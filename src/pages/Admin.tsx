@@ -236,6 +236,29 @@ const PermDot = ({ value, title }: { value: number; title: string }) => (
   }} />
 )
 
+// ─── HELP MODAL PRIMITIVES ──────────────────────────────────
+// Used exclusively in the UsersTab help modal. Kept near the
+// tab they belong to rather than in the global shared section.
+const HelpSection = ({ title, icon, children }: { title: string; icon: string; children: React.ReactNode }) => (
+  <div style={{ marginBottom: 4 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+      <span style={{ fontSize: 14 }}>{icon}</span>
+      <span style={{ fontSize: 11, fontWeight: 700, color: '#E84E0F', letterSpacing: '0.07em', textTransform: 'uppercase' }}>{title}</span>
+    </div>
+    <ul style={{ margin: 0, padding: '0 0 0 16px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {children}
+    </ul>
+  </div>
+)
+const HelpRule = ({ children }: { children: React.ReactNode }) => (
+  <li style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.55, paddingLeft: 2 }}>
+    <span style={{ color: 'inherit' }}>{children}</span>
+  </li>
+)
+const HelpDivider = ({ dark }: { dark: boolean }) => (
+  <div style={{ borderTop: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, margin: '18px 0' }} />
+)
+
 // ═══════════════════════════════════════════════════════════
 // ─── USERS TAB ──────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════
@@ -293,6 +316,7 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
   const [approving,   setApproving]   = useState<number | null>(null)
   const [resetPwId,   setResetPwId]   = useState<number | null>(null)
   const [resetPwDone, setResetPwDone] = useState<number | null>(null)
+  const [showHelp,    setShowHelp]    = useState(false)
 
   const { containerRef, startResize } = useTableResize(U_DEF, U_MIN)
   const GRID = [
@@ -442,6 +466,12 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
         </select>
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: '#94a3b8' }}>{total == null ? 'Loading…' : `${total} user${total !== 1 ? 's' : ''}`}</span>
+        <button
+          onClick={() => setShowHelp(true)}
+          title="User creation rules and guidelines"
+          style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'IBM Plex Sans, sans-serif', flexShrink: 0 }}>
+          ℹ
+        </button>
         <AddBtn onClick={openAdd} label="+ Add User" />
       </div>
 
@@ -577,6 +607,80 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
             </div>
           </Field>
         </Modal>
+      )}
+
+      {/* ─── USER CREATION HELP MODAL ───────────────────────── */}
+      {showHelp && createPortal(
+        <div
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setShowHelp(false) }}
+          style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(0,0,0,0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, fontFamily: 'IBM Plex Sans, sans-serif' }}
+          ref={(el) => {
+            if (!el) return
+            const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowHelp(false) }
+            el.addEventListener('keydown', onKey)
+          }}
+          tabIndex={-1}>
+          <div style={{ width: 580, maxHeight: 'calc(100vh - 80px)', display: 'flex', flexDirection: 'column', background: dark ? '#1e293b' : '#ffffff', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: 12, boxShadow: '0 24px 64px rgba(0,0,0,0.5)', overflow: 'hidden' }}>
+
+            {/* Header */}
+            <div style={{ padding: '14px 20px', borderBottom: `1px solid ${dark ? 'rgba(232,78,15,0.2)' : '#e2e8f0'}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, background: dark ? '#0f172a' : '#f8fafc' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 15, color: '#E84E0F' }}>◈</span>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: dark ? '#f1f5f9' : '#0f172a' }}>User Creation Guide</div>
+                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 1 }}>Rules and guidelines for adding users to QCO MMS</div>
+                </div>
+              </div>
+              <button onClick={() => setShowHelp(false)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: 4 }}>×</button>
+            </div>
+
+            {/* Body */}
+            <div style={{ overflowY: 'auto', flex: 1, padding: '20px' }}>
+
+              {/* Internal Users */}
+              <HelpSection title="Internal Users" icon="🏢">
+                <HelpRule>Full Name and Email are required fields.</HelpRule>
+                <HelpRule>Email must be unique — it is the primary identifier for every account.</HelpRule>
+                <HelpRule>Staff ID is optional but recommended when multiple staff share the same name.</HelpRule>
+                <HelpRule>Contract End Date is optional for permanent staff with no fixed end date.</HelpRule>
+                <HelpRule>A secure temporary password is auto-generated and emailed on account creation.</HelpRule>
+                <HelpRule>The user must change their password on first login.</HelpRule>
+                <HelpRule>Passwords expire every <strong>90 days</strong> for internal users.</HelpRule>
+              </HelpSection>
+
+              <HelpDivider dark={dark} />
+
+              {/* External Users */}
+              <HelpSection title="External Users — Contractors, Vendors, Suppliers" icon="🌐">
+                <HelpRule>External accounts require approval from <strong>two distinct admins</strong> before access is granted.</HelpRule>
+                <HelpRule>Contract Start and End dates are strongly recommended for compliance tracking.</HelpRule>
+                <HelpRule>After approval, the user is assigned to specific projects and WBS codes by an admin.</HelpRule>
+                <HelpRule>Access is automatically revoked on the contract end date.</HelpRule>
+                <HelpRule>Warning notifications are sent at <strong>30, 14, 7 and 1 day(s)</strong> before expiry.</HelpRule>
+                <HelpRule>Passwords expire every <strong>30 days</strong> for external users.</HelpRule>
+              </HelpSection>
+
+              <HelpDivider dark={dark} />
+
+              {/* General Rules */}
+              <HelpSection title="General Rules" icon="📋">
+                <HelpRule>A minimum of <strong>2 active admin accounts</strong> must exist at all times.</HelpRule>
+                <HelpRule>Deactivated users cannot log in, but all their data and history is preserved.</HelpRule>
+                <HelpRule>All user changes — create, edit, deactivate, delete — are recorded in the audit trail.</HelpRule>
+                <HelpRule>Two users may share the same full name. Email is always the unique identifier.</HelpRule>
+              </HelpSection>
+
+            </div>
+
+            {/* Footer */}
+            <div style={{ padding: '12px 20px', borderTop: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>
+              <button onClick={() => setShowHelp(false)} style={{ padding: '7px 20px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#E84E0F', color: '#fff', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </>
   )
