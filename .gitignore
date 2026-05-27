@@ -1,0 +1,51 @@
+# ─── DEPENDENCIES ───────────────────────────────────────────
+node_modules/
+
+# ─── ENVIRONMENT VARIABLES ──────────────────────────────────
+# Never commit secrets — copy .env.example and fill in locally
+.env
+.env.local
+.env.*.local
+
+# ─── BUILD OUTPUT ───────────────────────────────────────────
+dist/
+dist-ssr/
+build/
+
+# ─── LOGS ───────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ─── OS FILES ───────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ─── EDITOR / IDE ───────────────────────────────────────────
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ─── VITE / TYPESCRIPT CACHE ────────────────────────────────
+*.tsbuildinfo
+.vite/
+
+# ─── PROJECT-LOCAL ──────────────────────────────────────────
+# Claude Code session memory — local only, not for version control
+.claude/
+
+# Catch nested .env files (e.g. server/.env)
+**/.env

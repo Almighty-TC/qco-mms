@@ -1,0 +1,455 @@
+/* ═══════════════════════════════════════════════════════════════
+   QMAT GLOBAL STANDARDS
+   src/styles/globals.css
+
+   Single source of truth for layout contracts, design tokens,
+   and utility classes. Import once in main.tsx — every module
+   inherits these rules automatically.
+
+   Contents
+   ────────────────────────────────────────────────────────────
+   1.  Design tokens  (CSS custom properties)
+   2.  Dark-mode token overrides  ([data-theme="dark"])
+   3.  Font-scale system  ([data-font-size="small|medium|large"])
+   4.  Fixed topbar  (.qmat-topbar)
+   5.  Fixed sidebar  (.qmat-sidebar / .qmat-sidebar-collapsed)
+   6.  Main content area  (.qmat-main)
+   7.  Sticky table headers  (thead th / .qmat-table-header)
+   8.  Truncate + tooltip utility  (.truncate-tooltip)
+   9.  Resize-handle CSS  (.resize-handle / .resize-handle-bar)
+   10. RAG status pill classes  (.pill, .pill-*)
+   11. Scrollbar normalisation
+   ═══════════════════════════════════════════════════════════════ */
+
+
+/* ─── 1. DESIGN TOKENS ──────────────────────────────────────────
+   All visual values are defined here as CSS custom properties.
+   Modules must reference these variables — never hard-code colour
+   or size values that are already defined below.
+
+   Font sizes are computed as  base × --font-scale  so the A/A+
+   control updates every value that uses these variables in one
+   operation.  See section 3 for the scale rules.
+   ─────────────────────────────────────────────────────────────── */
+:root {
+  /* Layout dimensions */
+  --topbar-height:           46px;
+  --sidebar-width:           224px;
+  --sidebar-collapsed-width: 0px;
+
+  /* Font scale — overridden by [data-font-size] selectors in §3 */
+  --font-scale: 1;
+
+  /* Named font sizes (scale-aware).
+     Use these in component stylesheets; they update automatically
+     when the user changes font-size preference.              */
+  --font-size-xs:  calc(10px * var(--font-scale));
+  --font-size-sm:  calc(12px * var(--font-scale));
+  --font-size-md:  calc(14px * var(--font-scale));
+  --font-size-lg:  calc(16px * var(--font-scale));
+  --font-size-xl:  calc(20px * var(--font-scale));
+  --font-size-2xl: calc(24px * var(--font-scale));
+
+  /* Colour palette — light mode */
+  --color-bg:            #f1f4f8;
+  --color-surface:       #ffffff;
+  --color-surface-alt:   #f4f7fb;
+  --color-border:        #dde3ed;
+  --color-border-subtle: #e8ecf2;
+
+  --color-text-primary:   #0f172a;
+  --color-text-secondary: #475569;
+  --color-text-muted:     #94a3b8;
+
+  --color-accent:         #2563eb;
+  --color-accent-hover:   #1d4ed8;
+
+  /* Sidebar is always dark regardless of theme */
+  --color-sidebar-from:   #1e293b;
+  --color-sidebar-to:     #0f172a;
+  --color-sidebar-border: #1e2d4a;
+
+  /* RAG status colours — identical in both themes */
+  --color-rag-green: #22c55e;
+  --color-rag-amber: #f59e0b;
+  --color-rag-red:   #ef4444;
+  --color-rag-blue:  #2563eb;
+  --color-rag-grey:  #8899aa;
+
+  /* Resize handle — at-rest separator line uses --color-border (above).
+     Active/hover state uses the QCO brand orange. */
+  --color-handle-active: #E84E0F;
+
+  /* Elevation / shadow */
+  --shadow-sm:      0 1px 4px rgba(0, 0, 0, 0.06);
+  --shadow-md:      0 4px 16px rgba(0, 0, 0, 0.10);
+  --shadow-popover: 0 24px 48px rgba(0, 0, 0, 0.15),
+                    0 0 0 1px rgba(0, 0, 0, 0.05);
+
+  /* Z-index layers — always use these, never raw numbers */
+  --z-table-header: 10;
+  --z-sidebar:      90;
+  --z-topbar:       100;
+  --z-popover:      9999;
+
+  /* Transitions */
+  --transition-fast: 120ms ease;
+  --transition-base: 200ms ease;
+}
+
+
+/* ─── 2. DARK-MODE TOKEN OVERRIDES ─────────────────────────────
+   JS sets  document.documentElement.dataset.theme = 'dark'  to
+   activate this block.  Only tokens that differ from light mode
+   need to be listed here.
+   ─────────────────────────────────────────────────────────────── */
+:root[data-theme="dark"] {
+  --color-bg:            #0f172a;
+  --color-surface:       #1e293b;
+  --color-surface-alt:   #0f172a;
+  --color-border:        #334155;
+  --color-border-subtle: #1e293b;
+
+  --color-text-primary:   #f1f5f9;
+  --color-text-secondary: #94a3b8;
+  --color-text-muted:     #64748b;
+
+  --color-accent:       #3b82f6;
+  --color-accent-hover: #60a5fa;
+
+  /* --color-handle-active stays #E84E0F in dark mode — it's a brand colour */
+
+  --shadow-sm:      0 1px 4px rgba(0, 0, 0, 0.25);
+  --shadow-md:      0 4px 16px rgba(0, 0, 0, 0.40);
+  --shadow-popover: 0 24px 48px rgba(0, 0, 0, 0.60),
+                    0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+
+/* ─── 3. FONT-SCALE SYSTEM ──────────────────────────────────────
+   The A/A+ buttons in the topbar write a data-font-size attribute
+   to the root element and persist the preference to localStorage.
+
+   JS (in App.tsx):
+     document.documentElement.dataset.fontSize = 'small' | 'medium' | 'large'
+     localStorage.setItem('qmat_font_size', value)
+
+   All --font-size-* variables in §1 automatically recompute because
+   they reference --font-scale via calc().  No JS re-render required.
+   ─────────────────────────────────────────────────────────────── */
+:root[data-font-size="small"]  { --font-scale: 0.85; }
+:root[data-font-size="medium"] { --font-scale: 1;    }
+:root[data-font-size="large"]  { --font-scale: 1.15; }
+
+
+/* ─── 4. FIXED TOPBAR ───────────────────────────────────────────
+   .qmat-topbar
+   Sticks to the viewport top regardless of scroll position.
+   Sits above the sidebar (--z-topbar > --z-sidebar).
+   The main content area must add margin-top: var(--topbar-height)
+   or be placed in a flex/grid layout that accounts for this height.
+   ─────────────────────────────────────────────────────────────── */
+.qmat-topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--topbar-height);
+  z-index: var(--z-topbar);
+  display: flex;
+  align-items: center;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  padding: 0 12px 0 16px;
+  gap: 10px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+
+/* ─── 5. FIXED SIDEBAR ──────────────────────────────────────────
+   .qmat-sidebar
+   Positioned below the topbar, scrolls independently from the
+   main content area. Width is controlled by --sidebar-width.
+
+   .qmat-sidebar-collapsed
+   Add alongside .qmat-sidebar when the sidebar is toggled off.
+   The main content area should also remove its left margin.
+   ─────────────────────────────────────────────────────────────── */
+.qmat-sidebar {
+  position: fixed;
+  top: var(--topbar-height);
+  left: 0;
+  bottom: 0;
+  width: var(--sidebar-width);
+  overflow-y: auto;
+  overflow-x: hidden;
+  z-index: var(--z-sidebar);
+  background: linear-gradient(180deg, var(--color-sidebar-from) 0%, var(--color-sidebar-to) 100%);
+  border-right: 1px solid var(--color-sidebar-border);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  transition: width var(--transition-base), transform var(--transition-base);
+}
+
+.qmat-sidebar-collapsed {
+  width: 0;
+  overflow: hidden;
+}
+
+
+/* ─── 6. MAIN CONTENT AREA ──────────────────────────────────────
+   .qmat-main
+   Offsets content so it is never hidden behind the fixed topbar
+   or sidebar.  When the sidebar is collapsed, remove or override
+   the margin-left in JS / a modifier class.
+   ─────────────────────────────────────────────────────────────── */
+.qmat-main {
+  margin-top: var(--topbar-height);
+  margin-left: var(--sidebar-width);
+  min-height: calc(100vh - var(--topbar-height));
+  overflow-y: auto;
+  box-sizing: border-box;
+  transition: margin-left var(--transition-base);
+}
+
+.qmat-main-sidebar-collapsed {
+  margin-left: 0;
+}
+
+
+/* ─── 7. STICKY TABLE HEADERS ───────────────────────────────────
+   Standard HTML <table> — thead th sticks to the top of the
+   nearest scroll container (not the viewport).  The scroll
+   container must have overflow-y: auto or scroll.
+
+   Grid-based tables (ResizableTable) — apply .qmat-table-header
+   to the header row div.  It sticks within the same scroll
+   container as the rows below it.
+   ─────────────────────────────────────────────────────────────── */
+.qmat-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-table-header);
+  background: var(--color-surface-alt);
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* Grid-based table header row (used by ResizableTable component) */
+.qmat-table-header {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-table-header);
+  background: var(--color-surface-alt);
+  border-bottom: 1px solid var(--color-border);
+}
+
+
+/* ─── 8. TRUNCATE + TOOLTIP UTILITY ────────────────────────────
+   .truncate-tooltip
+   Apply to any element whose text may overflow its container.
+   ALWAYS pair with a  title="full text"  attribute on the same
+   element so the browser shows the complete string on hover.
+
+   Usage:
+     <div class="truncate-tooltip" title="Full long project name">
+       Full long project name
+     </div>
+
+   Note: the native browser tooltip (from title=) is the only
+   cross-platform zero-JS solution.  Do not remove the title attr.
+   ─────────────────────────────────────────────────────────────── */
+.truncate-tooltip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  cursor: default;
+  /* Ensure the element is a block-level context so text-overflow fires */
+  display: block;
+}
+
+/* Inline variant — for <span> inside flex rows */
+.truncate-tooltip-inline {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  cursor: default;
+  display: inline-block;
+}
+
+
+/* ─── 9. RESIZE HANDLE CSS ──────────────────────────────────────
+   CSS half of the column-resize affordance.  The JS drag logic
+   lives in  src/hooks/useTableResize.ts.  The React markup lives
+   in  src/components/ResizableTable.tsx.
+
+   Anatomy of the handle (right edge of every header cell):
+
+       ┌──────────────────────────────┬──┐
+       │  Column Label                │▐▌│  ← 8px .resize-handle
+       └──────────────────────────────┴──┘
+                                       ││
+                              3px .resize-handle-bar  (always visible)
+                              SVG .resize-grip-icon  (2×3 dot grid)
+
+   At rest   — bar is a subtle separator (--color-border), dots are
+               muted grey at 60% opacity so the handle is discoverable.
+   On hover  — bar turns QCO orange (#E84E0F), dots turn white, cursor
+               is col-resize.
+   Dragging  — bar stays orange at reduced opacity.
+
+   The header cell must have  position: relative  so the handle
+   can use  position: absolute  within it.
+   ─────────────────────────────────────────────────────────────── */
+
+/* ── Container — full-height invisible hit-target ─────────── */
+.resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 8px;          /* wider than the bar so clicking near the edge works */
+  height: 100%;
+  cursor: col-resize;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+
+/* ── Visible bar — always present, not just on hover ──────── */
+.resize-handle-bar {
+  position: relative;
+  width: 3px;
+  height: 60%;
+  min-height: 14px;
+  border-radius: 2px;
+  background: var(--color-border);   /* subtle but visible separator */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background var(--transition-fast),
+    width var(--transition-fast);
+}
+
+/* ── Grip icon — SVG 2×3 dot grid inside the bar ──────────── */
+.resize-grip-icon {
+  position: absolute;
+  fill: var(--color-text-muted);
+  opacity: 0.6;
+  pointer-events: none;
+  transition:
+    fill var(--transition-fast),
+    opacity var(--transition-fast);
+}
+
+/* ── Hover state ───────────────────────────────────────────── */
+.resize-handle:hover .resize-handle-bar {
+  background: var(--color-handle-active);
+  width: 3px;   /* keep same width; colour change is the signal */
+}
+
+.resize-handle:hover .resize-grip-icon {
+  fill: #ffffff;
+  opacity: 1;
+}
+
+/* ── Dragging state (class applied by JS) ──────────────────── */
+.resize-handle.is-dragging .resize-handle-bar {
+  background: var(--color-handle-active);
+  opacity: 0.7;
+}
+
+
+/* ─── 10. RAG STATUS PILLS ──────────────────────────────────────
+   Shared pill classes used across all modules wherever a RAG,
+   status, or phase indicator is rendered.
+
+   Base class:  .pill
+   Modifier:    .pill-green | .pill-amber | .pill-red
+                .pill-blue  | .pill-grey
+
+   Sizes: default (14px), add .pill-sm for 12px table rows.
+
+   Usage:
+     <span class="pill pill-green">
+       <span class="pill-dot"></span>
+       On track
+     </span>
+   ─────────────────────────────────────────────────────────────── */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 9999px;
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 3px 10px;
+  font-size: var(--font-size-sm);
+  line-height: 1;
+}
+
+.pill-sm {
+  padding: 2px 7px;
+  font-size: var(--font-size-xs);
+}
+
+.pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.pill-green {
+  background: rgba(22, 163, 74, 0.10);
+  color: #22c55e;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+}
+.pill-green .pill-dot { background: #22c55e; }
+
+.pill-amber {
+  background: rgba(217, 119, 6, 0.10);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+.pill-amber .pill-dot { background: #f59e0b; }
+
+.pill-red {
+  background: rgba(220, 38, 38, 0.10);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+.pill-red .pill-dot { background: #ef4444; }
+
+.pill-blue {
+  background: rgba(37, 99, 235, 0.10);
+  color: #2563eb;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+}
+.pill-blue .pill-dot { background: #2563eb; }
+
+.pill-grey {
+  background: rgba(100, 116, 139, 0.08);
+  color: #8899aa;
+  border: 1px solid rgba(100, 116, 139, 0.35);
+}
+.pill-grey .pill-dot { background: #8899aa; }
+
+
+/* ─── 11. SCROLLBAR NORMALISATION ───────────────────────────────
+   Thin, unobtrusive scrollbars on WebKit/Blink browsers.
+   Firefox gets the system scrollbar (acceptable fallback).
+   ─────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar          { width: 6px; height: 6px; }
+::-webkit-scrollbar-track    { background: transparent; }
+::-webkit-scrollbar-thumb    { background: #c4cedf; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+/* Firefox */
+* { scrollbar-width: thin; scrollbar-color: #c4cedf transparent; }
