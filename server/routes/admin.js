@@ -8,7 +8,8 @@ const { generate, addToHistory, expiresAt: pwExpiry } = require('../utils/passwo
 // ─── VALID ENUMERATIONS ──────────────────────────────────────
 // Validated against before writing to DB to prevent invalid data.
 const VALID_ROLES = new Set([
-  'admin', 'procurement_manager', 'procurement_officer',
+  'admin', 'ceo', 'director', 'project_director', 'project_manager',
+  'procurement_manager', 'procurement_officer',
   'expediting_manager', 'expeditor', 'logistics_manager',
   'warehouse', 'vendor', 'freight_forwarder', 'site_contractor', 'viewer',
 ])

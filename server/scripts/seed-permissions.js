@@ -7,7 +7,8 @@ const db = require('../db')
 
 // ─── PERMISSION MATRIX DEFINITION ───────────────────────────
 // Each entry: [role, module, view, create, edit, approve, delete, wbs_scoped]
-// Roles: admin, procurement_manager, procurement_officer,
+// Roles: admin, ceo, director, project_director, project_manager,
+//        procurement_manager, procurement_officer,
 //        expediting_manager, expeditor, logistics_manager,
 //        warehouse, vendor, freight_forwarder, site_contractor, viewer
 // Modules: dashboard, procurement, expediting, vdrl, logistics,
@@ -147,6 +148,60 @@ const PERMISSIONS = [
   ['viewer', 'document_inbox',   T,F,F,F,F,F],
   ['viewer', 'audit',            F,F,F,F,F,F],
   ['viewer', 'admin',            F,F,F,F,F,F],
+
+  // ── ceo: read-only across ALL modules, all projects ─────
+  // No WBS scoping — CEO sees the full portfolio.
+  ['ceo', 'dashboard',        T,F,F,F,F,F],
+  ['ceo', 'procurement',      T,F,F,F,F,F],
+  ['ceo', 'expediting',       T,F,F,F,F,F],
+  ['ceo', 'vdrl',             T,F,F,F,F,F],
+  ['ceo', 'logistics',        T,F,F,F,F,F],
+  ['ceo', 'material_control', T,F,F,F,F,F],
+  ['ceo', 'traceability',     T,F,F,F,F,F],
+  ['ceo', 'document_inbox',   T,F,F,F,F,F],
+  ['ceo', 'audit',            T,F,F,F,F,F],
+  ['ceo', 'admin',            F,F,F,F,F,F],
+
+  // ── director: same as CEO ────────────────────────────────
+  ['director', 'dashboard',        T,F,F,F,F,F],
+  ['director', 'procurement',      T,F,F,F,F,F],
+  ['director', 'expediting',       T,F,F,F,F,F],
+  ['director', 'vdrl',             T,F,F,F,F,F],
+  ['director', 'logistics',        T,F,F,F,F,F],
+  ['director', 'material_control', T,F,F,F,F,F],
+  ['director', 'traceability',     T,F,F,F,F,F],
+  ['director', 'document_inbox',   T,F,F,F,F,F],
+  ['director', 'audit',            T,F,F,F,F,F],
+  ['director', 'admin',            F,F,F,F,F,F],
+
+  // ── project_director: read-only, WBS scoped ─────────────
+  // Dashboard is not WBS-scoped (portfolio overview is always visible).
+  // All operational modules are scoped to assigned projects.
+  ['project_director', 'dashboard',        T,F,F,F,F,F],
+  ['project_director', 'procurement',      T,F,F,F,F,T],
+  ['project_director', 'expediting',       T,F,F,F,F,T],
+  ['project_director', 'vdrl',             T,F,F,F,F,T],
+  ['project_director', 'logistics',        T,F,F,F,F,T],
+  ['project_director', 'material_control', T,F,F,F,F,T],
+  ['project_director', 'traceability',     T,F,F,F,F,T],
+  ['project_director', 'document_inbox',   T,F,F,F,F,T],
+  ['project_director', 'audit',            T,F,F,F,F,T],
+  ['project_director', 'admin',            F,F,F,F,F,F],
+
+  // ── project_manager: view+create+edit on operational modules, WBS scoped
+  // Can create and edit in Procurement, Expediting, VDRL, Logistics.
+  // View-only on Material Control, Traceability, Document Inbox, Audit.
+  // No admin access. No delete anywhere.
+  ['project_manager', 'dashboard',        T,F,F,F,F,F],
+  ['project_manager', 'procurement',      T,T,T,F,F,T],
+  ['project_manager', 'expediting',       T,T,T,F,F,T],
+  ['project_manager', 'vdrl',             T,T,T,F,F,T],
+  ['project_manager', 'logistics',        T,T,T,F,F,T],
+  ['project_manager', 'material_control', T,F,F,F,F,T],
+  ['project_manager', 'traceability',     T,F,F,F,F,T],
+  ['project_manager', 'document_inbox',   T,T,F,F,F,T],
+  ['project_manager', 'audit',            T,F,F,F,F,T],
+  ['project_manager', 'admin',            F,F,F,F,F,F],
 ]
 
 async function seed() {

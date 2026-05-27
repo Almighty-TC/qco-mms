@@ -222,15 +222,24 @@ const ProjectRow = ({
 }
 
 // ─── SIDEBAR NAV ─────────────────────────────────────────────
+// ─── READ-ONLY ROLES ─────────────────────────────────────────
+// These roles have no write access to any module.  The sidebar
+// shows a "View only" badge next to each module item so users
+// understand they are in a read-only context.
+const READ_ONLY_ROLES = new Set(['ceo', 'director', 'project_director', 'viewer'])
+
 // Dark-gradient sidebar with logo, nav items, and user chip.
 // activePage and onNavigate enable state-based page routing without
 // a router library. Only items with a page key are clickable.
 const Nav = ({
-  userName, userInitial, activePage, onNavigate,
+  userName, userInitial, userRole, activePage, onNavigate,
 }: {
-  userName: string; userInitial: string
+  userName: string; userInitial: string; userRole: string
   activePage: Page; onNavigate: (p: Page) => void
 }) => {
+  const isReadOnly = READ_ONLY_ROLES.has(userRole)
+  const isAdmin    = userRole === 'admin'
+
   const navItem = (label: string, icon: string, page?: Page, badge?: number) => {
     const active = page != null && page === activePage
     return (
@@ -262,6 +271,12 @@ const Nav = ({
         <span style={{ flex: 1 }}>{label}</span>
         {badge != null && badge > 0 && (
           <span style={{ background: '#ef4444', color: '#fff', fontSize: 10, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', padding: '1px 5px', borderRadius: 9999, minWidth: 18, textAlign: 'center' }}>{badge}</span>
+        )}
+        {/* ─── READ-ONLY BADGE ───────────────────────────────────
+            Shown on every module item for roles with no write access,
+            so users immediately understand they cannot make changes. */}
+        {isReadOnly && (
+          <span style={{ fontSize: 9, fontWeight: 600, color: '#475569', letterSpacing: '0.05em', textTransform: 'uppercase' }}>view</span>
         )}
       </div>
     )
@@ -300,11 +315,15 @@ const Nav = ({
         {navItem('Audit', '🔍')}
       </div>
 
-      {/* System */}
-      <div style={{ padding: '4px 8px', flexShrink: 0 }}>
-        {sectionLabel('System')}
-        {navItem('Admin', '⚙️', 'admin')}
-      </div>
+      {/* ─── SYSTEM SECTION ────────────────────────────────────
+          Admin link is only shown to users with the admin role.
+          All other roles have no business accessing that panel. */}
+      {isAdmin && (
+        <div style={{ padding: '4px 8px', flexShrink: 0 }}>
+          {sectionLabel('System')}
+          {navItem('Admin', '⚙️', 'admin')}
+        </div>
+      )}
 
       {/* User chip */}
       <div style={{ padding: 8, borderTop: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
@@ -317,6 +336,7 @@ const Nav = ({
           </div>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 12, fontWeight: 500, color: '#e2e8f0', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{userName}</div>
+            <div style={{ fontSize: 10, color: '#475569', marginTop: 1, textTransform: 'capitalize' }}>{userRole.replace(/_/g, ' ')}</div>
           </div>
         </div>
       </div>
@@ -545,7 +565,7 @@ function App() {
 
       {/* Sidebar — slides in/out over 200ms */}
       <div style={{ width: sidebarOpen ? 224 : 0, flexShrink: 0, overflow: 'hidden', transition: 'width 200ms ease' }}>
-        <Nav userName={userName} userInitial={userInitial} activePage={page} onNavigate={setPage} />
+        <Nav userName={userName} userInitial={userInitial} userRole={user?.role ?? ''} activePage={page} onNavigate={setPage} />
       </div>
 
       {/* Main column */}

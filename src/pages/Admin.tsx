@@ -11,7 +11,8 @@ const API = 'http://localhost:3001/api/admin'
 // Single source of truth for all valid role and module names,
 // used in selects, filters, and the permissions matrix.
 const ALL_ROLES = [
-  'admin', 'procurement_manager', 'procurement_officer',
+  'admin', 'ceo', 'director', 'project_director', 'project_manager',
+  'procurement_manager', 'procurement_officer',
   'expediting_manager', 'expeditor', 'logistics_manager',
   'warehouse', 'vendor', 'freight_forwarder', 'site_contractor', 'viewer',
 ] as const
