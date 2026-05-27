@@ -185,7 +185,28 @@ router.delete('/suppliers/:id', async (req, res) => {
 // activated immediately on creation.
 // ═══════════════════════════════════════════════════════════
 
+// ─── CHECK EMAIL UNIQUENESS ──────────────────────────────────
+// Called before form submit on the client to give an immediate,
+// specific error before attempting the full save.  Must be defined
+// before GET /users/:id so Express does not treat "check-email"
+// as an id parameter.
+router.get('/users/check-email', async (req, res) => {
+  const { email, excludeId } = req.query
+  if (!email?.trim()) return res.status(400).json({ error: 'email is required' })
+  try {
+    let sql  = 'SELECT id FROM users WHERE email = ? LIMIT 1'
+    const args = [email.trim().toLowerCase()]
+    // When editing, exclude the user being edited from the uniqueness check
+    if (excludeId) { sql = 'SELECT id FROM users WHERE email = ? AND id != ? LIMIT 1'; args.push(parseInt(excludeId)) }
+    const [rows] = await db.query(sql, args)
+    res.json({ exists: rows.length > 0 })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
 // ─── LIST USERS ─────────────────────────────────────────────
+// Returns paginated user rows with a project_count subquery so the
+// Projects column in the admin table shows how many projects each
+// user has been assigned to via user_wbs_access.
 router.get('/users', async (req, res) => {
   try {
     const { page, limit, offset } = paginate(req.query)
@@ -194,15 +215,15 @@ router.get('/users', async (req, res) => {
     let where  = '1=1'
     const args = []
 
-    if (role && VALID_ROLES.has(role))        { where += ' AND u.role = ?';                    args.push(role) }
-    if (status === 'active')                  { where += ' AND u.is_active = 1';               }
-    if (status === 'inactive')                { where += ' AND u.is_active = 0';               }
-    if (is_external === 'true')               { where += ' AND u.is_external = 1';             }
-    if (is_external === 'false')              { where += ' AND u.is_external = 0';             }
+    if (role && VALID_ROLES.has(role))        { where += ' AND u.role = ?';        args.push(role) }
+    if (status === 'active')                  { where += ' AND u.is_active = 1'    }
+    if (status === 'inactive')                { where += ' AND u.is_active = 0'    }
+    if (is_external === 'true')               { where += ' AND u.is_external = 1'  }
+    if (is_external === 'false')              { where += ' AND u.is_external = 0'  }
     if (search?.trim()) {
-      where += ' AND (u.full_name LIKE ? OR u.email LIKE ? OR u.company LIKE ?)'
+      where += ' AND (u.full_name LIKE ? OR u.email LIKE ? OR u.company LIKE ? OR u.staff_id LIKE ?)'
       const s = `%${search.trim()}%`
-      args.push(s, s, s)
+      args.push(s, s, s, s)
     }
 
     const [[{ total }]] = await db.query(
@@ -211,12 +232,21 @@ router.get('/users', async (req, res) => {
 
     const [rows] = await db.query(
       `SELECT u.id, u.full_name AS fullName, u.email, u.role, u.company,
-              u.is_active AS isActive, u.is_external AS isExternal,
-              u.contract_start AS contractStart, u.contract_end AS contractEnd,
-              u.approved_by AS approvedBy, u.approved_at AS approvedAt,
-              u.second_approved_by AS secondApprovedBy, u.second_approved_at AS secondApprovedAt,
-              u.last_login AS lastLogin,
-              a1.full_name AS approvedByName, a2.full_name AS secondApprovedByName
+              IFNULL(u.staff_id, '')   AS staffId,
+              u.is_active              AS isActive,
+              u.is_external            AS isExternal,
+              u.contract_start         AS contractStart,
+              u.contract_end           AS contractEnd,
+              u.approved_by            AS approvedBy,
+              u.approved_at            AS approvedAt,
+              u.second_approved_by     AS secondApprovedBy,
+              u.second_approved_at     AS secondApprovedAt,
+              u.last_login             AS lastLogin,
+              a1.full_name             AS approvedByName,
+              a2.full_name             AS secondApprovedByName,
+              (SELECT COUNT(DISTINCT project_id)
+               FROM user_wbs_access
+               WHERE user_id = u.id)  AS projectCount
        FROM users u
        LEFT JOIN users a1 ON a1.id = u.approved_by
        LEFT JOIN users a2 ON a2.id = u.second_approved_by
@@ -227,7 +257,10 @@ router.get('/users', async (req, res) => {
     )
 
     res.json({ rows, total, page, limit, pages: Math.ceil(total / limit) })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) {
+    // Surface the actual DB error so admins can diagnose missing columns
+    res.status(500).json({ error: `Database error: ${err.message}` })
+  }
 })
 
 // ─── GET SINGLE USER ────────────────────────────────────────
@@ -251,14 +284,15 @@ router.get('/users/:id', async (req, res) => {
 // force_password_change is set so the user must set their own
 // password on first login.  Credentials are emailed to the user.
 router.post('/users', async (req, res) => {
-  const { fullName, email, role, company, isActive, isExternal,
+  const { fullName, email, role, company, staffId, isActive, isExternal,
           contractStart, contractEnd } = req.body
 
   if (!fullName?.trim())      return res.status(400).json({ error: 'Full name is required' })
   if (!email?.trim())         return res.status(400).json({ error: 'Email is required' })
   if (!VALID_ROLES.has(role)) return res.status(400).json({ error: 'Invalid role' })
 
-  // External users are created inactive; they need two-admin approval.
+  // contractEnd is intentionally optional — internal QCO staff have no end date.
+  // External users are created inactive and need two-admin approval.
   const active    = isExternal ? false : (isActive !== false)
   const tempPass  = generate()
   const expiresAt = pwExpiry(Boolean(isExternal))
@@ -267,13 +301,13 @@ router.post('/users', async (req, res) => {
     const hash = await bcrypt.hash(tempPass, 12)
     const [r]  = await db.query(
       `INSERT INTO users
-         (full_name, email, password_hash, role, company,
+         (full_name, email, password_hash, role, company, staff_id,
           is_active, is_external, contract_start, contract_end,
           force_password_change, password_expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
       [fullName.trim(), email.trim().toLowerCase(), hash, role,
-       company?.trim() || null, active ? 1 : 0,
-       isExternal ? 1 : 0,
+       company?.trim() || null, staffId?.trim() || null,
+       active ? 1 : 0, isExternal ? 1 : 0,
        contractStart || null, contractEnd || null, expiresAt]
     )
 
@@ -378,33 +412,36 @@ router.post('/users/:id/reset-password', async (req, res) => {
 })
 
 // ─── UPDATE USER ────────────────────────────────────────────
+// contractEnd is optional — omitting it sets it to NULL (no expiry).
 router.put('/users/:id', async (req, res) => {
   const id = parseInt(req.params.id)
-  const { fullName, email, password, role, company, isActive, isExternal,
+  const { fullName, email, password, role, company, staffId, isActive, isExternal,
           contractStart, contractEnd } = req.body
 
-  if (!fullName?.trim())    return res.status(400).json({ error: 'Full name is required' })
-  if (!email?.trim())       return res.status(400).json({ error: 'Email is required' })
+  if (!fullName?.trim())      return res.status(400).json({ error: 'Full name is required' })
+  if (!email?.trim())         return res.status(400).json({ error: 'Email is required' })
   if (!VALID_ROLES.has(role)) return res.status(400).json({ error: 'Invalid role' })
 
   try {
     if (password) {
       const hash = await bcrypt.hash(password, 10)
       await db.query(
-        `UPDATE users SET full_name=?,email=?,password_hash=?,role=?,company=?,
+        `UPDATE users SET full_name=?,email=?,password_hash=?,role=?,company=?,staff_id=?,
                           is_active=?,is_external=?,contract_start=?,contract_end=?
          WHERE id=?`,
         [fullName.trim(), email.trim().toLowerCase(), hash, role,
-         company?.trim()||null, isActive?1:0, isExternal?1:0,
+         company?.trim()||null, staffId?.trim()||null,
+         isActive?1:0, isExternal?1:0,
          contractStart||null, contractEnd||null, id]
       )
     } else {
       await db.query(
-        `UPDATE users SET full_name=?,email=?,role=?,company=?,
+        `UPDATE users SET full_name=?,email=?,role=?,company=?,staff_id=?,
                           is_active=?,is_external=?,contract_start=?,contract_end=?
          WHERE id=?`,
         [fullName.trim(), email.trim().toLowerCase(), role,
-         company?.trim()||null, isActive?1:0, isExternal?1:0,
+         company?.trim()||null, staffId?.trim()||null,
+         isActive?1:0, isExternal?1:0,
          contractStart||null, contractEnd||null, id]
       )
     }

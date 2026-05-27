@@ -27,13 +27,25 @@ type Module = typeof ALL_MODULES[number]
 // ─── TYPES ──────────────────────────────────────────────────
 type AdminUser = {
   id: number; fullName: string; email: string; role: string; company: string
+  staffId: string
   isActive: number; isExternal: number
   contractStart: string; contractEnd: string
   approvedBy: number | null; approvedAt: string | null
   secondApprovedBy: number | null; secondApprovedAt: string | null
   approvedByName: string | null; secondApprovedByName: string | null
   lastLogin: string | null
+  projectCount: number
 }
+
+// ─── FULL-ACCESS ROLES ───────────────────────────────────────
+// These roles are not WBS-scoped, so they can see all projects.
+// Used by the Projects column in the users table to display "All"
+// instead of a count from user_wbs_access.
+const FULL_ACCESS_ROLES = new Set([
+  'admin', 'ceo', 'director',
+  'procurement_manager', 'procurement_officer',
+  'expediting_manager', 'logistics_manager', 'viewer',
+])
 type RolePerm = {
   id: number; role: string; module: string
   can_view: number; can_create: number; can_edit: number
@@ -224,17 +236,37 @@ const PermDot = ({ value, title }: { value: number; title: string }) => (
 // ═══════════════════════════════════════════════════════════
 // ─── USERS TAB ──────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════
-type UserKey = 'uname' | 'uemail' | 'urole' | 'ucompany' | 'ucontract' | 'ustatus'
-const U_DEF: Record<UserKey, number> = { uname: 190, uemail: 230, urole: 140, ucompany: 160, ucontract: 120, ustatus: 90 }
-const U_MIN: Record<UserKey, number> = { uname: 100, uemail: 120, urole: 90, ucompany: 80, ucontract: 80, ustatus: 70 }
+
+// ─── COLUMN KEYS ────────────────────────────────────────────
+// Email is shown below the name in the Name cell (not a separate
+// column) so users with the same full name are still distinguishable.
+type UserKey = 'uname' | 'urole' | 'uprojects' | 'ucompany' | 'ucontract' | 'ustatus' | 'ulastlogin'
+const U_DEF: Record<UserKey, number> = { uname: 230, urole: 145, uprojects: 80, ucompany: 140, ucontract: 110, ustatus: 90, ulastlogin: 110 }
+const U_MIN: Record<UserKey, number> = { uname: 140, urole: 90,  uprojects: 60, ucompany: 80,  ucontract: 80,  ustatus: 70, ulastlogin: 80  }
 
 type UserForm = {
-  fullName: string; email: string; role: string; company: string
+  fullName: string; email: string; role: string; company: string; staffId: string
   isActive: boolean; isExternal: boolean; contractStart: string; contractEnd: string
 }
+// contractEnd is intentionally empty — internal staff have no end date
 const EMPTY_USER: UserForm = {
-  fullName: '', email: '', role: 'viewer', company: '',
+  fullName: '', email: '', role: 'viewer', company: '', staffId: '',
   isActive: true, isExternal: false, contractStart: '', contractEnd: '',
+}
+
+// ─── ERROR MESSAGE MAP ───────────────────────────────────────
+// Maps server-side error strings to user-friendly messages with
+// specific guidance on how to resolve the issue.
+function friendlyUserError(serverErr: string): string {
+  if (!serverErr) return 'Save failed. Please check all fields and try again.'
+  const e = serverErr.toLowerCase()
+  if (e.includes('email already exists') || e.includes('er_dup_entry') || e.includes('duplicate entry')) {
+    return 'A user with this email already exists. Please use a different email address, or search for the existing user and edit them instead.'
+  }
+  if (e.includes('full name')) return 'Full name is required. Please enter the user\'s complete name.'
+  if (e.includes('invalid role')) return 'Please select a valid role from the Role dropdown.'
+  if (e.includes('database error')) return `Database error — a column may be missing. Run the SQL setup in System Settings, then try again. (Detail: ${serverErr})`
+  return serverErr
 }
 
 function UsersTab({ dark }: { dark: boolean }) {
@@ -257,7 +289,16 @@ function UsersTab({ dark }: { dark: boolean }) {
   const [resetPwDone, setResetPwDone] = useState<number | null>(null)
 
   const { containerRef, startResize } = useTableResize(U_DEF, U_MIN)
-  const GRID = `var(--col-uname,${U_DEF.uname}px) var(--col-uemail,${U_DEF.uemail}px) var(--col-urole,${U_DEF.urole}px) var(--col-ucompany,${U_DEF.ucompany}px) var(--col-ucontract,${U_DEF.ucontract}px) var(--col-ustatus,${U_DEF.ustatus}px) 120px`
+  const GRID = [
+    `var(--col-uname,${U_DEF.uname}px)`,
+    `var(--col-urole,${U_DEF.urole}px)`,
+    `var(--col-uprojects,${U_DEF.uprojects}px)`,
+    `var(--col-ucompany,${U_DEF.ucompany}px)`,
+    `var(--col-ucontract,${U_DEF.ucontract}px)`,
+    `var(--col-ustatus,${U_DEF.ustatus}px)`,
+    `var(--col-ulastlogin,${U_DEF.ulastlogin}px)`,
+    '190px',
+  ].join(' ')
 
   const searchRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -289,7 +330,8 @@ function UsersTab({ dark }: { dark: boolean }) {
   const openEdit = (u: AdminUser) => {
     setForm({
       fullName: u.fullName, email: u.email, role: u.role,
-      company: u.company ?? '', isActive: !!u.isActive, isExternal: !!u.isExternal,
+      company: u.company ?? '', staffId: u.staffId ?? '',
+      isActive: !!u.isActive, isExternal: !!u.isExternal,
       contractStart: u.contractStart?.slice(0, 10) ?? '',
       contractEnd: u.contractEnd?.slice(0, 10) ?? '',
     })
@@ -299,6 +341,20 @@ function UsersTab({ dark }: { dark: boolean }) {
   const save = async () => {
     if (!form.fullName.trim()) { setFormErr('Full name is required'); return }
     if (!form.email.trim())    { setFormErr('Email is required'); return }
+    const emailRx = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRx.test(form.email.trim())) { setFormErr('Please enter a valid email address (e.g. jane@example.com)'); return }
+    // ─── PRE-CHECK EMAIL UNIQUENESS ─────────────────────────────────
+    // Do this before submitting so the error message can give the user
+    // specific guidance rather than a raw DB duplicate-key error.
+    try {
+      const params: Record<string, string> = { email: form.email.trim() }
+      if (editId != null) params.excludeId = String(editId)
+      const { data: check } = await axios.get(`${API}/users/check-email`, { params })
+      if (check.exists) {
+        setFormErr('A user with this email already exists. Please use a different email address, or search for the existing user and edit them instead.')
+        return
+      }
+    } catch { /* if check fails, let the server reject it with a clear error */ }
     setSaving(true); setFormErr('')
     try {
       editId != null
@@ -307,7 +363,7 @@ function UsersTab({ dark }: { dark: boolean }) {
       setShowForm(false); load()
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setFormErr(err.response?.data?.error ?? 'Save failed')
+      setFormErr(friendlyUserError(err.response?.data?.error ?? ''))
     } finally { setSaving(false) }
   }
 
@@ -388,38 +444,50 @@ function UsersTab({ dark }: { dark: boolean }) {
       <TableCard dark={dark}>
         <div ref={containerRef}>
           <TH dark={dark} grid={GRID}>
-            <HeaderCell label="Name"     col="uname"    align="left" onResize={startResize} />
-            <HeaderCell label="Email"    col="uemail"   align="left" onResize={startResize} />
-            <HeaderCell label="Role"     col="urole"                 onResize={startResize} />
-            <HeaderCell label="Company"  col="ucompany" align="left" onResize={startResize} />
-            <HeaderCell label="Contract" col="ucontract"             onResize={startResize} />
-            <HeaderCell label="Status"   col="ustatus"               onResize={startResize} />
+            <HeaderCell label="Name / Email"  col="uname"      align="left" onResize={startResize} />
+            <HeaderCell label="Role"          col="urole"                   onResize={startResize} />
+            <HeaderCell label="Projects"      col="uprojects"  align="left" onResize={startResize} />
+            <HeaderCell label="Company"       col="ucompany"   align="left" onResize={startResize} />
+            <HeaderCell label="Contract End"  col="ucontract"               onResize={startResize} />
+            <HeaderCell label="Status"        col="ustatus"                 onResize={startResize} />
+            <HeaderCell label="Last Login"    col="ulastlogin"              onResize={startResize} />
             <div />
           </TH>
 
           {rows.length === 0 && total !== null && <Empty msg="No users found." />}
           {rows.map(u => (
             <TR key={u.id} dark={dark} grid={GRID}>
-              <div style={{ padding: '0 12px', overflow: 'hidden' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              {/* ─── NAME CELL: name + email below + badges ────────── */}
+              <div style={{ padding: '4px 12px', overflow: 'hidden' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                   <span title={u.fullName} style={{ fontSize: 13, fontWeight: 500, color: dark ? '#f1f5f9' : '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.fullName}</span>
                   {!!u.isExternal && <ExtBadge />}
+                  {u.staffId && <span style={{ fontSize: 10, color: '#94a3b8', flexShrink: 0 }}>#{u.staffId}</span>}
+                </div>
+                <div style={{ fontSize: 11, color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }} title={u.email}>
+                  {u.email}
                 </div>
                 {u.isExternal && <div style={{ marginTop: 2 }}>{approvalStatus(u)}</div>}
               </div>
-              <TD dark={dark} muted>
-                <span title={u.email} style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.email}</span>
-              </TD>
+              {/* ─── ROLE ───────────────────────────────────────────── */}
               <div style={{ padding: '0 12px' }}>
                 <RoleBadge role={u.role} />
               </div>
-              <TD dark={dark} muted>{u.company ?? '—'}</TD>
+              {/* ─── PROJECTS ───────────────────────────────────────── */}
+              <TD dark={dark} muted center>
+                {FULL_ACCESS_ROLES.has(u.role) ? 'All' : (u.projectCount ?? 0)}
+              </TD>
+              {/* ─── COMPANY / CONTRACT / STATUS / LAST LOGIN ───────── */}
+              <TD dark={dark} muted>{u.company || '—'}</TD>
               <TD dark={dark} muted mono>
                 {u.contractEnd ? u.contractEnd.slice(0, 10) : '—'}
               </TD>
               <div style={{ padding: '0 12px' }}>
                 <StatusPill active={!!u.isActive} />
               </div>
+              <TD dark={dark} muted mono>
+                {u.lastLogin ? u.lastLogin.slice(0, 10) : 'Never'}
+              </TD>
               <div style={{ padding: '0 8px', display: 'flex', gap: 4, alignItems: 'center' }}>
                 {canApprove(u) && (
                   <button
@@ -468,6 +536,15 @@ function UsersTab({ dark }: { dark: boolean }) {
         <Modal title={editId != null ? 'Edit User' : 'Add User'} dark={dark} onClose={() => setShowForm(false)} onSubmit={save} error={formErr} saving={saving}>
           <Field label="Full Name *"><input value={form.fullName} onChange={f('fullName')} placeholder="Jane Smith" style={inp(dark)} /></Field>
           <Field label="Email *"><input type="email" value={form.email} onChange={f('email')} placeholder="jane@example.com" style={inp(dark)} /></Field>
+          <Field label="Staff ID (optional)"><input value={form.staffId} onChange={f('staffId')} placeholder="e.g. EMP-0042" style={inp(dark)} /></Field>
+          <Field label="Role">
+            <select value={form.role} onChange={f('role')} style={inp(dark)}>
+              {ALL_ROLES.map(r => <option key={r} value={r}>{r.replace(/_/g, ' ')}</option>)}
+            </select>
+          </Field>
+          <Field label="Company"><input value={form.company} onChange={f('company')} placeholder="Company name" style={inp(dark)} /></Field>
+          <Field label="Contract Start"><input type="date" value={form.contractStart} onChange={f('contractStart')} style={inp(dark)} /></Field>
+          <Field label="Contract End (optional)"><input type="date" value={form.contractEnd} onChange={f('contractEnd')} style={inp(dark)} /></Field>
           {/* New users get a system-generated temp password emailed to them; no manual password entry needed */}
           {editId == null && (
             <Field label="Password" wide>
@@ -476,14 +553,6 @@ function UsersTab({ dark }: { dark: boolean }) {
               </div>
             </Field>
           )}
-          <Field label="Role">
-            <select value={form.role} onChange={f('role')} style={inp(dark)}>
-              {ALL_ROLES.map(r => <option key={r} value={r}>{r.replace(/_/g, ' ')}</option>)}
-            </select>
-          </Field>
-          <Field label="Company"><input value={form.company} onChange={f('company')} placeholder="Company name" style={inp(dark)} /></Field>
-          <Field label="Contract Start"><input type="date" value={form.contractStart} onChange={f('contractStart')} style={inp(dark)} /></Field>
-          <Field label="Contract End"><input type="date" value={form.contractEnd} onChange={f('contractEnd')} style={inp(dark)} /></Field>
           <Field label="Options">
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', fontSize: 13, color: dark ? '#f1f5f9' : '#0f172a' }}>
@@ -1035,19 +1104,241 @@ node server/scripts/seed-permissions.js`}
 }
 
 // ═══════════════════════════════════════════════════════════
+// ─── SUPPLIERS TAB ──────────────────────────────────────────
+// Full CRUD for the suppliers master list. Matches wireframe
+// columns: Name, Code, Country, Contact, Email, Phone, Status.
+// ═══════════════════════════════════════════════════════════
+type Supplier = {
+  id: number; name: string; code: string; country: string
+  contactName: string; email: string; phone: string; status: string
+}
+type SupplierForm = { name: string; code: string; country: string; contactName: string; email: string; phone: string; status: string }
+const EMPTY_SUP: SupplierForm = { name: '', code: '', country: '', contactName: '', email: '', phone: '', status: 'active' }
+
+type SKey = 'sname' | 'scode' | 'scountry' | 'scontact' | 'semail' | 'sphone' | 'sstatus'
+const S_DEF: Record<SKey, number> = { sname: 200, scode: 100, scountry: 110, scontact: 150, semail: 190, sphone: 130, sstatus: 90 }
+const S_MIN: Record<SKey, number> = { sname: 120, scode: 70,  scountry: 80,  scontact: 100, semail: 130, sphone: 90,  sstatus: 70 }
+
+function SuppliersTab({ dark }: { dark: boolean }) {
+  const [rows,     setRows]     = useState<Supplier[]>([])
+  const [total,    setTotal]    = useState<number | null>(null)
+  const [error,    setError]    = useState('')
+  const [showForm, setShowForm] = useState(false)
+  const [editId,   setEditId]   = useState<number | null>(null)
+  const [form,     setForm]     = useState<SupplierForm>(EMPTY_SUP)
+  const [formErr,  setFormErr]  = useState('')
+  const [saving,   setSaving]   = useState(false)
+  const [delId,    setDelId]    = useState<number | null>(null)
+
+  const { containerRef, startResize } = useTableResize(S_DEF, S_MIN)
+  const GRID = [
+    `var(--col-sname,${S_DEF.sname}px)`,
+    `var(--col-scode,${S_DEF.scode}px)`,
+    `var(--col-scountry,${S_DEF.scountry}px)`,
+    `var(--col-scontact,${S_DEF.scontact}px)`,
+    `var(--col-semail,${S_DEF.semail}px)`,
+    `var(--col-sphone,${S_DEF.sphone}px)`,
+    `var(--col-sstatus,${S_DEF.sstatus}px)`,
+    '130px',
+  ].join(' ')
+
+  const load = useCallback(async () => {
+    setError('')
+    try {
+      const { data } = await axios.get(`${API}/suppliers`)
+      setRows(data); setTotal(data.length)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setError(err.response?.data?.error ?? 'Failed to load suppliers')
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const openAdd  = () => { setForm(EMPTY_SUP); setEditId(null); setFormErr(''); setShowForm(true) }
+  const openEdit = (s: Supplier) => {
+    setForm({ name: s.name, code: s.code, country: s.country, contactName: s.contactName, email: s.email, phone: s.phone, status: s.status })
+    setEditId(s.id); setFormErr(''); setShowForm(true)
+  }
+
+  const sf = (k: keyof SupplierForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setForm(p => ({ ...p, [k]: e.target.value }))
+
+  const save = async () => {
+    if (!form.name.trim()) { setFormErr('Supplier name is required'); return }
+    setSaving(true); setFormErr('')
+    try {
+      editId != null
+        ? await axios.put(`${API}/suppliers/${editId}`, form)
+        : await axios.post(`${API}/suppliers`, form)
+      setShowForm(false); load()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setFormErr(err.response?.data?.error ?? 'Save failed')
+    } finally { setSaving(false) }
+  }
+
+  const del = async (id: number) => {
+    try { await axios.delete(`${API}/suppliers/${id}`); setDelId(null); load() }
+    catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setError(err.response?.data?.error ?? 'Delete failed')
+    }
+  }
+
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <span style={{ fontSize: 12, color: '#94a3b8' }}>{total == null ? 'Loading…' : `${total} supplier${total !== 1 ? 's' : ''}`}</span>
+        <AddBtn onClick={openAdd} label="+ Add Supplier" />
+      </div>
+
+      {error && <Err msg={error} />}
+
+      <TableCard dark={dark}>
+        <div ref={containerRef}>
+          <TH dark={dark} grid={GRID}>
+            <HeaderCell label="Name"    col="sname"    align="left" onResize={startResize} />
+            <HeaderCell label="Code"    col="scode"    align="left" onResize={startResize} />
+            <HeaderCell label="Country" col="scountry" align="left" onResize={startResize} />
+            <HeaderCell label="Contact" col="scontact" align="left" onResize={startResize} />
+            <HeaderCell label="Email"   col="semail"   align="left" onResize={startResize} />
+            <HeaderCell label="Phone"   col="sphone"   align="left" onResize={startResize} />
+            <HeaderCell label="Status"  col="sstatus"               onResize={startResize} />
+            <div />
+          </TH>
+          {rows.length === 0 && total !== null && <Empty msg="No suppliers found." />}
+          {rows.map(s => (
+            <TR key={s.id} dark={dark} grid={GRID}>
+              <TD dark={dark}>{s.name}</TD>
+              <TD dark={dark} mono>{s.code || '—'}</TD>
+              <TD dark={dark} muted>{s.country || '—'}</TD>
+              <TD dark={dark} muted>{s.contactName || '—'}</TD>
+              <TD dark={dark} muted>{s.email || '—'}</TD>
+              <TD dark={dark} muted mono>{s.phone || '—'}</TD>
+              <div style={{ padding: '0 12px' }}>
+                <StatusPill active={s.status === 'active'} label={s.status === 'active' ? 'Active' : 'Inactive'} />
+              </div>
+              <div style={{ padding: '0 8px', display: 'flex', gap: 4, alignItems: 'center' }}>
+                <button onClick={() => openEdit(s)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
+                <DelBtn id={s.id} confirmId={delId} onInit={() => setDelId(s.id)} onConfirm={() => del(s.id)} onCancel={() => setDelId(null)} />
+              </div>
+            </TR>
+          ))}
+        </div>
+      </TableCard>
+
+      {showForm && (
+        <Modal title={editId != null ? 'Edit Supplier' : 'Add Supplier'} dark={dark} onClose={() => setShowForm(false)} onSubmit={save} error={formErr} saving={saving}>
+          <Field label="Name *"><input value={form.name} onChange={sf('name')} placeholder="Supplier name" style={inp(dark)} /></Field>
+          <Field label="Code"><input value={form.code} onChange={sf('code')} placeholder="e.g. SUP-001" style={inp(dark)} /></Field>
+          <Field label="Country"><input value={form.country} onChange={sf('country')} placeholder="Country" style={inp(dark)} /></Field>
+          <Field label="Contact Name"><input value={form.contactName} onChange={sf('contactName')} placeholder="Contact person" style={inp(dark)} /></Field>
+          <Field label="Email"><input type="email" value={form.email} onChange={sf('email')} placeholder="contact@supplier.com" style={inp(dark)} /></Field>
+          <Field label="Phone"><input value={form.phone} onChange={sf('phone')} placeholder="+61 2 1234 5678" style={inp(dark)} /></Field>
+          <Field label="Status">
+            <select value={form.status} onChange={sf('status')} style={inp(dark)}>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+          </Field>
+        </Modal>
+      )}
+    </>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
+// ─── PROJECTS ADMIN TAB ─────────────────────────────────────
+// Read-only project list from /api/admin/projects. Full project
+// management (edit/create) is done from the main project view.
+// ═══════════════════════════════════════════════════════════
+type AdminProject = {
+  id: number; code: string; name: string; phase: string; status: string
+  rag: string; client: string; start_date: string; end_date: string
+}
+
+function ProjectsAdminTab({ dark }: { dark: boolean }) {
+  const [rows,  setRows]  = useState<AdminProject[]>([])
+  const [error, setError] = useState('')
+
+  const load = useCallback(async () => {
+    setError('')
+    try {
+      const { data } = await axios.get(`${API}/projects`)
+      setRows(data)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setError(err.response?.data?.error ?? 'Failed to load projects')
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const RAG_COLOR: Record<string, string> = { green: '#22c55e', amber: '#f59e0b', red: '#ef4444' }
+
+  return (
+    <>
+      <div style={{ marginBottom: 12 }}>
+        <span style={{ fontSize: 12, color: '#94a3b8' }}>{rows.length} project{rows.length !== 1 ? 's' : ''}</span>
+      </div>
+      {error && <Err msg={error} />}
+      <TableCard dark={dark}>
+        <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr 120px 100px 70px 120px 110px', background: dark ? '#0f172a' : '#f4f7fb', borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}`, height: 36, userSelect: 'none' }}>
+          {['Code', 'Name', 'Client', 'Phase', 'RAG', 'Start', 'End'].map(h => (
+            <div key={h} style={{ padding: '0 12px', display: 'flex', alignItems: 'center', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase' }}>{h}</div>
+          ))}
+        </div>
+        {rows.length === 0 && <Empty msg="No projects found." />}
+        {rows.map(p => (
+          <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '100px 1fr 120px 100px 70px 120px 110px', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, minHeight: 40, alignItems: 'center' }}>
+            <TD dark={dark} mono>{p.code}</TD>
+            <TD dark={dark}>{p.name}</TD>
+            <TD dark={dark} muted>{p.client || '—'}</TD>
+            <TD dark={dark} muted>{p.phase || '—'}</TD>
+            <div style={{ padding: '0 12px' }}>
+              <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: RAG_COLOR[p.rag] ?? '#64748b' }} title={p.rag} />
+            </div>
+            <TD dark={dark} muted mono>{p.start_date?.slice(0, 10) ?? '—'}</TD>
+            <TD dark={dark} muted mono>{p.end_date?.slice(0, 10) ?? '—'}</TD>
+          </div>
+        ))}
+      </TableCard>
+    </>
+  )
+}
+
+// ─── STUB TABS ───────────────────────────────────────────────
+// Warehouses, UoM, and Acronyms match the wireframe tab bar but
+// are not yet implemented. They display a placeholder until the
+// backend and UI design are finalised.
+const ComingSoonTab = ({ dark, label }: { dark: boolean; label: string }) => (
+  <div style={{ padding: '48px 0', textAlign: 'center' }}>
+    <div style={{ fontSize: 32, marginBottom: 12 }}>🔧</div>
+    <div style={{ fontSize: 15, fontWeight: 600, color: dark ? '#f1f5f9' : '#0f172a', marginBottom: 6 }}>{label}</div>
+    <div style={{ fontSize: 13, color: '#94a3b8' }}>This module is coming soon.</div>
+  </div>
+)
+
+// ═══════════════════════════════════════════════════════════
 // ─── ADMIN ──────────────────────────────────────────────────
 // Root admin page. Tab bar routes to the five sub-sections.
 // Only users with role='admin' reach this page (guarded both
 // in App.tsx and on every /api/admin route server-side).
 // ═══════════════════════════════════════════════════════════
-type AdminTab = 'users' | 'permissions' | 'external' | 'notifications' | 'settings'
+type AdminTab = 'users' | 'suppliers' | 'warehouses' | 'uom' | 'acronyms' | 'projects' | 'permissions' | 'external' | 'notifications' | 'settings'
 
 export function Admin({ dark }: { dark: boolean }) {
   const [tab, setTab] = useState<AdminTab>('users')
 
   const tabs: { key: AdminTab; label: string; icon: string }[] = [
-    { key: 'users',         label: 'Users',              icon: '👤' },
-    { key: 'permissions',   label: 'Permissions Matrix', icon: '🔐' },
+    { key: 'users',         label: 'Users & Roles',      icon: '👤' },
+    { key: 'suppliers',     label: 'Suppliers',          icon: '🏭' },
+    { key: 'warehouses',    label: 'Warehouses',         icon: '🏗️' },
+    { key: 'uom',           label: 'Units of Measure',   icon: '📏' },
+    { key: 'acronyms',      label: 'Acronyms',           icon: '🔤' },
+    { key: 'projects',      label: 'Projects',           icon: '📁' },
+    { key: 'permissions',   label: 'Permission Matrix',  icon: '🔐' },
     { key: 'external',      label: 'External Users',     icon: '🌐' },
     { key: 'notifications', label: 'Notifications',      icon: '🔔' },
     { key: 'settings',      label: 'System Settings',    icon: '⚙️' },
@@ -1082,10 +1373,15 @@ export function Admin({ dark }: { dark: boolean }) {
       </div>
 
       {/* ─── TAB CONTENT ──────────────────────────────────── */}
-      {tab === 'users'         && <UsersTab         dark={dark} />}
-      {tab === 'permissions'   && <PermissionsTab   dark={dark} />}
-      {tab === 'external'      && <ExternalUsersTab dark={dark} />}
-      {tab === 'notifications' && <NotificationsTab dark={dark} />}
+      {tab === 'users'         && <UsersTab          dark={dark} />}
+      {tab === 'suppliers'     && <SuppliersTab      dark={dark} />}
+      {tab === 'warehouses'    && <ComingSoonTab     dark={dark} label="Warehouses" />}
+      {tab === 'uom'           && <ComingSoonTab     dark={dark} label="Units of Measure" />}
+      {tab === 'acronyms'      && <ComingSoonTab     dark={dark} label="Acronyms" />}
+      {tab === 'projects'      && <ProjectsAdminTab  dark={dark} />}
+      {tab === 'permissions'   && <PermissionsTab    dark={dark} />}
+      {tab === 'external'      && <ExternalUsersTab  dark={dark} />}
+      {tab === 'notifications' && <NotificationsTab  dark={dark} />}
       {tab === 'settings'      && <SystemSettingsTab dark={dark} />}
     </div>
   )
