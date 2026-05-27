@@ -243,9 +243,9 @@ const PermDot = ({ value, title }: { value: number; title: string }) => (
 // ─── COLUMN KEYS ────────────────────────────────────────────
 // Email is shown below the name in the Name cell (not a separate
 // column) so users with the same full name are still distinguishable.
-type UserKey = 'uname' | 'urole' | 'uprojects' | 'ucompany' | 'ucontract' | 'ustatus' | 'ulastlogin'
-const U_DEF: Record<UserKey, number> = { uname: 230, urole: 145, uprojects: 80, ucompany: 140, ucontract: 110, ustatus: 90, ulastlogin: 110 }
-const U_MIN: Record<UserKey, number> = { uname: 140, urole: 90,  uprojects: 60, ucompany: 80,  ucontract: 80,  ustatus: 70, ulastlogin: 80  }
+type UserKey = 'uname' | 'urole' | 'uprojects' | 'ucompany' | 'ucontractstart' | 'ucontract' | 'ustatus' | 'ulastlogin'
+const U_DEF: Record<UserKey, number> = { uname: 230, urole: 145, uprojects: 80, ucompany: 140, ucontractstart: 110, ucontract: 110, ustatus: 90, ulastlogin: 110 }
+const U_MIN: Record<UserKey, number> = { uname: 140, urole: 90,  uprojects: 60, ucompany: 80,  ucontractstart: 80,  ucontract: 80,  ustatus: 70, ulastlogin: 80  }
 
 type UserForm = {
   fullName: string; email: string; role: string; company: string; staffId: string
@@ -300,6 +300,7 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
     `var(--col-urole,${U_DEF.urole}px)`,
     `var(--col-uprojects,${U_DEF.uprojects}px)`,
     `var(--col-ucompany,${U_DEF.ucompany}px)`,
+    `var(--col-ucontractstart,${U_DEF.ucontractstart}px)`,
     `var(--col-ucontract,${U_DEF.ucontract}px)`,
     `var(--col-ustatus,${U_DEF.ustatus}px)`,
     `var(--col-ulastlogin,${U_DEF.ulastlogin}px)`,
@@ -450,13 +451,14 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
       <TableCard dark={dark}>
         <div ref={containerRef}>
           <TH dark={dark} grid={GRID}>
-            <HeaderCell label="Name / Email"  col="uname"      align="left" onResize={startResize} />
-            <HeaderCell label="Role"          col="urole"                   onResize={startResize} />
-            <HeaderCell label="Projects"      col="uprojects"  align="left" onResize={startResize} />
-            <HeaderCell label="Company"       col="ucompany"   align="left" onResize={startResize} />
-            <HeaderCell label="Contract End"  col="ucontract"               onResize={startResize} />
-            <HeaderCell label="Status"        col="ustatus"                 onResize={startResize} />
-            <HeaderCell label="Last Login"    col="ulastlogin"              onResize={startResize} />
+            <HeaderCell label="Name / Email"    col="uname"          align="left" onResize={startResize} />
+            <HeaderCell label="Role"            col="urole"                       onResize={startResize} />
+            <HeaderCell label="Projects"        col="uprojects"      align="left" onResize={startResize} />
+            <HeaderCell label="Company"         col="ucompany"       align="left" onResize={startResize} />
+            <HeaderCell label="Contract Start"  col="ucontractstart"              onResize={startResize} />
+            <HeaderCell label="Contract End"    col="ucontract"                   onResize={startResize} />
+            <HeaderCell label="Status"          col="ustatus"                     onResize={startResize} />
+            <HeaderCell label="Last Login"      col="ulastlogin"                  onResize={startResize} />
             <div />
           </TH>
 
@@ -483,8 +485,11 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
               <TD dark={dark} muted center>
                 {FULL_ACCESS_ROLES.has(u.role) ? 'All' : (u.projectCount ?? 0)}
               </TD>
-              {/* ─── COMPANY / CONTRACT / STATUS / LAST LOGIN ───────── */}
+              {/* ─── COMPANY / CONTRACT START / CONTRACT END / STATUS / LAST LOGIN */}
               <TD dark={dark} muted>{u.company || '—'}</TD>
+              <TD dark={dark} muted mono>
+                {u.contractStart ? u.contractStart.slice(0, 10) : '—'}
+              </TD>
               <TD dark={dark} muted mono>
                 {u.contractEnd ? u.contractEnd.slice(0, 10) : '—'}
               </TD>
@@ -549,8 +554,8 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
             </select>
           </Field>
           <Field label="Company"><input value={form.company} onChange={f('company')} placeholder="Company name" style={inp(dark)} /></Field>
-          <Field label="Contract Start"><input type="date" value={form.contractStart} onChange={f('contractStart')} style={inp(dark)} /></Field>
-          <Field label="Contract End (optional)"><input type="date" value={form.contractEnd} onChange={f('contractEnd')} style={inp(dark)} /></Field>
+          <Field label="Contract Start Date (optional)"><input type="date" value={form.contractStart} onChange={f('contractStart')} style={inp(dark)} /></Field>
+          <Field label="Contract End Date (optional)"><input type="date" value={form.contractEnd} onChange={f('contractEnd')} style={inp(dark)} /></Field>
           {/* New users get a system-generated temp password emailed to them; no manual password entry needed */}
           {editId == null && (
             <Field label="Password" wide>
