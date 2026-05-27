@@ -35,6 +35,9 @@ type AdminUser = {
   approvedByName: string | null; secondApprovedByName: string | null
   lastLogin: string | null
   projectCount: number
+  // Set to 1 when a single-admin emergency override was used for approval
+  emergencyOverride: number
+  emergencyOverrideReason: string | null
 }
 
 // ─── FULL-ACCESS ROLES ───────────────────────────────────────
@@ -269,7 +272,10 @@ function friendlyUserError(serverErr: string): string {
   return serverErr
 }
 
-function UsersTab({ dark }: { dark: boolean }) {
+// onSave: called after any successful create/update/delete so the
+// parent Admin component can refresh the active admin count and
+// update the warning banner without a full page reload.
+function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
   const { user: me } = useAuth()
   const [rows,      setRows]      = useState<AdminUser[]>([])
   const [total,     setTotal]     = useState<number | null>(null)
@@ -360,7 +366,7 @@ function UsersTab({ dark }: { dark: boolean }) {
       editId != null
         ? await axios.put(`${API}/users/${editId}`, form)
         : await axios.post(`${API}/users`, form)
-      setShowForm(false); load()
+      setShowForm(false); load(); onSave?.()
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
       setFormErr(friendlyUserError(err.response?.data?.error ?? ''))
@@ -382,7 +388,7 @@ function UsersTab({ dark }: { dark: boolean }) {
   const del = async (id: number) => {
     try {
       await axios.delete(`${API}/users/${id}`)
-      setDelId(null); load()
+      setDelId(null); load(); onSave?.()
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
       setError(err.response?.data?.error ?? 'Delete failed')
@@ -756,15 +762,24 @@ function PermissionsTab({ dark }: { dark: boolean }) {
 // ═══════════════════════════════════════════════════════════
 // ─── EXTERNAL USERS TAB ─────────────────────────────────────
 // Shows all external users with their approval status.
-// Admins can approve from here; the two-admin rule is enforced
-// server-side — the UI just sends the approve request.
+// Normal flow: two distinct admins must approve before activation.
+// Emergency override: when activeAdminCount === 1, a single admin
+// may approve with a mandatory documented reason. The server flags
+// the approval and sends escalation emails automatically.
 // ═══════════════════════════════════════════════════════════
-function ExternalUsersTab({ dark }: { dark: boolean }) {
+function ExternalUsersTab({ dark, activeAdminCount }: { dark: boolean; activeAdminCount: number | null }) {
   const { user: me } = useAuth()
   const [rows,      setRows]      = useState<AdminUser[]>([])
   const [error,     setError]     = useState('')
   const [approving, setApproving] = useState<number | null>(null)
   const [filter,    setFilter]    = useState<'all' | 'pending' | 'approved'>('pending')
+
+  // ─── EMERGENCY OVERRIDE MODAL STATE ─────────────────────────
+  // Shown instead of a direct approve when only 1 admin is active.
+  const [emergencyModal,      setEmergencyModal]      = useState<{ userId: number; userName: string; userEmail: string } | null>(null)
+  const [emergencyReason,     setEmergencyReason]     = useState('')
+  const [emergencySubmitting, setEmergencySubmitting] = useState(false)
+  const [emergencyErr,        setEmergencyErr]        = useState('')
 
   const load = useCallback(async () => {
     setError('')
@@ -779,7 +794,20 @@ function ExternalUsersTab({ dark }: { dark: boolean }) {
 
   useEffect(() => { load() }, [load])
 
-  const approve = async (id: number) => {
+  // ─── APPROVE HANDLER ────────────────────────────────────────
+  // Routes to emergency modal when there's only 1 active admin,
+  // otherwise calls the API directly for normal two-admin flow.
+  const handleApprove = (u: AdminUser) => {
+    if (activeAdminCount === 1) {
+      setEmergencyModal({ userId: u.id, userName: u.fullName, userEmail: u.email })
+      setEmergencyReason('')
+      setEmergencyErr('')
+    } else {
+      normalApprove(u.id)
+    }
+  }
+
+  const normalApprove = async (id: number) => {
     setApproving(id)
     try {
       const { data } = await axios.post(`${API}/users/${id}/approve`)
@@ -792,13 +820,32 @@ function ExternalUsersTab({ dark }: { dark: boolean }) {
     } finally { setApproving(null) }
   }
 
+  // ─── EMERGENCY OVERRIDE SUBMIT ───────────────────────────────
+  // Posts the reason with the approve request. Server logs the event,
+  // flags the record, and sends escalation emails.
+  const submitEmergency = async () => {
+    if (!emergencyReason.trim()) { setEmergencyErr('Emergency override reason is required.'); return }
+    if (!emergencyModal) return
+    setEmergencySubmitting(true); setEmergencyErr('')
+    try {
+      await axios.post(`${API}/users/${emergencyModal.userId}/approve`, {
+        emergencyReason: emergencyReason.trim(),
+      })
+      setEmergencyModal(null)
+      load()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setEmergencyErr(err.response?.data?.error ?? 'Emergency approval failed')
+    } finally { setEmergencySubmitting(false) }
+  }
+
   const filtered = rows.filter(u => {
     if (filter === 'pending')  return !u.isActive
     if (filter === 'approved') return !!u.isActive
     return true
   })
 
-  const approvals = (u: AdminUser) => {
+  const ApprovalBubbles = ({ u }: { u: AdminUser }) => {
     const count = u.secondApprovedBy ? 2 : u.approvedBy ? 1 : 0
     return (
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -807,7 +854,11 @@ function ExternalUsersTab({ dark }: { dark: boolean }) {
             {i + 1}
           </span>
         ))}
-        <span style={{ fontSize: 11, color: '#94a3b8' }}>{count}/2 approved</span>
+        {u.emergencyOverride ? (
+          <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: 'rgba(245,158,11,0.15)', color: '#b45309' }}>EMERGENCY</span>
+        ) : (
+          <span style={{ fontSize: 11, color: '#94a3b8' }}>{count}/2 approved</span>
+        )}
       </div>
     )
   }
@@ -836,6 +887,7 @@ function ExternalUsersTab({ dark }: { dark: boolean }) {
           const hasAlreadyApproved = u.approvedBy === me?.id
           const fullyApproved      = !!u.secondApprovedBy
           const canApprove         = !fullyApproved && !hasAlreadyApproved
+          const isEmergencyMode    = activeAdminCount === 1
 
           return (
             <div key={u.id} style={{ background: dark ? '#1e293b' : '#fff', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: 10, padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 16 }}>
@@ -858,21 +910,34 @@ function ExternalUsersTab({ dark }: { dark: boolean }) {
                     Contract ends: {u.contractEnd.slice(0, 10)}
                   </div>
                 )}
+                {/* Show emergency override reason on the card if it was used */}
+                {u.emergencyOverride && u.emergencyOverrideReason && (
+                  <div style={{ marginTop: 4, fontSize: 11, color: '#b45309', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 4, padding: '3px 8px', display: 'inline-block' }}>
+                    Emergency override: {u.emergencyOverrideReason}
+                  </div>
+                )}
               </div>
               {/* Approvals */}
-              <div style={{ flexShrink: 0 }}>{approvals(u)}</div>
+              <div style={{ flexShrink: 0 }}><ApprovalBubbles u={u} /></div>
               {/* Actions */}
               <div style={{ flexShrink: 0 }}>
                 {fullyApproved ? (
                   <span style={{ fontSize: 12, color: '#22c55e', fontWeight: 600 }}>✓ Activated</span>
-                ) : hasAlreadyApproved ? (
+                ) : hasAlreadyApproved && !isEmergencyMode ? (
                   <span style={{ fontSize: 12, color: '#94a3b8' }}>You approved — awaiting 2nd</span>
-                ) : canApprove ? (
+                ) : canApprove || isEmergencyMode ? (
                   <button
-                    onClick={() => approve(u.id)}
+                    onClick={() => handleApprove(u)}
                     disabled={approving === u.id}
-                    style={{ padding: '7px 18px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#E84E0F', color: '#fff', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', opacity: approving === u.id ? 0.6 : 1 }}>
-                    {approving === u.id ? 'Approving…' : 'Approve'}
+                    style={{
+                      padding: '7px 18px', borderRadius: 6, fontSize: 13, fontWeight: 600,
+                      border: isEmergencyMode ? '1px solid rgba(245,158,11,0.5)' : 'none',
+                      background: isEmergencyMode ? 'rgba(245,158,11,0.12)' : '#E84E0F',
+                      color: isEmergencyMode ? '#b45309' : '#fff',
+                      cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif',
+                      opacity: approving === u.id ? 0.6 : 1,
+                    }}>
+                    {approving === u.id ? 'Approving…' : isEmergencyMode ? 'Emergency Approve' : 'Approve'}
                   </button>
                 ) : null}
               </div>
@@ -880,6 +945,68 @@ function ExternalUsersTab({ dark }: { dark: boolean }) {
           )
         })}
       </div>
+
+      {/* ─── EMERGENCY OVERRIDE MODAL ───────────────────────── */}
+      {emergencyModal && createPortal(
+        <div
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setEmergencyModal(null) }}
+          style={{ position: 'fixed', inset: 0, zIndex: 10001, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, fontFamily: 'IBM Plex Sans, sans-serif' }}>
+          <div style={{ width: 520, background: dark ? '#1e293b' : '#fff', border: '1px solid rgba(245,158,11,0.4)', borderRadius: 12, boxShadow: '0 24px 64px rgba(0,0,0,0.5)', overflow: 'hidden' }}>
+            {/* Header */}
+            <div style={{ padding: '14px 20px', borderBottom: '1px solid rgba(245,158,11,0.25)', background: 'rgba(245,158,11,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 16 }}>⚠️</span>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#b45309' }}>Emergency Single-Admin Approval</div>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 1 }}>Only 1 active administrator exists — normal two-admin approval unavailable</div>
+                </div>
+              </div>
+              <button onClick={() => setEmergencyModal(null)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 20, lineHeight: 1 }}>×</button>
+            </div>
+            {/* Body */}
+            <div style={{ padding: '20px' }}>
+              {/* User summary */}
+              <div style={{ padding: '10px 14px', borderRadius: 8, background: dark ? '#0f172a' : '#f8fafc', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, marginBottom: 16 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: dark ? '#f1f5f9' : '#0f172a' }}>{emergencyModal.userName}</div>
+                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>{emergencyModal.userEmail}</div>
+              </div>
+              {/* Warning note */}
+              <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', marginBottom: 16, fontSize: 12, color: '#92400e', lineHeight: 1.6 }}>
+                This action bypasses the standard two-admin approval requirement. It will be flagged in the audit trail and all administrators and escalation contacts will be notified by email.
+              </div>
+              {/* Reason field */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 4 }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                  Emergency Override Reason <span style={{ color: '#ef4444' }}>*</span>
+                </span>
+                <textarea
+                  value={emergencyReason}
+                  onChange={(e) => setEmergencyReason(e.target.value)}
+                  placeholder="Describe why single-admin approval is necessary (e.g. urgent project access required, second admin unavailable)"
+                  rows={3}
+                  style={{ padding: '8px 10px', borderRadius: 6, border: `1px solid ${emergencyErr ? '#ef4444' : (dark ? '#334155' : '#dde3ed')}`, background: dark ? '#0f172a' : '#f8fafc', color: dark ? '#f1f5f9' : '#0f172a', fontSize: 13, fontFamily: 'IBM Plex Sans, sans-serif', resize: 'vertical', outline: 'none', width: '100%', boxSizing: 'border-box' }}
+                />
+                {emergencyErr && <span style={{ fontSize: 12, color: '#ef4444' }}>{emergencyErr}</span>}
+              </div>
+            </div>
+            {/* Footer */}
+            <div style={{ padding: '14px 20px', borderTop: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                onClick={() => setEmergencyModal(null)}
+                style={{ padding: '7px 16px', borderRadius: 6, fontSize: 13, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
+                Cancel
+              </button>
+              <button
+                onClick={submitEmergency}
+                disabled={emergencySubmitting}
+                style={{ padding: '7px 20px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#f59e0b', color: '#fff', cursor: emergencySubmitting ? 'not-allowed' : 'pointer', opacity: emergencySubmitting ? 0.7 : 1, fontFamily: 'IBM Plex Sans, sans-serif' }}>
+                {emergencySubmitting ? 'Approving…' : 'Confirm Emergency Approval'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   )
 }
@@ -1009,13 +1136,30 @@ function NotificationsTab({ dark }: { dark: boolean }) {
 
 // ═══════════════════════════════════════════════════════════
 // ─── SYSTEM SETTINGS TAB ────────────────────────────────────
-// Displays read-only SMTP configuration status, expiry thresholds,
-// and allows admins to send a test email.
+// Shows SMTP status, expiry thresholds, and the editable
+// escalation email field. Settings are persisted in the
+// system_settings table via GET/PUT /api/admin/system-settings.
 // ═══════════════════════════════════════════════════════════
 function SystemSettingsTab({ dark }: { dark: boolean }) {
-  const [testing,     setTesting]     = useState(false)
-  const [testResult,  setTestResult]  = useState('')
-  const [testError,   setTestError]   = useState('')
+  const [testing,          setTesting]          = useState(false)
+  const [testResult,       setTestResult]       = useState('')
+  const [testError,        setTestError]        = useState('')
+  const [escalationEmail,  setEscalationEmail]  = useState('')
+  const [savingEmail,      setSavingEmail]      = useState(false)
+  const [emailSaved,       setEmailSaved]       = useState(false)
+  const [emailErr,         setEmailErr]         = useState('')
+
+  // ─── LOAD SETTINGS ──────────────────────────────────────────
+  // Fetch system_settings on mount. Degrades silently if the table
+  // hasn't been created yet (table will return {} from the server).
+  const loadSettings = useCallback(async () => {
+    try {
+      const { data } = await axios.get(`${API}/system-settings`)
+      setEscalationEmail(data.escalation_email ?? '')
+    } catch { /* non-critical — table may not exist yet */ }
+  }, [])
+
+  useEffect(() => { loadSettings() }, [loadSettings])
 
   const sendTest = async () => {
     setTesting(true); setTestResult(''); setTestError('')
@@ -1026,6 +1170,18 @@ function SystemSettingsTab({ dark }: { dark: boolean }) {
       const err = e as { response?: { data?: { error?: string } } }
       setTestError(err.response?.data?.error ?? 'Email test failed')
     } finally { setTesting(false) }
+  }
+
+  const saveEscalationEmail = async () => {
+    setSavingEmail(true); setEmailSaved(false); setEmailErr('')
+    try {
+      await axios.put(`${API}/system-settings`, { escalation_email: escalationEmail })
+      setEmailSaved(true)
+      setTimeout(() => setEmailSaved(false), 3000)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setEmailErr(err.response?.data?.error ?? 'Save failed')
+    } finally { setSavingEmail(false) }
   }
 
   const row = (label: string, value: string, mono = false) => (
@@ -1045,9 +1201,33 @@ function SystemSettingsTab({ dark }: { dark: boolean }) {
 
   return (
     <div style={{ maxWidth: 680 }}>
+
+      {section('Emergency Escalation')}
+      <div style={{ background: dark ? '#1e293b' : '#fff', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: 10, padding: '16px 18px' }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: dark ? '#f1f5f9' : '#0f172a', marginBottom: 4 }}>Emergency Escalation Email</div>
+        <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12, lineHeight: 1.5 }}>
+          This address receives an email whenever an emergency single-admin approval is used. Separate multiple addresses with commas.
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <input
+            value={escalationEmail}
+            onChange={(e) => setEscalationEmail(e.target.value)}
+            placeholder="e.g. security@qcogroup.com.au, director@qcogroup.com.au"
+            style={{ ...inp(dark), flex: 1 }}
+          />
+          <button
+            onClick={saveEscalationEmail}
+            disabled={savingEmail}
+            style={{ padding: '7px 18px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#E84E0F', color: '#fff', cursor: savingEmail ? 'not-allowed' : 'pointer', opacity: savingEmail ? 0.7 : 1, fontFamily: 'IBM Plex Sans, sans-serif', flexShrink: 0, height: 36 }}>
+            {savingEmail ? 'Saving…' : emailSaved ? '✓ Saved' : 'Save'}
+          </button>
+        </div>
+        {emailErr && <p style={{ margin: '6px 0 0', fontSize: 12, color: '#ef4444' }}>{emailErr}</p>}
+      </div>
+
       {section('SMTP Configuration')}
       <div style={{ background: dark ? '#1e293b' : '#fff', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: 10, padding: '0 18px' }}>
-        {row('Host', process.env.SMTP_HOST ?? 'smtp.office365.com', true)}
+        {row('Host', 'smtp.office365.com', true)}
         {row('Port', '587', true)}
         {row('From address', 'noreply@qcogroup.com.au', true)}
         {row('Additional alert recipients', 'Configured via ADDITIONAL_ALERT_EMAILS in .env')}
@@ -1079,15 +1259,37 @@ function SystemSettingsTab({ dark }: { dark: boolean }) {
 
       {section('SQL Setup')}
       <div style={{ background: dark ? '#0f172a' : '#f8fafc', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: 10, padding: '14px 18px' }}>
-        <p style={{ fontSize: 12, color: '#94a3b8', margin: '0 0 10px' }}>Run the following SQL on your MySQL database to enable all permission system features:</p>
+        <p style={{ fontSize: 12, color: '#94a3b8', margin: '0 0 10px' }}>Run the following SQL on your MySQL database to enable all features:</p>
         <pre style={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', color: dark ? '#94a3b8' : '#475569', margin: 0, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
-{`ALTER TABLE users ADD COLUMN IF NOT EXISTS contract_start DATE;
+{`-- Users table: external approval + emergency override columns
+ALTER TABLE users ADD COLUMN IF NOT EXISTS contract_start DATE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS contract_end DATE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_external BOOLEAN DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS approved_by INT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS approved_at DATETIME;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS second_approved_by INT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS second_approved_at DATETIME;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS emergency_override TINYINT(1) DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS emergency_override_reason TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_id VARCHAR(50);
+
+-- System settings (escalation email, policy thresholds)
+CREATE TABLE IF NOT EXISTS system_settings (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  setting_key VARCHAR(100) NOT NULL UNIQUE,
+  setting_value TEXT,
+  updated_by INT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (updated_by) REFERENCES users(id)
+);
+INSERT INTO system_settings (setting_key, setting_value) VALUES
+  ('escalation_email', ''),
+  ('min_admins_required', '2'),
+  ('external_user_approval_required', '2'),
+  ('password_expiry_days_internal', '90'),
+  ('password_expiry_days_external', '30'),
+  ('access_expiry_warning_days', '30,14,7,1')
+ON DUPLICATE KEY UPDATE setting_key=setting_key;
 
 CREATE TABLE IF NOT EXISTS user_wbs_access (...);
 CREATE TABLE IF NOT EXISTS role_permissions (...);
@@ -1095,7 +1297,7 @@ CREATE TABLE IF NOT EXISTS user_permission_overrides (...);
 CREATE TABLE IF NOT EXISTS notifications (...);
 CREATE TABLE IF NOT EXISTS delegated_permissions (...);
 
--- Then seed default permissions:
+-- Then seed default role permissions:
 node server/scripts/seed-permissions.js`}
         </pre>
       </div>
@@ -1322,14 +1524,31 @@ const ComingSoonTab = ({ dark, label }: { dark: boolean; label: string }) => (
 
 // ═══════════════════════════════════════════════════════════
 // ─── ADMIN ──────────────────────────────────────────────────
-// Root admin page. Tab bar routes to the five sub-sections.
+// Root admin page. Tab bar routes to the sub-sections.
 // Only users with role='admin' reach this page (guarded both
 // in App.tsx and on every /api/admin route server-side).
+//
+// activeAdminCount is fetched on mount and passed to tabs that
+// need it. A persistent warning banner is shown when count ≤ 1
+// because the system requires a minimum of 2 active admins.
 // ═══════════════════════════════════════════════════════════
 type AdminTab = 'users' | 'suppliers' | 'warehouses' | 'uom' | 'acronyms' | 'projects' | 'permissions' | 'external' | 'notifications' | 'settings'
 
 export function Admin({ dark }: { dark: boolean }) {
-  const [tab, setTab] = useState<AdminTab>('users')
+  const [tab,        setTab]        = useState<AdminTab>('users')
+  const [adminCount, setAdminCount] = useState<number | null>(null)
+
+  // ─── LOAD ACTIVE ADMIN COUNT ─────────────────────────────────
+  // Refreshed on mount. If this returns 1, the warning banner is shown
+  // and emergency single-admin approval is enabled in the External Users tab.
+  const loadAdminCount = useCallback(async () => {
+    try {
+      const { data } = await axios.get(`${API}/admin-count`)
+      setAdminCount(data.count)
+    } catch { /* non-critical — fail silently */ }
+  }, [])
+
+  useEffect(() => { loadAdminCount() }, [loadAdminCount])
 
   const tabs: { key: AdminTab; label: string; icon: string }[] = [
     { key: 'users',         label: 'Users & Roles',      icon: '👤' },
@@ -1356,6 +1575,22 @@ export function Admin({ dark }: { dark: boolean }) {
         </p>
       </div>
 
+      {/* ─── SINGLE-ADMIN WARNING BANNER ──────────────────── */}
+      {/* Persistent — only dismisses when a second admin is added. */}
+      {adminCount !== null && adminCount <= 1 && (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px 16px', borderRadius: 8, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.4)', marginBottom: 20, fontFamily: 'IBM Plex Sans, sans-serif' }}>
+          <span style={{ fontSize: 18, flexShrink: 0, marginTop: 1 }}>⚠️</span>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#b45309', marginBottom: 2 }}>
+              Warning: Only {adminCount === 0 ? 'no' : '1'} active administrator{adminCount === 0 ? 's exist' : ' exists'}
+            </div>
+            <div style={{ fontSize: 12, color: '#92400e', lineHeight: 1.5 }}>
+              The system requires a minimum of 2 active administrators. Please assign a second administrator immediately to maintain system security and restore normal two-admin approval workflows.
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ─── TAB BAR ──────────────────────────────────────── */}
       <div style={{ display: 'flex', gap: 2, marginBottom: 20, borderBottom: `2px solid ${dark ? '#334155' : '#e2e8f0'}`, paddingBottom: 0, overflowX: 'auto' }}>
         {tabs.map(t => {
@@ -1373,14 +1608,14 @@ export function Admin({ dark }: { dark: boolean }) {
       </div>
 
       {/* ─── TAB CONTENT ──────────────────────────────────── */}
-      {tab === 'users'         && <UsersTab          dark={dark} />}
+      {tab === 'users'         && <UsersTab          dark={dark} onSave={loadAdminCount} />}
       {tab === 'suppliers'     && <SuppliersTab      dark={dark} />}
       {tab === 'warehouses'    && <ComingSoonTab     dark={dark} label="Warehouses" />}
       {tab === 'uom'           && <ComingSoonTab     dark={dark} label="Units of Measure" />}
       {tab === 'acronyms'      && <ComingSoonTab     dark={dark} label="Acronyms" />}
       {tab === 'projects'      && <ProjectsAdminTab  dark={dark} />}
       {tab === 'permissions'   && <PermissionsTab    dark={dark} />}
-      {tab === 'external'      && <ExternalUsersTab  dark={dark} />}
+      {tab === 'external'      && <ExternalUsersTab  dark={dark} activeAdminCount={adminCount} />}
       {tab === 'notifications' && <NotificationsTab  dark={dark} />}
       {tab === 'settings'      && <SystemSettingsTab dark={dark} />}
     </div>

@@ -47,6 +47,28 @@ function paginate(query) {
   return { page, limit, offset: (page - 1) * limit }
 }
 
+// ─── ACTIVE ADMIN COUNT ──────────────────────────────────────
+// Returns the number of active users with role='admin'. Used to
+// enforce the minimum-2-admins security rule and to decide whether
+// emergency single-admin approval is permitted for external users.
+async function activeAdminCount() {
+  const [[{ n }]] = await db.query(
+    `SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND is_active = 1`
+  )
+  return Number(n)
+}
+
+// ─── ADMIN COUNT ENDPOINT ────────────────────────────────────
+// Returns the current active admin count so the frontend can show
+// a warning banner and enable the emergency approval path when
+// only 1 admin exists.
+router.get('/admin-count', async (req, res) => {
+  try {
+    const count = await activeAdminCount()
+    res.json({ count })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
 // ═══════════════════════════════════════════════════════════
 // ─── PROJECTS CRUD ──────────────────────────────────────────
 // Preserved from previous version. Projects are also seeded from
@@ -246,7 +268,9 @@ router.get('/users', async (req, res) => {
               a2.full_name             AS secondApprovedByName,
               (SELECT COUNT(DISTINCT project_id)
                FROM user_wbs_access
-               WHERE user_id = u.id)  AS projectCount
+               WHERE user_id = u.id)  AS projectCount,
+              IFNULL(u.emergency_override, 0) AS emergencyOverride,
+              u.emergency_override_reason      AS emergencyOverrideReason
        FROM users u
        LEFT JOIN users a1 ON a1.id = u.approved_by
        LEFT JOIN users a2 ON a2.id = u.second_approved_by
@@ -423,6 +447,27 @@ router.put('/users/:id', async (req, res) => {
   if (!VALID_ROLES.has(role)) return res.status(400).json({ error: 'Invalid role' })
 
   try {
+    // ─── MIN-2-ADMINS GUARD ───────────────────────────────────────
+    // Fetch current state to detect if this edit would shrink the active
+    // admin pool below 2 (deactivating or demoting the last active admin).
+    const [[current]] = await db.query('SELECT role, is_active FROM users WHERE id=?', [id])
+    if (!current) return res.status(404).json({ error: 'User not found' })
+
+    const willReduceAdminCount =
+      current.role === 'admin' && current.is_active && (
+        !isActive ||           // deactivating an active admin
+        role !== 'admin'       // demoting an active admin to a non-admin role
+      )
+    if (willReduceAdminCount) {
+      const count = await activeAdminCount()
+      if (count <= 2) {
+        const act = !isActive ? 'deactivate' : 'change the role of'
+        return res.status(400).json({
+          error: `Cannot ${act} this admin account. The system requires a minimum of 2 active administrators. Please assign another admin before making this change.`
+        })
+      }
+    }
+
     if (password) {
       const hash = await bcrypt.hash(password, 10)
       await db.query(
@@ -468,6 +513,17 @@ router.delete('/users/:id', async (req, res) => {
   const id = parseInt(req.params.id)
   if (id === req.user.id) return res.status(400).json({ error: 'Cannot delete your own account' })
   try {
+    // ─── MIN-2-ADMINS GUARD ───────────────────────────────────────
+    const [[target]] = await db.query('SELECT role, is_active FROM users WHERE id=?', [id])
+    if (!target) return res.status(404).json({ error: 'User not found' })
+    if (target.role === 'admin' && target.is_active) {
+      const count = await activeAdminCount()
+      if (count <= 2) {
+        return res.status(400).json({
+          error: 'Cannot delete this admin account. The system requires a minimum of 2 active administrators. Please assign another admin before deleting this account.'
+        })
+      }
+    }
     const [r] = await db.query('DELETE FROM users WHERE id=?', [id])
     if (!r.affectedRows) return res.status(404).json({ error: 'User not found' })
     audit(req, 'user.delete', `id=${id}`)
@@ -476,12 +532,18 @@ router.delete('/users/:id', async (req, res) => {
 })
 
 // ─── APPROVE EXTERNAL USER ──────────────────────────────────
-// Two distinct admins must call this endpoint before the external
-// user is activated.  The first call sets approved_by; the second
-// call (by a different admin) sets second_approved_by and activates
-// the account.  Calling it a third time is a no-op.
+// Normal flow: two distinct admins must approve before the external
+// user is activated (first call sets approved_by; second call from a
+// different admin sets second_approved_by and activates the account).
+//
+// Emergency override: when only 1 active admin exists, the normal
+// two-admin workflow cannot complete. A single admin may approve with
+// a mandatory documented reason. The override is flagged in the DB
+// (emergency_override=1) and escalation emails are sent automatically.
 router.post('/users/:id/approve', async (req, res) => {
   const id = parseInt(req.params.id)
+  const { emergencyReason } = req.body
+
   try {
     const [[user]] = await db.query(
       `SELECT id, full_name AS fullName, email, is_external AS isExternal,
@@ -490,13 +552,114 @@ router.post('/users/:id/approve', async (req, res) => {
        FROM users WHERE id = ?`,
       [id]
     )
-    if (!user) return res.status(404).json({ error: 'User not found' })
+    if (!user)            return res.status(404).json({ error: 'User not found' })
     if (!user.isExternal) return res.status(400).json({ error: 'User is not external' })
     if (user.isActive && user.secondApprovedBy) {
       return res.status(400).json({ error: 'User already fully approved and active' })
     }
 
-    // ── First approval ───────────────────────────────────
+    const adminCount = await activeAdminCount()
+
+    // ─── EMERGENCY SINGLE-ADMIN OVERRIDE PATH ────────────────────
+    // Activated when only 1 active admin exists so the normal two-admin
+    // constraint cannot be satisfied. A reason is mandatory; the approval
+    // is flagged and escalation emails are sent to all admins + the
+    // escalation_email address stored in system_settings.
+    if (adminCount === 1) {
+      if (!emergencyReason?.trim()) {
+        return res.status(400).json({
+          error: 'There is only 1 active administrator. Enter an emergency override reason to proceed with single-admin approval.',
+          requiresEmergencyReason: true,
+        })
+      }
+
+      // Set both approval slots to the single admin regardless of whether
+      // approved_by was already recorded (first approval may have been set
+      // before a second admin was deactivated).
+      if (!user.approvedBy) {
+        await db.query(
+          `UPDATE users
+           SET approved_by=?, approved_at=NOW(),
+               second_approved_by=?, second_approved_at=NOW(),
+               is_active=1, emergency_override=1, emergency_override_reason=?
+           WHERE id=?`,
+          [req.user.id, req.user.id, emergencyReason.trim(), id]
+        )
+      } else {
+        await db.query(
+          `UPDATE users
+           SET second_approved_by=?, second_approved_at=NOW(),
+               is_active=1, emergency_override=1, emergency_override_reason=?
+           WHERE id=?`,
+          [req.user.id, emergencyReason.trim(), id]
+        )
+      }
+
+      const timestamp = new Date().toUTCString()
+      audit(req, 'user.emergency_approve',
+        `EMERGENCY SINGLE-ADMIN APPROVAL — user=${id} (${user.fullName}) ` +
+        `Reason: ${emergencyReason.trim()} ` +
+        `Approved by: ${req.user.email} at ${timestamp}`
+      )
+
+      // ── Escalation email recipients ──────────────────────────────
+      // Send to all currently active admins plus any escalation_email
+      // addresses saved in system_settings.
+      const [adminRows] = await db.query(
+        `SELECT email FROM users WHERE role = 'admin' AND is_active = 1`
+      )
+      let escalationList = []
+      try {
+        const [[escRow]] = await db.query(
+          `SELECT setting_value FROM system_settings WHERE setting_key = 'escalation_email'`
+        )
+        if (escRow?.setting_value) {
+          escalationList = escRow.setting_value.split(',').map(e => e.trim()).filter(Boolean)
+        }
+      } catch { /* system_settings table may not exist yet — continue without */ }
+
+      const notifyList = [...new Set([
+        ...adminRows.map(r => r.email),
+        ...escalationList,
+      ])]
+
+      if (notifyList.length) {
+        await sendEmail(
+          notifyList,
+          'QCO MMS — Emergency Single-Admin Approval Used',
+          html('Emergency Single-Admin Approval',
+            `<div style="padding:10px 14px;border-radius:6px;background:#fff3cd;border:1px solid #f59e0b;margin-bottom:16px">
+               <strong style="color:#b45309">⚠️ Emergency Override Alert</strong>
+             </div>
+             <p>An emergency single-admin approval was used in QCO MMS. Normally two distinct admin approvals are required.</p>
+             <table style="border-collapse:collapse;margin:12px 0;width:100%">
+               <tr><td style="padding:6px 12px 6px 0;color:#64748b;font-weight:600;white-space:nowrap">User approved:</td><td>${user.fullName} &lt;${user.email}&gt;</td></tr>
+               <tr><td style="padding:6px 12px 6px 0;color:#64748b;font-weight:600;white-space:nowrap">Approved by:</td><td>${req.user.full_name} &lt;${req.user.email}&gt;</td></tr>
+               <tr><td style="padding:6px 12px 6px 0;color:#64748b;font-weight:600;white-space:nowrap">Reason given:</td><td><em>${emergencyReason.trim()}</em></td></tr>
+               <tr><td style="padding:6px 12px 6px 0;color:#64748b;font-weight:600;white-space:nowrap">Timestamp:</td><td>${timestamp}</td></tr>
+             </table>
+             <p style="color:#64748b;font-size:13px">Please ensure a second administrator account is assigned immediately to restore normal approval workflows.</p>`
+          )
+        )
+      }
+
+      // Notify the approved user that their account is active
+      await sendEmail(user.email, 'Access approved — QCO MMS',
+        html('Access Approved',
+          `<p>Dear ${user.fullName},</p>
+           <p>Your QCO MMS access request has been approved. You can now log in at your project's QMAT URL.</p>`
+        )
+      )
+
+      return res.json({
+        message: 'Emergency single-admin approval completed. User is now active.',
+        approvals: 1, isActive: true, emergency: true,
+      })
+    }
+
+    // ─── NORMAL TWO-ADMIN APPROVAL PATH ──────────────────────────
+
+    // First approval
     if (!user.approvedBy) {
       if (req.user.id === id) {
         return res.status(400).json({ error: 'Cannot approve your own account' })
@@ -507,7 +670,6 @@ router.post('/users/:id/approve', async (req, res) => {
       )
       audit(req, 'user.approve_first', `id=${id}`)
 
-      // Notify user that first approval was received
       await sendEmail(user.email, 'Access request received — QCO MMS',
         html('Access Request Update',
           `<p>Dear ${user.fullName},</p>
@@ -515,11 +677,10 @@ router.post('/users/:id/approve', async (req, res) => {
            <p>You will receive another email once your access is fully approved.</p>`
         )
       )
-
       return res.json({ message: 'First approval recorded. Awaiting second admin approval.', approvals: 1 })
     }
 
-    // ── Second approval ──────────────────────────────────
+    // Second approval
     if (user.secondApprovedBy) {
       return res.status(400).json({ error: 'Already has two approvals' })
     }
@@ -533,7 +694,6 @@ router.post('/users/:id/approve', async (req, res) => {
     )
     audit(req, 'user.approve_second', `id=${id}`)
 
-    // Notify user that their account is now active
     await sendEmail(user.email, 'Access approved — QCO MMS',
       html('Access Approved',
         `<p>Dear ${user.fullName},</p>
@@ -550,6 +710,16 @@ router.post('/users/:id/deactivate', async (req, res) => {
   const id = parseInt(req.params.id)
   if (id === req.user.id) return res.status(400).json({ error: 'Cannot deactivate your own account' })
   try {
+    // ─── MIN-2-ADMINS GUARD ───────────────────────────────────────
+    const [[target]] = await db.query('SELECT role, is_active FROM users WHERE id=?', [id])
+    if (target?.role === 'admin' && target?.is_active) {
+      const count = await activeAdminCount()
+      if (count <= 2) {
+        return res.status(400).json({
+          error: 'Cannot deactivate this admin account. The system requires a minimum of 2 active administrators. Please assign another admin before deactivating this account.'
+        })
+      }
+    }
     await db.query('UPDATE users SET is_active=0 WHERE id=?', [id])
     audit(req, 'user.deactivate', `id=${id}`)
     res.json({ ok: true })
@@ -816,6 +986,56 @@ router.delete('/notifications/:id', async (req, res) => {
     await db.query('DELETE FROM notifications WHERE id=?', [parseInt(req.params.id)])
     res.json({ ok: true })
   } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ═══════════════════════════════════════════════════════════
+// ─── SYSTEM SETTINGS ────────────────────────────────────────
+// Persistent key-value store for admin-configurable settings.
+// The table is created via the SQL block in the System Settings tab.
+// Only keys in EDITABLE_SETTING_KEYS can be written via the API to
+// prevent arbitrary injection.
+// ═══════════════════════════════════════════════════════════
+const EDITABLE_SETTING_KEYS = new Set(['escalation_email'])
+
+router.get('/system-settings', async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      'SELECT setting_key AS k, setting_value AS v FROM system_settings'
+    )
+    const settings = {}
+    rows.forEach(r => { settings[r.k] = r.v ?? '' })
+    res.json(settings)
+  } catch (err) {
+    // If the table does not exist yet, return an empty object so
+    // the frontend degrades gracefully until the migration is run.
+    if (err.code === 'ER_NO_SUCH_TABLE') return res.json({})
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.put('/system-settings', async (req, res) => {
+  const updates = req.body
+  const keys = Object.keys(updates).filter(k => EDITABLE_SETTING_KEYS.has(k))
+  if (keys.length === 0) return res.status(400).json({ error: 'No valid settings provided' })
+  try {
+    for (const key of keys) {
+      await db.query(
+        `INSERT INTO system_settings (setting_key, setting_value, updated_by)
+         VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value), updated_by=VALUES(updated_by)`,
+        [key, updates[key] ?? '', req.user.id]
+      )
+    }
+    audit(req, 'system_settings.update', `keys=${keys.join(',')}`)
+    res.json({ ok: true })
+  } catch (err) {
+    if (err.code === 'ER_NO_SUCH_TABLE') {
+      return res.status(500).json({
+        error: 'System settings table does not exist yet. Run the SQL setup from the System Settings tab first.'
+      })
+    }
+    res.status(500).json({ error: err.message })
+  }
 })
 
 // ─── SEND TEST EMAIL ────────────────────────────────────────
