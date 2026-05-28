@@ -126,18 +126,105 @@ router.delete('/projects/:id', async (req, res) => {
 // ─── SUPPLIERS CRUD ─────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════
 
+// ─── HELPER: upsert supplier addresses ──────────────────────
+// Called after creating or updating a supplier. Replaces all
+// existing address rows with the submitted array.
+async function upsertSupplierAddresses(supplierId, addresses) {
+  if (!Array.isArray(addresses) || addresses.length === 0) return
+  // Remove old rows then insert fresh — simpler than diffing by id
+  await db.query('DELETE FROM supplier_addresses WHERE supplier_id = ?', [supplierId])
+  for (const a of addresses) {
+    await db.query(
+      `INSERT INTO supplier_addresses
+         (supplier_id, label, address_line1, address_line2, city, state, postcode, country,
+          is_primary, is_pickup, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        supplierId,
+        (a.label || 'Main').toString().slice(0, 100),
+        (a.address_line1 || '').toString().slice(0, 255),
+        (a.address_line2 || null),
+        (a.city || null), (a.state || null), (a.postcode || null), (a.country || null),
+        a.is_primary ? 1 : 0,
+        a.is_pickup  ? 1 : 0,
+        (a.notes || null),
+      ]
+    )
+  }
+}
+
 router.get('/suppliers', async (req, res) => {
   try {
+    // ─── INCLUDE ADDRESS COUNT + PRIMARY ADDRESS ─────────────
+    // Degrades gracefully if supplier_addresses table doesn't exist yet.
+    let rows
+    try {
+      ;[rows] = await db.query(
+        `SELECT s.id, s.name, s.code, s.country, s.contact_name AS contactName,
+                s.email, s.phone, s.status,
+                COUNT(a.id)                                   AS addressCount,
+                MAX(CASE WHEN a.is_primary = 1 THEN
+                  CONCAT_WS(', ',
+                    NULLIF(a.address_line1,''), NULLIF(a.city,''), NULLIF(a.state,''),
+                    NULLIF(a.postcode,''), NULLIF(a.country,''))
+                  ELSE NULL END)                              AS primaryAddressText
+         FROM suppliers s
+         LEFT JOIN supplier_addresses a ON a.supplier_id = s.id
+         GROUP BY s.id
+         ORDER BY s.name`
+      )
+    } catch {
+      // supplier_addresses table not yet created — fall back
+      ;[rows] = await db.query(
+        `SELECT id, name, code, country, contact_name AS contactName, email, phone, status,
+                0 AS addressCount, NULL AS primaryAddressText
+         FROM suppliers ORDER BY name`
+      )
+    }
+    res.json(rows)
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ─── GET SUPPLIER DETAIL ─────────────────────────────────────
+// Full supplier record with all addresses — used by edit modal.
+router.get('/suppliers/:id', async (req, res) => {
+  const id = parseInt(req.params.id)
+  try {
+    const [[row]] = await db.query(
+      `SELECT id, name, code, country, contact_name AS contactName, email, phone, status FROM suppliers WHERE id=?`,
+      [id]
+    )
+    if (!row) return res.status(404).json({ error: 'Supplier not found' })
+    let addresses = []
+    try {
+      ;[addresses] = await db.query(
+        `SELECT id, label, address_line1, address_line2, city, state, postcode, country,
+                is_primary, is_pickup, notes
+         FROM supplier_addresses WHERE supplier_id = ? ORDER BY is_primary DESC, id ASC`,
+        [id]
+      )
+    } catch { /* table may not exist */ }
+    res.json({ ...row, addresses })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ─── GET SUPPLIER ADDRESSES ONLY ────────────────────────────
+// Used by Expediting SCN module to list pickup locations.
+router.get('/suppliers/:id/addresses', async (req, res) => {
+  const id = parseInt(req.params.id)
+  try {
     const [rows] = await db.query(
-      `SELECT id, name, code, country, contact_name AS contactName, email, phone, status
-       FROM suppliers ORDER BY name`
+      `SELECT id, label, address_line1, address_line2, city, state, postcode, country,
+              is_primary, is_pickup, notes
+       FROM supplier_addresses WHERE supplier_id = ? ORDER BY is_primary DESC, id ASC`,
+      [id]
     )
     res.json(rows)
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
 router.post('/suppliers', async (req, res) => {
-  const { name, code, country, contactName, email, phone, status } = req.body
+  const { name, code, country, contactName, email, phone, status, addresses } = req.body
   if (!name?.trim()) return res.status(400).json({ error: 'Name is required' })
   try {
     const [r] = await db.query(
@@ -145,6 +232,7 @@ router.post('/suppliers', async (req, res) => {
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [name.trim(), code||null, country||null, contactName||null, email||null, phone||null, status||'active']
     )
+    if (addresses?.length) await upsertSupplierAddresses(r.insertId, addresses)
     audit(req, 'supplier.create', `id=${r.insertId}`)
     const [[row]] = await db.query(
       `SELECT id, name, code, country, contact_name AS contactName, email, phone, status FROM suppliers WHERE id=?`,
@@ -156,7 +244,7 @@ router.post('/suppliers', async (req, res) => {
 
 router.put('/suppliers/:id', async (req, res) => {
   const id = parseInt(req.params.id)
-  const { name, code, country, contactName, email, phone, status } = req.body
+  const { name, code, country, contactName, email, phone, status, addresses } = req.body
   if (!name?.trim()) return res.status(400).json({ error: 'Name is required' })
   try {
     const [r] = await db.query(
@@ -164,6 +252,7 @@ router.put('/suppliers/:id', async (req, res) => {
       [name.trim(), code||null, country||null, contactName||null, email||null, phone||null, status||'active', id]
     )
     if (!r.affectedRows) return res.status(404).json({ error: 'Supplier not found' })
+    if (addresses?.length) await upsertSupplierAddresses(id, addresses)
     audit(req, 'supplier.update', `id=${id}`)
     const [[row]] = await db.query(
       `SELECT id, name, code, country, contact_name AS contactName, email, phone, status FROM suppliers WHERE id=?`,
@@ -262,7 +351,10 @@ router.get('/users', async (req, res) => {
               u.last_login           AS lastLogin,
               (SELECT COUNT(DISTINCT project_id)
                FROM user_wbs_access
-               WHERE user_id = u.id) AS projectCount
+               WHERE user_id = u.id) AS projectCount,
+              (SELECT COUNT(*) > 0
+               FROM user_permission_overrides
+               WHERE user_id = u.id) AS hasCustomPermissions
        FROM users u
        WHERE ${where}
        ORDER BY u.full_name
@@ -678,6 +770,65 @@ router.delete('/permissions/overrides/:id', async (req, res) => {
     )
     if (!r.affectedRows) return res.status(404).json({ error: 'Override not found' })
     audit(req, 'override.delete', `id=${req.params.id}`)
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ─── GET USER PERMISSION OVERRIDES (by userId in URL) ───────
+// Convenience alias: GET /permissions/user/:userId
+// Returns overrides + the user's current role for the UI.
+router.get('/permissions/user/:userId', async (req, res) => {
+  const userId = parseInt(req.params.userId)
+  try {
+    const [[user]] = await db.query(
+      'SELECT id, full_name AS fullName, email, role FROM users WHERE id=?', [userId]
+    )
+    if (!user) return res.status(404).json({ error: 'User not found' })
+    let overrides = []
+    try {
+      ;[overrides] = await db.query(
+        `SELECT o.id, o.module, o.can_view, o.can_create, o.can_edit,
+                o.can_approve, o.can_delete, o.overridden_at
+         FROM user_permission_overrides o
+         WHERE o.user_id = ?`,
+        [userId]
+      )
+    } catch { /* table may not exist */ }
+    res.json({ user, overrides })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ─── SAVE USER PERMISSION OVERRIDES (batch) ─────────────────
+// POST /permissions/user/:userId — saves all override changes in one call.
+// Body: { overrides: [{ module, can_view, can_create, can_edit, can_approve, can_delete }] }
+// To remove an override for a module, omit it from the array or set all values null.
+router.post('/permissions/user/:userId', async (req, res) => {
+  const userId   = parseInt(req.params.userId)
+  const { overrides } = req.body  // array of module override objects
+  if (!Array.isArray(overrides))  return res.status(400).json({ error: 'overrides array required' })
+  try {
+    for (const o of overrides) {
+      if (!o.module || !VALID_MODULES.has(o.module)) continue
+      if (o.remove) {
+        await db.query(
+          'DELETE FROM user_permission_overrides WHERE user_id=? AND module=?', [userId, o.module]
+        )
+      } else {
+        await db.query(
+          `INSERT INTO user_permission_overrides
+             (user_id, module, can_view, can_create, can_edit, can_approve, can_delete, overridden_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE
+             can_view=VALUES(can_view), can_create=VALUES(can_create),
+             can_edit=VALUES(can_edit), can_approve=VALUES(can_approve),
+             can_delete=VALUES(can_delete), overridden_by=VALUES(overridden_by),
+             overridden_at=NOW()`,
+          [userId, o.module, o.can_view?1:0, o.can_create?1:0, o.can_edit?1:0,
+           o.can_approve?1:0, o.can_delete?1:0, req.user.id]
+        )
+      }
+    }
+    audit(req, 'override.batch', `user=${userId} count=${overrides.length}`)
     res.json({ ok: true })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })

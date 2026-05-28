@@ -1,0 +1,63 @@
+/* ═══════════════════════════════════════════════════════════════
+   Admin Module - Global Spacing
+   All Admin page and tab spacing lives here. Edit once, all tabs inherit.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── PAGE WRAPPER ─────────────────────────────────────────────── */
+.admin-page {
+  padding-top: 12px;
+  padding-bottom: 0;
+}
+
+/* ─── PAGE TITLE ───────────────────────────────────────────────── */
+.admin-title {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 0 0 2px;
+  font-family: 'IBM Plex Sans', sans-serif;
+}
+
+/* ─── PAGE SUBTITLE ────────────────────────────────────────────── */
+.admin-subtitle {
+  font-size: 13px;
+  color: #94a3b8;
+  margin: 0 0 8px;
+  font-family: 'IBM Plex Sans', sans-serif;
+}
+
+/* ─── HEADER WRAP (title + tab bar, sticky) ────────────────────── */
+/* Wraps title + subtitle + tab bar. Sticky so table headers pin below it. */
+.admin-header-wrap {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: inherit;
+  padding-top: 12px;
+}
+
+/* ─── TAB BAR ──────────────────────────────────────────────────── */
+.admin-tab-bar {
+  margin-bottom: 6px;
+  padding: 0;
+}
+
+/* ─── TAB BUTTON ───────────────────────────────────────────────── */
+.admin-tab-btn {
+  padding: 6px 16px;
+}
+
+/* ─── FILTER / TOOLBAR ROW ─────────────────────────────────────── */
+/* Applied to the search + filter + action-button row above each table. */
+.admin-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 6px 0;
+}
+
+/* ─── TABLE WRAPPER ────────────────────────────────────────────── */
+.admin-table-wrap {
+  margin-top: 0;
+}

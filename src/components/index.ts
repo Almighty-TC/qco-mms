@@ -15,3 +15,7 @@ export { SimpleConfirmModal }                         from './SimpleConfirmModal
 
 // ─── TABLE PRIMITIVES ────────────────────────────────────────
 export { HeaderCell, ResizeHandle } from './ResizableTable'
+
+// ─── HELP MODAL ──────────────────────────────────────────────
+export { HelpModal } from './HelpModal'
+export type { HelpSection } from './HelpModal'

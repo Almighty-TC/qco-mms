@@ -32,23 +32,21 @@ const AUTH_USER_KEY  = 'qmat_auth_user';
 
 // ─── AUTH PROVIDER ──────────────────────────────────────────
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
-  const [user, setUser]   = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(null);
+  // ── Restore session + set axios header synchronously ────
+  // Lazy initializer runs before first render, so child useEffects
+  // that fire API calls immediately will already have the header set.
+  const [user, setUser] = useState<User | null>(() => {
+    const stored = localStorage.getItem(AUTH_USER_KEY);
+    if (!stored) return null;
+    try { return JSON.parse(stored); } catch { return null; }
+  });
+  const [token, setToken] = useState<string | null>(() => {
+    const stored = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (stored) axios.defaults.headers.common.Authorization = `Bearer ${stored}`;
+    return stored;
+  });
 
-  // ── Restore session from localStorage ───────────────────
-  useEffect(() => {
-    const storedToken = localStorage.getItem(AUTH_TOKEN_KEY);
-    const storedUser  = localStorage.getItem(AUTH_USER_KEY);
-
-    if (storedToken) setToken(storedToken);
-
-    if (storedUser) {
-      try { setUser(JSON.parse(storedUser)); }
-      catch { setUser(null); }
-    }
-  }, []);
-
-  // ── Wire axios Authorization header ─────────────────────
+  // ── Keep axios header in sync with token state changes ──
   useEffect(() => {
     if (token) {
       axios.defaults.headers.common.Authorization = `Bearer ${token}`;

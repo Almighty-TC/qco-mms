@@ -2,9 +2,12 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import axios from 'axios'
 import { useAuth } from '../context/AuthContext'
-import { useTableResize } from '../hooks/useTableResize'
-import { HeaderCell } from '../components/ResizableTable'
 import { DeleteConfirmModal, SimpleConfirmModal } from '../components'
+import { AdminTable, AdminRow, AdminCell, AdminActions } from '../components/AdminTable'
+import type { AdminCol } from '../components/AdminTable'
+import { HelpModal } from '../components/HelpModal'
+import type { HelpSection } from '../components/HelpModal'
+import '../styles/admin.css'
 
 const API = 'http://localhost:3001/api/admin'
 
@@ -35,6 +38,7 @@ type AdminUser = {
   contractStart: string; contractEnd: string
   lastLogin: string | null
   projectCount: number
+  hasCustomPermissions: number
 }
 
 // ─── FULL-ACCESS ROLES ───────────────────────────────────────
@@ -279,12 +283,22 @@ const HelpDivider = ({ dark }: { dark: boolean }) => (
 // ─── USERS TAB ──────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════
 
-// ─── COLUMN KEYS ────────────────────────────────────────────
-// Email is shown below the name in the Name cell (not a separate
-// column) so users with the same full name are still distinguishable.
-type UserKey = 'uname' | 'urole' | 'uprojects' | 'ucompany' | 'uphone' | 'ucontractstart' | 'ucontract' | 'ustatus' | 'ulastlogin'
-const U_DEF: Record<UserKey, number> = { uname: 230, urole: 145, uprojects: 80, ucompany: 140, uphone: 140, ucontractstart: 110, ucontract: 110, ustatus: 90, ulastlogin: 110 }
-const U_MIN: Record<UserKey, number> = { uname: 140, urole: 90,  uprojects: 60, ucompany: 80,  uphone: 90,  ucontractstart: 80,  ucontract: 80,  ustatus: 70, ulastlogin: 80  }
+// ─── USERS COLUMN DEFINITIONS ───────────────────────────────
+// Name and Email are split into two columns. Actions column
+// (last) has noResize: true — no drag handle, always 300px.
+const U_COLS: AdminCol[] = [
+  { label: 'Name',           width: 180, minWidth: 180 },
+  { label: 'Email',          width: 220, minWidth: 200 },
+  { label: 'Role',           width: 165, minWidth: 160 },
+  { label: 'Projects',       width: 210, minWidth: 200 },
+  { label: 'Company',        width: 155, minWidth: 150 },
+  { label: 'Phone',          width: 145, minWidth: 140 },
+  { label: 'Contract Start', width: 135, minWidth: 130 },
+  { label: 'Contract End',   width: 135, minWidth: 130 },
+  { label: 'Status',         width: 105, minWidth: 100 },
+  { label: 'Last Login',     width: 125, minWidth: 120 },
+  { label: '',               width: 300, minWidth: 300, noResize: true },
+]
 
 type UserForm = {
   fullName: string; email: string; role: string; company: string
@@ -320,93 +334,59 @@ function friendlyUserError(serverErr: string): string {
 }
 
 // ─── PROJECTS CELL ──────────────────────────────────────────
-// Renders the Projects count for a user row. Full-access roles show
-// "All"; scoped users show "X projects" (clickable) or "—".
-// Clicking opens a portal popover listing the actual project names.
+// Shows up to 2 project code pills. "+N more" shows full list as
+// a tooltip. Full-access roles show a single "All Projects" pill.
 type ProjectRow = { id: number; code: string; name: string }
 
 function ProjectsCell({ userId, count, fullAccess, dark }: {
   userId: number; count: number; fullAccess: boolean; dark: boolean
 }) {
-  const [open,     setOpen]     = useState(false)
-  const [loading,  setLoading]  = useState(false)
   const [projects, setProjects] = useState<ProjectRow[] | null>(null)
-  const [pos,      setPos]      = useState({ top: 0, left: 0 })
-  const cellRef = useRef<HTMLDivElement>(null)
 
-  const toggle = async (e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (fullAccess || count === 0) return
-    if (open) { setOpen(false); return }
-    const rect = cellRef.current?.getBoundingClientRect()
-    if (rect) setPos({ top: rect.bottom + 4, left: rect.left })
-    setOpen(true)
-    if (!projects) {
-      setLoading(true)
-      try {
-        const { data } = await axios.get(`${API}/users/${userId}/projects`)
-        setProjects(data.projects)
-      } catch { setProjects([]) }
-      finally { setLoading(false) }
-    }
+  // Load project codes lazily on mount for non-full-access users.
+  useEffect(() => {
+    if (fullAccess || count === 0) { setProjects([]); return }
+    let cancelled = false
+    axios.get(`${API}/users/${userId}/projects`)
+      .then(({ data }) => { if (!cancelled) setProjects(data.projects ?? []) })
+      .catch(() => { if (!cancelled) setProjects([]) })
+    return () => { cancelled = true }
+  }, [userId, fullAccess, count])
+
+  if (fullAccess) {
+    return (
+      <div style={{ padding: '0 12px', display: 'flex', alignItems: 'center' }}>
+        <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, background: 'rgba(100,116,139,0.1)', color: '#64748b', whiteSpace: 'nowrap' }}>
+          All Projects
+        </span>
+      </div>
+    )
   }
 
-  // Close popover when clicking outside
-  useEffect(() => {
-    if (!open) return
-    const close = () => setOpen(false)
-    document.addEventListener('mousedown', close)
-    return () => document.removeEventListener('mousedown', close)
-  }, [open])
+  if (count === 0) {
+    return <div style={{ padding: '0 12px', fontSize: 13, color: dark ? '#475569' : '#94a3b8' }}>—</div>
+  }
 
-  const label = fullAccess ? 'All' : count === 0 ? '—' : `${count} project${count !== 1 ? 's' : ''}`
-  const clickable = !fullAccess && count > 0
+  if (projects === null) {
+    return <div style={{ padding: '0 12px', fontSize: 12, color: '#64748b' }}>…</div>
+  }
+
+  const visible = projects.slice(0, 2)
+  const hidden  = projects.slice(2)
 
   return (
-    <div
-      ref={cellRef}
-      onClick={toggle}
-      title={fullAccess ? 'Has access to all projects' : count === 0 ? 'No projects assigned' : `Click to view ${count} project${count !== 1 ? 's' : ''}`}
-      style={{
-        padding: '0 12px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        cursor: clickable ? 'pointer' : 'default',
-        color: clickable ? (dark ? '#60a5fa' : '#2563eb') : (dark ? '#64748b' : '#94a3b8'),
-        fontFamily: 'IBM Plex Mono, monospace', fontSize: 12,
-        textDecoration: clickable ? 'underline' : 'none',
-        textDecorationStyle: 'dotted', userSelect: 'none',
-      }}
-    >
-      {label}
-      {open && createPortal(
-        <div
-          onMouseDown={e => e.stopPropagation()}
-          style={{
-            position: 'fixed', top: pos.top, left: pos.left, zIndex: 9999,
-            background: dark ? '#1e293b' : '#fff',
-            border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`,
-            borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
-            minWidth: 220, maxWidth: 320, padding: 12,
-          }}
-        >
-          <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
-            Assigned Projects
-          </div>
-          {loading ? (
-            <div style={{ fontSize: 12, color: '#64748b', padding: '4px 0' }}>Loading…</div>
-          ) : !projects || projects.length === 0 ? (
-            <div style={{ fontSize: 12, color: '#64748b', padding: '4px 0' }}>No projects found.</div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {projects.map(p => (
-                <div key={p.id} style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-                  <span style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: 11, color: '#E84E0F', minWidth: 80 }}>{p.code}</span>
-                  <span style={{ fontSize: 12, color: dark ? '#cbd5e1' : '#334155' }}>{p.name}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>,
-        document.body
+    <div style={{ padding: '0 12px', display: 'flex', gap: 4, alignItems: 'center', overflow: 'hidden', flexWrap: 'nowrap' }}>
+      {visible.map(p => (
+        <span key={p.id} title={p.name} style={{ fontSize: 11, fontWeight: 600, padding: '2px 7px', borderRadius: 4, border: '1px solid rgba(232,78,15,0.35)', color: '#E84E0F', whiteSpace: 'nowrap', flexShrink: 0 }}>
+          {p.code}
+        </span>
+      ))}
+      {hidden.length > 0 && (
+        <span
+          title={hidden.map(p => `${p.code} — ${p.name}`).join('\n')}
+          style={{ fontSize: 11, color: '#64748b', whiteSpace: 'nowrap', cursor: 'default', flexShrink: 0 }}>
+          +{hidden.length} more
+        </span>
       )}
     </div>
   )
@@ -415,7 +395,7 @@ function ProjectsCell({ userId, count, fullAccess, dark }: {
 // ─── USERS TAB COMPONENT ────────────────────────────────────
 // Manages all user operations. Single-admin workflow — no approval
 // step required. onSave is optional for future parent callbacks.
-function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
+function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () => void; headerHeight?: number }) {
   const { user: me } = useAuth()
   const [rows,      setRows]      = useState<AdminUser[]>([])
   const [total,     setTotal]     = useState<number | null>(null)
@@ -454,20 +434,6 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
   const [resetPwSaving, setResetPwSaving] = useState(false)
   const [resetPwDone,   setResetPwDone]   = useState<number | null>(null)
   const [resetPwErr,    setResetPwErr]    = useState('')
-
-  const { containerRef, startResize } = useTableResize(U_DEF, U_MIN)
-  const GRID = [
-    `var(--col-uname,${U_DEF.uname}px)`,
-    `var(--col-urole,${U_DEF.urole}px)`,
-    `var(--col-uprojects,${U_DEF.uprojects}px)`,
-    `var(--col-ucompany,${U_DEF.ucompany}px)`,
-    `var(--col-uphone,${U_DEF.uphone}px)`,
-    `var(--col-ucontractstart,${U_DEF.ucontractstart}px)`,
-    `var(--col-ucontract,${U_DEF.ucontract}px)`,
-    `var(--col-ustatus,${U_DEF.ustatus}px)`,
-    `var(--col-ulastlogin,${U_DEF.ulastlogin}px)`,
-    '190px',
-  ].join(' ')
 
   const searchRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -605,7 +571,7 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
   return (
     <>
       {/* ─── FILTERS + TOOLBAR ──────────────────────────── */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'nowrap' }}>
         <input
           value={search} onChange={(e) => onSearch(e.target.value)}
           placeholder="Search name, email, company…"
@@ -634,108 +600,55 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
       {error && <Err msg={error} />}
 
       {/* ─── TABLE ──────────────────────────────────────── */}
-      <TableCard dark={dark}>
-        <div ref={containerRef}>
-          <TH dark={dark} grid={GRID}>
-            <HeaderCell label="Name / Email"    col="uname"          align="left" onResize={startResize} />
-            <HeaderCell label="Role"            col="urole"                       onResize={startResize} />
-            <HeaderCell label="Projects"        col="uprojects"      align="left" onResize={startResize} />
-            <HeaderCell label="Company"         col="ucompany"       align="left" onResize={startResize} />
-            <HeaderCell label="Phone"           col="uphone"         align="left" onResize={startResize} />
-            <HeaderCell label="Contract Start"  col="ucontractstart"              onResize={startResize} />
-            <HeaderCell label="Contract End"    col="ucontract"                   onResize={startResize} />
-            <HeaderCell label="Status"          col="ustatus"                     onResize={startResize} />
-            <HeaderCell label="Last Login"      col="ulastlogin"                  onResize={startResize} />
-            <div />
-          </TH>
-
-          {rows.length === 0 && total !== null && <Empty msg="No users found." />}
-          {rows.map(u => (
-            <TR key={u.id} dark={dark} grid={GRID}>
-              {/* ─── NAME CELL: name + email below + external badge ─ */}
-              <div style={{ padding: '4px 12px', overflow: 'hidden' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                  <span title={u.fullName} style={{ fontSize: 13, fontWeight: 500, color: dark ? '#f1f5f9' : '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.fullName}</span>
-                  {!!u.isExternal && <ExtBadge />}
-                  {u.staffId && <span style={{ fontSize: 10, color: '#94a3b8', flexShrink: 0 }}>#{u.staffId}</span>}
-                </div>
-                <div style={{ fontSize: 11, color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }} title={u.email}>
-                  {u.email}
-                </div>
-              </div>
-              {/* ─── ROLE ───────────────────────────────────────────── */}
-              <div style={{ padding: '0 12px' }}>
-                <RoleBadge role={u.role} />
-              </div>
-              {/* ─── PROJECTS ───────────────────────────────────────── */}
-              <ProjectsCell
-                userId={u.id}
-                count={u.projectCount ?? 0}
-                fullAccess={FULL_ACCESS_ROLES.has(u.role)}
-                dark={dark}
-              />
-              {/* ─── COMPANY / PHONE / CONTRACT START / CONTRACT END / STATUS / LAST LOGIN */}
-              <TD dark={dark} muted>{u.company || '—'}</TD>
-              <TD dark={dark} muted mono>{u.phone || '—'}</TD>
-              <TD dark={dark} muted mono>
-                {u.contractStart ? u.contractStart.slice(0, 10) : '—'}
-              </TD>
-              <TD dark={dark} muted mono>
-                {u.contractEnd ? u.contractEnd.slice(0, 10) : '—'}
-              </TD>
-              <div style={{ padding: '0 12px' }}>
-                <StatusPill active={!!u.isActive} />
-              </div>
-              <TD dark={dark} muted mono>
-                {u.lastLogin ? u.lastLogin.slice(0, 10) : 'Never'}
-              </TD>
-              {/* ─── ROW ACTIONS ────────────────────────────────────────
-                  Edit | Reset Password | Deactivate or Reactivate | Delete
-                  All actions execute immediately — no second-admin approval. */}
-              <div style={{ padding: '0 8px', display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'nowrap' }}>
-                {/* Edit — opens full edit form immediately */}
-                <button onClick={() => openEdit(u)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>
-                  Edit
+      <AdminTable tableId="admin_users" columns={U_COLS} dark={dark} empty="No users found." top={headerHeight}>
+        {rows.map(u => (
+          <AdminRow key={u.id} dark={dark}>
+            {/* ─── NAME ───────────────────────────────────── */}
+            <div style={{ padding: '4px 12px', overflow: 'hidden', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span title={u.fullName} style={{ fontSize: 13, fontWeight: 500, color: dark ? '#f1f5f9' : '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.fullName}</span>
+              {!!u.isExternal && <ExtBadge />}
+              {u.staffId && <span style={{ fontSize: 10, color: '#94a3b8', flexShrink: 0 }}>#{u.staffId}</span>}
+            </div>
+            {/* ─── EMAIL ──────────────────────────────────── */}
+            <AdminCell muted><span title={u.email}>{u.email}</span></AdminCell>
+            {/* ─── ROLE (with Custom badge if overrides exist) */}
+            <div style={{ padding: '0 12px', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <RoleBadge role={u.role} />
+              {!!u.hasCustomPermissions && (
+                <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 3, background: 'rgba(232,78,15,0.12)', color: '#E84E0F', letterSpacing: '0.04em' }}>Custom</span>
+              )}
+            </div>
+            {/* ─── PROJECTS ───────────────────────────────── */}
+            <ProjectsCell userId={u.id} count={u.projectCount ?? 0} fullAccess={FULL_ACCESS_ROLES.has(u.role)} dark={dark} />
+            {/* ─── COMPANY / PHONE / DATES / STATUS / LAST LOGIN */}
+            <AdminCell muted>{u.company || '—'}</AdminCell>
+            <AdminCell muted mono>{u.phone || '—'}</AdminCell>
+            <AdminCell muted mono>{u.contractStart ? u.contractStart.slice(0, 10) : '—'}</AdminCell>
+            <AdminCell muted mono>{u.contractEnd ? u.contractEnd.slice(0, 10) : '—'}</AdminCell>
+            <div style={{ padding: '0 12px' }}><StatusPill active={!!u.isActive} /></div>
+            <AdminCell muted mono>{u.lastLogin ? u.lastLogin.slice(0, 10) : 'Never'}</AdminCell>
+            {/* ─── ROW ACTIONS ────────────────────────────── */}
+            <AdminActions>
+              <button onClick={() => openEdit(u)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>Edit</button>
+              {u.id !== me?.id && (<>
+                <button
+                  onClick={() => setResetPwTarget({ userId: u.id, email: u.email })}
+                  title="Generate a new temp password and email it to the user"
+                  style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: `1px solid ${resetPwDone === u.id ? 'rgba(34,197,94,0.4)' : 'rgba(100,116,139,0.3)'}`, background: resetPwDone === u.id ? 'rgba(34,197,94,0.1)' : 'transparent', color: resetPwDone === u.id ? '#22c55e' : '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>
+                  {resetPwDone === u.id ? '✓ Sent' : 'Reset Password'}
                 </button>
-                {u.id !== me?.id && (<>
-                  {/* Reset Password — shows confirm modal before sending new temp password */}
-                  <button
-                    onClick={() => setResetPwTarget({ userId: u.id, email: u.email })}
-                    title="Generate a new temp password and email it to the user"
-                    style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: `1px solid ${resetPwDone === u.id ? 'rgba(34,197,94,0.4)' : 'rgba(100,116,139,0.3)'}`, background: resetPwDone === u.id ? 'rgba(34,197,94,0.1)' : 'transparent', color: resetPwDone === u.id ? '#22c55e' : '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>
-                    {resetPwDone === u.id ? '✓ Sent' : 'Reset Password'}
-                  </button>
-                  {/* Deactivate — soft disable, all data preserved (only for active users) */}
-                  {!!u.isActive && (
-                    <button
-                      onClick={() => { setDeactivateTarget({ userId: u.id, fullName: u.fullName }); setDeactivateErr('') }}
-                      title="Disable this account — user cannot log in but all data is kept"
-                      style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(245,158,11,0.35)', background: 'rgba(245,158,11,0.08)', color: '#d97706', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>
-                      Deactivate
-                    </button>
-                  )}
-                  {/* Reactivate — re-enables a previously deactivated account (only for inactive) */}
-                  {!u.isActive && (
-                    <button
-                      onClick={() => { setReactivateTarget({ userId: u.id, fullName: u.fullName }); setReactivateErr('') }}
-                      title="Re-enable this account so the user can log in again"
-                      style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(34,197,94,0.35)', background: 'rgba(34,197,94,0.08)', color: '#16a34a', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>
-                      Reactivate
-                    </button>
-                  )}
-                  {/* Delete — permanent hard delete; reason + checkbox required */}
-                  <button
-                    onClick={() => { setDeleteTarget({ userId: u.id, fullName: u.fullName }); setDeleteErr('') }}
-                    title="Permanently delete this user — cannot be undone"
-                    style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>
-                    Delete
-                  </button>
-                </>)}
-              </div>
-            </TR>
-          ))}
-        </div>
-      </TableCard>
+                {!!u.isActive && (
+                  <button onClick={() => { setDeactivateTarget({ userId: u.id, fullName: u.fullName }); setDeactivateErr('') }} title="Disable this account — user cannot log in but all data is kept" style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(245,158,11,0.35)', background: 'rgba(245,158,11,0.08)', color: '#d97706', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>Deactivate</button>
+                )}
+                {!u.isActive && (
+                  <button onClick={() => { setReactivateTarget({ userId: u.id, fullName: u.fullName }); setReactivateErr('') }} title="Re-enable this account so the user can log in again" style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(34,197,94,0.35)', background: 'rgba(34,197,94,0.08)', color: '#16a34a', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>Reactivate</button>
+                )}
+                <button onClick={() => { setDeleteTarget({ userId: u.id, fullName: u.fullName }); setDeleteErr('') }} title="Permanently delete this user — cannot be undone" style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>Delete</button>
+              </>)}
+            </AdminActions>
+          </AdminRow>
+        ))}
+      </AdminTable>
 
       {/* ─── PAGINATION ─────────────────────────────────── */}
       {total != null && total > 50 && (
@@ -788,78 +701,60 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
       )}
 
       {/* ─── USER CREATION HELP MODAL ───────────────────────── */}
-      {showHelp && createPortal(
-        <div
-          onMouseDown={(e) => { if (e.target === e.currentTarget) setShowHelp(false) }}
-          style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(0,0,0,0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, fontFamily: 'IBM Plex Sans, sans-serif' }}
-          ref={(el) => {
-            if (!el) return
-            const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowHelp(false) }
-            el.addEventListener('keydown', onKey)
-          }}
-          tabIndex={-1}>
-          <div style={{ width: 580, maxHeight: 'calc(100vh - 80px)', display: 'flex', flexDirection: 'column', background: dark ? '#1e293b' : '#ffffff', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: 12, boxShadow: '0 24px 64px rgba(0,0,0,0.5)', overflow: 'hidden' }}>
-
-            {/* Header */}
-            <div style={{ padding: '14px 20px', borderBottom: `1px solid ${dark ? 'rgba(232,78,15,0.2)' : '#e2e8f0'}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, background: dark ? '#0f172a' : '#f8fafc' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontSize: 15, color: '#E84E0F' }}>◈</span>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: dark ? '#f1f5f9' : '#0f172a' }}>User Creation Guide</div>
-                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 1 }}>Rules and guidelines for adding users to QCO Group MMS</div>
-                </div>
-              </div>
-              <button onClick={() => setShowHelp(false)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: 4 }}>×</button>
-            </div>
-
-            {/* Body */}
-            <div style={{ overflowY: 'auto', flex: 1, padding: '20px' }}>
-
-              {/* Creating Users */}
-              <HelpSection title="Creating Users" icon="🏢">
-                <HelpRule>Full Name and Email are required. Email must be unique — it is the login identifier.</HelpRule>
-                <HelpRule>Staff ID is optional but recommended when multiple staff share the same name.</HelpRule>
-                <HelpRule>Any admin can create any user (internal or external) immediately — no second-admin approval required.</HelpRule>
-                <HelpRule>A secure temporary password is auto-generated and emailed on account creation.</HelpRule>
-                <HelpRule>The user must change their password on first login.</HelpRule>
-                <HelpRule>Passwords expire every <strong>90 days</strong> for internal users and <strong>30 days</strong> for external users.</HelpRule>
-              </HelpSection>
-
-              <HelpDivider dark={dark} />
-
-              {/* External Users */}
-              <HelpSection title="External Users — Contractors, Vendors, Suppliers" icon="🌐">
-                <HelpRule>External users are activated immediately on creation — same workflow as internal users.</HelpRule>
-                <HelpRule>Contract Start and End dates are strongly recommended for compliance tracking.</HelpRule>
-                <HelpRule>Access is automatically revoked on the contract end date.</HelpRule>
-                <HelpRule>Warning notifications are sent at <strong>30, 14, 7 and 1 day(s)</strong> before expiry.</HelpRule>
-                <HelpRule>After creation, assign the user to specific projects and WBS codes via the project settings.</HelpRule>
-              </HelpSection>
-
-              <HelpDivider dark={dark} />
-
-              {/* Managing Users */}
-              <HelpSection title="Managing Users" icon="📋">
-                <HelpRule><strong>Edit</strong> — update any field immediately. Contract end date can be extended at any time.</HelpRule>
-                <HelpRule><strong>Deactivate</strong> — disables login while preserving all data. Reversible with Reactivate.</HelpRule>
-                <HelpRule><strong>Reactivate</strong> — re-enables a deactivated account immediately.</HelpRule>
-                <HelpRule><strong>Reset Password</strong> — generates a new temp password and emails it. User must change it on next login.</HelpRule>
-                <HelpRule><strong>Delete</strong> — permanent. Requires selecting a reason and confirming. Cannot be undone.</HelpRule>
-                <HelpRule>Every action (create, edit, deactivate, reactivate, reset, delete) is recorded in the audit trail with the acting admin's name and timestamp.</HelpRule>
-                <HelpRule>You cannot deactivate or delete your own account. Email is always the unique identifier.</HelpRule>
-              </HelpSection>
-
-            </div>
-
-            {/* Footer */}
-            <div style={{ padding: '12px 20px', borderTop: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>
-              <button onClick={() => setShowHelp(false)} style={{ padding: '7px 20px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#E84E0F', color: '#fff', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
-                Got it
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body
+      {showHelp && (
+        <HelpModal
+          dark={dark}
+          title="Users & Roles — Help"
+          subtitle="Rules and guidelines for managing users in QCO Group MMS"
+          onClose={() => setShowHelp(false)}
+          sections={[
+            {
+              icon: '🏢', title: 'Creating Users',
+              items: [
+                'Full Name and Email are required. Email must be unique — it is the login identifier.',
+                'Staff ID is optional but recommended when multiple staff share the same name.',
+                'Any admin can create any user (internal or external) immediately — no second-admin approval required.',
+                'A secure temporary password is auto-generated and emailed on account creation.',
+                'The user must change their password on first login.',
+                <>Passwords expire every <strong>90 days</strong> for internal users and <strong>30 days</strong> for external users.</>,
+              ],
+            },
+            {
+              icon: '🌐', title: 'External Users — Contractors, Vendors, Suppliers',
+              items: [
+                'External users are activated immediately on creation — same workflow as internal users.',
+                'Contract Start and End dates are strongly recommended for compliance tracking.',
+                'Access is automatically revoked on the contract end date.',
+                <>Warning notifications are sent at <strong>30, 14, 7 and 1 day(s)</strong> before expiry.</>,
+                'After creation, assign the user to specific projects and WBS codes via the project settings.',
+              ],
+            },
+            {
+              icon: '📋', title: 'Managing Users',
+              items: [
+                <><strong>Edit</strong> — update any field immediately. Contract end date can be extended at any time.</>,
+                <><strong>Deactivate</strong> — disables login while preserving all data. Reversible with Reactivate.</>,
+                <><strong>Reactivate</strong> — re-enables a deactivated account immediately.</>,
+                <><strong>Reset Password</strong> — generates a new temp password and emails it. User must change it on next login.</>,
+                <><strong>Delete</strong> — permanent. Requires selecting a reason and confirming. Cannot be undone.</>,
+                'Every action is recorded in the audit trail with the acting admin\'s name and timestamp.',
+                'You cannot deactivate or delete your own account. Email is always the unique identifier.',
+              ],
+            },
+            {
+              icon: '🔐', title: 'Column Reference',
+              items: [
+                <><strong>Name</strong> — full name. EXT badge = external user.</>,
+                <><strong>Email</strong> — unique login identifier.</>,
+                <><strong>Role</strong> — assigned system role. Custom badge = has per-module permission overrides.</>,
+                <><strong>Projects</strong> — project codes the user can access. Full-access roles see "All Projects".</>,
+                <><strong>Contract Start/End</strong> — external user contract dates. Access auto-revokes at end date.</>,
+                <><strong>Status</strong> — Active (can log in) or Inactive (account disabled).</>,
+                <><strong>Last Login</strong> — most recent successful login timestamp.</>,
+              ],
+            },
+          ] satisfies HelpSection[]}
+        />
       )}
 
       {/* ─── DEACTIVATE MODAL ───────────────────────────────────
@@ -975,13 +870,30 @@ type PermKey = 'can_view' | 'can_create' | 'can_edit' | 'can_approve' | 'can_del
 const PERM_KEYS: PermKey[] = ['can_view', 'can_create', 'can_edit', 'can_approve', 'can_delete', 'wbs_scoped']
 const PERM_LABELS: Record<PermKey, string> = { can_view: 'View', can_create: 'Create', can_edit: 'Edit', can_approve: 'Approve', can_delete: 'Delete', wbs_scoped: 'WBS scoped' }
 
+// ─── USER OVERRIDE STATE ─────────────────────────────────────
+// Each module/key cell is one of: inherit (use role default),
+// grant (force allow), restrict (force deny).
+type OverrideVal = 'inherit' | 'grant' | 'restrict'
+
 function PermissionsTab({ dark }: { dark: boolean }) {
+  // ─── MODE TOGGLE ──────────────────────────────────────────────
+  const [permMode, setPermMode] = useState<'roles' | 'users'>('roles')
+
   const [perms,    setPerms]    = useState<RolePerm[]>([])
   const [selRole,  setSelRole]  = useState<string>('procurement_officer')
   const [editing,  setEditing]  = useState<Record<string, Record<PermKey, boolean>>>({})
   const [saving,   setSaving]   = useState(false)
   const [error,    setError]    = useState('')
   const [success,  setSuccess]  = useState('')
+
+  // ─── USER OVERRIDES STATE ─────────────────────────────────────
+  const [usersList,       setUsersList]       = useState<{ id: number; fullName: string; role: string }[]>([])
+  const [selUserId,       setSelUserId]       = useState<number | null>(null)
+  const [userRole,        setUserRole]        = useState<string>('')
+  const [userOverrides,   setUserOverrides]   = useState<Record<string, Record<PermKey, OverrideVal>>>({})
+  const [overrideSaving,  setOverrideSaving]  = useState(false)
+  const [overrideError,   setOverrideError]   = useState('')
+  const [overrideSuccess, setOverrideSuccess] = useState('')
 
   const load = useCallback(async () => {
     setError('')
@@ -995,6 +907,78 @@ function PermissionsTab({ dark }: { dark: boolean }) {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  // ─── LOAD USERS FOR DROPDOWN ──────────────────────────────────
+  useEffect(() => {
+    if (permMode !== 'users') return
+    axios.get(`${API}/users`, { params: { limit: '500' } })
+      .then(({ data }) => setUsersList(data.rows ?? []))
+      .catch(() => {})
+  }, [permMode])
+
+  // ─── LOAD USER OVERRIDES ──────────────────────────────────────
+  // Fetches the selected user's base role perms and saved overrides.
+  const loadUserOverrides = useCallback(async (userId: number) => {
+    try {
+      const { data } = await axios.get(`${API}/permissions/user/${userId}`)
+      setUserRole(data.role ?? '')
+      const ovr: Record<string, Record<PermKey, OverrideVal>> = {}
+      for (const o of data.overrides ?? []) {
+        ovr[o.module] = {} as Record<PermKey, OverrideVal>
+        for (const k of PERM_KEYS) {
+          const v = o[k]
+          ovr[o.module][k] = v === 1 ? 'grant' : v === -1 ? 'restrict' : 'inherit'
+        }
+      }
+      setUserOverrides(ovr)
+    } catch { /* silent */ }
+  }, [])
+
+  useEffect(() => {
+    if (selUserId != null) loadUserOverrides(selUserId)
+  }, [selUserId, loadUserOverrides])
+
+  // ─── CYCLE OVERRIDE ───────────────────────────────────────────
+  // inherit → grant → restrict → inherit
+  const cycleOverride = (module: string, key: PermKey) => {
+    setUserOverrides(prev => {
+      const cur = prev[module]?.[key] ?? 'inherit'
+      const next: OverrideVal = cur === 'inherit' ? 'grant' : cur === 'grant' ? 'restrict' : 'inherit'
+      return { ...prev, [module]: { ...(prev[module] ?? {} as Record<PermKey, OverrideVal>), [key]: next } }
+    })
+  }
+
+  // ─── SAVE USER OVERRIDES ──────────────────────────────────────
+  const saveUserOverrides = async () => {
+    if (!selUserId) return
+    setOverrideSaving(true); setOverrideError(''); setOverrideSuccess('')
+    const overrides = ALL_MODULES.flatMap(mod => {
+      const row = userOverrides[mod]
+      if (!row) return []
+      const hasAny = PERM_KEYS.some(k => (row[k] ?? 'inherit') !== 'inherit')
+      if (!hasAny) return [{ module: mod, remove: true }]
+      const entry: Record<string, unknown> = { module: mod }
+      for (const k of PERM_KEYS) {
+        const v = row[k] ?? 'inherit'
+        entry[k] = v === 'grant' ? 1 : v === 'restrict' ? -1 : 0
+      }
+      return [entry]
+    })
+    try {
+      await axios.post(`${API}/permissions/user/${selUserId}`, { overrides })
+      setOverrideSuccess('User permission overrides saved.')
+      setTimeout(() => setOverrideSuccess(''), 3000)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setOverrideError(err.response?.data?.error ?? 'Save failed')
+    } finally { setOverrideSaving(false) }
+  }
+
+  const overrideCount = ALL_MODULES.reduce((n, mod) => {
+    const row = userOverrides[mod]
+    if (!row) return n
+    return n + PERM_KEYS.filter(k => (row[k] ?? 'inherit') !== 'inherit').length
+  }, 0)
 
   // Build lookup: perms[role][module] = { can_view, … }
   const lookup = perms.reduce<Record<string, Record<string, RolePerm>>>((acc, p) => {
@@ -1038,6 +1022,16 @@ function PermissionsTab({ dark }: { dark: boolean }) {
 
   return (
     <div>
+      {/* ─── MODE TOGGLE ─────────────────────────────────── */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 16 }}>
+        {(['roles', 'users'] as const).map(m => (
+          <button key={m} onClick={() => setPermMode(m)} style={{ padding: '6px 16px', borderRadius: 6, fontSize: 12, fontWeight: permMode === m ? 600 : 400, border: `1px solid ${permMode === m ? '#E84E0F' : (dark ? '#334155' : '#dde3ed')}`, background: permMode === m ? 'rgba(232,78,15,0.1)' : 'transparent', color: permMode === m ? '#E84E0F' : '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
+            {m === 'roles' ? 'Role Permissions' : 'User Overrides'}
+          </button>
+        ))}
+      </div>
+
+      {permMode === 'roles' && (<>
       {/* ─── ROLE SELECTOR + SAVE ───────────────────────── */}
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16 }}>
         <label style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>Role:</label>
@@ -1144,6 +1138,103 @@ function PermissionsTab({ dark }: { dark: boolean }) {
           </TableCard>
         </div>
       </div>
+      </>)}
+
+      {/* ─── USER OVERRIDES MODE ─────────────────────────── */}
+      {permMode === 'users' && (
+        <div>
+          {/* ─── USER SELECTOR ────────────────────────────── */}
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'nowrap' }}>
+            <label style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>User:</label>
+            <select
+              value={selUserId ?? ''}
+              onChange={e => { setSelUserId(e.target.value ? Number(e.target.value) : null); setUserOverrides({}) }}
+              style={{ ...inp(dark), width: 280, height: 34 }}>
+              <option value="">— Select a user —</option>
+              {usersList.map(u => (
+                <option key={u.id} value={u.id}>{u.fullName} ({u.role.replace(/_/g, ' ')})</option>
+              ))}
+            </select>
+            {selUserId != null && overrideCount > 0 && (
+              <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 9999, background: 'rgba(232,78,15,0.1)', color: '#E84E0F', fontWeight: 600 }}>
+                {overrideCount} permission{overrideCount !== 1 ? 's' : ''} overridden
+              </span>
+            )}
+            {selUserId != null && (
+              <button onClick={saveUserOverrides} disabled={overrideSaving} style={{ padding: '7px 18px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#E84E0F', color: '#fff', cursor: overrideSaving ? 'not-allowed' : 'pointer', opacity: overrideSaving ? 0.7 : 1, fontFamily: 'IBM Plex Sans, sans-serif' }}>
+                {overrideSaving ? 'Saving…' : 'Save overrides'}
+              </button>
+            )}
+            {selUserId != null && overrideCount > 0 && (
+              <button onClick={() => setUserOverrides({})} style={{ padding: '7px 14px', borderRadius: 6, fontSize: 13, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
+                Clear all
+              </button>
+            )}
+          </div>
+
+          {overrideError   && <Err msg={overrideError} />}
+          {overrideSuccess && <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 6, background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)', fontSize: 12, color: '#22c55e' }}>{overrideSuccess}</div>}
+
+          {selUserId == null ? (
+            <div style={{ padding: '40px 20px', textAlign: 'center', fontSize: 13, color: '#64748b' }}>
+              Select a user above to view and edit their permission overrides.
+            </div>
+          ) : (
+            <>
+              {userRole && (
+                <div style={{ marginBottom: 10, padding: '8px 12px', borderRadius: 6, background: dark ? 'rgba(37,99,235,0.08)' : 'rgba(37,99,235,0.05)', border: `1px solid ${dark ? 'rgba(37,99,235,0.2)' : 'rgba(37,99,235,0.15)'}`, fontSize: 12, color: '#2563eb' }}>
+                  Base role: <strong>{userRole.replace(/_/g, ' ')}</strong> — small dots show base role permissions (read-only). Click the badge below each dot to cycle: inherit → grant (✓) → restrict (✕).
+                </div>
+              )}
+
+              {/* ─── OVERRIDE MATRIX ──────────────────────── */}
+              <TableCard dark={dark}>
+                <div style={{ display: 'grid', gridTemplateColumns: '180px repeat(6, 1fr)', background: dark ? '#0f172a' : '#f4f7fb', borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}`, padding: '0 12px' }}>
+                  <div style={{ padding: '10px 0', fontSize: 11, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Module</div>
+                  {PERM_KEYS.map(k => (
+                    <div key={k} style={{ padding: '10px 4px', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase', textAlign: 'center' }}>
+                      {PERM_LABELS[k]}
+                    </div>
+                  ))}
+                </div>
+                {ALL_MODULES.map(mod => {
+                  const basePerm = lookup[userRole]?.[mod]
+                  return (
+                    <div key={mod} style={{ display: 'grid', gridTemplateColumns: '180px repeat(6, 1fr)', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, padding: '0 12px', alignItems: 'center', minHeight: 48 }}>
+                      <div style={{ fontSize: 13, color: dark ? '#f1f5f9' : '#0f172a', textTransform: 'capitalize' }}>
+                        {mod.replace(/_/g, ' ')}
+                      </div>
+                      {PERM_KEYS.map(key => {
+                        const baseVal = !!(basePerm?.[key] ?? 0)
+                        const ovr = userOverrides[mod]?.[key] ?? 'inherit'
+                        return (
+                          <div key={key} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3 }}>
+                            {/* base role dot */}
+                            <span title={`Base: ${baseVal ? 'allowed' : 'denied'}`} style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: baseVal ? 'rgba(34,197,94,0.4)' : 'rgba(100,116,139,0.25)' }} />
+                            {/* override toggle */}
+                            <button
+                              onClick={() => cycleOverride(mod, key)}
+                              title={`Override: ${ovr}. Click to cycle.`}
+                              style={{
+                                width: 22, height: 22, borderRadius: 4, cursor: 'pointer',
+                                border: ovr === 'inherit' ? `1px solid ${dark ? '#334155' : '#dde3ed'}` : 'none',
+                                background: ovr === 'grant' ? 'rgba(34,197,94,0.15)' : ovr === 'restrict' ? 'rgba(239,68,68,0.15)' : 'transparent',
+                                color: ovr === 'grant' ? '#22c55e' : ovr === 'restrict' ? '#ef4444' : '#64748b',
+                                fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              }}>
+                              {ovr === 'grant' ? '✓' : ovr === 'restrict' ? '✕' : '—'}
+                            </button>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                })}
+              </TableCard>
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -1158,19 +1249,22 @@ function PermissionsTab({ dark }: { dark: boolean }) {
 // Shows all in-app notifications with user context. Admins can
 // mark individual notifications as read or clear all.
 // ═══════════════════════════════════════════════════════════
-type NKey = 'nuser' | 'ntype' | 'nmsg' | 'ndate'
-const N_DEF: Record<NKey, number> = { nuser: 180, ntype: 130, nmsg: 400, ndate: 120 }
-const N_MIN: Record<NKey, number> = { nuser: 100, ntype: 80, nmsg: 150, ndate: 80 }
+// ─── NOTIFICATIONS COLUMN DEFINITIONS ───────────────────────
+const N_COLS: AdminCol[] = [
+  { label: 'User',    width: 180, minWidth: 100 },
+  { label: 'Type',    width: 130, minWidth: 80  },
+  { label: 'Message', width: 400, minWidth: 150 },
+  { label: 'Date',    width: 120, minWidth: 80  },
+  { label: '',        width: 80,  minWidth: 80, noResize: true },
+]
 
-function NotificationsTab({ dark }: { dark: boolean }) {
-  const [rows,    setRows]    = useState<Notification[]>([])
-  const [total,   setTotal]   = useState<number | null>(null)
-  const [page,    setPage]    = useState(1)
-  const [filter,  setFilter]  = useState<'all' | 'unread'>('all')
-  const [error,   setError]   = useState('')
-
-  const { containerRef, startResize } = useTableResize(N_DEF, N_MIN)
-  const GRID = `var(--col-nuser,${N_DEF.nuser}px) var(--col-ntype,${N_DEF.ntype}px) var(--col-nmsg,${N_DEF.nmsg}px) var(--col-ndate,${N_DEF.ndate}px) 80px`
+function NotificationsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
+  const [rows,     setRows]     = useState<Notification[]>([])
+  const [total,    setTotal]    = useState<number | null>(null)
+  const [page,     setPage]     = useState(1)
+  const [filter,   setFilter]   = useState<'all' | 'unread'>('all')
+  const [error,    setError]    = useState('')
+  const [showHelp, setShowHelp] = useState(false)
 
   const load = useCallback(async (p = 1) => {
     setError('')
@@ -1208,6 +1302,7 @@ function NotificationsTab({ dark }: { dark: boolean }) {
 
   return (
     <>
+      {/* ─── FILTERS + TOOLBAR ──────────────────────────── */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
         {(['all', 'unread'] as const).map(f => (
           <button key={f} onClick={() => setFilter(f)} style={{ padding: '6px 14px', borderRadius: 6, fontSize: 12, fontWeight: filter === f ? 600 : 400, border: `1px solid ${filter === f ? '#E84E0F' : (dark ? '#334155' : '#dde3ed')}`, background: filter === f ? 'rgba(232,78,15,0.1)' : 'transparent', color: filter === f ? '#E84E0F' : '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
@@ -1219,49 +1314,39 @@ function NotificationsTab({ dark }: { dark: boolean }) {
         <button onClick={markAllRead} style={{ padding: '6px 14px', borderRadius: 6, fontSize: 12, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
           Mark all read
         </button>
+        <button onClick={() => setShowHelp(true)} title="Notifications help" style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>ℹ</button>
       </div>
 
       {error && <Err msg={error} />}
 
-      <TableCard dark={dark}>
-        <div ref={containerRef}>
-          <TH dark={dark} grid={GRID}>
-            <HeaderCell label="User"    col="nuser" align="left" onResize={startResize} />
-            <HeaderCell label="Type"    col="ntype" align="left" onResize={startResize} />
-            <HeaderCell label="Message" col="nmsg"  align="left" onResize={startResize} />
-            <HeaderCell label="Date"    col="ndate"              onResize={startResize} />
-            <div />
-          </TH>
+      {/* ─── TABLE ──────────────────────────────────────── */}
+      <AdminTable tableId="admin_notifications" columns={N_COLS} dark={dark} empty="No notifications." top={headerHeight}>
+        {rows.map(n => (
+          <AdminRow key={n.id} dark={dark}>
+            <AdminCell><span title={n.userEmail}>{n.userName}</span></AdminCell>
+            <div style={{ padding: '0 12px' }}>
+              <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 7px', borderRadius: 9999, background: `${TYPE_COLOR[n.type] ?? '#94a3b8'}22`, color: TYPE_COLOR[n.type] ?? '#94a3b8' }}>
+                {n.type.replace(/_/g, ' ')}
+              </span>
+            </div>
+            <AdminCell muted>
+              <span title={n.message} style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: n.isRead ? 0.6 : 1, fontWeight: n.isRead ? 400 : 500 }}>
+                {n.message}
+              </span>
+            </AdminCell>
+            <AdminCell muted mono>{n.createdAt?.slice(0, 10) ?? '—'}</AdminCell>
+            <AdminActions>
+              {!n.isRead && (
+                <button onClick={() => markRead(n.id)} title="Mark as read" style={{ fontSize: 11, padding: '3px 8px', borderRadius: 5, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
+                  ✓ Read
+                </button>
+              )}
+            </AdminActions>
+          </AdminRow>
+        ))}
+      </AdminTable>
 
-          {rows.length === 0 && total !== null && <Empty msg="No notifications." />}
-          {rows.map(n => (
-            <TR key={n.id} dark={dark} grid={GRID}>
-              <TD dark={dark}>
-                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={n.userEmail}>{n.userName}</div>
-              </TD>
-              <div style={{ padding: '0 12px' }}>
-                <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 7px', borderRadius: 9999, background: `${TYPE_COLOR[n.type] ?? '#94a3b8'}22`, color: TYPE_COLOR[n.type] ?? '#94a3b8' }}>
-                  {n.type.replace(/_/g, ' ')}
-                </span>
-              </div>
-              <TD dark={dark} muted>
-                <span title={n.message} style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: n.isRead ? 0.6 : 1, fontWeight: n.isRead ? 400 : 500 }}>
-                  {n.message}
-                </span>
-              </TD>
-              <TD dark={dark} muted mono>{n.createdAt?.slice(0, 10) ?? '—'}</TD>
-              <div style={{ padding: '0 10px', display: 'flex', justifyContent: 'center' }}>
-                {!n.isRead && (
-                  <button onClick={() => markRead(n.id)} title="Mark as read" style={{ fontSize: 11, padding: '3px 8px', borderRadius: 5, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
-                    ✓
-                  </button>
-                )}
-              </div>
-            </TR>
-          ))}
-        </div>
-      </TableCard>
-
+      {/* ─── PAGINATION ─────────────────────────────────── */}
       {total != null && total > 50 && (
         <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 12 }}>
           {Array.from({ length: Math.ceil(total / 50) }, (_, i) => (
@@ -1271,6 +1356,15 @@ function NotificationsTab({ dark }: { dark: boolean }) {
             </button>
           ))}
         </div>
+      )}
+
+      {/* ─── HELP MODAL ──────────────────────────────────── */}
+      {showHelp && (
+        <HelpModal dark={dark} title="Notifications — Help" subtitle="System notification log" onClose={() => setShowHelp(false)} sections={[
+          { icon: '🔔', title: 'What this tab is for', items: ['Shows all system-generated notifications including contract expiry warnings, security alerts, and admin actions.'] },
+          { icon: '📋', title: 'Column Reference', items: [<><strong>User</strong> — the user the notification is about. Hover for email.</>, <><strong>Type</strong> — notification category (contract_expiry, contract_expired, etc.).</>, <><strong>Message</strong> — full notification text.</>, <><strong>Date</strong> — when the notification was generated.</> ] },
+          { icon: '⚙️', title: 'Actions', items: [<><strong>✓ Read</strong> — marks a single notification as read.</>, <><strong>Mark all read</strong> — clears all unread notifications at once.</>, <><strong>Unread filter</strong> — toggle to show only unread notifications.</> ] },
+        ] satisfies HelpSection[]} />
       )}
     </>
   )
@@ -1470,22 +1564,53 @@ node server/scripts/seed-permissions.js`}
 // Full CRUD for the suppliers master list. Matches wireframe
 // columns: Name, Code, Country, Contact, Email, Phone, Status.
 // ═══════════════════════════════════════════════════════════
+// ─── SUPPLIER ADDRESS TYPE ───────────────────────────────────
+type SupplierAddress = {
+  id?: number
+  label: string; address_line1: string; address_line2: string
+  city: string; state: string; postcode: string; country: string
+  is_primary: boolean; is_pickup: boolean; notes: string
+}
+const EMPTY_ADDR: SupplierAddress = {
+  label: 'Main', address_line1: '', address_line2: '',
+  city: '', state: '', postcode: '', country: '',
+  is_primary: true, is_pickup: false, notes: '',
+}
+
 type Supplier = {
   id: number; name: string; code: string; country: string
   contactName: string; email: string; phone: string; status: string
+  addressCount?: number; primaryAddressText?: string
 }
-type SupplierForm = { name: string; code: string; country: string; contactName: string; email: string; phone: string; status: string }
-const EMPTY_SUP: SupplierForm = { name: '', code: '', country: '', contactName: '', email: '', phone: '', status: 'active' }
+type SupplierForm = {
+  name: string; code: string; country: string; contactName: string
+  email: string; phone: string; status: string
+  addresses: SupplierAddress[]
+}
+const EMPTY_SUP: SupplierForm = {
+  name: '', code: '', country: '', contactName: '', email: '', phone: '', status: 'active',
+  addresses: [{ ...EMPTY_ADDR }],
+}
 
-type SKey = 'sname' | 'scode' | 'scountry' | 'scontact' | 'semail' | 'sphone' | 'sstatus'
-const S_DEF: Record<SKey, number> = { sname: 200, scode: 100, scountry: 110, scontact: 150, semail: 190, sphone: 130, sstatus: 90 }
-const S_MIN: Record<SKey, number> = { sname: 120, scode: 70,  scountry: 80,  scontact: 100, semail: 130, sphone: 90,  sstatus: 70 }
+// ─── SUPPLIERS COLUMN DEFINITIONS ───────────────────────────
+const S_COLS: AdminCol[] = [
+  { label: 'Name',      width: 200, minWidth: 120 },
+  { label: 'Code',      width: 100, minWidth: 70  },
+  { label: 'Country',   width: 110, minWidth: 80  },
+  { label: 'Contact',   width: 150, minWidth: 100 },
+  { label: 'Email',     width: 190, minWidth: 130 },
+  { label: 'Phone',     width: 130, minWidth: 90  },
+  { label: 'Addresses', width: 130, minWidth: 80  },
+  { label: 'Status',    width: 90,  minWidth: 70  },
+  { label: '',          width: 150, minWidth: 150, noResize: true },
+]
 
-function SuppliersTab({ dark }: { dark: boolean }) {
+function SuppliersTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
   const [rows,     setRows]     = useState<Supplier[]>([])
   const [total,    setTotal]    = useState<number | null>(null)
   const [error,    setError]    = useState('')
   const [showForm, setShowForm] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
   const [editId,   setEditId]   = useState<number | null>(null)
   const [form,     setForm]     = useState<SupplierForm>(EMPTY_SUP)
   const [formErr,  setFormErr]  = useState('')
@@ -1497,18 +1622,6 @@ function SuppliersTab({ dark }: { dark: boolean }) {
   const [deactivateTarget, setDeactivateTarget] = useState<{ id: number; name: string } | null>(null)
   const [deactivateSaving, setDeactivateSaving] = useState(false)
   const [deactivateErr,    setDeactivateErr]    = useState('')
-
-  const { containerRef, startResize } = useTableResize(S_DEF, S_MIN)
-  const GRID = [
-    `var(--col-sname,${S_DEF.sname}px)`,
-    `var(--col-scode,${S_DEF.scode}px)`,
-    `var(--col-scountry,${S_DEF.scountry}px)`,
-    `var(--col-scontact,${S_DEF.scontact}px)`,
-    `var(--col-semail,${S_DEF.semail}px)`,
-    `var(--col-sphone,${S_DEF.sphone}px)`,
-    `var(--col-sstatus,${S_DEF.sstatus}px)`,
-    '130px',
-  ].join(' ')
 
   const load = useCallback(async () => {
     setError('')
@@ -1523,11 +1636,52 @@ function SuppliersTab({ dark }: { dark: boolean }) {
 
   useEffect(() => { load() }, [load])
 
-  const openAdd  = () => { setForm(EMPTY_SUP); setEditId(null); setFormErr(''); setShowForm(true) }
-  const openEdit = (s: Supplier) => {
-    setForm({ name: s.name, code: s.code, country: s.country, contactName: s.contactName, email: s.email, phone: s.phone, status: s.status })
+  const openAdd  = () => { setForm({ ...EMPTY_SUP, addresses: [{ ...EMPTY_ADDR }] }); setEditId(null); setFormErr(''); setShowForm(true) }
+  const openEdit = async (s: Supplier) => {
+    // Fetch full supplier with addresses for the edit modal
+    try {
+      const { data } = await axios.get(`${API}/suppliers/${s.id}`)
+      const addrs: SupplierAddress[] = (data.addresses ?? []).map((a: SupplierAddress) => ({
+        id: a.id, label: a.label || 'Main',
+        address_line1: a.address_line1 || '', address_line2: a.address_line2 || '',
+        city: a.city || '', state: a.state || '', postcode: a.postcode || '',
+        country: a.country || '',
+        is_primary: !!a.is_primary, is_pickup: !!a.is_pickup, notes: a.notes || '',
+      }))
+      setForm({
+        name: s.name, code: s.code, country: s.country, contactName: s.contactName,
+        email: s.email, phone: s.phone, status: s.status,
+        addresses: addrs.length ? addrs : [{ ...EMPTY_ADDR }],
+      })
+    } catch {
+      setForm({
+        name: s.name, code: s.code, country: s.country, contactName: s.contactName,
+        email: s.email, phone: s.phone, status: s.status, addresses: [{ ...EMPTY_ADDR }],
+      })
+    }
     setEditId(s.id); setFormErr(''); setShowForm(true)
   }
+
+  // ─── ADDRESS HELPERS ──────────────────────────────────────────
+  const addAddress = () => setForm(p => ({
+    ...p,
+    addresses: [...p.addresses, { ...EMPTY_ADDR, is_primary: false }],
+  }))
+  const removeAddress = (i: number) => setForm(p => ({
+    ...p,
+    addresses: p.addresses.filter((_, idx) => idx !== i),
+  }))
+  const updateAddress = (i: number, key: keyof SupplierAddress, val: string | boolean) =>
+    setForm(p => {
+      const addrs = [...p.addresses]
+      // Enforce single primary
+      if (key === 'is_primary' && val === true) {
+        addrs.forEach((a, idx) => { addrs[idx] = { ...a, is_primary: idx === i } })
+      } else {
+        addrs[i] = { ...addrs[i], [key]: val }
+      }
+      return { ...p, addresses: addrs }
+    })
 
   const sf = (k: keyof SupplierForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(p => ({ ...p, [k]: e.target.value }))
@@ -1573,48 +1727,48 @@ function SuppliersTab({ dark }: { dark: boolean }) {
 
   return (
     <>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
         <span style={{ fontSize: 12, color: '#94a3b8' }}>{total == null ? 'Loading…' : `${total} supplier${total !== 1 ? 's' : ''}`}</span>
-        <AddBtn onClick={openAdd} label="+ Add Supplier" />
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button onClick={() => setShowHelp(true)} title="Suppliers help" style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>ℹ</button>
+          <AddBtn onClick={openAdd} label="+ Add Supplier" />
+        </div>
       </div>
 
       {error && <Err msg={error} />}
 
-      <TableCard dark={dark}>
-        <div ref={containerRef}>
-          <TH dark={dark} grid={GRID}>
-            <HeaderCell label="Name"    col="sname"    align="left" onResize={startResize} />
-            <HeaderCell label="Code"    col="scode"    align="left" onResize={startResize} />
-            <HeaderCell label="Country" col="scountry" align="left" onResize={startResize} />
-            <HeaderCell label="Contact" col="scontact" align="left" onResize={startResize} />
-            <HeaderCell label="Email"   col="semail"   align="left" onResize={startResize} />
-            <HeaderCell label="Phone"   col="sphone"   align="left" onResize={startResize} />
-            <HeaderCell label="Status"  col="sstatus"               onResize={startResize} />
-            <div />
-          </TH>
-          {rows.length === 0 && total !== null && <Empty msg="No suppliers found." />}
-          {rows.map(s => (
-            <TR key={s.id} dark={dark} grid={GRID}>
-              <TD dark={dark}>{s.name}</TD>
-              <TD dark={dark} mono>{s.code || '—'}</TD>
-              <TD dark={dark} muted>{s.country || '—'}</TD>
-              <TD dark={dark} muted>{s.contactName || '—'}</TD>
-              <TD dark={dark} muted>{s.email || '—'}</TD>
-              <TD dark={dark} muted mono>{s.phone || '—'}</TD>
-              <div style={{ padding: '0 12px' }}>
-                <StatusPill active={s.status === 'active'} label={s.status === 'active' ? 'Active' : 'Inactive'} />
-              </div>
-              <div style={{ padding: '0 8px', display: 'flex', gap: 4, alignItems: 'center' }}>
-                <button onClick={() => openEdit(s)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
-                {s.status === 'active' && (
-                  <button onClick={() => { setDeactivateTarget({ id: s.id, name: s.name }); setDeactivateErr('') }} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(245,158,11,0.35)', background: 'rgba(245,158,11,0.08)', color: '#d97706', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Deactivate</button>
-                )}
-                <button onClick={() => { setDeleteTarget({ id: s.id, name: s.name }); setDeleteErr('') }} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
-              </div>
-            </TR>
-          ))}
-        </div>
-      </TableCard>
+      <AdminTable tableId="admin_suppliers" columns={S_COLS} dark={dark} empty="No suppliers found." top={headerHeight}>
+        {rows.map(s => (
+          <AdminRow key={s.id} dark={dark}>
+            <AdminCell>{s.name}</AdminCell>
+            <AdminCell mono>{s.code || '—'}</AdminCell>
+            <AdminCell muted>{s.country || '—'}</AdminCell>
+            <AdminCell muted>{s.contactName || '—'}</AdminCell>
+            <AdminCell muted>{s.email || '—'}</AdminCell>
+            <AdminCell muted mono>{s.phone || '—'}</AdminCell>
+            {/* ─── ADDRESSES BADGE ────────────────────────── */}
+            <div style={{ padding: '0 12px' }}>
+              {(s.addressCount ?? 0) > 0 ? (
+                <span title={s.primaryAddressText || undefined} style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 9999, background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: s.primaryAddressText ? 'help' : 'default', whiteSpace: 'nowrap' }}>
+                  {s.addressCount} address{(s.addressCount ?? 0) !== 1 ? 'es' : ''}
+                </span>
+              ) : (
+                <span style={{ fontSize: 12, color: '#94a3b8' }}>—</span>
+              )}
+            </div>
+            <div style={{ padding: '0 12px' }}>
+              <StatusPill active={s.status === 'active'} label={s.status === 'active' ? 'Active' : 'Inactive'} />
+            </div>
+            <AdminActions>
+              <button onClick={() => openEdit(s)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
+              {s.status === 'active' && (
+                <button onClick={() => { setDeactivateTarget({ id: s.id, name: s.name }); setDeactivateErr('') }} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(245,158,11,0.35)', background: 'rgba(245,158,11,0.08)', color: '#d97706', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Deactivate</button>
+              )}
+              <button onClick={() => { setDeleteTarget({ id: s.id, name: s.name }); setDeleteErr('') }} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
+            </AdminActions>
+          </AdminRow>
+        ))}
+      </AdminTable>
 
       {/* ─── DEACTIVATE / DELETE MODALS ─────────────────────── */}
       {deactivateTarget && (
@@ -1633,8 +1787,9 @@ function SuppliersTab({ dark }: { dark: boolean }) {
           saving={deleteSaving} error={deleteErr} />
       )}
 
+      {/* ─── ADD / EDIT MODAL WITH ADDRESSES ────────────────── */}
       {showForm && (
-        <Modal title={editId != null ? 'Edit Supplier' : 'Add Supplier'} dark={dark} onClose={() => setShowForm(false)} onSubmit={save} error={formErr} saving={saving}>
+        <Modal title={editId != null ? 'Edit Supplier' : 'Add Supplier'} dark={dark} wide onClose={() => setShowForm(false)} onSubmit={save} error={formErr} saving={saving}>
           <Field label="Name *"><input value={form.name} onChange={sf('name')} placeholder="Supplier name" style={inp(dark)} /></Field>
           <Field label="Code"><input value={form.code} onChange={sf('code')} placeholder="e.g. SUP-001" style={inp(dark)} /></Field>
           <Field label="Country"><input value={form.country} onChange={sf('country')} placeholder="Country" style={inp(dark)} /></Field>
@@ -1647,7 +1802,82 @@ function SuppliersTab({ dark }: { dark: boolean }) {
               <option value="inactive">Inactive</option>
             </select>
           </Field>
+          {/* ─── ADDRESS SECTION ────────────────────────────── */}
+          <Field label="Pickup & Delivery Addresses" wide>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {form.addresses.map((addr, i) => (
+                <div key={i} style={{ padding: 12, borderRadius: 8, border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, background: dark ? '#0f172a' : '#f8fafc' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#64748b', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Address {i + 1}</span>
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                      <label style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 12, color: dark ? '#94a3b8' : '#64748b', cursor: 'pointer' }}>
+                        <input type="radio" checked={addr.is_primary} onChange={() => updateAddress(i, 'is_primary', true)} style={{ accentColor: '#E84E0F' }} />
+                        Primary
+                      </label>
+                      <label style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 12, color: dark ? '#94a3b8' : '#64748b', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={addr.is_pickup} onChange={e => updateAddress(i, 'is_pickup', e.target.checked)} style={{ accentColor: '#E84E0F' }} />
+                        Pickup location
+                      </label>
+                      <button
+                        type="button"
+                        disabled={form.addresses.length <= 1}
+                        onClick={() => removeAddress(i)}
+                        style={{ fontSize: 12, fontWeight: 600, padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(239,68,68,0.3)', background: 'transparent', color: form.addresses.length <= 1 ? '#64748b' : '#ef4444', cursor: form.addresses.length <= 1 ? 'not-allowed' : 'pointer', opacity: form.addresses.length <= 1 ? 0.4 : 1 }}>
+                        ✕ Remove
+                      </button>
+                    </div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Label</span>
+                      <input value={addr.label} onChange={e => updateAddress(i, 'label', e.target.value)} placeholder="e.g. Head Office" style={{ ...inp(dark), height: 30 }} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Address Line 1 *</span>
+                      <input value={addr.address_line1} onChange={e => updateAddress(i, 'address_line1', e.target.value)} placeholder="Street address" style={{ ...inp(dark), height: 30 }} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Address Line 2</span>
+                      <input value={addr.address_line2} onChange={e => updateAddress(i, 'address_line2', e.target.value)} placeholder="Unit, floor, suite…" style={{ ...inp(dark), height: 30 }} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase' }}>City</span>
+                      <input value={addr.city} onChange={e => updateAddress(i, 'city', e.target.value)} placeholder="City" style={{ ...inp(dark), height: 30 }} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase' }}>State</span>
+                      <input value={addr.state} onChange={e => updateAddress(i, 'state', e.target.value)} placeholder="State / Province" style={{ ...inp(dark), height: 30 }} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Postcode</span>
+                      <input value={addr.postcode} onChange={e => updateAddress(i, 'postcode', e.target.value)} placeholder="Postcode" style={{ ...inp(dark), height: 30 }} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Country</span>
+                      <input value={addr.country} onChange={e => updateAddress(i, 'country', e.target.value)} placeholder="Country" style={{ ...inp(dark), height: 30 }} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Notes</span>
+                      <input value={addr.notes} onChange={e => updateAddress(i, 'notes', e.target.value)} placeholder="Optional notes" style={{ ...inp(dark), height: 30 }} />
+                    </div>
+                  </div>
+                </div>
+              ))}
+              <button type="button" onClick={addAddress} style={{ alignSelf: 'flex-start', padding: '6px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer' }}>
+                + Add Address
+              </button>
+            </div>
+          </Field>
         </Modal>
+      )}
+
+      {/* ─── HELP MODAL ──────────────────────────────────── */}
+      {showHelp && (
+        <HelpModal dark={dark} title="Suppliers — Help" subtitle="Manage the supplier master list" onClose={() => setShowHelp(false)} sections={[
+          { icon: '🏭', title: 'What this tab is for', items: ['Manage the master list of suppliers used on Purchase Orders across all projects. Each supplier can have multiple pickup and delivery addresses.'] },
+          { icon: '📋', title: 'Column Reference', items: [<><strong>Name</strong> — full legal supplier name.</>, <><strong>Code</strong> — short supplier code used on POs.</>, <><strong>Addresses</strong> — number of addresses on record. Hover for primary address.</>, <><strong>Status</strong> — Active suppliers appear in PO drop-downs.</> ] },
+          { icon: '⚙️', title: 'Actions', items: [<><strong>Edit</strong> — update supplier fields and manage pickup/delivery addresses.</>, <><strong>Deactivate</strong> — hides from active lists. Reversible.</>, <><strong>Delete</strong> — permanent. Cascades to all addresses.</> ] },
+        ] satisfies HelpSection[]} />
       )}
     </>
   )
@@ -1669,7 +1899,21 @@ const EMPTY_PROJ: ProjForm = { code: '', name: '', phase: '', status: 'active', 
 const RAG_OPTS = ['green', 'amber', 'red', 'blue', 'grey']
 const RAG_DOT: Record<string, string> = { green: '#22c55e', amber: '#f59e0b', red: '#ef4444', blue: '#2563eb', grey: '#94a3b8' }
 
-function ProjectsAdminTab({ dark }: { dark: boolean }) {
+// ─── PROJECTS COLUMN DEFINITIONS ────────────────────────────
+const P_COLS: AdminCol[] = [
+  { label: 'Code',   width: 100, minWidth: 80  },
+  { label: 'Name',   width: 200, minWidth: 120 },
+  { label: 'Client', width: 130, minWidth: 100 },
+  { label: 'Phase',  width: 100, minWidth: 80  },
+  { label: 'POs',    width: 60,  minWidth: 50  },
+  { label: 'Risk',   width: 60,  minWidth: 50  },
+  { label: 'Breach', width: 60,  minWidth: 50  },
+  { label: 'Start',  width: 110, minWidth: 80  },
+  { label: 'End',    width: 110, minWidth: 80  },
+  { label: '',       width: 120, minWidth: 120, noResize: true },
+]
+
+function ProjectsAdminTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
   const [rows,     setRows]     = useState<AdminProject[]>([])
   const [search,   setSearch]   = useState('')
   const [error,    setError]    = useState('')
@@ -1682,6 +1926,7 @@ function ProjectsAdminTab({ dark }: { dark: boolean }) {
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string } | null>(null)
   const [deleteSaving, setDeleteSaving] = useState(false)
   const [deleteErr,    setDeleteErr]    = useState('')
+  const [showHelp,     setShowHelp]     = useState(false)
 
   const load = useCallback(async () => {
     setError('')
@@ -1738,44 +1983,42 @@ function ProjectsAdminTab({ dark }: { dark: boolean }) {
     ? rows.filter(p => p.code.toLowerCase().includes(search.toLowerCase()) || p.name.toLowerCase().includes(search.toLowerCase()) || (p.client || '').toLowerCase().includes(search.toLowerCase()))
     : rows
 
-  const GRID = '100px 1fr 130px 100px 60px 60px 60px 110px 110px 120px'
   return (
     <>
+      {/* ─── FILTERS + TOOLBAR ──────────────────────────── */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search code, name, client…" style={{ ...inp(dark), width: 260 }} />
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: '#94a3b8' }}>{filtered.length} project{filtered.length !== 1 ? 's' : ''}</span>
+        <button onClick={() => setShowHelp(true)} title="Projects help" style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>ℹ</button>
         <AddBtn onClick={openAdd} label="+ Add Project" />
       </div>
       {error && <Err msg={error} />}
-      <TableCard dark={dark}>
-        <div style={{ display: 'grid', gridTemplateColumns: GRID, background: dark ? '#0f172a' : '#f4f7fb', borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}`, height: 36, userSelect: 'none', position: 'sticky', top: 0, zIndex: 1 }}>
-          {['Code','Name','Client','Phase','POs','Risk','Breach','Start','End',''].map(h => (
-            <div key={h} style={{ padding: '0 12px', display: 'flex', alignItems: 'center', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase' }}>{h}</div>
-          ))}
-        </div>
-        {filtered.length === 0 && <Empty msg="No projects found." />}
+
+      {/* ─── TABLE ──────────────────────────────────────── */}
+      <AdminTable tableId="admin_projects" columns={P_COLS} dark={dark} empty="No projects found." top={headerHeight}>
         {filtered.map(p => (
-          <div key={p.id} style={{ display: 'grid', gridTemplateColumns: GRID, borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, minHeight: 40, alignItems: 'center' }}>
+          <AdminRow key={p.id} dark={dark}>
+            {/* ─── CODE (with RAG dot) ─────────────────────── */}
             <div style={{ padding: '0 12px', display: 'flex', alignItems: 'center', gap: 6 }}>
               <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: RAG_DOT[p.rag] ?? '#94a3b8' }} />
               <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: dark ? '#f1f5f9' : '#0f172a' }}>{p.code}</span>
             </div>
-            <TD dark={dark}>{p.name}</TD>
-            <TD dark={dark} muted>{p.client || '—'}</TD>
-            <TD dark={dark} muted>{p.phase || '—'}</TD>
-            <TD dark={dark} muted center>{p.totalPOs ?? 0}</TD>
-            <TD dark={dark} muted center>{p.atRisk ?? 0}</TD>
-            <TD dark={dark} muted center>{p.breached ?? 0}</TD>
-            <TD dark={dark} muted mono>{p.startDate?.slice(0, 10) || '—'}</TD>
-            <TD dark={dark} muted mono>{p.endDate?.slice(0, 10) || '—'}</TD>
-            <div style={{ padding: '0 8px', display: 'flex', gap: 4 }}>
+            <AdminCell>{p.name}</AdminCell>
+            <AdminCell muted>{p.client || '—'}</AdminCell>
+            <AdminCell muted>{p.phase || '—'}</AdminCell>
+            <div style={{ padding: '0 12px', textAlign: 'center', fontSize: 13, color: '#94a3b8' }}>{p.totalPOs ?? 0}</div>
+            <div style={{ padding: '0 12px', textAlign: 'center', fontSize: 13, color: '#94a3b8' }}>{p.atRisk ?? 0}</div>
+            <div style={{ padding: '0 12px', textAlign: 'center', fontSize: 13, color: '#94a3b8' }}>{p.breached ?? 0}</div>
+            <AdminCell muted mono>{p.startDate?.slice(0, 10) || '—'}</AdminCell>
+            <AdminCell muted mono>{p.endDate?.slice(0, 10) || '—'}</AdminCell>
+            <AdminActions>
               <button onClick={() => openEdit(p)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
               <button onClick={() => { setDeleteTarget({ id: p.id, name: `${p.code} — ${p.name}` }); setDeleteErr('') }} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
-            </div>
-          </div>
+            </AdminActions>
+          </AdminRow>
         ))}
-      </TableCard>
+      </AdminTable>
       {showForm && (
         <Modal title={editId != null ? 'Edit Project' : 'Add Project'} dark={dark} onClose={() => setShowForm(false)} onSubmit={save} error={formErr} saving={saving}>
           <Field label="Project Code *"><input value={form.code} onChange={pf('code')} placeholder="e.g. PGAS-001" style={inp(dark)} /></Field>
@@ -1815,6 +2058,15 @@ function ProjectsAdminTab({ dark }: { dark: boolean }) {
           onCancel={() => { setDeleteTarget(null); setDeleteErr('') }}
           saving={deleteSaving} error={deleteErr} />
       )}
+
+      {/* ─── HELP MODAL ──────────────────────────────────── */}
+      {showHelp && (
+        <HelpModal dark={dark} title="Projects — Help" subtitle="Project master list management" onClose={() => setShowHelp(false)} sections={[
+          { icon: '📁', title: 'What this tab is for', items: ['Manage the master list of projects. Projects are referenced by Purchase Orders, WBS codes, and user access assignments.'] },
+          { icon: '📋', title: 'Column Reference', items: [<><strong>Code</strong> — unique project code. RAG dot shows status (Green/Amber/Red/Blue/Grey).</>, <><strong>Client</strong> — client organisation.</>, <><strong>Phase</strong> — current project phase (e.g. Execution, Close-out).</>, <><strong>POs / Risk / Breach</strong> — purchase order summary counts from the Procurement module.</>, <><strong>Start / End</strong> — project date range.</> ] },
+          { icon: '⚙️', title: 'Actions', items: [<><strong>Edit</strong> — update project details, RAG status, and dates.</>, <><strong>Delete</strong> — permanent. Requires reason. Does not delete linked POs.</> ] },
+        ] satisfies HelpSection[]} />
+      )}
     </>
   )
 }
@@ -1831,11 +2083,19 @@ type Warehouse = {
 }
 type WhForm = { name: string; code: string; address: string; state: string; contactName: string; phone: string; status: string }
 const EMPTY_WH: WhForm = { name: '', code: '', address: '', state: '', contactName: '', phone: '', status: 'active' }
-type WhKey = 'whname' | 'whcode' | 'whaddr' | 'whstate' | 'whcontact' | 'whphone' | 'whstatus'
-const WH_DEF: Record<WhKey, number> = { whname: 200, whcode: 80, whaddr: 220, whstate: 80, whcontact: 140, whphone: 130, whstatus: 90 }
-const WH_MIN: Record<WhKey, number> = { whname: 120, whcode: 60, whaddr: 120, whstate: 60, whcontact: 90,  whphone: 90,  whstatus: 70 }
+// ─── WAREHOUSES COLUMN DEFINITIONS ──────────────────────────
+const WH_COLS: AdminCol[] = [
+  { label: 'Name',    width: 200, minWidth: 120 },
+  { label: 'Code',    width: 80,  minWidth: 60  },
+  { label: 'Address', width: 220, minWidth: 120 },
+  { label: 'State',   width: 80,  minWidth: 60  },
+  { label: 'Contact', width: 140, minWidth: 90  },
+  { label: 'Phone',   width: 130, minWidth: 90  },
+  { label: 'Status',  width: 90,  minWidth: 70  },
+  { label: '',        width: 160, minWidth: 160, noResize: true },
+]
 
-function WarehousesTab({ dark }: { dark: boolean }) {
+function WarehousesTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
   const [rows,     setRows]     = useState<Warehouse[]>([])
   const [total,    setTotal]    = useState<number | null>(null)
   const [search,   setSearch]   = useState('')
@@ -1852,17 +2112,7 @@ function WarehousesTab({ dark }: { dark: boolean }) {
   const [deactivateTarget,  setDeactivateTarget]  = useState<Warehouse | null>(null)
   const [deactivateSaving,  setDeactivateSaving]  = useState(false)
   const [deactivateErr,     setDeactivateErr]     = useState('')
-  const { containerRef, startResize } = useTableResize(WH_DEF, WH_MIN)
-  const GRID = [
-    `var(--col-whname,${WH_DEF.whname}px)`,
-    `var(--col-whcode,${WH_DEF.whcode}px)`,
-    `var(--col-whaddr,${WH_DEF.whaddr}px)`,
-    `var(--col-whstate,${WH_DEF.whstate}px)`,
-    `var(--col-whcontact,${WH_DEF.whcontact}px)`,
-    `var(--col-whphone,${WH_DEF.whphone}px)`,
-    `var(--col-whstatus,${WH_DEF.whstatus}px)`,
-    '100px',
-  ].join(' ')
+  const [showHelp, setShowHelp] = useState(false)
 
   const load = useCallback(async () => {
     setError('')
@@ -1915,6 +2165,7 @@ function WarehousesTab({ dark }: { dark: boolean }) {
 
   return (
     <>
+      {/* ─── FILTERS + TOOLBAR ──────────────────────────── */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, code, state…" style={{ ...inp(dark), width: 240 }} />
         <select value={filterSt} onChange={e => setFilterSt(e.target.value)} style={{ ...inp(dark), width: 120 }}>
@@ -1924,44 +2175,34 @@ function WarehousesTab({ dark }: { dark: boolean }) {
         </select>
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: '#94a3b8' }}>{total == null ? 'Loading…' : `${total} warehouse${total !== 1 ? 's' : ''}`}</span>
+        <button onClick={() => setShowHelp(true)} title="Warehouses help" style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>ℹ</button>
         <AddBtn onClick={openAdd} label="+ Add Warehouse" />
       </div>
       {error && <Err msg={error} />}
-      <TableCard dark={dark}>
-        <div ref={containerRef}>
-          <TH dark={dark} grid={GRID}>
-            <HeaderCell label="Name"    col="whname"    align="left" onResize={startResize} />
-            <HeaderCell label="Code"    col="whcode"    align="left" onResize={startResize} />
-            <HeaderCell label="Address" col="whaddr"    align="left" onResize={startResize} />
-            <HeaderCell label="State"   col="whstate"   align="left" onResize={startResize} />
-            <HeaderCell label="Contact" col="whcontact" align="left" onResize={startResize} />
-            <HeaderCell label="Phone"   col="whphone"   align="left" onResize={startResize} />
-            <HeaderCell label="Status"  col="whstatus"              onResize={startResize} />
-            <div />
-          </TH>
-          {rows.length === 0 && total !== null && <Empty msg="No warehouses found." />}
-          {rows.map(w => (
-            <TR key={w.id} dark={dark} grid={GRID}>
-              <TD dark={dark}>{w.name}</TD>
-              <TD dark={dark} mono>{w.code}</TD>
-              <TD dark={dark} muted><span title={w.address} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{w.address || '—'}</span></TD>
-              <TD dark={dark} muted>{w.state || '—'}</TD>
-              <TD dark={dark} muted>{w.contactName || '—'}</TD>
-              <TD dark={dark} muted mono>{w.phone || '—'}</TD>
-              <div style={{ padding: '0 12px' }}>
-                <StatusPill active={w.status === 'active'} label={w.status === 'active' ? 'Active' : 'Inactive'} />
-              </div>
-              <div style={{ padding: '0 8px', display: 'flex', gap: 4 }}>
-                <button onClick={() => openEdit(w)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
-                {w.status === 'active' && (
-                  <button onClick={() => setDeactivateTarget(w)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(217,119,6,0.3)', background: 'rgba(217,119,6,0.08)', color: '#d97706', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Deactivate</button>
-                )}
-                <button onClick={() => setDeleteTarget(w)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
-              </div>
-            </TR>
-          ))}
-        </div>
-      </TableCard>
+
+      {/* ─── TABLE ──────────────────────────────────────── */}
+      <AdminTable tableId="admin_warehouses" columns={WH_COLS} dark={dark} empty="No warehouses found." top={headerHeight}>
+        {rows.map(w => (
+          <AdminRow key={w.id} dark={dark}>
+            <AdminCell>{w.name}</AdminCell>
+            <AdminCell mono>{w.code}</AdminCell>
+            <AdminCell muted><span title={w.address}>{w.address || '—'}</span></AdminCell>
+            <AdminCell muted>{w.state || '—'}</AdminCell>
+            <AdminCell muted>{w.contactName || '—'}</AdminCell>
+            <AdminCell muted mono>{w.phone || '—'}</AdminCell>
+            <div style={{ padding: '0 12px' }}>
+              <StatusPill active={w.status === 'active'} label={w.status === 'active' ? 'Active' : 'Inactive'} />
+            </div>
+            <AdminActions>
+              <button onClick={() => openEdit(w)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
+              {w.status === 'active' && (
+                <button onClick={() => setDeactivateTarget(w)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(245,158,11,0.35)', background: 'rgba(245,158,11,0.08)', color: '#d97706', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Deactivate</button>
+              )}
+              <button onClick={() => setDeleteTarget(w)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
+            </AdminActions>
+          </AdminRow>
+        ))}
+      </AdminTable>
       {showForm && (
         <Modal title={editId != null ? 'Edit Warehouse' : 'Add Warehouse'} dark={dark} onClose={() => setShowForm(false)} onSubmit={save} error={formErr} saving={saving}>
           <Field label="Name *"><input value={form.name} onChange={wf('name')} placeholder="e.g. Perth Laydown Yard" style={inp(dark)} /></Field>
@@ -1995,6 +2236,15 @@ function WarehousesTab({ dark }: { dark: boolean }) {
           onCancel={() => { setDeleteTarget(null); setDeleteErr('') }}
           saving={deleteSaving} error={deleteErr} />
       )}
+
+      {/* ─── HELP MODAL ──────────────────────────────────── */}
+      {showHelp && (
+        <HelpModal dark={dark} title="Warehouses — Help" subtitle="Physical storage locations and laydown yards" onClose={() => setShowHelp(false)} sections={[
+          { icon: '🏗️', title: 'What this tab is for', items: ['Manage the master list of physical warehouses, laydown yards, and storage facilities used for material receipt and dispatch.'] },
+          { icon: '📋', title: 'Column Reference', items: [<><strong>Name</strong> — full warehouse name.</>, <><strong>Code</strong> — short identifier used on transfers and tags.</>, <><strong>Address</strong> — full street address. Hover for full text.</>, <><strong>State</strong> — state or territory.</>, <><strong>Contact</strong> — site contact person.</>, <><strong>Status</strong> — Active warehouses appear in material transfer forms.</> ] },
+          { icon: '⚙️', title: 'Actions', items: [<><strong>Edit</strong> — update warehouse details.</>, <><strong>Deactivate</strong> — hides from active lists. Reversible.</>, <><strong>Delete</strong> — permanent. Requires reason confirmation.</> ] },
+        ] satisfies HelpSection[]} />
+      )}
     </>
   )
 }
@@ -2008,7 +2258,15 @@ type Uom = { id: number; code: string; description: string; status: string }
 type UomForm = { code: string; description: string; status: string }
 const EMPTY_UOM: UomForm = { code: '', description: '', status: 'active' }
 
-function UomTab({ dark }: { dark: boolean }) {
+// ─── UNITS OF MEASURE COLUMN DEFINITIONS ────────────────────
+const UOM_COLS: AdminCol[] = [
+  { label: 'Code',        width: 80,  minWidth: 70  },
+  { label: 'Description', width: 300, minWidth: 150 },
+  { label: 'Status',      width: 100, minWidth: 80  },
+  { label: '',            width: 160, minWidth: 160, noResize: true },
+]
+
+function UomTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
   const [rows,     setRows]     = useState<Uom[]>([])
   const [search,   setSearch]   = useState('')
   const [filterSt, setFilterSt] = useState('')
@@ -2024,6 +2282,7 @@ function UomTab({ dark }: { dark: boolean }) {
   const [deactivateTarget,  setDeactivateTarget]  = useState<Uom | null>(null)
   const [deactivateSaving,  setDeactivateSaving]  = useState(false)
   const [deactivateErr,     setDeactivateErr]     = useState('')
+  const [showHelp,          setShowHelp]          = useState(false)
 
   const load = useCallback(async () => {
     setError('')
@@ -2071,9 +2330,9 @@ function UomTab({ dark }: { dark: boolean }) {
     finally { setDeactivateSaving(false) }
   }
 
-  const GRID = '80px 1fr 100px 100px'
   return (
     <>
+      {/* ─── FILTERS + TOOLBAR ──────────────────────────── */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search code or description…" style={{ ...inp(dark), width: 260 }} />
         <select value={filterSt} onChange={e => setFilterSt(e.target.value)} style={{ ...inp(dark), width: 120 }}>
@@ -2083,34 +2342,30 @@ function UomTab({ dark }: { dark: boolean }) {
         </select>
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: '#94a3b8' }}>{rows.length} unit{rows.length !== 1 ? 's' : ''}</span>
+        <button onClick={() => setShowHelp(true)} title="Units of Measure help" style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>ℹ</button>
         <AddBtn onClick={openAdd} label="+ Add UoM" />
       </div>
       {error && <Err msg={error} />}
-      <TableCard dark={dark}>
-        <TH dark={dark} grid={GRID}>
-          <div style={{ padding: '0 12px', display: 'flex', alignItems: 'center', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Code</div>
-          <div style={{ padding: '0 12px', display: 'flex', alignItems: 'center', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Description</div>
-          <div style={{ padding: '0 12px', display: 'flex', alignItems: 'center', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Status</div>
-          <div />
-        </TH>
-        {rows.length === 0 && <Empty msg="No units of measure found." />}
+
+      {/* ─── TABLE ──────────────────────────────────────── */}
+      <AdminTable tableId="admin_uom" columns={UOM_COLS} dark={dark} empty="No units of measure found." top={headerHeight}>
         {rows.map(u => (
-          <TR key={u.id} dark={dark} grid={GRID}>
-            <TD dark={dark} mono>{u.code}</TD>
-            <TD dark={dark} muted>{u.description}</TD>
+          <AdminRow key={u.id} dark={dark}>
+            <AdminCell mono>{u.code}</AdminCell>
+            <AdminCell muted>{u.description}</AdminCell>
             <div style={{ padding: '0 12px' }}>
               <StatusPill active={u.status === 'active'} label={u.status === 'active' ? 'Active' : 'Inactive'} />
             </div>
-            <div style={{ padding: '0 8px', display: 'flex', gap: 4 }}>
+            <AdminActions>
               <button onClick={() => openEdit(u)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
               {u.status === 'active' && (
-                <button onClick={() => setDeactivateTarget(u)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(217,119,6,0.3)', background: 'rgba(217,119,6,0.08)', color: '#d97706', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Deactivate</button>
+                <button onClick={() => setDeactivateTarget(u)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(245,158,11,0.35)', background: 'rgba(245,158,11,0.08)', color: '#d97706', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Deactivate</button>
               )}
-              <button onClick={() => setDeleteTarget(u)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
-            </div>
-          </TR>
+              <button onClick={() => setDeleteTarget(u)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
+            </AdminActions>
+          </AdminRow>
         ))}
-      </TableCard>
+      </AdminTable>
       {showForm && (
         <Modal title={editId != null ? 'Edit Unit of Measure' : 'Add Unit of Measure'} dark={dark} onClose={() => setShowForm(false)} onSubmit={save} error={formErr} saving={saving}>
           <Field label="Code *"><input value={form.code} onChange={uf('code')} placeholder="e.g. EA" style={inp(dark)} /></Field>
@@ -2138,6 +2393,15 @@ function UomTab({ dark }: { dark: boolean }) {
           onCancel={() => { setDeleteTarget(null); setDeleteErr('') }}
           saving={deleteSaving} error={deleteErr} />
       )}
+
+      {/* ─── HELP MODAL ──────────────────────────────────── */}
+      {showHelp && (
+        <HelpModal dark={dark} title="Units of Measure — Help" subtitle="Reference list of UoM codes used on POs and MTO lines" onClose={() => setShowHelp(false)} sections={[
+          { icon: '📏', title: 'What this tab is for', items: ['Manage the master list of Units of Measure used on Purchase Order line items and Material Take-Off sheets.'] },
+          { icon: '📋', title: 'Column Reference', items: [<><strong>Code</strong> — short UoM code (e.g. EA, KG, M).</>, <><strong>Description</strong> — full description (e.g. Each, Kilogram, Metre).</>, <><strong>Status</strong> — Active units appear in PO and MTO line item forms.</> ] },
+          { icon: '⚙️', title: 'Actions', items: [<><strong>Edit</strong> — update code or description.</>, <><strong>Deactivate</strong> — hides from selection lists. Existing PO lines keep their value.</>, <><strong>Delete</strong> — permanent. Requires reason confirmation.</> ] },
+        ] satisfies HelpSection[]} />
+      )}
     </>
   )
 }
@@ -2150,9 +2414,18 @@ function UomTab({ dark }: { dark: boolean }) {
 type AcronymRow = { id: number; acronym: string; definition: string; module: string; notes: string }
 type AcrForm    = { acronym: string; definition: string; module: string; notes: string }
 const EMPTY_ACR: AcrForm = { acronym: '', definition: '', module: '', notes: '' }
-const ACR_MODULES = ['', 'Procurement', 'Expediting', 'VDRL', 'Logistics', 'Material Control', 'Traceability', 'Document Inbox', 'Audit', 'Admin', 'Foundational', 'Foundational']
+const ACR_MODULES = ['', 'Procurement', 'Expediting', 'VDRL', 'Logistics', 'Material Control', 'Traceability', 'Document Inbox', 'Audit', 'Admin', 'Foundational']
 
-function AcronymsTab({ dark }: { dark: boolean }) {
+// ─── ACRONYMS COLUMN DEFINITIONS ────────────────────────────
+const ACR_COLS: AdminCol[] = [
+  { label: 'Acronym',    width: 90,  minWidth: 70  },
+  { label: 'Definition', width: 260, minWidth: 130 },
+  { label: 'Module',     width: 140, minWidth: 100 },
+  { label: 'Notes',      width: 200, minWidth: 120 },
+  { label: '',           width: 120, minWidth: 120, noResize: true },
+]
+
+function AcronymsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
   const [rows,     setRows]     = useState<AcronymRow[]>([])
   const [search,   setSearch]   = useState('')
   const [filterMod, setFilterMod] = useState('')
@@ -2165,6 +2438,7 @@ function AcronymsTab({ dark }: { dark: boolean }) {
   const [deleteTarget,  setDeleteTarget]  = useState<AcronymRow | null>(null)
   const [deleteSaving,  setDeleteSaving]  = useState(false)
   const [deleteErr,     setDeleteErr]     = useState('')
+  const [showHelp,      setShowHelp]      = useState(false)
 
   const load = useCallback(async () => {
     setError('')
@@ -2206,9 +2480,9 @@ function AcronymsTab({ dark }: { dark: boolean }) {
     finally { setDeleteSaving(false) }
   }
 
-  const GRID = '90px 1fr 140px 200px 110px'
   return (
     <>
+      {/* ─── FILTERS + TOOLBAR ──────────────────────────── */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search acronym or definition…" style={{ ...inp(dark), width: 260 }} />
         <select value={filterMod} onChange={e => setFilterMod(e.target.value)} style={{ ...inp(dark), width: 160 }}>
@@ -2217,29 +2491,26 @@ function AcronymsTab({ dark }: { dark: boolean }) {
         </select>
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: '#94a3b8' }}>{rows.length} acronym{rows.length !== 1 ? 's' : ''}</span>
+        <button onClick={() => setShowHelp(true)} title="Acronyms help" style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>ℹ</button>
         <AddBtn onClick={openAdd} label="+ Add Acronym" />
       </div>
       {error && <Err msg={error} />}
-      <TableCard dark={dark}>
-        <TH dark={dark} grid={GRID}>
-          {['Acronym','Definition','Module','Notes',''].map(h => (
-            <div key={h} style={{ padding: '0 12px', display: 'flex', alignItems: 'center', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase' }}>{h}</div>
-          ))}
-        </TH>
-        {rows.length === 0 && <Empty msg="No acronyms found." />}
+
+      {/* ─── TABLE ──────────────────────────────────────── */}
+      <AdminTable tableId="admin_acronyms" columns={ACR_COLS} dark={dark} empty="No acronyms found." top={headerHeight}>
         {rows.map(a => (
-          <TR key={a.id} dark={dark} grid={GRID}>
-            <TD dark={dark} mono>{a.acronym}</TD>
-            <TD dark={dark}><span title={a.definition} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{a.definition}</span></TD>
-            <TD dark={dark} muted>{a.module || '—'}</TD>
-            <TD dark={dark} muted><span title={a.notes} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{a.notes || '—'}</span></TD>
-            <div style={{ padding: '0 8px', display: 'flex', gap: 4 }}>
+          <AdminRow key={a.id} dark={dark}>
+            <AdminCell mono>{a.acronym}</AdminCell>
+            <AdminCell><span title={a.definition}>{a.definition}</span></AdminCell>
+            <AdminCell muted>{a.module || '—'}</AdminCell>
+            <AdminCell muted><span title={a.notes}>{a.notes || '—'}</span></AdminCell>
+            <AdminActions>
               <button onClick={() => openEdit(a)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
-              <button onClick={() => setDeleteTarget(a)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
-            </div>
-          </TR>
+              <button onClick={() => setDeleteTarget(a)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
+            </AdminActions>
+          </AdminRow>
         ))}
-      </TableCard>
+      </AdminTable>
       {showForm && (
         <Modal title={editId != null ? 'Edit Acronym' : 'Add Acronym'} dark={dark} onClose={() => setShowForm(false)} onSubmit={save} error={formErr} saving={saving}>
           <Field label="Acronym *"><input value={form.acronym} onChange={af('acronym')} placeholder="e.g. PO" style={inp(dark)} /></Field>
@@ -2263,6 +2534,15 @@ function AcronymsTab({ dark }: { dark: boolean }) {
           onCancel={() => { setDeleteTarget(null); setDeleteErr('') }}
           saving={deleteSaving} error={deleteErr} />
       )}
+
+      {/* ─── HELP MODAL ──────────────────────────────────── */}
+      {showHelp && (
+        <HelpModal dark={dark} title="Acronyms — Help" subtitle="Searchable glossary of MMS acronyms" onClose={() => setShowHelp(false)} sections={[
+          { icon: '🔤', title: 'What this tab is for', items: ['Manage the searchable glossary of acronyms used across all MMS modules. Users can look up definitions from any module.'] },
+          { icon: '📋', title: 'Column Reference', items: [<><strong>Acronym</strong> — the short form (e.g. PO, MTO, FAT).</>, <><strong>Definition</strong> — full expanded text.</>, <><strong>Module</strong> — which MMS module this acronym primarily belongs to.</>, <><strong>Notes</strong> — additional context or usage notes.</> ] },
+          { icon: '⚙️', title: 'Actions', items: [<><strong>Edit</strong> — update any field.</>, <><strong>Delete</strong> — permanent. Requires reason confirmation.</> ] },
+        ] satisfies HelpSection[]} />
+      )}
     </>
   )
 }
@@ -2280,11 +2560,19 @@ type IncoTerm = {
 }
 type IncForm = { code: string; fullName: string; description: string; riskTransferPoint: string; transportMode: string; status: string }
 const EMPTY_INC: IncForm = { code: '', fullName: '', description: '', riskTransferPoint: '', transportMode: 'Any mode', status: 'active' }
-type IKey = 'icode' | 'iname' | 'idesc' | 'irisk' | 'imode' | 'istatus'
-const I_DEF: Record<IKey, number> = { icode: 70, iname: 200, idesc: 260, irisk: 200, imode: 150, istatus: 90 }
-const I_MIN: Record<IKey, number> = { icode: 50, iname: 130, idesc: 130, irisk: 120, imode: 100, istatus: 70 }
 
-function IncoTermsTab({ dark }: { dark: boolean }) {
+// ─── INCO TERMS COLUMN DEFINITIONS ──────────────────────────
+const INC_COLS: AdminCol[] = [
+  { label: 'Code',           width: 70,  minWidth: 50  },
+  { label: 'Full Name',      width: 200, minWidth: 130 },
+  { label: 'Description',    width: 260, minWidth: 130 },
+  { label: 'Risk Transfer',  width: 200, minWidth: 120 },
+  { label: 'Transport Mode', width: 150, minWidth: 100 },
+  { label: 'Status',         width: 90,  minWidth: 70  },
+  { label: '',               width: 120, minWidth: 120, noResize: true },
+]
+
+function IncoTermsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
   const [rows,     setRows]     = useState<IncoTerm[]>([])
   const [search,   setSearch]   = useState('')
   const [filterSt, setFilterSt] = useState('')
@@ -2300,16 +2588,7 @@ function IncoTermsTab({ dark }: { dark: boolean }) {
   const [deactivateTarget,  setDeactivateTarget]  = useState<IncoTerm | null>(null)
   const [deactivateSaving,  setDeactivateSaving]  = useState(false)
   const [deactivateErr,     setDeactivateErr]     = useState('')
-  const { containerRef, startResize } = useTableResize(I_DEF, I_MIN)
-  const GRID = [
-    `var(--col-icode,${I_DEF.icode}px)`,
-    `var(--col-iname,${I_DEF.iname}px)`,
-    `var(--col-idesc,${I_DEF.idesc}px)`,
-    `var(--col-irisk,${I_DEF.irisk}px)`,
-    `var(--col-imode,${I_DEF.imode}px)`,
-    `var(--col-istatus,${I_DEF.istatus}px)`,
-    '100px',
-  ].join(' ')
+  const [showHelp,          setShowHelp]          = useState(false)
 
   const load = useCallback(async () => {
     setError('')
@@ -2362,6 +2641,7 @@ function IncoTermsTab({ dark }: { dark: boolean }) {
 
   return (
     <>
+      {/* ─── FILTERS + TOOLBAR ──────────────────────────── */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search code, name, mode…" style={{ ...inp(dark), width: 260 }} />
         <select value={filterSt} onChange={e => setFilterSt(e.target.value)} style={{ ...inp(dark), width: 120 }}>
@@ -2371,42 +2651,33 @@ function IncoTermsTab({ dark }: { dark: boolean }) {
         </select>
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: '#94a3b8' }}>{rows.length} term{rows.length !== 1 ? 's' : ''}</span>
+        <button onClick={() => setShowHelp(true)} title="INCO Terms help" style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>ℹ</button>
         <AddBtn onClick={openAdd} label="+ Add INCO Term" />
       </div>
       {error && <Err msg={error} />}
-      <TableCard dark={dark}>
-        <div ref={containerRef}>
-          <TH dark={dark} grid={GRID}>
-            <HeaderCell label="Code"              col="icode"   align="left" onResize={startResize} />
-            <HeaderCell label="Full Name"         col="iname"   align="left" onResize={startResize} />
-            <HeaderCell label="Description"       col="idesc"   align="left" onResize={startResize} />
-            <HeaderCell label="Risk Transfer"     col="irisk"   align="left" onResize={startResize} />
-            <HeaderCell label="Transport Mode"    col="imode"   align="left" onResize={startResize} />
-            <HeaderCell label="Status"            col="istatus"              onResize={startResize} />
-            <div />
-          </TH>
-          {rows.length === 0 && <Empty msg="No INCO terms found." />}
-          {rows.map(t => (
-            <TR key={t.id} dark={dark} grid={GRID}>
-              <TD dark={dark} mono>{t.code}</TD>
-              <TD dark={dark}><span title={t.fullName} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{t.fullName}</span></TD>
-              <TD dark={dark} muted><span title={t.description} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{t.description || '—'}</span></TD>
-              <TD dark={dark} muted><span title={t.riskTransferPoint} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{t.riskTransferPoint || '—'}</span></TD>
-              <TD dark={dark} muted>{t.transportMode || '—'}</TD>
-              <div style={{ padding: '0 12px' }}>
-                <StatusPill active={t.status === 'active'} label={t.status === 'active' ? 'Active' : 'Inactive'} />
-              </div>
-              <div style={{ padding: '0 8px', display: 'flex', gap: 4 }}>
-                <button onClick={() => openEdit(t)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
-                {t.status === 'active' && (
-                  <button onClick={() => setDeactivateTarget(t)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(217,119,6,0.3)', background: 'rgba(217,119,6,0.08)', color: '#d97706', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Deactivate</button>
-                )}
-                <button onClick={() => setDeleteTarget(t)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
-              </div>
-            </TR>
-          ))}
-        </div>
-      </TableCard>
+
+      {/* ─── TABLE ──────────────────────────────────────── */}
+      <AdminTable tableId="admin_incoterms" columns={INC_COLS} dark={dark} empty="No INCO terms found." top={headerHeight}>
+        {rows.map(t => (
+          <AdminRow key={t.id} dark={dark}>
+            <AdminCell mono>{t.code}</AdminCell>
+            <AdminCell><span title={t.fullName}>{t.fullName}</span></AdminCell>
+            <AdminCell muted><span title={t.description}>{t.description || '—'}</span></AdminCell>
+            <AdminCell muted><span title={t.riskTransferPoint}>{t.riskTransferPoint || '—'}</span></AdminCell>
+            <AdminCell muted>{t.transportMode || '—'}</AdminCell>
+            <div style={{ padding: '0 12px' }}>
+              <StatusPill active={t.status === 'active'} label={t.status === 'active' ? 'Active' : 'Inactive'} />
+            </div>
+            <AdminActions>
+              <button onClick={() => openEdit(t)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
+              {t.status === 'active' && (
+                <button onClick={() => setDeactivateTarget(t)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(245,158,11,0.35)', background: 'rgba(245,158,11,0.08)', color: '#d97706', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Deactivate</button>
+              )}
+              <button onClick={() => setDeleteTarget(t)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
+            </AdminActions>
+          </AdminRow>
+        ))}
+      </AdminTable>
       {showForm && (
         <Modal title={editId != null ? 'Edit INCO Term' : 'Add INCO Term'} dark={dark} onClose={() => setShowForm(false)} onSubmit={save} error={formErr} saving={saving}>
           <Field label="Code *"><input value={form.code} onChange={inf('code')} placeholder="e.g. FOB" style={inp(dark)} /></Field>
@@ -2451,6 +2722,15 @@ function IncoTermsTab({ dark }: { dark: boolean }) {
           onCancel={() => { setDeleteTarget(null); setDeleteErr('') }}
           saving={deleteSaving} error={deleteErr} />
       )}
+
+      {/* ─── HELP MODAL ──────────────────────────────────── */}
+      {showHelp && (
+        <HelpModal dark={dark} title="INCO Terms — Help" subtitle="International commercial terms for PO freight and risk" onClose={() => setShowHelp(false)} sections={[
+          { icon: '🚢', title: 'What this tab is for', items: ['Manage the list of INCO Terms (International Commercial Terms) available on Purchase Orders. These define where risk and freight cost transfer between buyer and seller.'] },
+          { icon: '📋', title: 'Column Reference', items: [<><strong>Code</strong> — standard INCO code (e.g. FOB, CIF, EXW).</>, <><strong>Full Name</strong> — complete term name.</>, <><strong>Description</strong> — plain-language explanation.</>, <><strong>Risk Transfer</strong> — the point at which responsibility passes to the buyer.</>, <><strong>Transport Mode</strong> — applicable transport modes (Any, Sea, Air, Road, Rail).</>, <><strong>Status</strong> — Active terms appear on PO forms.</> ] },
+          { icon: '⚙️', title: 'Actions', items: [<><strong>Edit</strong> — update any field.</>, <><strong>Deactivate</strong> — hides from PO selection. Existing POs keep their value.</>, <><strong>Delete</strong> — permanent. Requires reason confirmation.</> ] },
+        ] satisfies HelpSection[]} />
+      )}
     </>
   )
 }
@@ -2468,6 +2748,22 @@ type AdminTab = 'users' | 'suppliers' | 'warehouses' | 'uom' | 'acronyms' | 'inc
 
 export function Admin({ dark }: { dark: boolean }) {
   const [tab, setTab] = useState<AdminTab>('users')
+  const [headerHeight, setHeaderHeight] = useState(0)
+  const headerRef = useRef<HTMLDivElement>(null)
+
+  // ─── STICKY HEADER HEIGHT ─────────────────────────────────────
+  // Measures the rendered height of the sticky admin-header-wrap and
+  // passes it to AdminTable as the `top` offset so column headers pin
+  // exactly below the sticky admin header.
+  useEffect(() => {
+    const el = headerRef.current
+    if (!el) return
+    const obs = new ResizeObserver(() => {
+      setHeaderHeight(el.getBoundingClientRect().height)
+    })
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [])
 
   const tabs: { key: AdminTab; label: string; icon: string }[] = [
     { key: 'users',         label: 'Users & Roles',      icon: '👤' },
@@ -2483,43 +2779,44 @@ export function Admin({ dark }: { dark: boolean }) {
   ]
 
   return (
-    <div>
-      {/* ─── PAGE HEADER ──────────────────────────────────── */}
-      <div style={{ marginBottom: 20 }}>
-        <h2 style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.02em', margin: 0, color: dark ? '#f1f5f9' : '#0f172a', fontFamily: 'IBM Plex Sans, sans-serif' }}>
+    <div className="admin-page">
+      {/* ─── STICKY HEADER (title + tab bar) ─────────────────── */}
+      <div ref={headerRef} className="admin-header-wrap">
+        <h2 className="admin-title" style={{ color: dark ? '#f1f5f9' : '#0f172a' }}>
           Admin
         </h2>
-        <p style={{ fontSize: 13, color: '#94a3b8', margin: '3px 0 0' }}>
+        <p className="admin-subtitle">
           Manage users, permissions, external access and system settings.
         </p>
-      </div>
 
-      {/* ─── TAB BAR ──────────────────────────────────────── */}
-      <div style={{ display: 'flex', gap: 2, marginBottom: 20, borderBottom: `2px solid ${dark ? '#334155' : '#e2e8f0'}`, paddingBottom: 0, overflowX: 'auto' }}>
-        {tabs.map(t => {
-          const active = tab === t.key
-          return (
-            <button
-              key={t.key}
-              onClick={() => setTab(t.key)}
-              style={{ padding: '8px 16px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, fontWeight: active ? 600 : 400, color: active ? '#E84E0F' : (dark ? '#94a3b8' : '#64748b'), borderBottom: `2px solid ${active ? '#E84E0F' : 'transparent'}`, marginBottom: -2, fontFamily: 'IBM Plex Sans, sans-serif', display: 'flex', alignItems: 'center', gap: 6, transition: 'color 150ms', whiteSpace: 'nowrap' }}>
-              <span style={{ fontSize: 14 }}>{t.icon}</span>
-              {t.label}
-            </button>
-          )
-        })}
+        {/* ─── TAB BAR ────────────────────────────────────── */}
+        <div className="admin-tab-bar" style={{ display: 'flex', gap: 2, borderBottom: `2px solid ${dark ? '#334155' : '#e2e8f0'}`, overflowX: 'auto' }}>
+          {tabs.map(t => {
+            const active = tab === t.key
+            return (
+              <button
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                className="admin-tab-btn"
+                style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, fontWeight: active ? 600 : 400, color: active ? '#E84E0F' : (dark ? '#94a3b8' : '#64748b'), borderBottom: `2px solid ${active ? '#E84E0F' : 'transparent'}`, marginBottom: -2, fontFamily: 'IBM Plex Sans, sans-serif', display: 'flex', alignItems: 'center', gap: 6, transition: 'color 150ms', whiteSpace: 'nowrap' }}>
+                <span style={{ fontSize: 14 }}>{t.icon}</span>
+                {t.label}
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       {/* ─── TAB CONTENT ──────────────────────────────────── */}
-      {tab === 'users'         && <UsersTab          dark={dark} />}
-      {tab === 'suppliers'     && <SuppliersTab      dark={dark} />}
-      {tab === 'warehouses'    && <WarehousesTab     dark={dark} />}
-      {tab === 'uom'           && <UomTab            dark={dark} />}
-      {tab === 'acronyms'      && <AcronymsTab       dark={dark} />}
-      {tab === 'incoterms'     && <IncoTermsTab      dark={dark} />}
-      {tab === 'projects'      && <ProjectsAdminTab  dark={dark} />}
+      {tab === 'users'         && <UsersTab          dark={dark} headerHeight={headerHeight} />}
+      {tab === 'suppliers'     && <SuppliersTab      dark={dark} headerHeight={headerHeight} />}
+      {tab === 'warehouses'    && <WarehousesTab     dark={dark} headerHeight={headerHeight} />}
+      {tab === 'uom'           && <UomTab            dark={dark} headerHeight={headerHeight} />}
+      {tab === 'acronyms'      && <AcronymsTab       dark={dark} headerHeight={headerHeight} />}
+      {tab === 'incoterms'     && <IncoTermsTab      dark={dark} headerHeight={headerHeight} />}
+      {tab === 'projects'      && <ProjectsAdminTab  dark={dark} headerHeight={headerHeight} />}
       {tab === 'permissions'   && <PermissionsTab    dark={dark} />}
-      {tab === 'notifications' && <NotificationsTab  dark={dark} />}
+      {tab === 'notifications' && <NotificationsTab  dark={dark} headerHeight={headerHeight} />}
       {tab === 'settings'      && <SystemSettingsTab dark={dark} />}
     </div>
   )

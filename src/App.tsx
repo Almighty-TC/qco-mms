@@ -650,29 +650,29 @@ function App() {
         (= 100vh/vw ÷ scale) ensures the content fills the viewport
         exactly — without it, small mode leaves blank space and
         large mode overflows and clips. */}
+    {/* ── Zoom wrapper — scales the UI; fixed children use its coordinate space ── */}
     <div style={{
-      display: 'flex',
-      height: `${(100 / scale).toFixed(4)}vh`,
-      width:  `${(100 / scale).toFixed(4)}vw`,
-      overflow: 'hidden',
       fontFamily: 'IBM Plex Sans, sans-serif',
-      background: dark ? '#0f172a' : '#f1f4f8',
-      color: dark ? '#f1f5f9' : '#0f172a',
       zoom: scale,
     }}>
 
-      {/* Sidebar — slides in/out over 200ms */}
-      <div style={{ width: sidebarOpen ? 224 : 0, flexShrink: 0, overflow: 'hidden', transition: 'width 200ms ease' }}>
+      {/* ─── SIDEBAR — fixed, slides in/out below topbar ──────────── */}
+      <div style={{
+        position: 'fixed', top: 48, left: 0, bottom: 0,
+        width: sidebarOpen ? 224 : 0,
+        overflow: 'hidden',
+        transition: 'width 200ms ease',
+        zIndex: 90,
+      }}>
         <Nav userName={userName} userInitial={userInitial} userRole={user?.role ?? ''} activePage={page} onNavigate={setPage} />
       </div>
 
-      {/* Main column */}
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* ─── MAIN COLUMN placeholder (layout provided by fixed children below) ── */}
+      <div>
 
-        {/* ─── TOPBAR ──────────────────────────────────────────
-            Fixed-height bar: sidebar toggle · breadcrumb · date ·
-            critical badge · dark-mode · font-size · help · user chip. */}
-        <div style={{ height: 46, background: dark ? '#1e293b' : '#fff', borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}`, display: 'flex', alignItems: 'center', padding: '0 12px 0 16px', gap: 10, flexShrink: 0 }}>
+        {/* ─── TOPBAR — fixed across full width ────────────────
+            Sidebar toggle · breadcrumb · date · dark-mode · user chip */}
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, height: 48, zIndex: 100, background: dark ? '#1e293b' : '#fff', borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}`, display: 'flex', alignItems: 'center', padding: '0 12px 0 16px', gap: 10 }}>
 
           {/* Sidebar toggle */}
           <button
@@ -815,33 +815,34 @@ function App() {
           </div>
         </div>
 
-        {/* ─── PASSWORD EXPIRY BANNER ──────────────────────────
-            Shown when the user's password expires within 7 days.
-            Prompts them to change it before it forces a change. */}
-        {pwExpiryDaysLeft !== null && (
-          <div style={{
-            background: pwExpiryDaysLeft <= 1 ? 'rgba(239,68,68,0.08)' : 'rgba(245,158,11,0.08)',
-            borderBottom: `1px solid ${pwExpiryDaysLeft <= 1 ? 'rgba(239,68,68,0.25)' : 'rgba(245,158,11,0.25)'}`,
-            padding: '8px 20px', display: 'flex', alignItems: 'center', gap: 12, fontSize: 12,
-          }}>
-            <span style={{ color: pwExpiryDaysLeft <= 1 ? '#ef4444' : '#f59e0b', fontWeight: 700 }}>
-              {pwExpiryDaysLeft <= 0
-                ? 'Your password has expired.'
-                : `Your password expires in ${pwExpiryDaysLeft} day${pwExpiryDaysLeft !== 1 ? 's' : ''}.`}
-            </span>
-            <span style={{ color: dark ? '#94a3b8' : '#64748b' }}>Change it now to avoid being locked out.</span>
-            <button
-              onClick={() => setShowChangePw(true)}
-              style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 5, border: 'none', cursor: 'pointer', background: pwExpiryDaysLeft <= 1 ? '#ef4444' : '#f59e0b', color: '#fff', fontFamily: 'inherit' }}>
-              Change Password
-            </button>
-          </div>
-        )}
+        {/* ─── MAIN CONTENT — the one-and-only scroll container ──
+            Fixed below topbar, beside sidebar. overflow: auto so
+            position:sticky children work relative to this element. */}
+        <div style={{ position: 'fixed', top: 48, left: sidebarOpen ? 224 : 0, right: 0, bottom: 0, overflowY: 'auto', overflowX: 'auto', zIndex: 1, transition: 'left 200ms ease', background: dark ? '#0f172a' : '#f1f4f8', color: dark ? '#f1f5f9' : '#0f172a', padding: '0 20px 20px' }}>
 
-        {/* ─── SCROLLABLE CONTENT ───────────────────────────────
-            Renders the active page. Admin is only accessible when
-            the user's role is 'admin'; others see an access error. */}
-        <div style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', padding: 20, minWidth: 0 }}>
+          {/* ─── PASSWORD EXPIRY BANNER ────────────────────────
+              Scrolls with page content; visible at top of scroll area. */}
+          {pwExpiryDaysLeft !== null && (
+            <div style={{
+              margin: '12px 0 0',
+              borderRadius: 8,
+              background: pwExpiryDaysLeft <= 1 ? 'rgba(239,68,68,0.08)' : 'rgba(245,158,11,0.08)',
+              border: `1px solid ${pwExpiryDaysLeft <= 1 ? 'rgba(239,68,68,0.25)' : 'rgba(245,158,11,0.25)'}`,
+              padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 12, fontSize: 12,
+            }}>
+              <span style={{ color: pwExpiryDaysLeft <= 1 ? '#ef4444' : '#f59e0b', fontWeight: 700 }}>
+                {pwExpiryDaysLeft <= 0
+                  ? 'Your password has expired.'
+                  : `Your password expires in ${pwExpiryDaysLeft} day${pwExpiryDaysLeft !== 1 ? 's' : ''}.`}
+              </span>
+              <span style={{ color: dark ? '#94a3b8' : '#64748b' }}>Change it now to avoid being locked out.</span>
+              <button
+                onClick={() => setShowChangePw(true)}
+                style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 5, border: 'none', cursor: 'pointer', background: pwExpiryDaysLeft <= 1 ? '#ef4444' : '#f59e0b', color: '#fff', fontFamily: 'inherit' }}>
+                Change Password
+              </button>
+            </div>
+          )}
           {page === 'dashboard' && (
             <DashboardHome
               projects={projects} loading={loading} error={error} dark={dark}
