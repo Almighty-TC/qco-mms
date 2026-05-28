@@ -1,6 +1,6 @@
 # QCO MMS - Claude Context & Build Tracker
 Last updated: 2026-05-29
-Last commit: (pending — see session 7 below)
+Last commit: (pending — see session 8 below)
 
 ## MODULE STATUS
 - Login: ✅ Complete
@@ -96,6 +96,29 @@ Last commit: (pending — see session 7 below)
 See docs/USER_MANUAL_STATUS.md
 
 ## SESSION HISTORY
+
+### Session 2026-05-29 (session 8)
+Fixed in this session:
+- server/scripts/migrate-is-external.js (new, run ✓):
+  - ALTER TABLE IF NOT EXISTS is_external TINYINT(1) DEFAULT 0
+  - UPDATE: 6 users updated to is_external=1 (Hans Mueller, James Wilson, Emma Davis,
+    Sophie Kim, Raj Patel, Mei Lin — all had external roles but flag was 0)
+  - All 10 external-role users now correctly flagged
+- server/scripts/seed-role-permissions.js (new, run ✓):
+  - Deleted 150 stale rows; inserted 160 correct rows (16 roles × 10 modules)
+  - subcontractor role added (was missing from original seed)
+  - Permissions match the canonical spec exactly (wbs_scoped=0 for all)
+- server/routes/admin.js:
+  - Added 'subcontractor' to VALID_ROLES
+  - GET /users (list + single): DATE_FORMAT(contract_start/end, '%Y-%m-%d') so dates
+    return as plain 'YYYY-MM-DD' strings not JS Date objects (fixes UTC timezone
+    offset showing dates 1 day behind for servers in UTC+10)
+- src/pages/Admin.tsx:
+  - Added 'subcontractor' to ALL_ROLES constant
+- Contract End column: CONFIRMED in code (U_COLS line 300, row cell line 650-656)
+  and API (DATE_FORMAT now returns clean 'YYYY-MM-DD' strings). If not visible,
+  scroll right — table is ~1700px wide. Click ↺ to reset column widths.
+  Most internal users show '—' (no contract_end set) — this is expected.
 
 ### Session 2026-05-29 (session 7)
 Fixed in this session:

@@ -21,7 +21,7 @@ const ALL_ROLES = [
   'admin', 'ceo', 'director', 'project_director', 'project_manager',
   'procurement_manager', 'procurement_officer',
   'expediting_manager', 'expeditor', 'logistics_manager',
-  'warehouse', 'vendor', 'freight_forwarder', 'site_contractor', 'viewer',
+  'warehouse', 'vendor', 'freight_forwarder', 'site_contractor', 'subcontractor', 'viewer',
 ] as const
 type Role = typeof ALL_ROLES[number]
 

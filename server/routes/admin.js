@@ -11,7 +11,7 @@ const VALID_ROLES = new Set([
   'admin', 'ceo', 'director', 'project_director', 'project_manager',
   'procurement_manager', 'procurement_officer',
   'expediting_manager', 'expeditor', 'logistics_manager',
-  'warehouse', 'vendor', 'freight_forwarder', 'site_contractor', 'viewer',
+  'warehouse', 'vendor', 'freight_forwarder', 'site_contractor', 'subcontractor', 'viewer',
 ])
 const VALID_MODULES = new Set([
   'dashboard', 'procurement', 'expediting', 'vdrl', 'logistics',
@@ -366,11 +366,11 @@ router.get('/users', async (req, res) => {
       `SELECT u.id, u.full_name AS fullName, u.email, u.role, u.company,
               IFNULL(u.staff_id, '') AS staffId,
               IFNULL(u.phone, '')    AS phone,
-              u.is_active            AS isActive,
-              u.is_external          AS isExternal,
-              u.contract_start       AS contractStart,
-              u.contract_end         AS contractEnd,
-              u.last_login           AS lastLogin,
+              u.is_active                                    AS isActive,
+              u.is_external                                  AS isExternal,
+              DATE_FORMAT(u.contract_start, '%Y-%m-%d')     AS contractStart,
+              DATE_FORMAT(u.contract_end,   '%Y-%m-%d')     AS contractEnd,
+              u.last_login                                   AS lastLogin,
               (SELECT COUNT(DISTINCT project_id)
                FROM user_wbs_access
                WHERE user_id = u.id) AS projectCount,
@@ -416,7 +416,8 @@ router.get('/users/:id', async (req, res) => {
       `SELECT id, full_name AS fullName, email, role, company,
               IFNULL(phone, '') AS phone,
               is_active AS isActive, is_external AS isExternal,
-              contract_start AS contractStart, contract_end AS contractEnd
+              DATE_FORMAT(contract_start, '%Y-%m-%d') AS contractStart,
+              DATE_FORMAT(contract_end,   '%Y-%m-%d') AS contractEnd
        FROM users WHERE id = ?`,
       [parseInt(req.params.id)]
     )
@@ -496,7 +497,8 @@ router.post('/users', async (req, res) => {
       `SELECT id, full_name AS fullName, email, role, company,
               IFNULL(phone, '') AS phone,
               is_active AS isActive, is_external AS isExternal,
-              contract_start AS contractStart, contract_end AS contractEnd
+              DATE_FORMAT(contract_start, '%Y-%m-%d') AS contractStart,
+              DATE_FORMAT(contract_end,   '%Y-%m-%d') AS contractEnd
        FROM users WHERE id = ?`,
       [r.insertId]
     )
@@ -624,7 +626,8 @@ router.put('/users/:id', async (req, res) => {
       `SELECT id, full_name AS fullName, email, role, company,
               IFNULL(phone, '') AS phone,
               is_active AS isActive, is_external AS isExternal,
-              contract_start AS contractStart, contract_end AS contractEnd
+              DATE_FORMAT(contract_start, '%Y-%m-%d') AS contractStart,
+              DATE_FORMAT(contract_end,   '%Y-%m-%d') AS contractEnd
        FROM users WHERE id = ?`,
       [id]
     )
