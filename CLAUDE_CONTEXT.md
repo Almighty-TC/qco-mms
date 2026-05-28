@@ -1,6 +1,6 @@
 # QCO MMS - Claude Context & Build Tracker
 Last updated: 2026-05-29
-Last commit: (pending — see session 8 below)
+Last commit: (pending — see session 9 below)
 
 ## MODULE STATUS
 - Login: ✅ Complete
@@ -30,6 +30,14 @@ Last commit: (pending — see session 8 below)
 - ✅ Projects: full CRUD via /api/admin/projects
 - ✅ Notifications: GET/PUT(read)/DELETE via /api/admin/notifications
 - ✅ System Settings: GET/PUT via /api/admin/system-settings
+
+## GLOBAL RULES
+
+### Help Modal Rule (ALL modules — permanent)
+Whenever any feature, column, filter, colour coding or behaviour is added or
+changed in any screen, the ℹ help modal for that screen MUST be updated in the
+same commit to reflect the change. This applies to every module built going
+forward (Procurement, Expediting, VDRL, Logistics, etc.).
 
 ## DECISIONS MADE
 
@@ -96,6 +104,31 @@ Last commit: (pending — see session 8 below)
 See docs/USER_MANUAL_STATUS.md
 
 ## SESSION HISTORY
+
+### Session 2026-05-29 (session 9)
+Fixed in this session:
+- src/pages/Admin.tsx (UsersTab):
+  - User type filter: switched from backend param to CLIENT-SIDE filtering via
+    filteredRows useMemo. Removed filterType from load() deps and params.
+    load() now uses limit=200 to pre-load all users for reliable client filtering.
+    filteredRows conditions: qco (company='QCO Group' && !isExternal),
+    project_team (!isExternal && company≠'QCO Group'), external (isExternal).
+    Count display: "N of M users" when filter active.
+  - External legend: updated label text; references filteredRows (not rows)
+- src/pages/Admin.tsx (PermissionsTab):
+  - loadUserOverrides: split into two separate try-catch blocks; each failure
+    logs to console.error instead of silently swallowing. Role var extracted
+    before await so second call still runs if first succeeds.
+  - effectiveRolePermsLookup: falls back to global lookup[userRole] when
+    rolePermsLookup is empty (e.g. if /permissions/role call fails).
+  - basePerm uses effectiveRolePermsLookup; admin role special-case restored:
+    admin always shows green dots (except wbs_scoped which is always false).
+- src/pages/Admin.tsx (UsersTab help modal):
+  - External Users section: added orange border description
+  - New "User Type Filter" section: explains all 4 filter options
+  - Column Reference: updated Name entry (orange border = external, no badge);
+    Contract End entry: full colour-coding legend (red/amber/green/dash)
+- CLAUDE_CONTEXT.md: added GLOBAL RULES section with Help Modal Rule
 
 ### Session 2026-05-29 (session 8)
 Fixed in this session:

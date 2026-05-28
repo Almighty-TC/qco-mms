@@ -454,17 +454,30 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
   const load = useCallback(async (p = page, s = search) => {
     setError('')
     try {
-      const params: Record<string, string> = { page: String(p), limit: '50' }
-      if (filterRole)   params.role      = filterRole
-      if (filterType)   params.user_type = filterType
-      if (s.trim())            params.search      = s.trim()
+      const params: Record<string, string> = { page: String(p), limit: '200' }
+      if (filterRole) params.role   = filterRole
+      if (s.trim())   params.search = s.trim()
       const { data } = await axios.get(`${API}/users`, { params })
       setRows(data.rows); setTotal(data.total)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
       setError(err.response?.data?.error ?? 'Failed to load users')
     }
-  }, [page, filterRole, filterType, search])
+  }, [page, filterRole, search])
+
+  // ─── CLIENT-SIDE TYPE FILTER ──────────────────────────────────
+  // Applied on top of already-loaded rows so no extra network call is needed.
+  // Conditions match exactly what the DB flags represent:
+  //   qco          → internal user with company = 'QCO Group'
+  //   project_team → internal user with any other company (incl. null)
+  //   external     → is_external = 1 (vendor / freight_forwarder / site_contractor)
+  const filteredRows = useMemo(() => {
+    if (!filterType) return rows
+    if (filterType === 'qco')          return rows.filter(u => !u.isExternal && u.company === 'QCO Group')
+    if (filterType === 'project_team') return rows.filter(u => !u.isExternal && u.company !== 'QCO Group')
+    if (filterType === 'external')     return rows.filter(u => !!u.isExternal)
+    return rows
+  }, [rows, filterType])
 
   useEffect(() => { load() }, [load])
 
@@ -602,7 +615,9 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
           <option value="external">External</option>
         </select>
         <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 12, color: '#94a3b8' }}>{total == null ? 'Loading…' : `${total} user${total !== 1 ? 's' : ''}`}</span>
+        <span style={{ fontSize: 12, color: '#94a3b8' }}>
+          {total == null ? 'Loading…' : filterType ? `${filteredRows.length} of ${total} user${total !== 1 ? 's' : ''}` : `${total} user${total !== 1 ? 's' : ''}`}
+        </span>
         <button
           onClick={() => setShowHelp(true)}
           title="User creation rules and guidelines"
@@ -616,7 +631,7 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
 
       {/* ─── TABLE ──────────────────────────────────────── */}
       <AdminTable tableId="admin_users" columns={U_COLS} dark={dark} empty="No users found." top={headerHeight}>
-        {rows.map(u => (
+        {filteredRows.map(u => (
           <AdminRow key={u.id} dark={dark}>
             {/* ─── NAME ───────────────────────────────────── */}
             <td title={u.fullName} style={{
@@ -675,10 +690,10 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
       </AdminTable>
 
       {/* ─── EXTERNAL LEGEND ──────────────────────────────── */}
-      {rows.some(u => u.isExternal) && (
+      {filteredRows.some(u => u.isExternal) && (
         <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#94a3b8' }}>
           <span style={{ display: 'inline-block', width: 18, height: 13, boxShadow: 'inset 3px 0 0 #E84E0F', flexShrink: 0 }} />
-          External user
+          External user (vendor / freight forwarder / site contractor / subcontractor)
         </div>
       )}
 
@@ -754,11 +769,22 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
             {
               icon: '🌐', title: 'External Users — Contractors, Vendors, Suppliers',
               items: [
+                <>External users (vendor, freight forwarder, site contractor, subcontractor) are shown with an <strong>orange left border</strong> on their row. Internal users have no border.</>,
                 'External users are activated immediately on creation — same workflow as internal users.',
                 'Contract Start and End dates are strongly recommended for compliance tracking.',
                 'Access is automatically revoked on the contract end date.',
                 <>Warning notifications are sent at <strong>30, 14, 7 and 1 day(s)</strong> before expiry.</>,
                 'After creation, assign the user to specific projects and WBS codes via the project settings.',
+              ],
+            },
+            {
+              icon: '🔍', title: 'User Type Filter',
+              items: [
+                <><strong>All users</strong> — shows everyone in the system.</>,
+                <><strong>QCO Team</strong> — internal staff with company = QCO Group.</>,
+                <><strong>Project Team</strong> — internal users not from QCO Group (client-side staff, secondees, etc.).</>,
+                <><strong>External</strong> — vendors, freight forwarders, site contractors and subcontractors. These users have contract expiry dates and an orange left border on their row.</>,
+                'The filter is applied client-side on top of any active role filter or search.',
               ],
             },
             {
@@ -776,11 +802,11 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
             {
               icon: '🔐', title: 'Column Reference',
               items: [
-                <><strong>Name</strong> — full name. EXT badge = external user.</>,
+                <><strong>Name</strong> — full name. Orange left border = external user (vendor / freight forwarder / site contractor / subcontractor). No border = internal user.</>,
                 <><strong>Email</strong> — unique login identifier.</>,
                 <><strong>Role</strong> — assigned system role. Custom badge = has per-module permission overrides.</>,
                 <><strong>Projects</strong> — project codes the user can access. Full-access roles see "All Projects".</>,
-                <><strong>Contract Start/End</strong> — external user contract dates. Access auto-revokes at end date.</>,
+                <><strong>Contract End</strong> — colour coded: <span style={{ color: '#ef4444' }}>Red = expired</span>, <span style={{ color: '#d97706' }}>Amber = expiring within 30 days</span>, <span style={{ color: '#22c55e' }}>Green = more than 30 days remaining</span>, Grey dash = no expiry date (permanent internal staff).</>,
                 <><strong>Status</strong> — Active (can log in) or Inactive (account disabled).</>,
                 <><strong>Last Login</strong> — most recent successful login timestamp.</>,
               ],
@@ -1091,14 +1117,15 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
   }, [permMode])
 
   // ─── LOAD USER OVERRIDES ──────────────────────────────────────
-  // Two parallel calls: user overrides + base role permissions.
-  // The base role perms are fetched separately (not from the global
-  // perms state) because the admin role has no DB rows — the backend
-  // synthesises full access for it.
+  // Call 1: GET /permissions/user/:userId — overrides + user's role
+  // Call 2: GET /permissions/role?role=... — base role permissions
+  //   (separate call so admin role, which was previously unseedable, works correctly)
+  // Each call has its own try-catch so one failure does not block the other.
   const loadUserOverrides = useCallback(async (userId: number) => {
+    let role = ''
     try {
       const { data } = await axios.get(`${API}/permissions/user/${userId}`)
-      const role = data.user?.role ?? ''
+      role = data.user?.role ?? ''
       setUserRole(role)
       const ovr: Record<string, Record<PermKey, OverrideVal>> = {}
       for (const o of data.overrides ?? []) {
@@ -1109,11 +1136,16 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
         }
       }
       setUserOverrides(ovr)
-      if (role) {
-        const { data: rp } = await axios.get(`${API}/permissions/role`, { params: { role } })
-        setRolePerms(rp)
-      }
-    } catch { /* silent */ }
+    } catch (e) {
+      console.error('[loadUserOverrides] user/overrides call failed:', e)
+    }
+    if (!role) return
+    try {
+      const { data: rp } = await axios.get(`${API}/permissions/role`, { params: { role } })
+      setRolePerms(Array.isArray(rp) ? rp : [])
+    } catch (e) {
+      console.error('[loadUserOverrides] role perms call failed:', e)
+    }
   }, [])
 
   useEffect(() => {
@@ -1188,10 +1220,18 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
   }, {})
 
   // Build lookup for the selected user's base role — used by user-overrides mode.
-  // Separate from global lookup so admin role (no DB rows) also works correctly.
+  // rolePermsLookup comes from the dedicated /permissions/role endpoint.
+  // Falls back to the global lookup (from GET /permissions) so that if the
+  // separate call fails the dots still render from already-loaded data.
   const rolePermsLookup = useMemo(
     () => rolePerms.reduce<Record<string, RolePerm>>((acc, p) => { acc[p.module] = p; return acc }, {}),
     [rolePerms]
+  )
+  const effectiveRolePermsLookup = useMemo(
+    () => Object.keys(rolePermsLookup).length > 0
+      ? rolePermsLookup
+      : (lookup[userRole] ?? {}),
+    [rolePermsLookup, lookup, userRole]
   )
 
   const getVal = (module: string, key: PermKey): boolean => {
@@ -1344,12 +1384,13 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
             {/* ─── OVERRIDE MATRIX ────────────────────── */}
             <AdminTable tableId="admin_perm_users" columns={PERM_MATRIX_COLS} dark={dark} top={(headerHeight ?? 0) + stickyH}>
               {ALL_MODULES.map(mod => {
-                const basePerm = rolePermsLookup[mod]
+                const basePerm = effectiveRolePermsLookup[mod] as RolePerm | undefined
                 return (
                   <AdminRow key={mod} dark={dark}>
                     <AdminCell title={mod.replace(/_/g, ' ')}>{mod.replace(/_/g, ' ')}</AdminCell>
                     {PERM_KEYS.map(key => {
-                      const baseVal = !!(basePerm?.[key] ?? 0)
+                      // admin role always has full access; for others read from effective lookup
+                      const baseVal = userRole === 'admin' ? (key !== 'wbs_scoped') : !!(basePerm?.[key] ?? 0)
                       const ovr = userOverrides[mod]?.[key] ?? 'inherit'
                       return (
                         <AdminCell key={key} center>
