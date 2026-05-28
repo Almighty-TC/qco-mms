@@ -642,7 +642,13 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
             <AdminCell muted title={u.company || undefined}>{u.company || '—'}</AdminCell>
             <AdminCell muted mono title={u.phone || undefined}>{u.phone || '—'}</AdminCell>
             <AdminCell muted mono>{u.contractStart ? u.contractStart.slice(0, 10) : '—'}</AdminCell>
-            <AdminCell muted mono>{u.contractEnd ? u.contractEnd.slice(0, 10) : '—'}</AdminCell>
+            <AdminCell mono>{(() => {
+              if (!u.contractEnd) return <span style={{ color: '#94a3b8' }}>—</span>
+              const d = new Date(u.contractEnd.slice(0, 10))
+              const daysLeft = Math.ceil((d.getTime() - Date.now()) / 86400000)
+              const color = daysLeft < 0 ? '#ef4444' : daysLeft <= 30 ? '#d97706' : '#22c55e'
+              return <span style={{ color, fontWeight: daysLeft <= 30 ? 600 : 400 }}>{u.contractEnd.slice(0, 10)}</span>
+            })()}</AdminCell>
             <AdminCell center><StatusPill active={!!u.isActive} /></AdminCell>
             <AdminCell muted mono>{u.lastLogin ? u.lastLogin.slice(0, 10) : 'Never'}</AdminCell>
             {/* ─── ROW ACTIONS ────────────────────────────── */}
@@ -922,6 +928,18 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
   const [overrideSuccess, setOverrideSuccess] = useState('')
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
   const [resetSaving,     setResetSaving]     = useState(false)
+  const [stickyH,         setStickyH]         = useState(0)
+  const stickyRef = useRef<HTMLDivElement>(null)
+
+  // Measure sticky header height so AdminTable thead can stick below it
+  useEffect(() => {
+    const el = stickyRef.current
+    if (!el) return
+    setStickyH(el.offsetHeight)
+    const ro = new ResizeObserver(() => setStickyH(el.offsetHeight))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [permMode])
 
   const load = useCallback(async () => {
     setError('')
@@ -1069,7 +1087,7 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
   return (
     <div>
       {/* ─── STICKY HEADER (mode toggle + selector) ──────── */}
-      <div style={{ position: 'sticky', top: headerHeight ?? 0, zIndex: 10, background: 'inherit', paddingBottom: 12 }}>
+      <div ref={stickyRef} style={{ position: 'sticky', top: headerHeight ?? 0, zIndex: 20, background: dark ? '#0f172a' : '#f1f4f8', paddingBottom: 12 }}>
         {/* Mode toggle */}
         <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
           {(['roles', 'users'] as const).map(m => (
@@ -1141,7 +1159,7 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
           </div>
         )}
         {/* ─── PERMISSION GRID ──────────────────────────── */}
-        <AdminTable tableId="admin_perm_roles" columns={PERM_MATRIX_COLS} dark={dark} top={headerHeight}>
+        <AdminTable tableId="admin_perm_roles" columns={PERM_MATRIX_COLS} dark={dark} top={(headerHeight ?? 0) + stickyH}>
           {ALL_MODULES.map(mod => (
             <AdminRow key={mod} dark={dark}>
               <AdminCell title={mod.replace(/_/g, ' ')}>{mod.replace(/_/g, ' ')}</AdminCell>
@@ -1222,14 +1240,15 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
               </div>
             )}
             {/* ─── OVERRIDE MATRIX ────────────────────── */}
-            <AdminTable tableId="admin_perm_users" columns={PERM_MATRIX_COLS} dark={dark} top={headerHeight}>
+            <AdminTable tableId="admin_perm_users" columns={PERM_MATRIX_COLS} dark={dark} top={(headerHeight ?? 0) + stickyH}>
               {ALL_MODULES.map(mod => {
                 const basePerm = lookup[userRole]?.[mod]
                 return (
                   <AdminRow key={mod} dark={dark}>
                     <AdminCell title={mod.replace(/_/g, ' ')}>{mod.replace(/_/g, ' ')}</AdminCell>
                     {PERM_KEYS.map(key => {
-                      const baseVal = !!(basePerm?.[key] ?? 0)
+                      // admin role has full access — always show green indicator
+                      const baseVal = userRole === 'admin' ? true : !!(basePerm?.[key] ?? 0)
                       const ovr = userOverrides[mod]?.[key] ?? 'inherit'
                       return (
                         <AdminCell key={key} center>

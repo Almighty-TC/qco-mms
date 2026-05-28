@@ -22,7 +22,8 @@ let _closeActive: (() => void) | null = null
 export function ActionMenu({ actions, dark }: { actions: ActionItem[]; dark: boolean }) {
   const [open, setOpen] = useState(false)
   const [pos,  setPos]  = useState({ top: 0, right: 0 })
-  const btnRef = useRef<HTMLButtonElement>(null)
+  const btnRef  = useRef<HTMLButtonElement>(null)
+  const dropRef = useRef<HTMLDivElement>(null)
 
   const visible = actions.filter(a => !a.hidden)
 
@@ -44,10 +45,15 @@ export function ActionMenu({ actions, dark }: { actions: ActionItem[]; dark: boo
   }
 
   // ─── OUTSIDE CLICK + ESCAPE ──────────────────────────────────
+  // Uses mousedown (not click) so we can cancel the close when the
+  // target is inside the portal dropdown — mousedown fires before
+  // the click event, so without the dropRef check the handler would
+  // close the menu before the item's onClick could fire.
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
       if (btnRef.current?.contains(e.target as Node)) return
+      if (dropRef.current?.contains(e.target as Node)) return
       setOpen(false)
       _closeActive = null
     }
@@ -91,7 +97,7 @@ export function ActionMenu({ actions, dark }: { actions: ActionItem[]; dark: boo
       {/* Portal to body so overflow:clip on AdminTable outer div */}
       {/* does not clip the menu.                               */}
       {open && createPortal(
-        <div style={{
+        <div ref={dropRef} style={{
           position: 'fixed',
           top: pos.top,
           right: pos.right,

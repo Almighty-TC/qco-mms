@@ -1,6 +1,6 @@
 # QCO MMS - Claude Context & Build Tracker
 Last updated: 2026-05-29
-Last commit: (pending — see session 4 below)
+Last commit: (pending — see session 5 below)
 
 ## MODULE STATUS
 - Login: ✅ Complete
@@ -78,6 +78,11 @@ Last commit: (pending — see session 4 below)
 3. Next modules to build: Procurement (PO list, add PO, supplier/WBS linkage)
    — read QMAT-prototype.html and WIREFRAME_INVENTORY.md first
 
+## DB DATA STATUS (session 5)
+- 4 external dummy users added: john.doe, mary.jones (expired), peter.chan, lisa.park (expiring soon)
+- 21 internal QCO Group users got contract_start = 2024-01-01
+- Total users now: ~35
+
 ## DESIGN NOTES (session 4)
 - ActionMenu: portal-rendered dropdown (zIndex 9100), module-level _closeActive for
   single-open coordination. All actions columns are 90px noResize.
@@ -91,6 +96,21 @@ Last commit: (pending — see session 4 below)
 See docs/USER_MANUAL_STATUS.md
 
 ## SESSION HISTORY
+
+### Session 2026-05-29 (session 5)
+Fixed in this session:
+- ActionMenu.tsx: added dropRef (ref on portal div) — mousedown handler now checks
+  dropRef.current.contains(target) before closing; prevents menu closing before
+  item onClick fires (mousedown fires before click event)
+- Admin.tsx (PermissionsTab):
+  - stickyRef + ResizeObserver to measure sticky header height → stickyH
+  - AdminTable top = (headerHeight ?? 0) + stickyH (table thead sticks below selector)
+  - Sticky header background: explicit dark ? '#0f172a' : '#f1f4f8' (was 'inherit')
+  - zIndex 10 → 20 on sticky header
+  - baseVal = userRole === 'admin' ? true : existing logic (admin dots now green)
+- Admin.tsx (UsersTab):
+  - Contract End cell: color coded — red if expired, amber if ≤30 days, green if >30 days
+- seed-external-users.js: 4 external users + contract_start on 21 internal users (run ✓)
 
 ### Session 2026-05-29 (session 4)
 Fixed in this session:
