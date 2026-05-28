@@ -1,6 +1,6 @@
 # QCO MMS - Claude Context & Build Tracker
 Last updated: 2026-05-29
-Last commit: (pending — see session 5 below)
+Last commit: (pending — see session 6 below)
 
 ## MODULE STATUS
 - Login: ✅ Complete
@@ -96,6 +96,25 @@ Last commit: (pending — see session 5 below)
 See docs/USER_MANUAL_STATUS.md
 
 ## SESSION HISTORY
+
+### Session 2026-05-29 (session 6)
+Fixed in this session:
+- Admin.tsx (UsersTab):
+  - Actions column 90→120px (was too narrow for ActionMenu button)
+  - EXT badge removed; replaced with 3px #E84E0F left border on Name cell for external users
+  - Orange border legend added below Users table
+  - User type filter: "Internal only / External only" → "QCO Team / Project Team / External"
+    filterExt → filterType state; load() sends user_type param to backend
+- server/routes/admin.js:
+  - GET /users: added user_type param (qco | project_team | external)
+    project_team = is_external=0 AND company != 'QCO Group'
+- Admin.tsx (PermissionsTab):
+  - AllRolesOverview: new resizable-column <table> component replacing div-grid
+    overflow:clip (sticky thead works); useColumnResize hook; OvDragHandle inline
+    4-char module headers with full name tooltip; cell tooltip lists granted permissions
+    ↺ reset button next to heading; dots are 6px green per granted permission
+  - DESIGN: sticky thead uses overflow:clip like AdminTable (not overflow:auto which
+    would break sticky by creating a Y-axis scroll container)
 
 ### Session 2026-05-29 (session 5)
 Fixed in this session:

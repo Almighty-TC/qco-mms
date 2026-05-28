@@ -339,7 +339,7 @@ router.get('/users/check-email', async (req, res) => {
 router.get('/users', async (req, res) => {
   try {
     const { page, limit, offset } = paginate(req.query)
-    const { role, status, is_external, search } = req.query
+    const { role, status, is_external, search, user_type } = req.query
 
     let where  = '1=1'
     const args = []
@@ -349,6 +349,9 @@ router.get('/users', async (req, res) => {
     if (status === 'inactive')                { where += ' AND u.is_active = 0'    }
     if (is_external === 'true')               { where += ' AND u.is_external = 1'  }
     if (is_external === 'false')              { where += ' AND u.is_external = 0'  }
+    if (user_type === 'external')             { where += ' AND u.is_external = 1'  }
+    if (user_type === 'qco')                  { where += " AND u.is_external = 0 AND u.company = 'QCO Group'" }
+    if (user_type === 'project_team')         { where += " AND u.is_external = 0 AND (u.company IS NULL OR u.company != 'QCO Group')" }
     if (search?.trim()) {
       where += ' AND (u.full_name LIKE ? OR u.email LIKE ? OR u.company LIKE ? OR u.staff_id LIKE ?)'
       const s = `%${search.trim()}%`

@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import axios from 'axios'
 import { useAuth } from '../context/AuthContext'
 import { DeleteConfirmModal, SimpleConfirmModal } from '../components'
 import { AdminTable, AdminRow, AdminCell, AdminActions } from '../components/AdminTable'
 import type { AdminCol } from '../components/AdminTable'
+import { useColumnResize } from '../hooks/useColumnResize'
 import { ActionMenu } from '../components/ActionMenu'
 import type { ActionItem } from '../components/ActionMenu'
 import { HelpModal } from '../components/HelpModal'
@@ -296,10 +297,10 @@ const U_COLS: AdminCol[] = [
   { label: 'Company',        width: 155, minWidth: 150 },
   { label: 'Phone',          width: 145, minWidth: 140 },
   { label: 'Contract Start', width: 135, minWidth: 130 },
-  { label: 'Contract End',   width: 135, minWidth: 130 },
+  { label: 'Contract End',   width: 135, minWidth: 120 },
   { label: 'Status',         width: 105, minWidth: 100 },
   { label: 'Last Login',     width: 125, minWidth: 120 },
-  { label: '',               width: 90,  minWidth: 90,  noResize: true },
+  { label: '',               width: 120, minWidth: 120, noResize: true },
 ]
 
 type UserForm = {
@@ -415,7 +416,7 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
   const [page,      setPage]      = useState(1)
   const [search,    setSearch]    = useState('')
   const [filterRole, setFilterRole] = useState('')
-  const [filterExt, setFilterExt] = useState('')
+  const [filterType, setFilterType] = useState('')
   const [error,     setError]     = useState('')
   const [showForm,  setShowForm]  = useState(false)
   const [editId,    setEditId]    = useState<number | null>(null)
@@ -454,9 +455,8 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
     setError('')
     try {
       const params: Record<string, string> = { page: String(p), limit: '50' }
-      if (filterRole)          params.role        = filterRole
-      if (filterExt === 'ext') params.is_external = 'true'
-      if (filterExt === 'int') params.is_external = 'false'
+      if (filterRole)   params.role      = filterRole
+      if (filterType)   params.user_type = filterType
       if (s.trim())            params.search      = s.trim()
       const { data } = await axios.get(`${API}/users`, { params })
       setRows(data.rows); setTotal(data.total)
@@ -464,7 +464,7 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
       const err = e as { response?: { data?: { error?: string } } }
       setError(err.response?.data?.error ?? 'Failed to load users')
     }
-  }, [page, filterRole, filterExt, search])
+  }, [page, filterRole, filterType, search])
 
   useEffect(() => { load() }, [load])
 
@@ -595,10 +595,11 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
           <option value="">All roles</option>
           {ALL_ROLES.map(r => <option key={r} value={r}>{r.replace(/_/g, ' ')}</option>)}
         </select>
-        <select value={filterExt} onChange={(e) => { setFilterExt(e.target.value); setPage(1) }} style={{ ...inp(dark), width: 140, height: 32 }}>
+        <select value={filterType} onChange={(e) => { setFilterType(e.target.value); setPage(1) }} style={{ ...inp(dark), width: 150, height: 32 }}>
           <option value="">All users</option>
-          <option value="int">Internal only</option>
-          <option value="ext">External only</option>
+          <option value="qco">QCO Team</option>
+          <option value="project_team">Project Team</option>
+          <option value="external">External</option>
         </select>
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: '#94a3b8' }}>{total == null ? 'Loading…' : `${total} user${total !== 1 ? 's' : ''}`}</span>
@@ -618,10 +619,14 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
         {rows.map(u => (
           <AdminRow key={u.id} dark={dark}>
             {/* ─── NAME ───────────────────────────────────── */}
-            <td title={u.fullName} style={{ padding: '0 12px', height: 44, overflow: 'hidden', boxSizing: 'border-box', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
+            <td title={u.fullName} style={{
+              padding: '0 12px', height: 44, overflow: 'hidden', boxSizing: 'border-box',
+              borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`,
+              borderLeft: !!u.isExternal ? '3px solid #E84E0F' : undefined,
+              paddingLeft: !!u.isExternal ? 9 : 12,
+            }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: '100%' }}>
                 <span style={{ fontSize: 13, fontWeight: 500, color: dark ? '#f1f5f9' : '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.fullName}</span>
-                {!!u.isExternal && <ExtBadge />}
                 {u.staffId && <span style={{ fontSize: 10, color: '#94a3b8', flexShrink: 0 }}>#{u.staffId}</span>}
               </div>
             </td>
@@ -668,6 +673,14 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
           </AdminRow>
         ))}
       </AdminTable>
+
+      {/* ─── EXTERNAL LEGEND ──────────────────────────────── */}
+      {rows.some(u => u.isExternal) && (
+        <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#94a3b8' }}>
+          <span style={{ display: 'inline-block', width: 18, height: 13, borderLeft: '3px solid #E84E0F', flexShrink: 0 }} />
+          External user
+        </div>
+      )}
 
       {/* ─── PAGINATION ─────────────────────────────────── */}
       {total != null && total > 50 && (
@@ -877,6 +890,120 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
         document.body
       )}
     </>
+  )
+}
+
+// ─── OVERVIEW DRAG HANDLE ───────────────────────────────────────
+// Mirrors AdminTable's DragHandle for use in AllRolesOverview.
+function OvDragHandle({ onMouseDown, dark }: { onMouseDown: (e: React.MouseEvent) => void; dark: boolean }) {
+  const [hov, setHov] = useState(false)
+  return (
+    <>
+      <div style={{ position: 'absolute', right: 0, top: 0, width: 1, height: '100%', background: dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)', pointerEvents: 'none' }} />
+      <div
+        onMouseDown={onMouseDown}
+        onMouseEnter={() => setHov(true)}
+        onMouseLeave={() => setHov(false)}
+        style={{ position: 'absolute', right: 0, top: 0, width: 6, height: '100%', cursor: 'col-resize', background: hov ? '#E84E0F' : 'transparent', opacity: hov ? 0.6 : 1, transition: 'background 150ms', zIndex: 1 }}
+      />
+    </>
+  )
+}
+
+// ─── ALL ROLES OVERVIEW ──────────────────────────────────────────
+// Resizable-column table (same overflow:clip pattern as AdminTable)
+// showing all roles × modules as colour dots. Sticky thead sticks
+// relative to main content scroll container. 4-char column headers
+// with full module name in title tooltip.
+function AllRolesOverview({ dark, perms, top }: { dark: boolean; perms: RolePerm[]; top: number }) {
+  const ovDefaults = useMemo(() => [150, ...ALL_MODULES.map(() => 52)], [])
+  const ovMins     = useMemo(() => [100, ...ALL_MODULES.map(() => 40)], [])
+  const { widths, onMouseDown: ovDown, resetWidths: ovReset } = useColumnResize(
+    'admin_perm_overview', ovDefaults, ovMins
+  )
+
+  const lookup = useMemo(() => perms.reduce<Record<string, Record<string, RolePerm>>>((acc, p) => {
+    acc[p.role] = acc[p.role] ?? {}
+    acc[p.role][p.module] = p
+    return acc
+  }, {}), [perms])
+
+  const headerBg  = dark ? '#0f172a' : '#f4f7fb'
+  const borderCol = dark ? '#334155' : '#dde3ed'
+  const rowBorder = dark ? '#1e293b' : '#f1f5f9'
+  const minTableW = ovMins.reduce((a, b) => a + b, 0)
+
+  return (
+    <div style={{ marginTop: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+        <h3 style={{ fontSize: 13, fontWeight: 600, color: dark ? '#94a3b8' : '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>
+          All Roles Overview
+        </h3>
+        <button
+          onClick={ovReset}
+          title="Reset column widths"
+          style={{ width: 22, height: 22, borderRadius: 4, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onMouseEnter={e => { e.currentTarget.style.color = '#E84E0F'; e.currentTarget.style.borderColor = 'rgba(232,78,15,0.4)' }}
+          onMouseLeave={e => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.borderColor = dark ? '#334155' : '#dde3ed' }}
+        >↺</button>
+      </div>
+      <div style={{
+        background: dark ? '#1e293b' : '#fff',
+        border: `1px solid ${borderCol}`,
+        borderRadius: 10,
+        overflow: 'clip',
+        boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
+      }}>
+        <table style={{ width: '100%', minWidth: minTableW, borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed' }}>
+          <colgroup>
+            {widths[0] === ovDefaults[0] ? <col /> : <col style={{ width: widths[0] }} />}
+            {ALL_MODULES.map((_, i) => <col key={i} style={{ width: widths[i + 1] }} />)}
+          </colgroup>
+          <thead style={{ position: 'sticky', top, zIndex: 10, background: headerBg }}>
+            <tr>
+              <th style={{ height: 36, padding: '0 12px', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase', fontFamily: 'IBM Plex Sans, sans-serif', textAlign: 'left', position: 'relative', overflow: 'hidden', whiteSpace: 'nowrap', boxSizing: 'border-box', borderBottom: `1px solid ${borderCol}` }}>
+                ROLE
+                <OvDragHandle dark={dark} onMouseDown={e => ovDown(0, e)} />
+              </th>
+              {ALL_MODULES.map((m, i) => (
+                <th key={m} title={m.replace(/_/g, ' ')} style={{ height: 36, padding: '0 4px', fontSize: 9, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.05em', textTransform: 'uppercase', fontFamily: 'IBM Plex Sans, sans-serif', textAlign: 'center', position: 'relative', overflow: 'hidden', whiteSpace: 'nowrap', boxSizing: 'border-box', borderBottom: `1px solid ${borderCol}` }}>
+                  {m.replace(/_/g, ' ').slice(0, 4)}
+                  <OvDragHandle dark={dark} onMouseDown={e => ovDown(i + 1, e)} />
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {ALL_ROLES.map(role => (
+              <tr key={role}>
+                <td style={{ padding: '0 12px', height: 38, fontSize: 12, color: dark ? '#f1f5f9' : '#0f172a', borderBottom: `1px solid ${rowBorder}`, fontFamily: 'IBM Plex Sans, sans-serif', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', boxSizing: 'border-box' }}>
+                  {role.replace(/_/g, ' ')}
+                </td>
+                {ALL_MODULES.map(mod => {
+                  const p = lookup[role]?.[mod]
+                  const grants: string[] = []
+                  if (p?.can_view)    grants.push('View')
+                  if (p?.can_create)  grants.push('Create')
+                  if (p?.can_edit)    grants.push('Edit')
+                  if (p?.can_approve) grants.push('Approve')
+                  if (p?.can_delete)  grants.push('Delete')
+                  if (p?.wbs_scoped)  grants.push('WBS scoped')
+                  return (
+                    <td key={mod} title={grants.length > 0 ? grants.join(', ') : 'No access'} style={{ textAlign: 'center', height: 38, borderBottom: `1px solid ${rowBorder}`, boxSizing: 'border-box' }}>
+                      <div style={{ display: 'flex', gap: 1, justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap', padding: '0 3px' }}>
+                        {grants.length > 0
+                          ? grants.map((_, j) => <span key={j} style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block', flexShrink: 0 }} />)
+                          : <span style={{ color: '#475569', fontSize: 11 }}>—</span>}
+                      </div>
+                    </td>
+                  )
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   )
 }
 
@@ -1178,48 +1305,7 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
           ))}
         </AdminTable>
         {/* ─── ROLE SUMMARY (all roles overview) ───────── */}
-        <div style={{ marginTop: 24 }}>
-          <h3 style={{ fontSize: 13, fontWeight: 600, color: dark ? '#94a3b8' : '#64748b', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-            All Roles Overview
-          </h3>
-          <div style={{ overflowX: 'auto' }}>
-            <TableCard dark={dark}>
-              <div style={{ display: 'grid', gridTemplateColumns: `160px repeat(${ALL_MODULES.length}, 80px)`, minWidth: 'max-content' }}>
-                <div style={{ background: dark ? '#0f172a' : '#f4f7fb', borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}`, padding: '10px 12px', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Role</div>
-                {ALL_MODULES.map(m => (
-                  <div key={m} style={{ background: dark ? '#0f172a' : '#f4f7fb', borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}`, padding: '10px 4px', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase', textAlign: 'center' }}>
-                    {m.replace(/_/g, ' ').slice(0, 7)}
-                  </div>
-                ))}
-                {ALL_ROLES.map(role => (
-                  <>
-                    <div key={`${role}-name`} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, padding: '10px 12px', fontSize: 12, color: dark ? '#f1f5f9' : '#0f172a' }}>
-                      {role.replace(/_/g, ' ')}
-                    </div>
-                    {ALL_MODULES.map(mod => {
-                      const p = lookup[role]?.[mod]
-                      return (
-                        <div key={`${role}-${mod}`} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2, padding: '10px 4px' }}>
-                          {p ? (
-                            <>
-                              {!!p.can_view    && <PermDot value={1} title={`${role}/${mod}: view`} />}
-                              {!!p.can_create  && <PermDot value={1} title={`${role}/${mod}: create`} />}
-                              {!!p.can_edit    && <PermDot value={1} title={`${role}/${mod}: edit`} />}
-                              {!!p.can_approve && <PermDot value={1} title={`${role}/${mod}: approve`} />}
-                              {!!p.can_delete  && <PermDot value={1} title={`${role}/${mod}: delete`} />}
-                              {!p.can_view && !p.can_create && !p.can_edit && !p.can_approve && !p.can_delete &&
-                                <span style={{ fontSize: 11, color: '#475569' }}>—</span>}
-                            </>
-                          ) : <span style={{ fontSize: 11, color: '#475569' }}>—</span>}
-                        </div>
-                      )
-                    })}
-                  </>
-                ))}
-              </div>
-            </TableCard>
-          </div>
-        </div>
+        <AllRolesOverview dark={dark} perms={perms} top={(headerHeight ?? 0) + stickyH} />
       </>)}
 
       {/* ─── USER OVERRIDES MODE CONTENT ─────────────────── */}
