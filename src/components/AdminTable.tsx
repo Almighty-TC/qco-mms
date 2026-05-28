@@ -18,8 +18,8 @@ type RowCtx = { hov: boolean; dark: boolean }
 const RowCtx = createContext<RowCtx>({ hov: false, dark: false })
 
 // ─── DRAG HANDLE ────────────────────────────────────────────────
-// Two-layer design: 1px subtle grey divider always present; 4px orange
-// handle fades in only on hover so orange is never a resting state.
+// Two-layer design: 1px subtle grey divider always present; 6px orange
+// drag target appears on hover so orange is never a resting state.
 function DragHandle({
   onMouseDown,
   dark,
@@ -38,18 +38,18 @@ function DragHandle({
         background: dividerColor,
         pointerEvents: 'none',
       }} />
-      {/* ── 4px orange drag handle — appears on hover only ── */}
+      {/* ── 6px drag target — transparent at rest, orange on hover ── */}
       <div
         onMouseDown={onMouseDown}
         onMouseEnter={() => setHov(true)}
         onMouseLeave={() => setHov(false)}
         style={{
-          position: 'absolute', right: -1, top: 0,
-          width: 4, height: '100%',
+          position: 'absolute', right: 0, top: 0,
+          width: 6, height: '100%',
           cursor: 'col-resize',
-          background: '#E84E0F',
-          opacity: hov ? 1 : 0,
-          transition: 'opacity 150ms',
+          background: hov ? '#E84E0F' : 'transparent',
+          opacity: hov ? 0.6 : 1,
+          transition: 'background 150ms, opacity 150ms',
           zIndex: 1,
         }}
       />
@@ -81,12 +81,13 @@ export function AdminTable({ tableId, columns, dark, children, empty, top }: Adm
   const isEmpty   = React.Children.count(children) === 0
 
   // ─── COLGROUP ─────────────────────────────────────────────────
-  // Flex columns have no explicit width — browser fills remaining space.
-  // Fixed columns get their configured (and drag-adjusted) pixel width.
+  // Flex columns start with no explicit width so the browser fills
+  // remaining space. Once dragged (widths diverge from defaultWidths)
+  // an explicit width is applied so the user-set size persists.
   const colgroup = (
     <colgroup>
       {columns.map((col, i) => (
-        col.flex
+        col.flex && widths[i] === defaultWidths[i]
           ? <col key={i} />
           : <col key={i} style={{ width: widths[i] }} />
       ))}
@@ -129,7 +130,7 @@ export function AdminTable({ tableId, columns, dark, children, empty, top }: Adm
           <tr>
             {columns.map((col, i) => {
               const isLast  = i === columns.length - 1
-              const canDrag = !col.noResize && !isLast && !col.flex
+              const canDrag = !col.noResize
               return (
                 <th key={i} title={col.label} style={{
                   height: 36,

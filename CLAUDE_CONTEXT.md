@@ -1,11 +1,11 @@
 # QCO MMS - Claude Context & Build Tracker
 Last updated: 2026-05-29
-Last commit: aa7917d
+Last commit: (pending — see session 3 below)
 
 ## MODULE STATUS
 - Login: ✅ Complete
 - Dashboard: ✅ Complete
-- Admin: 🔨 In Progress (see issues below)
+- Admin: 🔨 In Progress (visual QA remaining)
 - All other modules: ⏳ Not started
 
 ## ADMIN MODULE - OUTSTANDING ISSUES
@@ -18,15 +18,10 @@ Last commit: aa7917d
 - [ ] Toolbar ↺ reset button position: currently inside last th (table header),
       not left of + Add button in toolbar — visually correct but position differs from spec
 
-### Features
-- [ ] audit_log table needs to be created by running:
-      `node server/scripts/migrate-audit-log.js`
-      (admin.js + auth.js will gracefully fall back to console if table missing)
-
 ### DB Connectivity (all confirmed wired to MySQL):
 - ✅ Users & Roles: full CRUD via /api/admin/users
 - ✅ Permission Matrix (roles): GET/PUT /api/admin/permissions
-- ✅ Permission Matrix (user overrides): GET/POST/DELETE /api/admin/permissions/overrides
+- ✅ Permission Matrix (user overrides): GET/POST /api/admin/permissions/user/:userId
 - ✅ Suppliers: full CRUD via /api/admin/suppliers
 - ✅ Warehouses: full CRUD via /api/admin/warehouses
 - ✅ Units of Measure: full CRUD via /api/admin/uom
@@ -44,8 +39,9 @@ Last commit: aa7917d
 - AdminTable: single <table> with sticky <thead top={headerHeight}> 
   overflow:clip on outer div — preserves border-radius, does NOT create BFC,
   so position:sticky on thead works relative to main content scroll container
-- Flex column: AdminCol with flex:true gets no explicit width in colgroup;
-  browser fills remaining table width. All tabs have one flex column.
+- Flex column: AdminCol with flex:true — colgroup uses <col /> (no width) until
+  user drags it; after drag, explicit width applied. All tabs have one flex column.
+- canDrag = !col.noResize (flex columns are NOW resizable)
 - Sticky top measurement: use element.offsetHeight (CSS pixels) NOT
   getBoundingClientRect().height (viewport pixels) to avoid zoom mismatch
 - AuthContext uses lazy useState initialiser to set axios defaults before
@@ -54,34 +50,57 @@ Last commit: aa7917d
   — no per-call Authorization headers needed
 
 ### Design
-- Column drag handle: 1px grey divider at rest, 4px orange only on hover
+- Column drag handle: 1px grey divider at rest, 6px transparent hit target
+  that turns #E84E0F at 0.6 opacity on hover. ALL columns (incl flex) resizable.
 - Tab bar: overflowX:auto so all 10 tabs stay visible at any width
 - Modals: portal-rendered to document.body so zoom CSS doesn't affect position
 - ↺ reset button: inside last th, absolutely positioned right edge, appears on all tables
 - Tab order: users → permissions → suppliers → warehouses → uom → acronyms →
   incoterms → projects → notifications → settings
+- Suppliers tab: client-side search + status filter dropdown
 
 ### DB / Backend
 - bcrypt hash `$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi`
   used for all seeded test users (password = "password")
 - Password change: 5-hash history enforced; complexity: 8+ chars, upper,
   lower, digit, special; expiry: 90 days internal / 365 days external
-- audit_log table: create with `node server/scripts/migrate-audit-log.js`
-  audit() in admin.js + change-password in auth.js both insert to audit_log
-  with graceful fallback to console if table doesn't exist
+- audit_log table: created — audit() in admin.js + change-password in auth.js
+  both insert with graceful fallback to console
+- user_permission_overrides: UNIQUE KEY uq_user_module (user_id, module) added
+  — ON DUPLICATE KEY UPDATE now works correctly
+- projects table: client, start_date, end_date columns added via migration
+- 27 users total in DB; project-scoped roles have user_wbs_access rows
 
 ## NEXT SESSION - START HERE
 
-1. Run `node server/scripts/migrate-audit-log.js` to create audit_log table
-2. Visual test at 1440/1280/1024/768px — check sticky header and table widths
-3. Admin module can be marked ✅ Complete once visual testing passes
-4. Next modules to build: Procurement (PO list, add PO, supplier/WBS linkage)
+1. Visual test at 1440/1280/1024/768px — check sticky header and table widths
+2. Admin module can be marked ✅ Complete once visual testing passes
+3. Next modules to build: Procurement (PO list, add PO, supplier/WBS linkage)
    — read QMAT-prototype.html and WIREFRAME_INVENTORY.md first
 
 ## USER MANUAL STATUS
 See docs/USER_MANUAL_STATUS.md
 
 ## SESSION HISTORY
+
+### Session 2026-05-29 (session 3)
+Fixed in this session:
+- AdminTable.tsx: canDrag = !col.noResize (flex columns now resizable);
+  colgroup: flex col uses <col /> until dragged, then explicit width;
+  DragHandle: 6px wide, transparent at rest, #E84E0F @0.6 opacity on hover
+- Admin.tsx:
+  - UsersTab load(): accepts s=search param to fix stale closure on clear/type
+  - PermissionsTab loadUserOverrides: data.role → data.user?.role (fix save bug)
+  - SuppliersTab: added search input + status filter dropdown (client-side);
+    fixed div-in-tr for Addresses and Status cells → AdminCell
+  - ProjectsTab: fixed div-in-tr for Code cell and POs/Risk/Breach cells → AdminCell
+- server/scripts/migrate-projects-columns.js: adds client, start_date, end_date
+  to projects table (run and confirmed successful)
+- server/scripts/migrate-permissions-unique.js: adds UNIQUE KEY uq_user_module
+  on user_permission_overrides (run and confirmed successful)
+- server/scripts/seed-dummy-users.js: run — 9 users inserted
+- server/scripts/seed-users-projects.js: new — 8 more users + WBS assignments
+  + project client/date/RAG data (run and confirmed successful)
 
 ### Session 2026-05-29 (session 2)
 Fixed in this session:

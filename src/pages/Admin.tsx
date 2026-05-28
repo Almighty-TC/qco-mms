@@ -448,14 +448,14 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
 
   const searchRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const load = useCallback(async (p = page) => {
+  const load = useCallback(async (p = page, s = search) => {
     setError('')
     try {
       const params: Record<string, string> = { page: String(p), limit: '50' }
       if (filterRole)          params.role        = filterRole
       if (filterExt === 'ext') params.is_external = 'true'
       if (filterExt === 'int') params.is_external = 'false'
-      if (search.trim())       params.search      = search.trim()
+      if (s.trim())            params.search      = s.trim()
       const { data } = await axios.get(`${API}/users`, { params })
       setRows(data.rows); setTotal(data.total)
     } catch (e: unknown) {
@@ -469,7 +469,8 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
   const onSearch = (v: string) => {
     setSearch(v)
     if (searchRef.current) clearTimeout(searchRef.current)
-    searchRef.current = setTimeout(() => { setPage(1); load(1) }, 350)
+    // Pass v directly to avoid stale closure capturing old search state
+    searchRef.current = setTimeout(() => { setPage(1); load(1, v) }, 350)
   }
 
   const openAdd = () => { setForm(EMPTY_USER); setEditId(null); setFormErr(''); setShowForm(true) }
@@ -949,7 +950,7 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
   const loadUserOverrides = useCallback(async (userId: number) => {
     try {
       const { data } = await axios.get(`${API}/permissions/user/${userId}`)
-      setUserRole(data.role ?? '')
+      setUserRole(data.user?.role ?? '')
       const ovr: Record<string, Record<PermKey, OverrideVal>> = {}
       for (const o of data.overrides ?? []) {
         ovr[o.module] = {} as Record<PermKey, OverrideVal>
@@ -1616,6 +1617,8 @@ const S_COLS: AdminCol[] = [
 function SuppliersTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
   const [rows,     setRows]     = useState<Supplier[]>([])
   const [total,    setTotal]    = useState<number | null>(null)
+  const [search,   setSearch]   = useState('')
+  const [filterSt, setFilterSt] = useState('')
   const [error,    setError]    = useState('')
   const [showForm, setShowForm] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
@@ -1643,6 +1646,16 @@ function SuppliersTab({ dark, headerHeight }: { dark: boolean; headerHeight?: nu
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  // ─── CLIENT-SIDE FILTER ──────────────────────────────────────
+  const filtered = rows.filter(s => {
+    if (filterSt && s.status !== filterSt) return false
+    if (search.trim()) {
+      const q = search.toLowerCase()
+      return s.name.toLowerCase().includes(q) || (s.code || '').toLowerCase().includes(q) || (s.country || '').toLowerCase().includes(q)
+    }
+    return true
+  })
 
   const openAdd  = () => { setForm({ ...EMPTY_SUP, addresses: [{ ...EMPTY_ADDR }] }); setEditId(null); setFormErr(''); setShowForm(true) }
   const openEdit = async (s: Supplier) => {
@@ -1735,18 +1748,23 @@ function SuppliersTab({ dark, headerHeight }: { dark: boolean; headerHeight?: nu
 
   return (
     <>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-        <span style={{ fontSize: 12, color: '#94a3b8' }}>{total == null ? 'Loading…' : `${total} supplier${total !== 1 ? 's' : ''}`}</span>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button onClick={() => setShowHelp(true)} title="Suppliers help" style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>ℹ</button>
-          <AddBtn onClick={openAdd} label="+ Add Supplier" />
-        </div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, code, country…" style={{ ...inp(dark), width: 240 }} />
+        <select value={filterSt} onChange={e => setFilterSt(e.target.value)} style={{ ...inp(dark), width: 120 }}>
+          <option value="">All statuses</option>
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+        </select>
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: '#94a3b8' }}>{filtered.length} supplier{filtered.length !== 1 ? 's' : ''}</span>
+        <button onClick={() => setShowHelp(true)} title="Suppliers help" style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>ℹ</button>
+        <AddBtn onClick={openAdd} label="+ Add Supplier" />
       </div>
 
       {error && <Err msg={error} />}
 
       <AdminTable tableId="admin_suppliers" columns={S_COLS} dark={dark} empty="No suppliers found." top={headerHeight}>
-        {rows.map(s => (
+        {filtered.map(s => (
           <AdminRow key={s.id} dark={dark}>
             <AdminCell>{s.name}</AdminCell>
             <AdminCell mono>{s.code || '—'}</AdminCell>
@@ -1755,7 +1773,7 @@ function SuppliersTab({ dark, headerHeight }: { dark: boolean; headerHeight?: nu
             <AdminCell muted>{s.email || '—'}</AdminCell>
             <AdminCell muted mono>{s.phone || '—'}</AdminCell>
             {/* ─── ADDRESSES BADGE ────────────────────────── */}
-            <div style={{ padding: '0 12px' }}>
+            <AdminCell>
               {(s.addressCount ?? 0) > 0 ? (
                 <span title={s.primaryAddressText || undefined} style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 9999, background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: s.primaryAddressText ? 'help' : 'default', whiteSpace: 'nowrap' }}>
                   {s.addressCount} address{(s.addressCount ?? 0) !== 1 ? 'es' : ''}
@@ -1763,10 +1781,10 @@ function SuppliersTab({ dark, headerHeight }: { dark: boolean; headerHeight?: nu
               ) : (
                 <span style={{ fontSize: 12, color: '#94a3b8' }}>—</span>
               )}
-            </div>
-            <div style={{ padding: '0 12px' }}>
+            </AdminCell>
+            <AdminCell>
               <StatusPill active={s.status === 'active'} label={s.status === 'active' ? 'Active' : 'Inactive'} />
-            </div>
+            </AdminCell>
             <AdminActions>
               <button onClick={() => openEdit(s)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
               {s.status === 'active' && (
@@ -2007,17 +2025,19 @@ function ProjectsAdminTab({ dark, headerHeight }: { dark: boolean; headerHeight?
       <AdminTable tableId="admin_projects" columns={P_COLS} dark={dark} empty="No projects found." top={headerHeight}>
         {filtered.map(p => (
           <AdminRow key={p.id} dark={dark}>
-            {/* ─── CODE (with RAG dot) ─────────────────────── */}
-            <div style={{ padding: '0 12px', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: RAG_DOT[p.rag] ?? '#94a3b8' }} />
-              <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: dark ? '#f1f5f9' : '#0f172a' }}>{p.code}</span>
-            </div>
+            {/* ─── CODE cell with inline RAG dot ───────────── */}
+            <AdminCell title={p.code}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: RAG_DOT[p.rag] ?? '#94a3b8' }} />
+                <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }}>{p.code}</span>
+              </span>
+            </AdminCell>
             <AdminCell>{p.name}</AdminCell>
             <AdminCell muted>{p.client || '—'}</AdminCell>
             <AdminCell muted>{p.phase || '—'}</AdminCell>
-            <div style={{ padding: '0 12px', textAlign: 'center', fontSize: 13, color: '#94a3b8' }}>{p.totalPOs ?? 0}</div>
-            <div style={{ padding: '0 12px', textAlign: 'center', fontSize: 13, color: '#94a3b8' }}>{p.atRisk ?? 0}</div>
-            <div style={{ padding: '0 12px', textAlign: 'center', fontSize: 13, color: '#94a3b8' }}>{p.breached ?? 0}</div>
+            <AdminCell muted center>{String(p.totalPOs ?? 0)}</AdminCell>
+            <AdminCell muted center>{String(p.atRisk ?? 0)}</AdminCell>
+            <AdminCell muted center>{String(p.breached ?? 0)}</AdminCell>
             <AdminCell muted mono>{p.startDate?.slice(0, 10) || '—'}</AdminCell>
             <AdminCell muted mono>{p.endDate?.slice(0, 10) || '—'}</AdminCell>
             <AdminActions>
