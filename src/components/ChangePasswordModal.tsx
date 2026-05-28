@@ -101,7 +101,7 @@ export function ChangePasswordModal({ dark, onClose }: Props) {
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 18 }}>
           <div>
             <div style={{ fontSize: 15, fontWeight: 700 }}>Change Password</div>
-            <div style={{ fontSize: 12, color: sub, marginTop: 3 }}>Update your QCO MMS account password</div>
+            <div style={{ fontSize: 12, color: sub, marginTop: 3 }}>Update your QCO Group MMS account password</div>
           </div>
           <button
             onClick={onClose}

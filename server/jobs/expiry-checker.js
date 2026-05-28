@@ -36,10 +36,10 @@ async function checkPasswordExpiry() {
 
       await sendEmail(
         u.email,
-        `Password expiring in ${PASSWORD_WARNING_DAYS} days — QCO MMS`,
+        `Password expiring in ${PASSWORD_WARNING_DAYS} days — QCO Group MMS`,
         html('Password Expiry Notice',
           `<p>Dear <strong>${u.full_name}</strong>,</p>
-           <p>Your QCO MMS password will expire in <strong>${PASSWORD_WARNING_DAYS} days</strong> on <strong>${date}</strong>.</p>
+           <p>Your QCO Group MMS password will expire in <strong>${PASSWORD_WARNING_DAYS} days</strong> on <strong>${date}</strong>.</p>
            <p>Please log in and change your password before it expires to avoid being locked out.</p>`
         )
       )
@@ -71,10 +71,10 @@ async function checkPasswordExpiry() {
 
         await sendEmail(
           u.email,
-          'Password expired — QCO MMS',
+          'Password expired — QCO Group MMS',
           html('Password Expired',
             `<p>Dear <strong>${u.full_name}</strong>,</p>
-             <p>Your QCO MMS password has expired. You will be prompted to set a new password the next time you log in.</p>`
+             <p>Your QCO Group MMS password has expired. You will be prompted to set a new password the next time you log in.</p>`
           )
         )
       }
@@ -119,11 +119,11 @@ async function checkContractExpiry() {
       // Email to the user
       await sendEmail(
         u.email,
-        `Contract access expiring in ${d} day${d !== 1 ? 's' : ''} — QCO MMS`,
+        `Contract access expiring in ${d} day${d !== 1 ? 's' : ''} — QCO Group MMS`,
         html(
           'Contract Expiry Notice',
           `<p>Dear <strong>${u.full_name}</strong>,</p>
-           <p>Your QCO MMS access contract expires in <strong>${d} day${d !== 1 ? 's' : ''}</strong> on <strong>${date}</strong>.</p>
+           <p>Your QCO Group MMS access contract expires in <strong>${d} day${d !== 1 ? 's' : ''}</strong> on <strong>${date}</strong>.</p>
            <p>Please contact your project administrator to renew your access before it is automatically deactivated.</p>`
         )
       )
@@ -163,11 +163,11 @@ async function checkContractExpiry() {
 
         await sendEmail(
           u.email,
-          'Access deactivated — QCO MMS',
+          'Access deactivated — QCO Group MMS',
           html(
             'Account Deactivated',
             `<p>Dear <strong>${u.full_name}</strong>,</p>
-             <p>Your QCO MMS access contract has expired and your account has been <strong>automatically deactivated</strong>.</p>
+             <p>Your QCO Group MMS access contract has expired and your account has been <strong>automatically deactivated</strong>.</p>
              <p>Contact your project administrator if you believe this is in error or to arrange renewed access.</p>`
           )
         )

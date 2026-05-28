@@ -100,7 +100,7 @@ export function ForcePasswordChange({ dark }: Props) {
           </div>
           <div style={{ fontSize: 17, fontWeight: 700 }}>Change Your Password</div>
           <div style={{ fontSize: 12, color: sub, marginTop: 6, lineHeight: 1.5 }}>
-            Your password must be changed before you can access QCO MMS.
+            Your password must be changed before you can access QCO Group MMS.
           </div>
         </div>
 

@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import axios from 'axios'
 import { useAuth } from './context/AuthContext'
 import Login from './pages/Login'
@@ -439,6 +440,102 @@ const DashboardHome = ({
   )
 }
 
+// ─── PROFILE MODAL ───────────────────────────────────────────
+// Lets the authenticated user update their own phone number.
+// Calls PUT /api/auth/profile and updates the JWT in context so the
+// change is reflected immediately without a re-login.
+const ProfileModal = ({ dark, onClose }: { dark: boolean; onClose: () => void }) => {
+  const { user, updateCredentials } = useAuth()
+  const [phone,   setPhone]   = useState(user?.phone ?? '')
+  const [saving,  setSaving]  = useState(false)
+  const [err,     setErr]     = useState('')
+  const [success, setSuccess] = useState(false)
+
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  const save = async () => {
+    setSaving(true); setErr(''); setSuccess(false)
+    try {
+      const { data } = await axios.put('http://localhost:3001/api/auth/profile', { phone })
+      updateCredentials(data.token, data.user)
+      setSuccess(true)
+      setTimeout(onClose, 900)
+    } catch (e: unknown) {
+      const er = e as { response?: { data?: { error?: string } }; message?: string }
+      setErr(er.response?.data?.error ?? er.message ?? 'Save failed')
+    } finally { setSaving(false) }
+  }
+
+  return createPortal(
+    // ── Backdrop ──────────────────────────────────────────────
+    <div
+      onClick={onClose}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{ background: dark ? '#1e293b' : '#fff', borderRadius: 10, padding: 28, width: 360, boxShadow: '0 16px 48px rgba(0,0,0,0.4)', fontFamily: 'IBM Plex Sans, sans-serif', border: `1px solid ${dark ? '#334155' : '#dde3ed'}` }}>
+
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          <span style={{ fontSize: 15, fontWeight: 700, color: dark ? '#f1f5f9' : '#0f172a' }}>My Profile</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer', lineHeight: 1, padding: 2 }}>×</button>
+        </div>
+
+        {/* Read-only identity fields */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>Name</div>
+          <div style={{ fontSize: 13, color: dark ? '#94a3b8' : '#475569' }}>{user?.full_name}</div>
+        </div>
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>Email</div>
+          <div style={{ fontSize: 13, color: dark ? '#94a3b8' : '#475569' }}>{user?.email}</div>
+        </div>
+
+        {/* Editable phone field */}
+        <div style={{ marginBottom: 20 }}>
+          <label style={{ display: 'block', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 5 }}>
+            Phone (Optional)
+          </label>
+          <input
+            value={phone}
+            onChange={e => setPhone(e.target.value)}
+            placeholder="e.g. +61 4XX XXX XXX"
+            maxLength={20}
+            style={{ height: 36, padding: '0 10px', borderRadius: 6, width: '100%', border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: dark ? '#0f172a' : '#f8fafc', color: dark ? '#f1f5f9' : '#0f172a', fontSize: 13, fontFamily: 'IBM Plex Sans, sans-serif', outline: 'none', boxSizing: 'border-box' }}
+          />
+        </div>
+
+        {/* Error / success feedback */}
+        {err && (
+          <div style={{ marginBottom: 14, fontSize: 12, color: '#ef4444', background: 'rgba(239,68,68,0.08)', borderRadius: 6, padding: '7px 10px', border: '1px solid rgba(239,68,68,0.2)' }}>{err}</div>
+        )}
+        {success && (
+          <div style={{ marginBottom: 14, fontSize: 12, color: '#22c55e', background: 'rgba(34,197,94,0.08)', borderRadius: 6, padding: '7px 10px', border: '1px solid rgba(34,197,94,0.2)' }}>Saved successfully</div>
+        )}
+
+        {/* Action buttons */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button onClick={onClose} style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: dark ? '#94a3b8' : '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+            Cancel
+          </button>
+          <button
+            onClick={save}
+            disabled={saving}
+            style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', fontSize: 12, fontWeight: 600, cursor: saving ? 'wait' : 'pointer', fontFamily: 'inherit', opacity: saving ? 0.7 : 1 }}>
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
 // ─── APP ─────────────────────────────────────────────────────
 // Root component. Owns auth, data-fetching, sidebar, dark-mode,
 // and font-size state. The zoom + compensated dimensions pattern
@@ -452,6 +549,7 @@ function App() {
   const [dark,          setDark]          = useState(false)
   const [page,          setPage]          = useState<Page>('dashboard')
   const [showChangePw,  setShowChangePw]  = useState(false)
+  const [showProfile,   setShowProfile]   = useState(false)
 
   // ─── FONT SIZE STATE ─────────────────────────────────────────
   // Initialised from localStorage so the preference survives reloads.
@@ -693,6 +791,13 @@ function App() {
                 {userName}
               </span>
               <button
+                onClick={() => setShowProfile(true)}
+                style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 6px', borderRadius: 4, fontFamily: 'inherit' }}
+                onMouseEnter={(e) => { e.currentTarget.style.color = dark ? '#e2e8f0' : '#1e293b' }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = '#94a3b8' }}>
+                Profile
+              </button>
+              <button
                 onClick={() => setShowChangePw(true)}
                 style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 6px', borderRadius: 4, fontFamily: 'inherit' }}
                 onMouseEnter={(e) => { e.currentTarget.style.color = dark ? '#e2e8f0' : '#1e293b' }}
@@ -766,6 +871,13 @@ function App() {
         the expiry warning banner. Dismissible. */}
     {showChangePw && !user?.forcePasswordChange && (
       <ChangePasswordModal dark={dark} onClose={() => setShowChangePw(false)} />
+    )}
+
+    {/* ─── PROFILE MODAL ───────────────────────────────────────
+        Opened via the topbar Profile button. Lets the user update
+        their own phone number; re-issues the JWT on save. */}
+    {showProfile && (
+      <ProfileModal dark={dark} onClose={() => setShowProfile(false)} />
     )}
 
     {/* ─── RESET TOAST ─────────────────────────────────────────

@@ -64,6 +64,7 @@ export const HeaderCell = ({
     textTransform: 'uppercase',
     padding: align === 'left' ? '0 20px 0 16px' : '0 14px 0 8px',
     overflow: 'hidden',
+    whiteSpace: 'nowrap',
     userSelect: 'none',
   }}>
     {label}

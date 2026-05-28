@@ -21,7 +21,7 @@ router.post('/login', async (req, res) => {
 
   try {
     const [rows] = await db.query(
-      `SELECT id, email, password_hash, full_name, role, company, is_active,
+      `SELECT id, email, password_hash, full_name, role, company, phone, is_active,
               force_password_change, password_expires_at
        FROM users WHERE email = ? LIMIT 1`,
       [email]
@@ -48,6 +48,7 @@ router.post('/login', async (req, res) => {
       full_name:            user.full_name,
       role:                 user.role,
       company:              user.company,
+      phone:                user.phone ?? null,
       forcePasswordChange:  Boolean(user.force_password_change),
       passwordExpiresAt:    user.password_expires_at
         ? new Date(user.password_expires_at).toISOString()
@@ -129,7 +130,7 @@ router.post('/change-password', authMiddleware, async (req, res) => {
     // ── Re-issue JWT with updated flags ───────────────────
     // Fetches fresh DB values so the token reflects the new state.
     const [updated] = await db.query(
-      `SELECT id, email, full_name, role, company, is_external
+      `SELECT id, email, full_name, role, company, phone, is_external
        FROM users WHERE id = ? LIMIT 1`,
       [userId]
     )
@@ -140,12 +141,56 @@ router.post('/change-password', authMiddleware, async (req, res) => {
       full_name:           u.full_name,
       role:                u.role,
       company:             u.company,
+      phone:               u.phone ?? null,
       forcePasswordChange: false,
       passwordExpiresAt:   expiresAt.toISOString(),
     }
     const newToken = jwt.sign(newPayload, JWT_SECRET, { expiresIn: '8h' })
 
     res.json({ message: 'Password changed successfully', token: newToken, user: newPayload })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ─── UPDATE OWN PROFILE ──────────────────────────────────────
+// Lets any authenticated user update their own phone number.
+// Re-issues a fresh JWT so the updated phone is reflected immediately
+// in the UI without requiring a re-login.
+router.put('/profile', authMiddleware, async (req, res) => {
+  const userId = req.user?.id
+  const { phone } = req.body
+
+  const cleanPhone = (phone ?? '').toString().trim().slice(0, 20) || null
+
+  try {
+    await db.query('UPDATE users SET phone = ? WHERE id = ?', [cleanPhone, userId])
+
+    // ── Re-fetch to build a fresh, accurate JWT payload ──────
+    const [rows] = await db.query(
+      `SELECT id, email, full_name, role, company, phone,
+              force_password_change, password_expires_at
+       FROM users WHERE id = ? LIMIT 1`,
+      [userId]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'User not found' })
+    const u = rows[0]
+
+    const newPayload = {
+      id:                  u.id,
+      email:               u.email,
+      full_name:           u.full_name,
+      role:                u.role,
+      company:             u.company,
+      phone:               u.phone ?? null,
+      forcePasswordChange: Boolean(u.force_password_change),
+      passwordExpiresAt:   u.password_expires_at
+        ? new Date(u.password_expires_at).toISOString()
+        : null,
+    }
+    const newToken = jwt.sign(newPayload, JWT_SECRET, { expiresIn: '8h' })
+
+    res.json({ message: 'Profile updated', token: newToken, user: newPayload })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }

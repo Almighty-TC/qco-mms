@@ -47,27 +47,9 @@ function paginate(query) {
   return { page, limit, offset: (page - 1) * limit }
 }
 
-// ─── ACTIVE ADMIN COUNT ──────────────────────────────────────
-// Returns the number of active users with role='admin'. Used to
-// enforce the minimum-2-admins security rule and to decide whether
-// emergency single-admin approval is permitted for external users.
-async function activeAdminCount() {
-  const [[{ n }]] = await db.query(
-    `SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND is_active = 1`
-  )
-  return Number(n)
-}
-
-// ─── ADMIN COUNT ENDPOINT ────────────────────────────────────
-// Returns the current active admin count so the frontend can show
-// a warning banner and enable the emergency approval path when
-// only 1 admin exists.
-router.get('/admin-count', async (req, res) => {
-  try {
-    const count = await activeAdminCount()
-    res.json({ count })
-  } catch (err) { res.status(500).json({ error: err.message }) }
-})
+// ─── (admin-count endpoint removed) ────────────────────────
+// Two-admin approval workflow removed. All admin actions are now
+// performed by a single admin immediately with full audit logging.
 
 // ═══════════════════════════════════════════════════════════
 // ─── PROJECTS CRUD ──────────────────────────────────────────
@@ -130,11 +112,12 @@ router.put('/projects/:id', async (req, res) => {
 })
 
 router.delete('/projects/:id', async (req, res) => {
-  const id = parseInt(req.params.id)
+  const id     = parseInt(req.params.id)
+  const reason = (req.body?.reason ?? '').toString().trim().slice(0, 255) || 'No reason provided'
   try {
     const [r] = await db.query('DELETE FROM projects WHERE id=?', [id])
     if (!r.affectedRows) return res.status(404).json({ error: 'Project not found' })
-    audit(req, 'project.delete', `id=${id}`)
+    audit(req, 'project.delete', `id=${id} reason="${reason}"`)
     res.json({ ok: true })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
@@ -190,21 +173,37 @@ router.put('/suppliers/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
+// ─── TOGGLE SUPPLIER STATUS ──────────────────────────────────
+// Used by the Deactivate/Activate button — sets status without
+// touching any other fields.
+router.patch('/suppliers/:id/status', async (req, res) => {
+  const id     = parseInt(req.params.id)
+  const { status } = req.body
+  if (!['active', 'inactive'].includes(status)) return res.status(400).json({ error: 'Invalid status' })
+  try {
+    const [r] = await db.query('UPDATE suppliers SET status=? WHERE id=?', [status, id])
+    if (!r.affectedRows) return res.status(404).json({ error: 'Supplier not found' })
+    audit(req, 'supplier.status', `id=${id} status=${status}`)
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
 router.delete('/suppliers/:id', async (req, res) => {
-  const id = parseInt(req.params.id)
+  const id     = parseInt(req.params.id)
+  const reason = (req.body?.reason ?? '').toString().trim().slice(0, 255) || 'No reason provided'
   try {
     const [r] = await db.query('DELETE FROM suppliers WHERE id=?', [id])
     if (!r.affectedRows) return res.status(404).json({ error: 'Supplier not found' })
-    audit(req, 'supplier.delete', `id=${id}`)
+    audit(req, 'supplier.delete', `id=${id} reason="${reason}"`)
     res.json({ ok: true })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
 // ═══════════════════════════════════════════════════════════
-// ─── USERS CRUD + APPROVAL WORKFLOW ─────────────────────────
-// External users (is_external=true) require two distinct admins to
-// approve before is_active is set to true.  Internal users are
-// activated immediately on creation.
+// ─── USERS CRUD ─────────────────────────────────────────────
+// Single-admin workflow: any admin can create, edit, deactivate,
+// reactivate, delete, or reset passwords for any user immediately.
+// Every mutation is logged to the audit trail with actor + reason.
 // ═══════════════════════════════════════════════════════════
 
 // ─── CHECK EMAIL UNIQUENESS ──────────────────────────────────
@@ -254,26 +253,17 @@ router.get('/users', async (req, res) => {
 
     const [rows] = await db.query(
       `SELECT u.id, u.full_name AS fullName, u.email, u.role, u.company,
-              IFNULL(u.staff_id, '')   AS staffId,
-              u.is_active              AS isActive,
-              u.is_external            AS isExternal,
-              u.contract_start         AS contractStart,
-              u.contract_end           AS contractEnd,
-              u.approved_by            AS approvedBy,
-              u.approved_at            AS approvedAt,
-              u.second_approved_by     AS secondApprovedBy,
-              u.second_approved_at     AS secondApprovedAt,
-              u.last_login             AS lastLogin,
-              a1.full_name             AS approvedByName,
-              a2.full_name             AS secondApprovedByName,
+              IFNULL(u.staff_id, '') AS staffId,
+              IFNULL(u.phone, '')    AS phone,
+              u.is_active            AS isActive,
+              u.is_external          AS isExternal,
+              u.contract_start       AS contractStart,
+              u.contract_end         AS contractEnd,
+              u.last_login           AS lastLogin,
               (SELECT COUNT(DISTINCT project_id)
                FROM user_wbs_access
-               WHERE user_id = u.id)  AS projectCount,
-              IFNULL(u.emergency_override, 0) AS emergencyOverride,
-              u.emergency_override_reason      AS emergencyOverrideReason
+               WHERE user_id = u.id) AS projectCount
        FROM users u
-       LEFT JOIN users a1 ON a1.id = u.approved_by
-       LEFT JOIN users a2 ON a2.id = u.second_approved_by
        WHERE ${where}
        ORDER BY u.full_name
        LIMIT ? OFFSET ?`,
@@ -287,14 +277,32 @@ router.get('/users', async (req, res) => {
   }
 })
 
+// ─── GET USER PROJECTS ──────────────────────────────────────
+// Returns distinct projects assigned to a user via user_wbs_access.
+router.get('/users/:id/projects', async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT DISTINCT p.id, p.code, p.name
+       FROM user_wbs_access w
+       JOIN projects p ON p.id = w.project_id
+       WHERE w.user_id = ?
+       ORDER BY p.code`,
+      [parseInt(req.params.id)]
+    )
+    res.json({ projects: rows })
+  } catch (err) {
+    res.status(500).json({ error: `Database error: ${err.message}` })
+  }
+})
+
 // ─── GET SINGLE USER ────────────────────────────────────────
 router.get('/users/:id', async (req, res) => {
   try {
     const [[user]] = await db.query(
       `SELECT id, full_name AS fullName, email, role, company,
+              IFNULL(phone, '') AS phone,
               is_active AS isActive, is_external AS isExternal,
-              contract_start AS contractStart, contract_end AS contractEnd,
-              approved_by AS approvedBy, second_approved_by AS secondApprovedBy
+              contract_start AS contractStart, contract_end AS contractEnd
        FROM users WHERE id = ?`,
       [parseInt(req.params.id)]
     )
@@ -304,49 +312,63 @@ router.get('/users/:id', async (req, res) => {
 })
 
 // ─── CREATE USER ────────────────────────────────────────────
-// Admin creates the account with a randomly generated temp password.
-// force_password_change is set so the user must set their own
-// password on first login.  Credentials are emailed to the user.
+// Single-admin workflow: any admin can create any user (internal or
+// external) immediately. The account is active from the moment of
+// creation (unless the admin explicitly unchecks the Active checkbox).
+// A temp password is auto-generated, emailed to the user, and must
+// be changed on first login. Everything is logged to the audit trail.
 router.post('/users', async (req, res) => {
-  const { fullName, email, role, company, staffId, isActive, isExternal,
+  const { fullName, email, role, company, staffId, phone, isActive, isExternal,
           contractStart, contractEnd } = req.body
 
   if (!fullName?.trim())      return res.status(400).json({ error: 'Full name is required' })
   if (!email?.trim())         return res.status(400).json({ error: 'Email is required' })
   if (!VALID_ROLES.has(role)) return res.status(400).json({ error: 'Invalid role' })
 
-  // contractEnd is intentionally optional — internal QCO staff have no end date.
-  // External users are created inactive and need two-admin approval.
-  const active    = isExternal ? false : (isActive !== false)
-  const tempPass  = generate()
+  // ─── ACTIVE FLAG ──────────────────────────────────────────────
+  // External users are treated the same as internal — active unless
+  // the admin explicitly marks them inactive in the form. No separate
+  // approval step is required.
+  const active    = isActive !== false
+  // External users get shorter password expiry (30 days) as a
+  // security measure for third-party accounts.
   const expiresAt = pwExpiry(Boolean(isExternal))
+  const tempPass  = generate()
 
   try {
     const hash = await bcrypt.hash(tempPass, 12)
     const [r]  = await db.query(
       `INSERT INTO users
-         (full_name, email, password_hash, role, company, staff_id,
+         (full_name, email, password_hash, role, company, staff_id, phone,
           is_active, is_external, contract_start, contract_end,
           force_password_change, password_expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
       [fullName.trim(), email.trim().toLowerCase(), hash, role,
-       company?.trim() || null, staffId?.trim() || null,
+       company?.trim() || null, staffId?.trim() || null, phone?.trim() || null,
        active ? 1 : 0, isExternal ? 1 : 0,
        contractStart || null, contractEnd || null, expiresAt]
     )
 
-    // Record initial password in history so it cannot be reused
-    await addToHistory(r.insertId, hash)
+    // ─── NON-FATAL: record temp password in history ──────────────────
+    // Isolated so a missing password_history table does not block user
+    // creation.
+    try {
+      await addToHistory(r.insertId, hash)
+    } catch (histErr) {
+      console.error('[user.create] password_history insert failed:', histErr.message)
+    }
 
-    audit(req, 'user.create', `id=${r.insertId} email=${email}`)
+    audit(req, 'user.create',
+      `id=${r.insertId} email=${email} external=${isExternal ? 1 : 0} by=${req.user.id}(${req.user.email})`
+    )
 
-    // Email credentials to the new user
+    // ─── EMAIL CREDENTIALS TO USER ───────────────────────────────────
     await sendEmail(
       email.trim().toLowerCase(),
-      'Your QCO MMS account has been created',
-      html('Welcome to QCO MMS',
+      'Your QCO Group MMS account has been created',
+      html('Welcome to QCO Group MMS',
         `<p>Dear ${fullName},</p>
-         <p>An account has been created for you on QCO MMS.</p>
+         <p>An account has been created for you on QCO Group MMS.</p>
          <table style="border-collapse:collapse;margin:12px 0">
            <tr><td style="padding:4px 12px 4px 0"><strong>Email:</strong></td><td>${email.trim().toLowerCase()}</td></tr>
            <tr><td style="padding:4px 12px 4px 0"><strong>Temporary Password:</strong></td><td style="font-family:monospace;font-size:15px">${tempPass}</td></tr>
@@ -356,25 +378,9 @@ router.post('/users', async (req, res) => {
       )
     )
 
-    // Alert admins if external user needs approval
-    if (isExternal) {
-      await sendAlert(
-        `New external user requires approval: ${fullName}`,
-        html('External User Approval Required',
-          `<p>A new external user has been created and requires two-admin approval before activation.</p>
-           <ul>
-             <li><strong>Name:</strong> ${fullName}</li>
-             <li><strong>Email:</strong> ${email}</li>
-             <li><strong>Role:</strong> ${role}</li>
-             <li><strong>Company:</strong> ${company || 'N/A'}</li>
-           </ul>
-           <p>Log in to QCO MMS Admin → External Users to approve.</p>`
-        )
-      )
-    }
-
     const [[newUser]] = await db.query(
       `SELECT id, full_name AS fullName, email, role, company,
+              IFNULL(phone, '') AS phone,
               is_active AS isActive, is_external AS isExternal,
               contract_start AS contractStart, contract_end AS contractEnd
        FROM users WHERE id = ?`,
@@ -382,8 +388,23 @@ router.post('/users', async (req, res) => {
     )
     res.status(201).json(newUser)
   } catch (err) {
-    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Email already exists' })
-    res.status(500).json({ error: err.message })
+    // ─── STRUCTURED ERROR RESPONSES ─────────────────────────────────
+    console.error('[user.create] ERROR code=%s msg=%s', err.code, err.message)
+
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ error: 'A user with this email already exists' })
+    }
+    if (err.code === 'ER_BAD_FIELD_ERROR') {
+      return res.status(500).json({
+        error: `Missing database column — ${err.message}. Run the SQL setup from Admin → System Settings → SQL Setup, then restart the server.`
+      })
+    }
+    if (err.code === 'ER_NO_SUCH_TABLE') {
+      return res.status(500).json({
+        error: `Missing database table — ${err.message}. Run the SQL setup from Admin → System Settings → SQL Setup, then restart the server.`
+      })
+    }
+    res.status(500).json({ error: err.message || 'Unexpected database error — check server logs' })
   }
 })
 
@@ -418,10 +439,10 @@ router.post('/users/:id/reset-password', async (req, res) => {
 
     await sendEmail(
       user.email,
-      'Your QCO MMS password has been reset',
+      'Your QCO Group MMS password has been reset',
       html('Password Reset',
         `<p>Dear ${user.fullName},</p>
-         <p>An administrator has reset your QCO MMS password.</p>
+         <p>An administrator has reset your QCO Group MMS password.</p>
          <table style="border-collapse:collapse;margin:12px 0">
            <tr><td style="padding:4px 12px 4px 0"><strong>Email:</strong></td><td>${user.email}</td></tr>
            <tr><td style="padding:4px 12px 4px 0"><strong>Temporary Password:</strong></td><td style="font-family:monospace;font-size:15px">${tempPass}</td></tr>
@@ -436,10 +457,12 @@ router.post('/users/:id/reset-password', async (req, res) => {
 })
 
 // ─── UPDATE USER ────────────────────────────────────────────
-// contractEnd is optional — omitting it sets it to NULL (no expiry).
+// Single-admin: any admin can edit any user immediately. contractEnd
+// is optional — omitting/clearing it sets it to NULL (no expiry).
+// Audit logs the acting admin name + email for full traceability.
 router.put('/users/:id', async (req, res) => {
   const id = parseInt(req.params.id)
-  const { fullName, email, password, role, company, staffId, isActive, isExternal,
+  const { fullName, email, password, role, company, staffId, phone, isActive, isExternal,
           contractStart, contractEnd } = req.body
 
   if (!fullName?.trim())      return res.status(400).json({ error: 'Full name is required' })
@@ -447,56 +470,47 @@ router.put('/users/:id', async (req, res) => {
   if (!VALID_ROLES.has(role)) return res.status(400).json({ error: 'Invalid role' })
 
   try {
-    // ─── MIN-2-ADMINS GUARD ───────────────────────────────────────
-    // Fetch current state to detect if this edit would shrink the active
-    // admin pool below 2 (deactivating or demoting the last active admin).
-    const [[current]] = await db.query('SELECT role, is_active FROM users WHERE id=?', [id])
+    const [[current]] = await db.query(
+      'SELECT full_name, email, role, is_active, is_external FROM users WHERE id=?', [id]
+    )
     if (!current) return res.status(404).json({ error: 'User not found' })
-
-    const willReduceAdminCount =
-      current.role === 'admin' && current.is_active && (
-        !isActive ||           // deactivating an active admin
-        role !== 'admin'       // demoting an active admin to a non-admin role
-      )
-    if (willReduceAdminCount) {
-      const count = await activeAdminCount()
-      if (count <= 2) {
-        const act = !isActive ? 'deactivate' : 'change the role of'
-        return res.status(400).json({
-          error: `Cannot ${act} this admin account. The system requires a minimum of 2 active administrators. Please assign another admin before making this change.`
-        })
-      }
-    }
 
     if (password) {
       const hash = await bcrypt.hash(password, 10)
       await db.query(
-        `UPDATE users SET full_name=?,email=?,password_hash=?,role=?,company=?,staff_id=?,
+        `UPDATE users SET full_name=?,email=?,password_hash=?,role=?,company=?,staff_id=?,phone=?,
                           is_active=?,is_external=?,contract_start=?,contract_end=?
          WHERE id=?`,
         [fullName.trim(), email.trim().toLowerCase(), hash, role,
-         company?.trim()||null, staffId?.trim()||null,
-         isActive?1:0, isExternal?1:0,
-         contractStart||null, contractEnd||null, id]
+         company?.trim()||null, staffId?.trim()||null, phone?.trim()||null,
+         isActive?1:0, isExternal?1:0, contractStart||null, contractEnd||null, id]
       )
     } else {
       await db.query(
-        `UPDATE users SET full_name=?,email=?,role=?,company=?,staff_id=?,
+        `UPDATE users SET full_name=?,email=?,role=?,company=?,staff_id=?,phone=?,
                           is_active=?,is_external=?,contract_start=?,contract_end=?
          WHERE id=?`,
         [fullName.trim(), email.trim().toLowerCase(), role,
-         company?.trim()||null, staffId?.trim()||null,
-         isActive?1:0, isExternal?1:0,
-         contractStart||null, contractEnd||null, id]
+         company?.trim()||null, staffId?.trim()||null, phone?.trim()||null,
+         isActive?1:0, isExternal?1:0, contractStart||null, contractEnd||null, id]
       )
     }
 
-    audit(req, 'user.update', `id=${id}`)
+    // ─── AUDIT: log before/after for key fields ───────────────────
+    const changes = []
+    if (current.full_name !== fullName.trim())         changes.push(`name: "${current.full_name}"→"${fullName.trim()}"`)
+    if (current.email !== email.trim().toLowerCase())  changes.push(`email: "${current.email}"→"${email.trim().toLowerCase()}"`)
+    if (current.role !== role)                         changes.push(`role: ${current.role}→${role}`)
+    if (Number(current.is_active) !== (isActive?1:0)) changes.push(`active: ${current.is_active}→${isActive?1:0}`)
+    audit(req, 'user.update',
+      `id=${id} by=${req.user.id}(${req.user.email})` + (changes.length ? ` changes=[${changes.join(', ')}]` : '')
+    )
+
     const [[user]] = await db.query(
       `SELECT id, full_name AS fullName, email, role, company,
+              IFNULL(phone, '') AS phone,
               is_active AS isActive, is_external AS isExternal,
-              contract_start AS contractStart, contract_end AS contractEnd,
-              approved_by AS approvedBy, second_approved_by AS secondApprovedBy
+              contract_start AS contractStart, contract_end AS contractEnd
        FROM users WHERE id = ?`,
       [id]
     )
@@ -509,228 +523,62 @@ router.put('/users/:id', async (req, res) => {
 })
 
 // ─── DELETE USER ────────────────────────────────────────────
+// Permanent hard delete. Accepts a `reason` in the request body —
+// required by the UI (DeleteConfirmModal) and always logged to audit.
+// Self-deletion is blocked to prevent accidental lockout.
 router.delete('/users/:id', async (req, res) => {
   const id = parseInt(req.params.id)
   if (id === req.user.id) return res.status(400).json({ error: 'Cannot delete your own account' })
+  const reason = (req.body?.reason ?? '').toString().trim().slice(0, 255) || 'No reason provided'
   try {
-    // ─── MIN-2-ADMINS GUARD ───────────────────────────────────────
-    const [[target]] = await db.query('SELECT role, is_active FROM users WHERE id=?', [id])
+    const [[target]] = await db.query('SELECT full_name, email FROM users WHERE id=?', [id])
     if (!target) return res.status(404).json({ error: 'User not found' })
-    if (target.role === 'admin' && target.is_active) {
-      const count = await activeAdminCount()
-      if (count <= 2) {
-        return res.status(400).json({
-          error: 'Cannot delete this admin account. The system requires a minimum of 2 active administrators. Please assign another admin before deleting this account.'
-        })
-      }
-    }
     const [r] = await db.query('DELETE FROM users WHERE id=?', [id])
     if (!r.affectedRows) return res.status(404).json({ error: 'User not found' })
-    audit(req, 'user.delete', `id=${id}`)
+    audit(req, 'user.delete',
+      `id=${id} name="${target.full_name}" email=${target.email} ` +
+      `reason="${reason}" by=${req.user.id}(${req.user.email})`
+    )
     res.json({ ok: true })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-// ─── APPROVE EXTERNAL USER ──────────────────────────────────
-// Normal flow: two distinct admins must approve before the external
-// user is activated (first call sets approved_by; second call from a
-// different admin sets second_approved_by and activates the account).
-//
-// Emergency override: when only 1 active admin exists, the normal
-// two-admin workflow cannot complete. A single admin may approve with
-// a mandatory documented reason. The override is flagged in the DB
-// (emergency_override=1) and escalation emails are sent automatically.
-router.post('/users/:id/approve', async (req, res) => {
-  const id = parseInt(req.params.id)
-  const { emergencyReason } = req.body
+// ─── (approve endpoint removed) ─────────────────────────────
+// The two-admin approval workflow has been removed. External users
+// are created active immediately, same as internal users. The
+// is_external flag is kept for filtering and contract-expiry logic.
 
-  try {
-    const [[user]] = await db.query(
-      `SELECT id, full_name AS fullName, email, is_external AS isExternal,
-              is_active AS isActive, approved_by AS approvedBy,
-              second_approved_by AS secondApprovedBy
-       FROM users WHERE id = ?`,
-      [id]
-    )
-    if (!user)            return res.status(404).json({ error: 'User not found' })
-    if (!user.isExternal) return res.status(400).json({ error: 'User is not external' })
-    if (user.isActive && user.secondApprovedBy) {
-      return res.status(400).json({ error: 'User already fully approved and active' })
-    }
-
-    const adminCount = await activeAdminCount()
-
-    // ─── EMERGENCY SINGLE-ADMIN OVERRIDE PATH ────────────────────
-    // Activated when only 1 active admin exists so the normal two-admin
-    // constraint cannot be satisfied. A reason is mandatory; the approval
-    // is flagged and escalation emails are sent to all admins + the
-    // escalation_email address stored in system_settings.
-    if (adminCount === 1) {
-      if (!emergencyReason?.trim()) {
-        return res.status(400).json({
-          error: 'There is only 1 active administrator. Enter an emergency override reason to proceed with single-admin approval.',
-          requiresEmergencyReason: true,
-        })
-      }
-
-      // Set both approval slots to the single admin regardless of whether
-      // approved_by was already recorded (first approval may have been set
-      // before a second admin was deactivated).
-      if (!user.approvedBy) {
-        await db.query(
-          `UPDATE users
-           SET approved_by=?, approved_at=NOW(),
-               second_approved_by=?, second_approved_at=NOW(),
-               is_active=1, emergency_override=1, emergency_override_reason=?
-           WHERE id=?`,
-          [req.user.id, req.user.id, emergencyReason.trim(), id]
-        )
-      } else {
-        await db.query(
-          `UPDATE users
-           SET second_approved_by=?, second_approved_at=NOW(),
-               is_active=1, emergency_override=1, emergency_override_reason=?
-           WHERE id=?`,
-          [req.user.id, emergencyReason.trim(), id]
-        )
-      }
-
-      const timestamp = new Date().toUTCString()
-      audit(req, 'user.emergency_approve',
-        `EMERGENCY SINGLE-ADMIN APPROVAL — user=${id} (${user.fullName}) ` +
-        `Reason: ${emergencyReason.trim()} ` +
-        `Approved by: ${req.user.email} at ${timestamp}`
-      )
-
-      // ── Escalation email recipients ──────────────────────────────
-      // Send to all currently active admins plus any escalation_email
-      // addresses saved in system_settings.
-      const [adminRows] = await db.query(
-        `SELECT email FROM users WHERE role = 'admin' AND is_active = 1`
-      )
-      let escalationList = []
-      try {
-        const [[escRow]] = await db.query(
-          `SELECT setting_value FROM system_settings WHERE setting_key = 'escalation_email'`
-        )
-        if (escRow?.setting_value) {
-          escalationList = escRow.setting_value.split(',').map(e => e.trim()).filter(Boolean)
-        }
-      } catch { /* system_settings table may not exist yet — continue without */ }
-
-      const notifyList = [...new Set([
-        ...adminRows.map(r => r.email),
-        ...escalationList,
-      ])]
-
-      if (notifyList.length) {
-        await sendEmail(
-          notifyList,
-          'QCO MMS — Emergency Single-Admin Approval Used',
-          html('Emergency Single-Admin Approval',
-            `<div style="padding:10px 14px;border-radius:6px;background:#fff3cd;border:1px solid #f59e0b;margin-bottom:16px">
-               <strong style="color:#b45309">⚠️ Emergency Override Alert</strong>
-             </div>
-             <p>An emergency single-admin approval was used in QCO MMS. Normally two distinct admin approvals are required.</p>
-             <table style="border-collapse:collapse;margin:12px 0;width:100%">
-               <tr><td style="padding:6px 12px 6px 0;color:#64748b;font-weight:600;white-space:nowrap">User approved:</td><td>${user.fullName} &lt;${user.email}&gt;</td></tr>
-               <tr><td style="padding:6px 12px 6px 0;color:#64748b;font-weight:600;white-space:nowrap">Approved by:</td><td>${req.user.full_name} &lt;${req.user.email}&gt;</td></tr>
-               <tr><td style="padding:6px 12px 6px 0;color:#64748b;font-weight:600;white-space:nowrap">Reason given:</td><td><em>${emergencyReason.trim()}</em></td></tr>
-               <tr><td style="padding:6px 12px 6px 0;color:#64748b;font-weight:600;white-space:nowrap">Timestamp:</td><td>${timestamp}</td></tr>
-             </table>
-             <p style="color:#64748b;font-size:13px">Please ensure a second administrator account is assigned immediately to restore normal approval workflows.</p>`
-          )
-        )
-      }
-
-      // Notify the approved user that their account is active
-      await sendEmail(user.email, 'Access approved — QCO MMS',
-        html('Access Approved',
-          `<p>Dear ${user.fullName},</p>
-           <p>Your QCO MMS access request has been approved. You can now log in at your project's QMAT URL.</p>`
-        )
-      )
-
-      return res.json({
-        message: 'Emergency single-admin approval completed. User is now active.',
-        approvals: 1, isActive: true, emergency: true,
-      })
-    }
-
-    // ─── NORMAL TWO-ADMIN APPROVAL PATH ──────────────────────────
-
-    // First approval
-    if (!user.approvedBy) {
-      if (req.user.id === id) {
-        return res.status(400).json({ error: 'Cannot approve your own account' })
-      }
-      await db.query(
-        `UPDATE users SET approved_by=?, approved_at=NOW() WHERE id=?`,
-        [req.user.id, id]
-      )
-      audit(req, 'user.approve_first', `id=${id}`)
-
-      await sendEmail(user.email, 'Access request received — QCO MMS',
-        html('Access Request Update',
-          `<p>Dear ${user.fullName},</p>
-           <p>Your QCO MMS access request has received its first approval. A second admin approval is still required before your account is activated.</p>
-           <p>You will receive another email once your access is fully approved.</p>`
-        )
-      )
-      return res.json({ message: 'First approval recorded. Awaiting second admin approval.', approvals: 1 })
-    }
-
-    // Second approval
-    if (user.secondApprovedBy) {
-      return res.status(400).json({ error: 'Already has two approvals' })
-    }
-    if (user.approvedBy === req.user.id) {
-      return res.status(400).json({ error: 'Second approval must come from a different admin' })
-    }
-
-    await db.query(
-      `UPDATE users SET second_approved_by=?, second_approved_at=NOW(), is_active=1 WHERE id=?`,
-      [req.user.id, id]
-    )
-    audit(req, 'user.approve_second', `id=${id}`)
-
-    await sendEmail(user.email, 'Access approved — QCO MMS',
-      html('Access Approved',
-        `<p>Dear ${user.fullName},</p>
-         <p>Your QCO MMS access request has been <strong>fully approved</strong>. You can now log in at your project's QMAT URL.</p>`
-      )
-    )
-
-    res.json({ message: 'Second approval recorded. User is now active.', approvals: 2, isActive: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
-})
-
-// ─── ACTIVATE / DEACTIVATE ──────────────────────────────────
+// ─── DEACTIVATE USER ────────────────────────────────────────
+// Soft action — disables login while preserving all data and history.
+// Accepts a `reason` string for the audit trail. Self-deactivation
+// is blocked to prevent accidental admin lockout.
 router.post('/users/:id/deactivate', async (req, res) => {
   const id = parseInt(req.params.id)
   if (id === req.user.id) return res.status(400).json({ error: 'Cannot deactivate your own account' })
+  const reason = (req.body?.reason ?? '').toString().trim().slice(0, 255) || 'No reason provided'
   try {
-    // ─── MIN-2-ADMINS GUARD ───────────────────────────────────────
-    const [[target]] = await db.query('SELECT role, is_active FROM users WHERE id=?', [id])
-    if (target?.role === 'admin' && target?.is_active) {
-      const count = await activeAdminCount()
-      if (count <= 2) {
-        return res.status(400).json({
-          error: 'Cannot deactivate this admin account. The system requires a minimum of 2 active administrators. Please assign another admin before deactivating this account.'
-        })
-      }
-    }
+    const [[target]] = await db.query('SELECT full_name, email FROM users WHERE id=?', [id])
+    if (!target) return res.status(404).json({ error: 'User not found' })
     await db.query('UPDATE users SET is_active=0 WHERE id=?', [id])
-    audit(req, 'user.deactivate', `id=${id}`)
+    audit(req, 'user.deactivate',
+      `id=${id} name="${target.full_name}" reason="${reason}" by=${req.user.id}(${req.user.email})`
+    )
     res.json({ ok: true })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
+// ─── REACTIVATE USER ────────────────────────────────────────
+// Re-enables a previously deactivated account. No approval step
+// required — any admin can reactivate any user immediately.
 router.post('/users/:id/activate', async (req, res) => {
   const id = parseInt(req.params.id)
   try {
+    const [[target]] = await db.query('SELECT full_name, email FROM users WHERE id=?', [id])
+    if (!target) return res.status(404).json({ error: 'User not found' })
     await db.query('UPDATE users SET is_active=1 WHERE id=?', [id])
-    audit(req, 'user.activate', `id=${id}`)
+    audit(req, 'user.reactivate',
+      `id=${id} name="${target.full_name}" by=${req.user.id}(${req.user.email})`
+    )
     res.json({ ok: true })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
@@ -995,19 +843,23 @@ router.delete('/notifications/:id', async (req, res) => {
 // Only keys in EDITABLE_SETTING_KEYS can be written via the API to
 // prevent arbitrary injection.
 // ═══════════════════════════════════════════════════════════
-const EDITABLE_SETTING_KEYS = new Set(['escalation_email'])
+// All keys that can be written via the API. Whitelist prevents arbitrary
+// key injection. The table uses `key`/`value` columns (not setting_key/value).
+const EDITABLE_SETTING_KEYS = new Set([
+  'escalation_email',
+  'password_expiry_days_internal',
+  'password_expiry_days_external',
+  'access_expiry_warning_days',
+  'system_name',
+])
 
 router.get('/system-settings', async (req, res) => {
   try {
-    const [rows] = await db.query(
-      'SELECT setting_key AS k, setting_value AS v FROM system_settings'
-    )
+    const [rows] = await db.query('SELECT `key` AS k, `value` AS v FROM system_settings')
     const settings = {}
     rows.forEach(r => { settings[r.k] = r.v ?? '' })
     res.json(settings)
   } catch (err) {
-    // If the table does not exist yet, return an empty object so
-    // the frontend degrades gracefully until the migration is run.
     if (err.code === 'ER_NO_SUCH_TABLE') return res.json({})
     res.status(500).json({ error: err.message })
   }
@@ -1020,19 +872,15 @@ router.put('/system-settings', async (req, res) => {
   try {
     for (const key of keys) {
       await db.query(
-        `INSERT INTO system_settings (setting_key, setting_value, updated_by)
-         VALUES (?, ?, ?)
-         ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value), updated_by=VALUES(updated_by)`,
-        [key, updates[key] ?? '', req.user.id]
+        'INSERT INTO system_settings (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)',
+        [key, updates[key] ?? '']
       )
     }
     audit(req, 'system_settings.update', `keys=${keys.join(',')}`)
     res.json({ ok: true })
   } catch (err) {
     if (err.code === 'ER_NO_SUCH_TABLE') {
-      return res.status(500).json({
-        error: 'System settings table does not exist yet. Run the SQL setup from the System Settings tab first.'
-      })
+      return res.status(500).json({ error: 'System settings table missing — run the migration script.' })
     }
     res.status(500).json({ error: err.message })
   }
@@ -1044,10 +892,375 @@ router.post('/test-email', async (req, res) => {
   try {
     await sendEmail(
       req.user.email,
-      'Test email — QCO MMS',
+      'Test email — QCO Group MMS',
       html('SMTP Test', `<p>SMTP is configured correctly. This email was sent at ${new Date().toISOString()}.</p>`)
     )
     res.json({ ok: true, sentTo: req.user.email })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ═══════════════════════════════════════════════════════════
+// ─── WAREHOUSES CRUD ────────────────────────────────────────
+// Master list of physical storage locations used across modules.
+// ═══════════════════════════════════════════════════════════
+
+router.get('/warehouses', async (req, res) => {
+  try {
+    const { page, limit, offset } = paginate(req.query)
+    const { search, status } = req.query
+    let where = '1=1'; const args = []
+    if (search?.trim()) {
+      where += ' AND (name LIKE ? OR code LIKE ? OR state LIKE ?)'
+      const s = `%${search.trim()}%`; args.push(s, s, s)
+    }
+    if (status === 'active')   where += ' AND status = "active"'
+    if (status === 'inactive') where += ' AND status = "inactive"'
+    const [[{ total }]] = await db.query(`SELECT COUNT(*) AS total FROM warehouses WHERE ${where}`, args)
+    const [rows] = await db.query(
+      `SELECT id, name, code, address, state,
+              IFNULL(contact_name,'') AS contactName,
+              IFNULL(phone,'') AS phone, status
+       FROM warehouses WHERE ${where} ORDER BY name LIMIT ? OFFSET ?`,
+      [...args, limit, offset]
+    )
+    res.json({ rows, total, page, limit, pages: Math.ceil(total / limit) })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+router.post('/warehouses', async (req, res) => {
+  const { name, code, address, state, contactName, phone, status } = req.body
+  if (!name?.trim()) return res.status(400).json({ error: 'Name is required' })
+  if (!code?.trim()) return res.status(400).json({ error: 'Code is required' })
+  try {
+    const [r] = await db.query(
+      `INSERT INTO warehouses (name, code, address, state, contact_name, phone, status, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [name.trim(), code.trim().toUpperCase(), address||null, state||null,
+       contactName||null, phone||null, status||'active', req.user.id]
+    )
+    audit(req, 'warehouse.create', `id=${r.insertId}`)
+    const [[row]] = await db.query(
+      `SELECT id, name, code, address, state, IFNULL(contact_name,'') AS contactName,
+              IFNULL(phone,'') AS phone, status FROM warehouses WHERE id=?`, [r.insertId]
+    )
+    res.status(201).json(row)
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Warehouse code already exists' })
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.put('/warehouses/:id', async (req, res) => {
+  const id = parseInt(req.params.id)
+  const { name, code, address, state, contactName, phone, status } = req.body
+  if (!name?.trim()) return res.status(400).json({ error: 'Name is required' })
+  if (!code?.trim()) return res.status(400).json({ error: 'Code is required' })
+  try {
+    const [r] = await db.query(
+      `UPDATE warehouses SET name=?,code=?,address=?,state=?,contact_name=?,phone=?,status=? WHERE id=?`,
+      [name.trim(), code.trim().toUpperCase(), address||null, state||null,
+       contactName||null, phone||null, status||'active', id]
+    )
+    if (!r.affectedRows) return res.status(404).json({ error: 'Warehouse not found' })
+    audit(req, 'warehouse.update', `id=${id}`)
+    const [[row]] = await db.query(
+      `SELECT id, name, code, address, state, IFNULL(contact_name,'') AS contactName,
+              IFNULL(phone,'') AS phone, status FROM warehouses WHERE id=?`, [id]
+    )
+    res.json(row)
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Warehouse code already exists' })
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ─── TOGGLE WAREHOUSE STATUS ─────────────────────────────────
+router.patch('/warehouses/:id/status', async (req, res) => {
+  const id     = parseInt(req.params.id)
+  const { status } = req.body
+  if (!['active', 'inactive'].includes(status)) return res.status(400).json({ error: 'Invalid status' })
+  try {
+    const [r] = await db.query('UPDATE warehouses SET status=? WHERE id=?', [status, id])
+    if (!r.affectedRows) return res.status(404).json({ error: 'Warehouse not found' })
+    audit(req, 'warehouse.status', `id=${id} status=${status}`)
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+router.delete('/warehouses/:id', async (req, res) => {
+  const id     = parseInt(req.params.id)
+  const reason = (req.body?.reason ?? '').toString().trim().slice(0, 255) || 'No reason provided'
+  try {
+    const [r] = await db.query('DELETE FROM warehouses WHERE id=?', [id])
+    if (!r.affectedRows) return res.status(404).json({ error: 'Warehouse not found' })
+    audit(req, 'warehouse.delete', `id=${id} reason="${reason}"`)
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ═══════════════════════════════════════════════════════════
+// ─── UNITS OF MEASURE CRUD ──────────────────────────────────
+// Reference list of UoM codes used on POs, MRs, and MTO lines.
+// ═══════════════════════════════════════════════════════════
+
+router.get('/uom', async (req, res) => {
+  try {
+    const { search, status } = req.query
+    let where = '1=1'; const args = []
+    if (search?.trim()) {
+      where += ' AND (code LIKE ? OR description LIKE ?)'
+      const s = `%${search.trim()}%`; args.push(s, s)
+    }
+    if (status === 'active')   where += ' AND status = "active"'
+    if (status === 'inactive') where += ' AND status = "inactive"'
+    const [rows] = await db.query(
+      `SELECT id, code, description, status FROM units_of_measure WHERE ${where} ORDER BY code`,
+      args
+    )
+    res.json(rows)
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+router.post('/uom', async (req, res) => {
+  const { code, description, status } = req.body
+  if (!code?.trim())        return res.status(400).json({ error: 'Code is required' })
+  if (!description?.trim()) return res.status(400).json({ error: 'Description is required' })
+  try {
+    const [r] = await db.query(
+      `INSERT INTO units_of_measure (code, description, status) VALUES (?, ?, ?)`,
+      [code.trim().toUpperCase(), description.trim(), status||'active']
+    )
+    audit(req, 'uom.create', `id=${r.insertId}`)
+    const [[row]] = await db.query('SELECT id, code, description, status FROM units_of_measure WHERE id=?', [r.insertId])
+    res.status(201).json(row)
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'UoM code already exists' })
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.put('/uom/:id', async (req, res) => {
+  const id = parseInt(req.params.id)
+  const { code, description, status } = req.body
+  if (!code?.trim())        return res.status(400).json({ error: 'Code is required' })
+  if (!description?.trim()) return res.status(400).json({ error: 'Description is required' })
+  try {
+    const [r] = await db.query(
+      `UPDATE units_of_measure SET code=?,description=?,status=? WHERE id=?`,
+      [code.trim().toUpperCase(), description.trim(), status||'active', id]
+    )
+    if (!r.affectedRows) return res.status(404).json({ error: 'UoM not found' })
+    audit(req, 'uom.update', `id=${id}`)
+    const [[row]] = await db.query('SELECT id, code, description, status FROM units_of_measure WHERE id=?', [id])
+    res.json(row)
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'UoM code already exists' })
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ─── TOGGLE UOM STATUS ───────────────────────────────────────
+router.patch('/uom/:id/status', async (req, res) => {
+  const id     = parseInt(req.params.id)
+  const { status } = req.body
+  if (!['active', 'inactive'].includes(status)) return res.status(400).json({ error: 'Invalid status' })
+  try {
+    const [r] = await db.query('UPDATE units_of_measure SET status=? WHERE id=?', [status, id])
+    if (!r.affectedRows) return res.status(404).json({ error: 'UoM not found' })
+    audit(req, 'uom.status', `id=${id} status=${status}`)
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+router.delete('/uom/:id', async (req, res) => {
+  const id     = parseInt(req.params.id)
+  const reason = (req.body?.reason ?? '').toString().trim().slice(0, 255) || 'No reason provided'
+  try {
+    const [r] = await db.query('DELETE FROM units_of_measure WHERE id=?', [id])
+    if (!r.affectedRows) return res.status(404).json({ error: 'UoM not found' })
+    audit(req, 'uom.delete', `id=${id} reason="${reason}"`)
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ═══════════════════════════════════════════════════════════
+// ─── ACRONYMS CRUD ──────────────────────────────────────────
+// Glossary of acronyms used across all MMS modules.
+// ═══════════════════════════════════════════════════════════
+
+router.get('/acronyms', async (req, res) => {
+  try {
+    const { search, module: mod } = req.query
+    let where = '1=1'; const args = []
+    if (search?.trim()) {
+      where += ' AND (acronym LIKE ? OR definition LIKE ?)'
+      const s = `%${search.trim()}%`; args.push(s, s)
+    }
+    if (mod?.trim()) { where += ' AND module = ?'; args.push(mod.trim()) }
+    const [rows] = await db.query(
+      `SELECT id, acronym, definition, IFNULL(module,'') AS module, IFNULL(notes,'') AS notes
+       FROM acronyms WHERE ${where} ORDER BY acronym`,
+      args
+    )
+    res.json(rows)
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+router.post('/acronyms', async (req, res) => {
+  const { acronym, definition, module: mod, notes } = req.body
+  if (!acronym?.trim())    return res.status(400).json({ error: 'Acronym is required' })
+  if (!definition?.trim()) return res.status(400).json({ error: 'Definition is required' })
+  try {
+    const [r] = await db.query(
+      `INSERT INTO acronyms (acronym, definition, module, notes) VALUES (?, ?, ?, ?)`,
+      [acronym.trim().toUpperCase(), definition.trim(), mod||null, notes||null]
+    )
+    audit(req, 'acronym.create', `id=${r.insertId}`)
+    const [[row]] = await db.query(
+      `SELECT id, acronym, definition, IFNULL(module,'') AS module, IFNULL(notes,'') AS notes
+       FROM acronyms WHERE id=?`, [r.insertId]
+    )
+    res.status(201).json(row)
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Acronym already exists' })
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.put('/acronyms/:id', async (req, res) => {
+  const id = parseInt(req.params.id)
+  const { acronym, definition, module: mod, notes } = req.body
+  if (!acronym?.trim())    return res.status(400).json({ error: 'Acronym is required' })
+  if (!definition?.trim()) return res.status(400).json({ error: 'Definition is required' })
+  try {
+    const [r] = await db.query(
+      `UPDATE acronyms SET acronym=?,definition=?,module=?,notes=? WHERE id=?`,
+      [acronym.trim().toUpperCase(), definition.trim(), mod||null, notes||null, id]
+    )
+    if (!r.affectedRows) return res.status(404).json({ error: 'Acronym not found' })
+    audit(req, 'acronym.update', `id=${id}`)
+    const [[row]] = await db.query(
+      `SELECT id, acronym, definition, IFNULL(module,'') AS module, IFNULL(notes,'') AS notes
+       FROM acronyms WHERE id=?`, [id]
+    )
+    res.json(row)
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Acronym already exists' })
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.delete('/acronyms/:id', async (req, res) => {
+  const id     = parseInt(req.params.id)
+  const reason = (req.body?.reason ?? '').toString().trim().slice(0, 255) || 'No reason provided'
+  try {
+    const [r] = await db.query('DELETE FROM acronyms WHERE id=?', [id])
+    if (!r.affectedRows) return res.status(404).json({ error: 'Acronym not found' })
+    audit(req, 'acronym.delete', `id=${id} reason="${reason}"`)
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ═══════════════════════════════════════════════════════════
+// ─── INCO TERMS CRUD ────────────────────────────────────────
+// International commercial terms used on Purchase Orders to
+// define risk transfer point and transport cost responsibility.
+// ═══════════════════════════════════════════════════════════
+
+router.get('/inco-terms', async (req, res) => {
+  try {
+    const { search, status } = req.query
+    let where = '1=1'; const args = []
+    if (search?.trim()) {
+      where += ' AND (code LIKE ? OR full_name LIKE ? OR transport_mode LIKE ?)'
+      const s = `%${search.trim()}%`; args.push(s, s, s)
+    }
+    if (status === 'active')   where += ' AND status = "active"'
+    if (status === 'inactive') where += ' AND status = "inactive"'
+    const [rows] = await db.query(
+      `SELECT id, code, full_name AS fullName,
+              IFNULL(description,'') AS description,
+              IFNULL(risk_transfer_point,'') AS riskTransferPoint,
+              IFNULL(transport_mode,'') AS transportMode, status
+       FROM inco_terms WHERE ${where} ORDER BY code`,
+      args
+    )
+    res.json(rows)
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+router.post('/inco-terms', async (req, res) => {
+  const { code, fullName, description, riskTransferPoint, transportMode, status } = req.body
+  if (!code?.trim())     return res.status(400).json({ error: 'Code is required' })
+  if (!fullName?.trim()) return res.status(400).json({ error: 'Full name is required' })
+  try {
+    const [r] = await db.query(
+      `INSERT INTO inco_terms (code, full_name, description, risk_transfer_point, transport_mode, status)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [code.trim().toUpperCase(), fullName.trim(), description||null,
+       riskTransferPoint||null, transportMode||null, status||'active']
+    )
+    audit(req, 'incoterm.create', `id=${r.insertId}`)
+    const [[row]] = await db.query(
+      `SELECT id, code, full_name AS fullName, IFNULL(description,'') AS description,
+              IFNULL(risk_transfer_point,'') AS riskTransferPoint,
+              IFNULL(transport_mode,'') AS transportMode, status
+       FROM inco_terms WHERE id=?`, [r.insertId]
+    )
+    res.status(201).json(row)
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'INCO term code already exists' })
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.put('/inco-terms/:id', async (req, res) => {
+  const id = parseInt(req.params.id)
+  const { code, fullName, description, riskTransferPoint, transportMode, status } = req.body
+  if (!code?.trim())     return res.status(400).json({ error: 'Code is required' })
+  if (!fullName?.trim()) return res.status(400).json({ error: 'Full name is required' })
+  try {
+    const [r] = await db.query(
+      `UPDATE inco_terms SET code=?,full_name=?,description=?,risk_transfer_point=?,transport_mode=?,status=? WHERE id=?`,
+      [code.trim().toUpperCase(), fullName.trim(), description||null,
+       riskTransferPoint||null, transportMode||null, status||'active', id]
+    )
+    if (!r.affectedRows) return res.status(404).json({ error: 'INCO term not found' })
+    audit(req, 'incoterm.update', `id=${id}`)
+    const [[row]] = await db.query(
+      `SELECT id, code, full_name AS fullName, IFNULL(description,'') AS description,
+              IFNULL(risk_transfer_point,'') AS riskTransferPoint,
+              IFNULL(transport_mode,'') AS transportMode, status
+       FROM inco_terms WHERE id=?`, [id]
+    )
+    res.json(row)
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'INCO term code already exists' })
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ─── TOGGLE INCO TERM STATUS ─────────────────────────────────
+router.patch('/inco-terms/:id/status', async (req, res) => {
+  const id     = parseInt(req.params.id)
+  const { status } = req.body
+  if (!['active', 'inactive'].includes(status)) return res.status(400).json({ error: 'Invalid status' })
+  try {
+    const [r] = await db.query('UPDATE inco_terms SET status=? WHERE id=?', [status, id])
+    if (!r.affectedRows) return res.status(404).json({ error: 'INCO term not found' })
+    audit(req, 'incoterm.status', `id=${id} status=${status}`)
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+router.delete('/inco-terms/:id', async (req, res) => {
+  const id     = parseInt(req.params.id)
+  const reason = (req.body?.reason ?? '').toString().trim().slice(0, 255) || 'No reason provided'
+  try {
+    const [r] = await db.query('DELETE FROM inco_terms WHERE id=?', [id])
+    if (!r.affectedRows) return res.status(404).json({ error: 'INCO term not found' })
+    audit(req, 'incoterm.delete', `id=${id} reason="${reason}"`)
+    res.json({ ok: true })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 

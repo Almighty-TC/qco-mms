@@ -4,6 +4,7 @@ import axios from 'axios'
 import { useAuth } from '../context/AuthContext'
 import { useTableResize } from '../hooks/useTableResize'
 import { HeaderCell } from '../components/ResizableTable'
+import { DeleteConfirmModal, SimpleConfirmModal } from '../components'
 
 const API = 'http://localhost:3001/api/admin'
 
@@ -25,19 +26,15 @@ const ALL_MODULES = [
 type Module = typeof ALL_MODULES[number]
 
 // ─── TYPES ──────────────────────────────────────────────────
+// Approval/emergency fields removed — single-admin workflow requires
+// no second approval, so those columns are no longer fetched or used.
 type AdminUser = {
   id: number; fullName: string; email: string; role: string; company: string
-  staffId: string
+  staffId: string; phone: string
   isActive: number; isExternal: number
   contractStart: string; contractEnd: string
-  approvedBy: number | null; approvedAt: string | null
-  secondApprovedBy: number | null; secondApprovedAt: string | null
-  approvedByName: string | null; secondApprovedByName: string | null
   lastLogin: string | null
   projectCount: number
-  // Set to 1 when a single-admin emergency override was used for approval
-  emergencyOverride: number
-  emergencyOverrideReason: string | null
 }
 
 // ─── FULL-ACCESS ROLES ───────────────────────────────────────
@@ -94,15 +91,41 @@ const StatusPill = ({ active, label }: { active: boolean; label?: string }) => (
 )
 
 // ─── ROLE BADGE ─────────────────────────────────────────────
-const RoleBadge = ({ role }: { role: string }) => (
-  <span style={{
-    fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 9999,
-    background: 'rgba(37,99,235,0.1)', color: '#2563eb',
-    fontFamily: 'IBM Plex Sans, sans-serif',
-  }}>
-    {role.replace(/_/g, ' ')}
-  </span>
-)
+// Each role category has a distinct colour so roles are scannable at a
+// glance without reading the text. Groups: leadership (orange), project
+// (blue), procurement (green), expediting (purple), logistics/warehouse
+// (cyan), external parties (amber), viewer (grey).
+const ROLE_COLORS: Record<string, { bg: string; text: string }> = {
+  admin:               { bg: 'rgba(232,78,15,0.12)',  text: '#E84E0F' },
+  ceo:                 { bg: 'rgba(232,78,15,0.12)',  text: '#E84E0F' },
+  director:            { bg: 'rgba(232,78,15,0.10)',  text: '#c43b0c' },
+  project_director:    { bg: 'rgba(37,99,235,0.12)',  text: '#2563eb' },
+  project_manager:     { bg: 'rgba(37,99,235,0.10)',  text: '#2563eb' },
+  procurement_manager: { bg: 'rgba(22,163,74,0.12)',  text: '#16a34a' },
+  procurement_officer: { bg: 'rgba(22,163,74,0.10)',  text: '#16a34a' },
+  expediting_manager:  { bg: 'rgba(124,58,237,0.12)', text: '#7c3aed' },
+  expeditor:           { bg: 'rgba(124,58,237,0.10)', text: '#7c3aed' },
+  logistics_manager:   { bg: 'rgba(6,182,212,0.12)',  text: '#0891b2' },
+  warehouse:           { bg: 'rgba(6,182,212,0.10)',  text: '#0891b2' },
+  vendor:              { bg: 'rgba(245,158,11,0.12)', text: '#d97706' },
+  freight_forwarder:   { bg: 'rgba(245,158,11,0.10)', text: '#d97706' },
+  site_contractor:     { bg: 'rgba(245,158,11,0.10)', text: '#d97706' },
+  qco_staff:           { bg: 'rgba(37,99,235,0.08)',  text: '#3b82f6' },
+  supplier:            { bg: 'rgba(245,158,11,0.10)', text: '#d97706' },
+  viewer:              { bg: 'rgba(100,116,139,0.10)', text: '#64748b' },
+}
+const RoleBadge = ({ role }: { role: string }) => {
+  const c = ROLE_COLORS[role] ?? { bg: 'rgba(100,116,139,0.10)', text: '#64748b' }
+  return (
+    <span style={{
+      fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 9999,
+      background: c.bg, color: c.text,
+      fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap',
+    }}>
+      {role.replace(/_/g, ' ')}
+    </span>
+  )
+}
 
 // ─── EXTERNAL BADGE ─────────────────────────────────────────
 const ExtBadge = () => (
@@ -205,16 +228,9 @@ const AddBtn = ({ onClick, label }: { onClick: () => void; label: string }) => (
 )
 
 // ─── DELETE CONFIRM BUTTON ──────────────────────────────────
-const DelBtn = ({ id, confirmId, onInit, onConfirm, onCancel }: {
-  id: number; confirmId: number | null; onInit: () => void; onConfirm: () => void; onCancel: () => void
-}) => confirmId === id ? (
-  <span style={{ display: 'flex', gap: 4 }}>
-    <button onClick={onConfirm} style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.12)', color: '#ef4444', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Confirm</button>
-    <button onClick={onCancel}  style={{ fontSize: 11, padding: '3px 8px', borderRadius: 5, border: '1px solid #334155', background: 'transparent', color: '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Cancel</button>
-  </span>
-) : (
-  <button onClick={onInit} style={{ fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
-)
+// ─── DELETION REASONS ───────────────────────────────────────
+// The global reason list lives in DeleteConfirmModal.tsx (DEFAULT_DELETE_REASONS).
+// Each module can pass a custom `reasons` prop if needed.
 
 // ─── TOOLBAR ────────────────────────────────────────────────
 const Toolbar = ({ count, label, children }: { count: number | null; label: string; children?: React.ReactNode }) => (
@@ -266,17 +282,19 @@ const HelpDivider = ({ dark }: { dark: boolean }) => (
 // ─── COLUMN KEYS ────────────────────────────────────────────
 // Email is shown below the name in the Name cell (not a separate
 // column) so users with the same full name are still distinguishable.
-type UserKey = 'uname' | 'urole' | 'uprojects' | 'ucompany' | 'ucontractstart' | 'ucontract' | 'ustatus' | 'ulastlogin'
-const U_DEF: Record<UserKey, number> = { uname: 230, urole: 145, uprojects: 80, ucompany: 140, ucontractstart: 110, ucontract: 110, ustatus: 90, ulastlogin: 110 }
-const U_MIN: Record<UserKey, number> = { uname: 140, urole: 90,  uprojects: 60, ucompany: 80,  ucontractstart: 80,  ucontract: 80,  ustatus: 70, ulastlogin: 80  }
+type UserKey = 'uname' | 'urole' | 'uprojects' | 'ucompany' | 'uphone' | 'ucontractstart' | 'ucontract' | 'ustatus' | 'ulastlogin'
+const U_DEF: Record<UserKey, number> = { uname: 230, urole: 145, uprojects: 80, ucompany: 140, uphone: 140, ucontractstart: 110, ucontract: 110, ustatus: 90, ulastlogin: 110 }
+const U_MIN: Record<UserKey, number> = { uname: 140, urole: 90,  uprojects: 60, ucompany: 80,  uphone: 90,  ucontractstart: 80,  ucontract: 80,  ustatus: 70, ulastlogin: 80  }
 
 type UserForm = {
-  fullName: string; email: string; role: string; company: string; staffId: string
+  fullName: string; email: string; role: string; company: string
+  staffId: string; phone: string
   isActive: boolean; isExternal: boolean; contractStart: string; contractEnd: string
 }
 // contractEnd is intentionally empty — internal staff have no end date
 const EMPTY_USER: UserForm = {
-  fullName: '', email: '', role: 'viewer', company: '', staffId: '',
+  fullName: '', email: '', role: 'viewer', company: '',
+  staffId: '', phone: '',
   isActive: true, isExternal: false, contractStart: '', contractEnd: '',
 }
 
@@ -291,13 +309,112 @@ function friendlyUserError(serverErr: string): string {
   }
   if (e.includes('full name')) return 'Full name is required. Please enter the user\'s complete name.'
   if (e.includes('invalid role')) return 'Please select a valid role from the Role dropdown.'
+  if (e.includes('er_bad_field_error') || e.includes('unknown column') || e.includes('missing database column')) {
+    return `Database column missing — the users table needs to be updated. Go to Admin → System Settings → SQL Setup and run the setup script, then try again. (Detail: ${serverErr})`
+  }
+  if (e.includes('er_no_such_table') || e.includes('missing database table') || e.includes("doesn't exist")) {
+    return `Database table missing — the database needs to be initialised. Go to Admin → System Settings → SQL Setup and run the setup script, then try again. (Detail: ${serverErr})`
+  }
   if (e.includes('database error')) return `Database error — a column may be missing. Run the SQL setup in System Settings, then try again. (Detail: ${serverErr})`
   return serverErr
 }
 
-// onSave: called after any successful create/update/delete so the
-// parent Admin component can refresh the active admin count and
-// update the warning banner without a full page reload.
+// ─── PROJECTS CELL ──────────────────────────────────────────
+// Renders the Projects count for a user row. Full-access roles show
+// "All"; scoped users show "X projects" (clickable) or "—".
+// Clicking opens a portal popover listing the actual project names.
+type ProjectRow = { id: number; code: string; name: string }
+
+function ProjectsCell({ userId, count, fullAccess, dark }: {
+  userId: number; count: number; fullAccess: boolean; dark: boolean
+}) {
+  const [open,     setOpen]     = useState(false)
+  const [loading,  setLoading]  = useState(false)
+  const [projects, setProjects] = useState<ProjectRow[] | null>(null)
+  const [pos,      setPos]      = useState({ top: 0, left: 0 })
+  const cellRef = useRef<HTMLDivElement>(null)
+
+  const toggle = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (fullAccess || count === 0) return
+    if (open) { setOpen(false); return }
+    const rect = cellRef.current?.getBoundingClientRect()
+    if (rect) setPos({ top: rect.bottom + 4, left: rect.left })
+    setOpen(true)
+    if (!projects) {
+      setLoading(true)
+      try {
+        const { data } = await axios.get(`${API}/users/${userId}/projects`)
+        setProjects(data.projects)
+      } catch { setProjects([]) }
+      finally { setLoading(false) }
+    }
+  }
+
+  // Close popover when clicking outside
+  useEffect(() => {
+    if (!open) return
+    const close = () => setOpen(false)
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [open])
+
+  const label = fullAccess ? 'All' : count === 0 ? '—' : `${count} project${count !== 1 ? 's' : ''}`
+  const clickable = !fullAccess && count > 0
+
+  return (
+    <div
+      ref={cellRef}
+      onClick={toggle}
+      title={fullAccess ? 'Has access to all projects' : count === 0 ? 'No projects assigned' : `Click to view ${count} project${count !== 1 ? 's' : ''}`}
+      style={{
+        padding: '0 12px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        cursor: clickable ? 'pointer' : 'default',
+        color: clickable ? (dark ? '#60a5fa' : '#2563eb') : (dark ? '#64748b' : '#94a3b8'),
+        fontFamily: 'IBM Plex Mono, monospace', fontSize: 12,
+        textDecoration: clickable ? 'underline' : 'none',
+        textDecorationStyle: 'dotted', userSelect: 'none',
+      }}
+    >
+      {label}
+      {open && createPortal(
+        <div
+          onMouseDown={e => e.stopPropagation()}
+          style={{
+            position: 'fixed', top: pos.top, left: pos.left, zIndex: 9999,
+            background: dark ? '#1e293b' : '#fff',
+            border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`,
+            borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+            minWidth: 220, maxWidth: 320, padding: 12,
+          }}
+        >
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
+            Assigned Projects
+          </div>
+          {loading ? (
+            <div style={{ fontSize: 12, color: '#64748b', padding: '4px 0' }}>Loading…</div>
+          ) : !projects || projects.length === 0 ? (
+            <div style={{ fontSize: 12, color: '#64748b', padding: '4px 0' }}>No projects found.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {projects.map(p => (
+                <div key={p.id} style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                  <span style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: 11, color: '#E84E0F', minWidth: 80 }}>{p.code}</span>
+                  <span style={{ fontSize: 12, color: dark ? '#cbd5e1' : '#334155' }}>{p.name}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>,
+        document.body
+      )}
+    </div>
+  )
+}
+
+// ─── USERS TAB COMPONENT ────────────────────────────────────
+// Manages all user operations. Single-admin workflow — no approval
+// step required. onSave is optional for future parent callbacks.
 function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
   const { user: me } = useAuth()
   const [rows,      setRows]      = useState<AdminUser[]>([])
@@ -312,11 +429,31 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
   const [form,      setForm]      = useState<UserForm>(EMPTY_USER)
   const [formErr,   setFormErr]   = useState('')
   const [saving,    setSaving]    = useState(false)
-  const [delId,       setDelId]       = useState<number | null>(null)
-  const [approving,   setApproving]   = useState<number | null>(null)
-  const [resetPwId,   setResetPwId]   = useState<number | null>(null)
-  const [resetPwDone, setResetPwDone] = useState<number | null>(null)
   const [showHelp,    setShowHelp]    = useState(false)
+
+  // ─── DEACTIVATE MODAL STATE ──────────────────────────────────
+  // Uses SimpleConfirmModal — reversible action, no reason required.
+  const [deactivateTarget, setDeactivateTarget] = useState<{ userId: number; fullName: string } | null>(null)
+  const [deactivateSaving, setDeactivateSaving] = useState(false)
+  const [deactivateErr,    setDeactivateErr]    = useState('')
+
+  // ─── REACTIVATE MODAL STATE ──────────────────────────────────
+  // Uses SimpleConfirmModal — re-enables a previously deactivated account.
+  const [reactivateTarget, setReactivateTarget] = useState<{ userId: number; fullName: string } | null>(null)
+  const [reactivateSaving, setReactivateSaving] = useState(false)
+  const [reactivateErr,    setReactivateErr]    = useState('')
+
+  // ─── DELETE MODAL STATE ──────────────────────────────────────
+  // Uses DeleteConfirmModal — permanent action, reason + checkbox required.
+  const [deleteTarget, setDeleteTarget] = useState<{ userId: number; fullName: string } | null>(null)
+  const [deleteSaving, setDeleteSaving] = useState(false)
+  const [deleteErr,    setDeleteErr]    = useState('')
+
+  // ─── RESET PASSWORD MODAL STATE ─────────────────────────────
+  const [resetPwTarget, setResetPwTarget] = useState<{ userId: number; email: string } | null>(null)
+  const [resetPwSaving, setResetPwSaving] = useState(false)
+  const [resetPwDone,   setResetPwDone]   = useState<number | null>(null)
+  const [resetPwErr,    setResetPwErr]    = useState('')
 
   const { containerRef, startResize } = useTableResize(U_DEF, U_MIN)
   const GRID = [
@@ -324,6 +461,7 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
     `var(--col-urole,${U_DEF.urole}px)`,
     `var(--col-uprojects,${U_DEF.uprojects}px)`,
     `var(--col-ucompany,${U_DEF.ucompany}px)`,
+    `var(--col-uphone,${U_DEF.uphone}px)`,
     `var(--col-ucontractstart,${U_DEF.ucontractstart}px)`,
     `var(--col-ucontract,${U_DEF.ucontract}px)`,
     `var(--col-ustatus,${U_DEF.ustatus}px)`,
@@ -361,7 +499,7 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
   const openEdit = (u: AdminUser) => {
     setForm({
       fullName: u.fullName, email: u.email, role: u.role,
-      company: u.company ?? '', staffId: u.staffId ?? '',
+      company: u.company ?? '', staffId: u.staffId ?? '', phone: u.phone ?? '',
       isActive: !!u.isActive, isExternal: !!u.isExternal,
       contractStart: u.contractStart?.slice(0, 10) ?? '',
       contractEnd: u.contractEnd?.slice(0, 10) ?? '',
@@ -393,58 +531,76 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
         : await axios.post(`${API}/users`, form)
       setShowForm(false); load(); onSave?.()
     } catch (e: unknown) {
-      const err = e as { response?: { data?: { error?: string } } }
-      setFormErr(friendlyUserError(err.response?.data?.error ?? ''))
+      const err = e as { response?: { data?: unknown }; message?: string }
+      const d = err.response?.data
+      const raw = (d && typeof d === 'object')
+        ? ((d as Record<string, string>).error || (d as Record<string, string>).message || '')
+        : (typeof d === 'string' ? (d as string).slice(0, 400) : '')
+      setFormErr(raw ? friendlyUserError(raw) : (err.message || 'Save failed — check the server console for details'))
     } finally { setSaving(false) }
   }
 
-  const resetPassword = async (id: number) => {
-    setResetPwId(id)
+  // ─── CONFIRM DEACTIVATE ──────────────────────────────────────
+  // Soft action — disables the account while preserving all data and history.
+  const confirmDeactivate = async () => {
+    if (!deactivateTarget) return
+    setDeactivateSaving(true); setDeactivateErr('')
     try {
-      await axios.post(`${API}/users/${id}/reset-password`)
-      setResetPwDone(id)
+      await axios.post(`${API}/users/${deactivateTarget.userId}/deactivate`, { reason: 'Manually deactivated by admin' })
+      setDeactivateTarget(null); load(); onSave?.()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setDeactivateErr(err.response?.data?.error ?? 'Deactivation failed')
+    } finally { setDeactivateSaving(false) }
+  }
+
+  // ─── CONFIRM DELETE ──────────────────────────────────────────
+  // Permanent hard delete. Called by DeleteConfirmModal with the
+  // admin-selected reason, which is forwarded to the server audit trail.
+  const confirmDelete = async (reason: string) => {
+    if (!deleteTarget) return
+    setDeleteSaving(true); setDeleteErr('')
+    try {
+      await axios.delete(`${API}/users/${deleteTarget.userId}`, { data: { reason } })
+      setDeleteTarget(null); load(); onSave?.()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setDeleteErr(err.response?.data?.error ?? 'Delete failed')
+    } finally { setDeleteSaving(false) }
+  }
+
+  // ─── CONFIRM REACTIVATE ──────────────────────────────────────
+  // Re-enables a previously deactivated account. Uses SimpleConfirmModal.
+  const confirmReactivate = async () => {
+    if (!reactivateTarget) return
+    setReactivateSaving(true); setReactivateErr('')
+    try {
+      await axios.post(`${API}/users/${reactivateTarget.userId}/activate`)
+      setReactivateTarget(null); load(); onSave?.()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setReactivateErr(err.response?.data?.error ?? 'Reactivation failed')
+    } finally { setReactivateSaving(false) }
+  }
+
+  // ─── CONFIRM RESET PASSWORD ──────────────────────────────────
+  // Called after admin confirms in the ResetPasswordModal.
+  const confirmResetPassword = async () => {
+    if (!resetPwTarget) return
+    setResetPwSaving(true); setResetPwErr('')
+    try {
+      await axios.post(`${API}/users/${resetPwTarget.userId}/reset-password`)
+      setResetPwDone(resetPwTarget.userId)
+      setResetPwTarget(null)
       setTimeout(() => setResetPwDone(null), 3000)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setError(err.response?.data?.error ?? 'Reset failed')
-    } finally { setResetPwId(null) }
-  }
-
-  const del = async (id: number) => {
-    try {
-      await axios.delete(`${API}/users/${id}`)
-      setDelId(null); load(); onSave?.()
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { error?: string } } }
-      setError(err.response?.data?.error ?? 'Delete failed')
-    }
-  }
-
-  const approve = async (id: number) => {
-    setApproving(id)
-    try {
-      await axios.post(`${API}/users/${id}/approve`)
-      load()
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { error?: string } } }
-      setError(err.response?.data?.error ?? 'Approval failed')
-    } finally { setApproving(null) }
+      setResetPwErr(err.response?.data?.error ?? 'Reset failed')
+    } finally { setResetPwSaving(false) }
   }
 
   const f = (k: keyof UserForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(p => ({ ...p, [k]: e.target.type === 'checkbox' ? (e.target as HTMLInputElement).checked : e.target.value }))
-
-  const approvalStatus = (u: AdminUser) => {
-    if (!u.isExternal) return null
-    if (u.secondApprovedBy) return <StatusPill active label="Approved (2/2)" />
-    if (u.approvedBy)       return <StatusPill active={false} label="Pending (1/2)" />
-    return <StatusPill active={false} label="Awaiting (0/2)" />
-  }
-
-  const canApprove = (u: AdminUser) =>
-    u.isExternal && !u.isActive &&
-    !(u.approvedBy === me?.id) &&
-    !u.secondApprovedBy
 
   return (
     <>
@@ -485,6 +641,7 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
             <HeaderCell label="Role"            col="urole"                       onResize={startResize} />
             <HeaderCell label="Projects"        col="uprojects"      align="left" onResize={startResize} />
             <HeaderCell label="Company"         col="ucompany"       align="left" onResize={startResize} />
+            <HeaderCell label="Phone"           col="uphone"         align="left" onResize={startResize} />
             <HeaderCell label="Contract Start"  col="ucontractstart"              onResize={startResize} />
             <HeaderCell label="Contract End"    col="ucontract"                   onResize={startResize} />
             <HeaderCell label="Status"          col="ustatus"                     onResize={startResize} />
@@ -495,7 +652,7 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
           {rows.length === 0 && total !== null && <Empty msg="No users found." />}
           {rows.map(u => (
             <TR key={u.id} dark={dark} grid={GRID}>
-              {/* ─── NAME CELL: name + email below + badges ────────── */}
+              {/* ─── NAME CELL: name + email below + external badge ─ */}
               <div style={{ padding: '4px 12px', overflow: 'hidden' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                   <span title={u.fullName} style={{ fontSize: 13, fontWeight: 500, color: dark ? '#f1f5f9' : '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.fullName}</span>
@@ -505,18 +662,21 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
                 <div style={{ fontSize: 11, color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }} title={u.email}>
                   {u.email}
                 </div>
-                {u.isExternal && <div style={{ marginTop: 2 }}>{approvalStatus(u)}</div>}
               </div>
               {/* ─── ROLE ───────────────────────────────────────────── */}
               <div style={{ padding: '0 12px' }}>
                 <RoleBadge role={u.role} />
               </div>
               {/* ─── PROJECTS ───────────────────────────────────────── */}
-              <TD dark={dark} muted center>
-                {FULL_ACCESS_ROLES.has(u.role) ? 'All' : (u.projectCount ?? 0)}
-              </TD>
-              {/* ─── COMPANY / CONTRACT START / CONTRACT END / STATUS / LAST LOGIN */}
+              <ProjectsCell
+                userId={u.id}
+                count={u.projectCount ?? 0}
+                fullAccess={FULL_ACCESS_ROLES.has(u.role)}
+                dark={dark}
+              />
+              {/* ─── COMPANY / PHONE / CONTRACT START / CONTRACT END / STATUS / LAST LOGIN */}
               <TD dark={dark} muted>{u.company || '—'}</TD>
+              <TD dark={dark} muted mono>{u.phone || '—'}</TD>
               <TD dark={dark} muted mono>
                 {u.contractStart ? u.contractStart.slice(0, 10) : '—'}
               </TD>
@@ -529,31 +689,48 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
               <TD dark={dark} muted mono>
                 {u.lastLogin ? u.lastLogin.slice(0, 10) : 'Never'}
               </TD>
-              <div style={{ padding: '0 8px', display: 'flex', gap: 4, alignItems: 'center' }}>
-                {canApprove(u) && (
+              {/* ─── ROW ACTIONS ────────────────────────────────────────
+                  Edit | Reset Password | Deactivate or Reactivate | Delete
+                  All actions execute immediately — no second-admin approval. */}
+              <div style={{ padding: '0 8px', display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'nowrap' }}>
+                {/* Edit — opens full edit form immediately */}
+                <button onClick={() => openEdit(u)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>
+                  Edit
+                </button>
+                {u.id !== me?.id && (<>
+                  {/* Reset Password — shows confirm modal before sending new temp password */}
                   <button
-                    onClick={() => approve(u.id)}
-                    disabled={approving === u.id}
-                    style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(232,78,15,0.4)', background: 'rgba(232,78,15,0.1)', color: '#E84E0F', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', opacity: approving === u.id ? 0.6 : 1 }}>
-                    {approving === u.id ? '…' : 'Approve'}
+                    onClick={() => setResetPwTarget({ userId: u.id, email: u.email })}
+                    title="Generate a new temp password and email it to the user"
+                    style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: `1px solid ${resetPwDone === u.id ? 'rgba(34,197,94,0.4)' : 'rgba(100,116,139,0.3)'}`, background: resetPwDone === u.id ? 'rgba(34,197,94,0.1)' : 'transparent', color: resetPwDone === u.id ? '#22c55e' : '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>
+                    {resetPwDone === u.id ? '✓ Sent' : 'Reset Password'}
                   </button>
-                )}
-                <button onClick={() => openEdit(u)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
-                {/* ─── RESET PW BUTTON ─────────────────────────────────
-                    Sends a temp password to the user's email.  Shows ✓
-                    for 3 s after success so the admin knows it was sent. */}
-                {u.id !== me?.id && (
+                  {/* Deactivate — soft disable, all data preserved (only for active users) */}
+                  {!!u.isActive && (
+                    <button
+                      onClick={() => { setDeactivateTarget({ userId: u.id, fullName: u.fullName }); setDeactivateErr('') }}
+                      title="Disable this account — user cannot log in but all data is kept"
+                      style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(245,158,11,0.35)', background: 'rgba(245,158,11,0.08)', color: '#d97706', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>
+                      Deactivate
+                    </button>
+                  )}
+                  {/* Reactivate — re-enables a previously deactivated account (only for inactive) */}
+                  {!u.isActive && (
+                    <button
+                      onClick={() => { setReactivateTarget({ userId: u.id, fullName: u.fullName }); setReactivateErr('') }}
+                      title="Re-enable this account so the user can log in again"
+                      style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(34,197,94,0.35)', background: 'rgba(34,197,94,0.08)', color: '#16a34a', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>
+                      Reactivate
+                    </button>
+                  )}
+                  {/* Delete — permanent hard delete; reason + checkbox required */}
                   <button
-                    onClick={() => resetPassword(u.id)}
-                    disabled={resetPwId === u.id}
-                    title="Send a temporary password reset email"
-                    style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: `1px solid ${resetPwDone === u.id ? 'rgba(34,197,94,0.4)' : 'rgba(100,116,139,0.3)'}`, background: resetPwDone === u.id ? 'rgba(34,197,94,0.1)' : 'transparent', color: resetPwDone === u.id ? '#22c55e' : '#64748b', cursor: resetPwId === u.id ? 'wait' : 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', opacity: resetPwId === u.id ? 0.6 : 1 }}>
-                    {resetPwDone === u.id ? '✓ Sent' : resetPwId === u.id ? '…' : 'Reset PW'}
+                    onClick={() => { setDeleteTarget({ userId: u.id, fullName: u.fullName }); setDeleteErr('') }}
+                    title="Permanently delete this user — cannot be undone"
+                    style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>
+                    Delete
                   </button>
-                )}
-                {u.id !== me?.id && (
-                  <DelBtn id={u.id} confirmId={delId} onInit={() => setDelId(u.id)} onConfirm={() => del(u.id)} onCancel={() => setDelId(null)} />
-                )}
+                </>)}
               </div>
             </TR>
           ))}
@@ -584,6 +761,7 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
             </select>
           </Field>
           <Field label="Company"><input value={form.company} onChange={f('company')} placeholder="Company name" style={inp(dark)} /></Field>
+          <Field label="Phone (Optional)"><input value={form.phone} onChange={f('phone')} placeholder="e.g. +61 4XX XXX XXX" style={inp(dark)} /></Field>
           <Field label="Contract Start Date (optional)"><input type="date" value={form.contractStart} onChange={f('contractStart')} style={inp(dark)} /></Field>
           <Field label="Contract End Date (optional)"><input type="date" value={form.contractEnd} onChange={f('contractEnd')} style={inp(dark)} /></Field>
           {/* New users get a system-generated temp password emailed to them; no manual password entry needed */}
@@ -602,7 +780,7 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
               </label>
               <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', fontSize: 13, color: dark ? '#f1f5f9' : '#0f172a' }}>
                 <input type="checkbox" checked={form.isExternal} onChange={f('isExternal')} style={{ accentColor: '#E84E0F' }} />
-                External user (requires two-admin approval)
+                External user (contractor, vendor, supplier)
               </label>
             </div>
           </Field>
@@ -628,7 +806,7 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
                 <span style={{ fontSize: 15, color: '#E84E0F' }}>◈</span>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 700, color: dark ? '#f1f5f9' : '#0f172a' }}>User Creation Guide</div>
-                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 1 }}>Rules and guidelines for adding users to QCO MMS</div>
+                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 1 }}>Rules and guidelines for adding users to QCO Group MMS</div>
                 </div>
               </div>
               <button onClick={() => setShowHelp(false)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: 4 }}>×</button>
@@ -637,37 +815,38 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
             {/* Body */}
             <div style={{ overflowY: 'auto', flex: 1, padding: '20px' }}>
 
-              {/* Internal Users */}
-              <HelpSection title="Internal Users" icon="🏢">
-                <HelpRule>Full Name and Email are required fields.</HelpRule>
-                <HelpRule>Email must be unique — it is the primary identifier for every account.</HelpRule>
+              {/* Creating Users */}
+              <HelpSection title="Creating Users" icon="🏢">
+                <HelpRule>Full Name and Email are required. Email must be unique — it is the login identifier.</HelpRule>
                 <HelpRule>Staff ID is optional but recommended when multiple staff share the same name.</HelpRule>
-                <HelpRule>Contract End Date is optional for permanent staff with no fixed end date.</HelpRule>
+                <HelpRule>Any admin can create any user (internal or external) immediately — no second-admin approval required.</HelpRule>
                 <HelpRule>A secure temporary password is auto-generated and emailed on account creation.</HelpRule>
                 <HelpRule>The user must change their password on first login.</HelpRule>
-                <HelpRule>Passwords expire every <strong>90 days</strong> for internal users.</HelpRule>
+                <HelpRule>Passwords expire every <strong>90 days</strong> for internal users and <strong>30 days</strong> for external users.</HelpRule>
               </HelpSection>
 
               <HelpDivider dark={dark} />
 
               {/* External Users */}
               <HelpSection title="External Users — Contractors, Vendors, Suppliers" icon="🌐">
-                <HelpRule>External accounts require approval from <strong>two distinct admins</strong> before access is granted.</HelpRule>
+                <HelpRule>External users are activated immediately on creation — same workflow as internal users.</HelpRule>
                 <HelpRule>Contract Start and End dates are strongly recommended for compliance tracking.</HelpRule>
-                <HelpRule>After approval, the user is assigned to specific projects and WBS codes by an admin.</HelpRule>
                 <HelpRule>Access is automatically revoked on the contract end date.</HelpRule>
                 <HelpRule>Warning notifications are sent at <strong>30, 14, 7 and 1 day(s)</strong> before expiry.</HelpRule>
-                <HelpRule>Passwords expire every <strong>30 days</strong> for external users.</HelpRule>
+                <HelpRule>After creation, assign the user to specific projects and WBS codes via the project settings.</HelpRule>
               </HelpSection>
 
               <HelpDivider dark={dark} />
 
-              {/* General Rules */}
-              <HelpSection title="General Rules" icon="📋">
-                <HelpRule>A minimum of <strong>2 active admin accounts</strong> must exist at all times.</HelpRule>
-                <HelpRule>Deactivated users cannot log in, but all their data and history is preserved.</HelpRule>
-                <HelpRule>All user changes — create, edit, deactivate, delete — are recorded in the audit trail.</HelpRule>
-                <HelpRule>Two users may share the same full name. Email is always the unique identifier.</HelpRule>
+              {/* Managing Users */}
+              <HelpSection title="Managing Users" icon="📋">
+                <HelpRule><strong>Edit</strong> — update any field immediately. Contract end date can be extended at any time.</HelpRule>
+                <HelpRule><strong>Deactivate</strong> — disables login while preserving all data. Reversible with Reactivate.</HelpRule>
+                <HelpRule><strong>Reactivate</strong> — re-enables a deactivated account immediately.</HelpRule>
+                <HelpRule><strong>Reset Password</strong> — generates a new temp password and emails it. User must change it on next login.</HelpRule>
+                <HelpRule><strong>Delete</strong> — permanent. Requires selecting a reason and confirming. Cannot be undone.</HelpRule>
+                <HelpRule>Every action (create, edit, deactivate, reactivate, reset, delete) is recorded in the audit trail with the acting admin's name and timestamp.</HelpRule>
+                <HelpRule>You cannot deactivate or delete your own account. Email is always the unique identifier.</HelpRule>
               </HelpSection>
 
             </div>
@@ -676,6 +855,107 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
             <div style={{ padding: '12px 20px', borderTop: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>
               <button onClick={() => setShowHelp(false)} style={{ padding: '7px 20px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#E84E0F', color: '#fff', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
                 Got it
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* ─── DEACTIVATE MODAL ───────────────────────────────────
+          SimpleConfirmModal — reversible action, no reason needed.
+          The server logs who performed the deactivation and when. */}
+      {deactivateTarget && (
+        <SimpleConfirmModal
+          dark={dark}
+          title="Deactivate User"
+          message={`Are you sure you want to deactivate ${deactivateTarget.fullName}? Their account will be disabled but all data and history is preserved. You can reactivate them at any time.`}
+          confirmLabel="Deactivate"
+          confirmStyle="warning"
+          onConfirm={confirmDeactivate}
+          onCancel={() => { setDeactivateTarget(null); setDeactivateErr('') }}
+          saving={deactivateSaving}
+          error={deactivateErr}
+        />
+      )}
+
+      {/* ─── REACTIVATE MODAL ───────────────────────────────────
+          SimpleConfirmModal — re-enables a previously deactivated account.
+          No approval required — any admin can reactivate immediately. */}
+      {reactivateTarget && (
+        <SimpleConfirmModal
+          dark={dark}
+          title="Reactivate User"
+          message={`Reactivate ${reactivateTarget.fullName}? They will be able to log in again immediately.`}
+          confirmLabel="Reactivate"
+          confirmStyle="primary"
+          onConfirm={confirmReactivate}
+          onCancel={() => { setReactivateTarget(null); setReactivateErr('') }}
+          saving={reactivateSaving}
+          error={reactivateErr}
+        />
+      )}
+
+      {/* ─── DELETE MODAL ───────────────────────────────────────
+          DeleteConfirmModal — permanent action. Admin must select a reason
+          from the dropdown AND tick the checkbox before Confirm is enabled.
+          The reason is forwarded to the server and logged in the audit trail. */}
+      {deleteTarget && (
+        <DeleteConfirmModal
+          dark={dark}
+          itemName={deleteTarget.fullName}
+          itemType="user"
+          onConfirm={confirmDelete}
+          onCancel={() => { setDeleteTarget(null); setDeleteErr('') }}
+          saving={deleteSaving}
+          error={deleteErr}
+        />
+      )}
+
+      {/* ─── RESET PASSWORD MODAL ───────────────────────────────
+          Shows before sending a reset so the admin can verify the
+          email address. Marks force_password_change on the account
+          so the user must set a new password on next login. */}
+      {resetPwTarget && createPortal(
+        <div
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setResetPwTarget(null) }}
+          style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(0,0,0,0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, fontFamily: 'IBM Plex Sans, sans-serif' }}>
+          <div style={{ width: 420, background: dark ? '#1e293b' : '#ffffff', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: 12, boxShadow: '0 24px 64px rgba(0,0,0,0.5)', overflow: 'hidden' }}>
+            {/* Header */}
+            <div style={{ padding: '14px 20px', borderBottom: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 15 }}>🔑</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: dark ? '#f1f5f9' : '#0f172a' }}>Reset Password</span>
+              </div>
+              <button onClick={() => setResetPwTarget(null)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 20, lineHeight: 1 }}>×</button>
+            </div>
+            {/* Body */}
+            <div style={{ padding: '20px' }}>
+              <p style={{ margin: '0 0 12px', fontSize: 13, color: dark ? '#cbd5e1' : '#334155', lineHeight: 1.5 }}>
+                Send a password reset email to:
+              </p>
+              <div style={{ padding: '8px 12px', borderRadius: 6, background: dark ? '#0f172a' : '#f8fafc', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, fontFamily: 'IBM Plex Mono, monospace', fontSize: 13, color: dark ? '#f1f5f9' : '#0f172a', marginBottom: 14 }}>
+                {resetPwTarget.email}
+              </div>
+              <p style={{ margin: 0, fontSize: 12, color: '#64748b', lineHeight: 1.5 }}>
+                The user will be required to set a new password on their next login.
+              </p>
+              {resetPwErr && (
+                <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 6, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', fontSize: 12, color: '#ef4444' }}>
+                  {resetPwErr}
+                </div>
+              )}
+            </div>
+            {/* Footer */}
+            <div style={{ padding: '14px 20px', borderTop: `1px solid ${dark ? '#334155' : '#f1f5f9'}`, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button onClick={() => setResetPwTarget(null)} style={{ padding: '7px 16px', borderRadius: 6, fontSize: 13, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
+                Cancel
+              </button>
+              <button
+                onClick={confirmResetPassword}
+                disabled={resetPwSaving}
+                style={{ padding: '7px 20px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#E84E0F', color: '#fff', cursor: resetPwSaving ? 'not-allowed' : 'pointer', opacity: resetPwSaving ? 0.7 : 1, fontFamily: 'IBM Plex Sans, sans-serif' }}>
+                {resetPwSaving ? 'Sending…' : 'Send Reset Email'}
               </button>
             </div>
           </div>
@@ -868,257 +1148,10 @@ function PermissionsTab({ dark }: { dark: boolean }) {
   )
 }
 
-// ═══════════════════════════════════════════════════════════
-// ─── EXTERNAL USERS TAB ─────────────────────────────────────
-// Shows all external users with their approval status.
-// Normal flow: two distinct admins must approve before activation.
-// Emergency override: when activeAdminCount === 1, a single admin
-// may approve with a mandatory documented reason. The server flags
-// the approval and sends escalation emails automatically.
-// ═══════════════════════════════════════════════════════════
-function ExternalUsersTab({ dark, activeAdminCount }: { dark: boolean; activeAdminCount: number | null }) {
-  const { user: me } = useAuth()
-  const [rows,      setRows]      = useState<AdminUser[]>([])
-  const [error,     setError]     = useState('')
-  const [approving, setApproving] = useState<number | null>(null)
-  const [filter,    setFilter]    = useState<'all' | 'pending' | 'approved'>('pending')
-
-  // ─── EMERGENCY OVERRIDE MODAL STATE ─────────────────────────
-  // Shown instead of a direct approve when only 1 admin is active.
-  const [emergencyModal,      setEmergencyModal]      = useState<{ userId: number; userName: string; userEmail: string } | null>(null)
-  const [emergencyReason,     setEmergencyReason]     = useState('')
-  const [emergencySubmitting, setEmergencySubmitting] = useState(false)
-  const [emergencyErr,        setEmergencyErr]        = useState('')
-
-  const load = useCallback(async () => {
-    setError('')
-    try {
-      const { data } = await axios.get(`${API}/users`, { params: { is_external: 'true', limit: '200' } })
-      setRows(data.rows)
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { error?: string } } }
-      setError(err.response?.data?.error ?? 'Failed to load external users')
-    }
-  }, [])
-
-  useEffect(() => { load() }, [load])
-
-  // ─── APPROVE HANDLER ────────────────────────────────────────
-  // Routes to emergency modal when there's only 1 active admin,
-  // otherwise calls the API directly for normal two-admin flow.
-  const handleApprove = (u: AdminUser) => {
-    if (activeAdminCount === 1) {
-      setEmergencyModal({ userId: u.id, userName: u.fullName, userEmail: u.email })
-      setEmergencyReason('')
-      setEmergencyErr('')
-    } else {
-      normalApprove(u.id)
-    }
-  }
-
-  const normalApprove = async (id: number) => {
-    setApproving(id)
-    try {
-      const { data } = await axios.post(`${API}/users/${id}/approve`)
-      setError('')
-      alert(data.message)
-      load()
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { error?: string } } }
-      setError(err.response?.data?.error ?? 'Approval failed')
-    } finally { setApproving(null) }
-  }
-
-  // ─── EMERGENCY OVERRIDE SUBMIT ───────────────────────────────
-  // Posts the reason with the approve request. Server logs the event,
-  // flags the record, and sends escalation emails.
-  const submitEmergency = async () => {
-    if (!emergencyReason.trim()) { setEmergencyErr('Emergency override reason is required.'); return }
-    if (!emergencyModal) return
-    setEmergencySubmitting(true); setEmergencyErr('')
-    try {
-      await axios.post(`${API}/users/${emergencyModal.userId}/approve`, {
-        emergencyReason: emergencyReason.trim(),
-      })
-      setEmergencyModal(null)
-      load()
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { error?: string } } }
-      setEmergencyErr(err.response?.data?.error ?? 'Emergency approval failed')
-    } finally { setEmergencySubmitting(false) }
-  }
-
-  const filtered = rows.filter(u => {
-    if (filter === 'pending')  return !u.isActive
-    if (filter === 'approved') return !!u.isActive
-    return true
-  })
-
-  const ApprovalBubbles = ({ u }: { u: AdminUser }) => {
-    const count = u.secondApprovedBy ? 2 : u.approvedBy ? 1 : 0
-    return (
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-        {[0, 1].map(i => (
-          <span key={i} style={{ width: 22, height: 22, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, background: i < count ? '#22c55e' : (dark ? '#1e293b' : '#f1f5f9'), color: i < count ? '#fff' : '#64748b', border: `1px solid ${i < count ? '#22c55e' : (dark ? '#334155' : '#dde3ed')}` }}>
-            {i + 1}
-          </span>
-        ))}
-        {u.emergencyOverride ? (
-          <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: 'rgba(245,158,11,0.15)', color: '#b45309' }}>EMERGENCY</span>
-        ) : (
-          <span style={{ fontSize: 11, color: '#94a3b8' }}>{count}/2 approved</span>
-        )}
-      </div>
-    )
-  }
-
-  return (
-    <div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center' }}>
-        {(['all', 'pending', 'approved'] as const).map(f => (
-          <button key={f} onClick={() => setFilter(f)} style={{ padding: '6px 14px', borderRadius: 6, fontSize: 12, fontWeight: filter === f ? 600 : 400, border: `1px solid ${filter === f ? '#E84E0F' : (dark ? '#334155' : '#dde3ed')}`, background: filter === f ? 'rgba(232,78,15,0.1)' : 'transparent', color: filter === f ? '#E84E0F' : '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
-            {f.charAt(0).toUpperCase() + f.slice(1)}
-          </button>
-        ))}
-        <span style={{ fontSize: 12, color: '#94a3b8', marginLeft: 4 }}>{filtered.length} external user{filtered.length !== 1 ? 's' : ''}</span>
-      </div>
-
-      {error && <Err msg={error} />}
-
-      {filtered.length === 0 && (
-        <div style={{ padding: '40px 20px', textAlign: 'center', fontSize: 13, color: '#94a3b8' }}>
-          {filter === 'pending' ? 'No external users awaiting approval.' : 'No external users found.'}
-        </div>
-      )}
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {filtered.map(u => {
-          const hasAlreadyApproved = u.approvedBy === me?.id
-          const fullyApproved      = !!u.secondApprovedBy
-          const canApprove         = !fullyApproved && !hasAlreadyApproved
-          const isEmergencyMode    = activeAdminCount === 1
-
-          return (
-            <div key={u.id} style={{ background: dark ? '#1e293b' : '#fff', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: 10, padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 16 }}>
-              {/* Avatar */}
-              <div style={{ width: 42, height: 42, borderRadius: '50%', background: u.isActive ? '#2563eb' : '#475569', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: '#fff', flexShrink: 0 }}>
-                {u.fullName.charAt(0).toUpperCase()}
-              </div>
-              {/* Info */}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 14, fontWeight: 600, color: dark ? '#f1f5f9' : '#0f172a' }}>{u.fullName}</span>
-                  <ExtBadge />
-                  <StatusPill active={!!u.isActive} />
-                </div>
-                <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>
-                  {u.email} · <RoleBadge role={u.role} /> {u.company ? ` · ${u.company}` : ''}
-                </div>
-                {u.contractEnd && (
-                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 3 }}>
-                    Contract ends: {u.contractEnd.slice(0, 10)}
-                  </div>
-                )}
-                {/* Show emergency override reason on the card if it was used */}
-                {u.emergencyOverride && u.emergencyOverrideReason && (
-                  <div style={{ marginTop: 4, fontSize: 11, color: '#b45309', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 4, padding: '3px 8px', display: 'inline-block' }}>
-                    Emergency override: {u.emergencyOverrideReason}
-                  </div>
-                )}
-              </div>
-              {/* Approvals */}
-              <div style={{ flexShrink: 0 }}><ApprovalBubbles u={u} /></div>
-              {/* Actions */}
-              <div style={{ flexShrink: 0 }}>
-                {fullyApproved ? (
-                  <span style={{ fontSize: 12, color: '#22c55e', fontWeight: 600 }}>✓ Activated</span>
-                ) : hasAlreadyApproved && !isEmergencyMode ? (
-                  <span style={{ fontSize: 12, color: '#94a3b8' }}>You approved — awaiting 2nd</span>
-                ) : canApprove || isEmergencyMode ? (
-                  <button
-                    onClick={() => handleApprove(u)}
-                    disabled={approving === u.id}
-                    style={{
-                      padding: '7px 18px', borderRadius: 6, fontSize: 13, fontWeight: 600,
-                      border: isEmergencyMode ? '1px solid rgba(245,158,11,0.5)' : 'none',
-                      background: isEmergencyMode ? 'rgba(245,158,11,0.12)' : '#E84E0F',
-                      color: isEmergencyMode ? '#b45309' : '#fff',
-                      cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif',
-                      opacity: approving === u.id ? 0.6 : 1,
-                    }}>
-                    {approving === u.id ? 'Approving…' : isEmergencyMode ? 'Emergency Approve' : 'Approve'}
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          )
-        })}
-      </div>
-
-      {/* ─── EMERGENCY OVERRIDE MODAL ───────────────────────── */}
-      {emergencyModal && createPortal(
-        <div
-          onMouseDown={(e) => { if (e.target === e.currentTarget) setEmergencyModal(null) }}
-          style={{ position: 'fixed', inset: 0, zIndex: 10001, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, fontFamily: 'IBM Plex Sans, sans-serif' }}>
-          <div style={{ width: 520, background: dark ? '#1e293b' : '#fff', border: '1px solid rgba(245,158,11,0.4)', borderRadius: 12, boxShadow: '0 24px 64px rgba(0,0,0,0.5)', overflow: 'hidden' }}>
-            {/* Header */}
-            <div style={{ padding: '14px 20px', borderBottom: '1px solid rgba(245,158,11,0.25)', background: 'rgba(245,158,11,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontSize: 16 }}>⚠️</span>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#b45309' }}>Emergency Single-Admin Approval</div>
-                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 1 }}>Only 1 active administrator exists — normal two-admin approval unavailable</div>
-                </div>
-              </div>
-              <button onClick={() => setEmergencyModal(null)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 20, lineHeight: 1 }}>×</button>
-            </div>
-            {/* Body */}
-            <div style={{ padding: '20px' }}>
-              {/* User summary */}
-              <div style={{ padding: '10px 14px', borderRadius: 8, background: dark ? '#0f172a' : '#f8fafc', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, marginBottom: 16 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: dark ? '#f1f5f9' : '#0f172a' }}>{emergencyModal.userName}</div>
-                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>{emergencyModal.userEmail}</div>
-              </div>
-              {/* Warning note */}
-              <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', marginBottom: 16, fontSize: 12, color: '#92400e', lineHeight: 1.6 }}>
-                This action bypasses the standard two-admin approval requirement. It will be flagged in the audit trail and all administrators and escalation contacts will be notified by email.
-              </div>
-              {/* Reason field */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 4 }}>
-                <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-                  Emergency Override Reason <span style={{ color: '#ef4444' }}>*</span>
-                </span>
-                <textarea
-                  value={emergencyReason}
-                  onChange={(e) => setEmergencyReason(e.target.value)}
-                  placeholder="Describe why single-admin approval is necessary (e.g. urgent project access required, second admin unavailable)"
-                  rows={3}
-                  style={{ padding: '8px 10px', borderRadius: 6, border: `1px solid ${emergencyErr ? '#ef4444' : (dark ? '#334155' : '#dde3ed')}`, background: dark ? '#0f172a' : '#f8fafc', color: dark ? '#f1f5f9' : '#0f172a', fontSize: 13, fontFamily: 'IBM Plex Sans, sans-serif', resize: 'vertical', outline: 'none', width: '100%', boxSizing: 'border-box' }}
-                />
-                {emergencyErr && <span style={{ fontSize: 12, color: '#ef4444' }}>{emergencyErr}</span>}
-              </div>
-            </div>
-            {/* Footer */}
-            <div style={{ padding: '14px 20px', borderTop: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button
-                onClick={() => setEmergencyModal(null)}
-                style={{ padding: '7px 16px', borderRadius: 6, fontSize: 13, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
-                Cancel
-              </button>
-              <button
-                onClick={submitEmergency}
-                disabled={emergencySubmitting}
-                style={{ padding: '7px 20px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#f59e0b', color: '#fff', cursor: emergencySubmitting ? 'not-allowed' : 'pointer', opacity: emergencySubmitting ? 0.7 : 1, fontFamily: 'IBM Plex Sans, sans-serif' }}>
-                {emergencySubmitting ? 'Approving…' : 'Confirm Emergency Approval'}
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
-    </div>
-  )
-}
+// ─── (ExternalUsersTab removed) ─────────────────────────────
+// The two-admin approval workflow has been removed. External users
+// are created active immediately — same as internal users. To view
+// external users, use the "External only" filter in the Users tab.
 
 // ═══════════════════════════════════════════════════════════
 // ─── NOTIFICATIONS TAB ──────────────────────────────────────
@@ -1249,26 +1282,63 @@ function NotificationsTab({ dark }: { dark: boolean }) {
 // escalation email field. Settings are persisted in the
 // system_settings table via GET/PUT /api/admin/system-settings.
 // ═══════════════════════════════════════════════════════════
-function SystemSettingsTab({ dark }: { dark: boolean }) {
-  const [testing,          setTesting]          = useState(false)
-  const [testResult,       setTestResult]       = useState('')
-  const [testError,        setTestError]        = useState('')
-  const [escalationEmail,  setEscalationEmail]  = useState('')
-  const [savingEmail,      setSavingEmail]      = useState(false)
-  const [emailSaved,       setEmailSaved]       = useState(false)
-  const [emailErr,         setEmailErr]         = useState('')
+// ─── SETTINGS FIELD DEFINITIONS ─────────────────────────────
+// Maps each setting key to its label and description so the
+// SystemSettingsTab can render fields generically.
+const SETTINGS_META: Record<string, { label: string; desc: string; placeholder: string }> = {
+  system_name:                   { label: 'System Name',                            desc: 'Displayed in email subjects and headings.',                                               placeholder: 'QCO Group MMS' },
+  escalation_email:              { label: 'Emergency Escalation Email(s)',          desc: 'Receives security and escalation alert emails. Comma-separated.',                        placeholder: 'security@qco.com.au, ceo@qco.com.au' },
+  password_expiry_days_internal: { label: 'Password Expiry — Internal Users (days)', desc: 'Days before internal user passwords expire (default 90).',                            placeholder: '90' },
+  password_expiry_days_external: { label: 'Password Expiry — External Users (days)', desc: 'Days before external user passwords expire (default 30).',                            placeholder: '30' },
+  access_expiry_warning_days:    { label: 'Access Expiry Warning Days',             desc: 'Comma-separated days before contract end to send warning notifications.',               placeholder: '30,14,7,1' },
+}
 
-  // ─── LOAD SETTINGS ──────────────────────────────────────────
-  // Fetch system_settings on mount. Degrades silently if the table
-  // hasn't been created yet (table will return {} from the server).
+function SystemSettingsTab({ dark }: { dark: boolean }) {
+  // ─── LOCAL STATE ─────────────────────────────────────────────
+  // Each editable setting is held in a single Record so adding
+  // new settings only requires updating SETTINGS_META above.
+  const [settings,   setSettings]   = useState<Record<string, string>>({})
+  const [saving,     setSaving]     = useState(false)
+  const [saved,      setSaved]      = useState(false)
+  const [saveErr,    setSaveErr]    = useState('')
+  const [testing,    setTesting]    = useState(false)
+  const [testResult, setTestResult] = useState('')
+  const [testError,  setTestError]  = useState('')
+
+  // ─── LOAD SETTINGS ON MOUNT ──────────────────────────────────
+  // Degrades silently if the table doesn't exist yet.
   const loadSettings = useCallback(async () => {
     try {
       const { data } = await axios.get(`${API}/system-settings`)
-      setEscalationEmail(data.escalation_email ?? '')
-    } catch { /* non-critical — table may not exist yet */ }
+      setSettings(data)
+    } catch { /* non-critical */ }
   }, [])
 
   useEffect(() => { loadSettings() }, [loadSettings])
+
+  const setSetting = (k: string, v: string) => setSettings(p => ({ ...p, [k]: v }))
+
+  const saveAll = async () => {
+    setSaving(true); setSaved(false); setSaveErr('')
+    try {
+      await axios.put(`${API}/system-settings`, settings)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 3000)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setSaveErr(err.response?.data?.error ?? 'Save failed')
+    } finally { setSaving(false) }
+  }
+
+  const resetDefaults = () => {
+    setSettings({
+      system_name: 'QCO Group MMS',
+      escalation_email: '',
+      password_expiry_days_internal: '90',
+      password_expiry_days_external: '30',
+      access_expiry_warning_days: '30,14,7,1',
+    })
+  }
 
   const sendTest = async () => {
     setTesting(true); setTestResult(''); setTestError('')
@@ -1281,69 +1351,57 @@ function SystemSettingsTab({ dark }: { dark: boolean }) {
     } finally { setTesting(false) }
   }
 
-  const saveEscalationEmail = async () => {
-    setSavingEmail(true); setEmailSaved(false); setEmailErr('')
-    try {
-      await axios.put(`${API}/system-settings`, { escalation_email: escalationEmail })
-      setEmailSaved(true)
-      setTimeout(() => setEmailSaved(false), 3000)
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { error?: string } } }
-      setEmailErr(err.response?.data?.error ?? 'Save failed')
-    } finally { setSavingEmail(false) }
-  }
-
-  const row = (label: string, value: string, mono = false) => (
-    <div style={{ display: 'flex', padding: '11px 0', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, alignItems: 'flex-start', gap: 12 }}>
-      <span style={{ width: 200, flexShrink: 0, fontSize: 12, color: '#94a3b8', fontWeight: 500 }}>{label}</span>
-      <span style={{ fontSize: 13, color: dark ? '#f1f5f9' : '#0f172a', fontFamily: mono ? 'JetBrains Mono, monospace' : 'IBM Plex Sans, sans-serif' }}>
-        {value}
-      </span>
+  const section = (title: string) => (
+    <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.1em', textTransform: 'uppercase', marginTop: 28, marginBottom: 10 }}>
+      {title}
     </div>
   )
-
-  const section = (title: string) => (
-    <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.1em', textTransform: 'uppercase', marginTop: 24, marginBottom: 8 }}>
-      {title}
+  const infoRow = (label: string, value: string, mono = false) => (
+    <div style={{ display: 'flex', padding: '11px 0', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, alignItems: 'flex-start', gap: 12 }}>
+      <span style={{ width: 220, flexShrink: 0, fontSize: 12, color: '#94a3b8', fontWeight: 500 }}>{label}</span>
+      <span style={{ fontSize: 13, color: dark ? '#f1f5f9' : '#0f172a', fontFamily: mono ? 'JetBrains Mono, monospace' : 'IBM Plex Sans, sans-serif' }}>{value}</span>
     </div>
   )
 
   return (
-    <div style={{ maxWidth: 680 }}>
+    <div style={{ maxWidth: 720 }}>
 
-      {section('Emergency Escalation')}
-      <div style={{ background: dark ? '#1e293b' : '#fff', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: 10, padding: '16px 18px' }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: dark ? '#f1f5f9' : '#0f172a', marginBottom: 4 }}>Emergency Escalation Email</div>
-        <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12, lineHeight: 1.5 }}>
-          This address receives an email whenever an emergency single-admin approval is used. Separate multiple addresses with commas.
-        </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-          <input
-            value={escalationEmail}
-            onChange={(e) => setEscalationEmail(e.target.value)}
-            placeholder="e.g. security@qcogroup.com.au, director@qcogroup.com.au"
-            style={{ ...inp(dark), flex: 1 }}
-          />
-          <button
-            onClick={saveEscalationEmail}
-            disabled={savingEmail}
-            style={{ padding: '7px 18px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#E84E0F', color: '#fff', cursor: savingEmail ? 'not-allowed' : 'pointer', opacity: savingEmail ? 0.7 : 1, fontFamily: 'IBM Plex Sans, sans-serif', flexShrink: 0, height: 36 }}>
-            {savingEmail ? 'Saving…' : emailSaved ? '✓ Saved' : 'Save'}
+      {/* ─── EDITABLE SETTINGS ──────────────────────────────────── */}
+      {section('System Settings')}
+      <div style={{ background: dark ? '#1e293b' : '#fff', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: 10, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+        {Object.entries(SETTINGS_META).map(([key, meta]) => (
+          <div key={key}>
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: dark ? '#f1f5f9' : '#0f172a', marginBottom: 3 }}>{meta.label}</label>
+            <p style={{ margin: '0 0 6px', fontSize: 11, color: '#94a3b8', lineHeight: 1.4 }}>{meta.desc}</p>
+            <input
+              value={settings[key] ?? ''}
+              onChange={e => setSetting(key, e.target.value)}
+              placeholder={meta.placeholder}
+              style={{ ...inp(dark), maxWidth: 460 }}
+            />
+          </div>
+        ))}
+        {saveErr && <p style={{ margin: 0, fontSize: 12, color: '#ef4444' }}>{saveErr}</p>}
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <button onClick={saveAll} disabled={saving} style={{ padding: '8px 22px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#E84E0F', color: '#fff', cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, fontFamily: 'IBM Plex Sans, sans-serif' }}>
+            {saving ? 'Saving…' : saved ? '✓ Saved' : 'Save Settings'}
+          </button>
+          <button onClick={resetDefaults} style={{ padding: '8px 18px', borderRadius: 6, fontSize: 13, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
+            Reset to Defaults
           </button>
         </div>
-        {emailErr && <p style={{ margin: '6px 0 0', fontSize: 12, color: '#ef4444' }}>{emailErr}</p>}
       </div>
 
+      {/* ─── SMTP CONFIG ────────────────────────────────────────── */}
       {section('SMTP Configuration')}
       <div style={{ background: dark ? '#1e293b' : '#fff', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: 10, padding: '0 18px' }}>
-        {row('Host', 'smtp.office365.com', true)}
-        {row('Port', '587', true)}
-        {row('From address', 'noreply@qcogroup.com.au', true)}
-        {row('Additional alert recipients', 'Configured via ADDITIONAL_ALERT_EMAILS in .env')}
-        {row('Status', 'Credentials configured in server/.env — restart server after changes')}
+        {infoRow('Host', 'smtp.office365.com', true)}
+        {infoRow('Port', '587', true)}
+        {infoRow('From address', 'noreply@qcogroup.com.au', true)}
+        {infoRow('Alert recipients', 'Configured via ADDITIONAL_ALERT_EMAILS in server/.env')}
+        {infoRow('Status', 'Credentials in server/.env — restart server after changes')}
       </div>
-
-      <div style={{ marginTop: 14 }}>
+      <div style={{ marginTop: 12 }}>
         <button onClick={sendTest} disabled={testing} style={{ padding: '8px 20px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#E84E0F', color: '#fff', cursor: testing ? 'not-allowed' : 'pointer', opacity: testing ? 0.7 : 1, fontFamily: 'IBM Plex Sans, sans-serif' }}>
           {testing ? 'Sending…' : 'Send test email to me'}
         </button>
@@ -1351,54 +1409,47 @@ function SystemSettingsTab({ dark }: { dark: boolean }) {
         {testError  && <p style={{ marginTop: 8, fontSize: 12, color: '#ef4444' }}>{testError}</p>}
       </div>
 
-      {section('Contract Expiry Notifications')}
-      <div style={{ background: dark ? '#1e293b' : '#fff', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: 10, padding: '0 18px' }}>
-        {row('Warning thresholds', '30, 14, 7, and 1 day(s) before expiry')}
-        {row('Auto-deactivation', 'Users are automatically deactivated on the day their contract expires')}
-        {row('Check frequency', 'Daily — runs on server start then every 24 hours')}
-        {row('Seed permissions', 'Run: node server/scripts/seed-permissions.js', true)}
-      </div>
-
-      {section('Roles')}
+      {/* ─── ROLES REFERENCE ────────────────────────────────────── */}
+      {section('Active Roles')}
       <div style={{ background: dark ? '#1e293b' : '#fff', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: 10, padding: '14px 18px' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {ALL_ROLES.map(r => <RoleBadge key={r} role={r} />)}
         </div>
       </div>
 
+      {/* ─── SQL SETUP ──────────────────────────────────────────── */}
       {section('SQL Setup')}
       <div style={{ background: dark ? '#0f172a' : '#f8fafc', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: 10, padding: '14px 18px' }}>
-        <p style={{ fontSize: 12, color: '#94a3b8', margin: '0 0 10px' }}>Run the following SQL on your MySQL database to enable all features:</p>
+        <p style={{ fontSize: 12, color: '#94a3b8', margin: '0 0 10px' }}>Run the migration script to initialise all tables and columns:</p>
         <pre style={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', color: dark ? '#94a3b8' : '#475569', margin: 0, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
-{`-- Users table: external approval + emergency override columns
+{`node server/scripts/migrate-users-columns.js
+node server/scripts/seed-admin-data.js
+node server/scripts/seed-permissions.js
+
+-- Or run these SQL statements manually:
 ALTER TABLE users ADD COLUMN IF NOT EXISTS contract_start DATE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS contract_end DATE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_external BOOLEAN DEFAULT FALSE;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS approved_by INT;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS approved_at DATETIME;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS second_approved_by INT;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS second_approved_at DATETIME;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS emergency_override TINYINT(1) DEFAULT 0;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS emergency_override_reason TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_id VARCHAR(50);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(20);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS force_password_change TINYINT(1) DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_expires_at DATETIME;
 
 -- System settings (escalation email, policy thresholds)
 CREATE TABLE IF NOT EXISTS system_settings (
   id INT AUTO_INCREMENT PRIMARY KEY,
-  setting_key VARCHAR(100) NOT NULL UNIQUE,
-  setting_value TEXT,
+  \`key\` VARCHAR(100) NOT NULL UNIQUE,
+  \`value\` TEXT,
   updated_by INT,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  FOREIGN KEY (updated_by) REFERENCES users(id)
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
-INSERT INTO system_settings (setting_key, setting_value) VALUES
+INSERT INTO system_settings (\`key\`, \`value\`) VALUES
+  ('system_name', 'QCO Group MMS'),
   ('escalation_email', ''),
-  ('min_admins_required', '2'),
-  ('external_user_approval_required', '2'),
   ('password_expiry_days_internal', '90'),
   ('password_expiry_days_external', '30'),
   ('access_expiry_warning_days', '30,14,7,1')
-ON DUPLICATE KEY UPDATE setting_key=setting_key;
+ON DUPLICATE KEY UPDATE \`key\`=\`key\`;
 
 CREATE TABLE IF NOT EXISTS user_wbs_access (...);
 CREATE TABLE IF NOT EXISTS role_permissions (...);
@@ -1439,7 +1490,13 @@ function SuppliersTab({ dark }: { dark: boolean }) {
   const [form,     setForm]     = useState<SupplierForm>(EMPTY_SUP)
   const [formErr,  setFormErr]  = useState('')
   const [saving,   setSaving]   = useState(false)
-  const [delId,    setDelId]    = useState<number | null>(null)
+  // ─── DELETE / DEACTIVATE STATE ──────────────────────────────
+  const [deleteTarget,     setDeleteTarget]     = useState<{ id: number; name: string } | null>(null)
+  const [deleteSaving,     setDeleteSaving]     = useState(false)
+  const [deleteErr,        setDeleteErr]        = useState('')
+  const [deactivateTarget, setDeactivateTarget] = useState<{ id: number; name: string } | null>(null)
+  const [deactivateSaving, setDeactivateSaving] = useState(false)
+  const [deactivateErr,    setDeactivateErr]    = useState('')
 
   const { containerRef, startResize } = useTableResize(S_DEF, S_MIN)
   const GRID = [
@@ -1489,12 +1546,29 @@ function SuppliersTab({ dark }: { dark: boolean }) {
     } finally { setSaving(false) }
   }
 
-  const del = async (id: number) => {
-    try { await axios.delete(`${API}/suppliers/${id}`); setDelId(null); load() }
-    catch (e: unknown) {
+  // ─── DELETE (permanent) ─────────────────────────────────────
+  // Reason is collected by DeleteConfirmModal and logged in audit.
+  const del = async (id: number, reason: string) => {
+    setDeleteSaving(true); setDeleteErr('')
+    try {
+      await axios.delete(`${API}/suppliers/${id}`, { data: { reason } })
+      setDeleteTarget(null); load()
+    } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setError(err.response?.data?.error ?? 'Delete failed')
-    }
+      setDeleteErr(err.response?.data?.error ?? 'Delete failed')
+    } finally { setDeleteSaving(false) }
+  }
+
+  // ─── DEACTIVATE (reversible) ─────────────────────────────────
+  const deactivate = async (id: number) => {
+    setDeactivateSaving(true); setDeactivateErr('')
+    try {
+      await axios.patch(`${API}/suppliers/${id}/status`, { status: 'inactive' })
+      setDeactivateTarget(null); load()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setDeactivateErr(err.response?.data?.error ?? 'Deactivation failed')
+    } finally { setDeactivateSaving(false) }
   }
 
   return (
@@ -1532,12 +1606,32 @@ function SuppliersTab({ dark }: { dark: boolean }) {
               </div>
               <div style={{ padding: '0 8px', display: 'flex', gap: 4, alignItems: 'center' }}>
                 <button onClick={() => openEdit(s)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
-                <DelBtn id={s.id} confirmId={delId} onInit={() => setDelId(s.id)} onConfirm={() => del(s.id)} onCancel={() => setDelId(null)} />
+                {s.status === 'active' && (
+                  <button onClick={() => { setDeactivateTarget({ id: s.id, name: s.name }); setDeactivateErr('') }} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(245,158,11,0.35)', background: 'rgba(245,158,11,0.08)', color: '#d97706', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Deactivate</button>
+                )}
+                <button onClick={() => { setDeleteTarget({ id: s.id, name: s.name }); setDeleteErr('') }} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
               </div>
             </TR>
           ))}
         </div>
       </TableCard>
+
+      {/* ─── DEACTIVATE / DELETE MODALS ─────────────────────── */}
+      {deactivateTarget && (
+        <SimpleConfirmModal dark={dark} title="Deactivate Supplier"
+          message={`Are you sure you want to deactivate ${deactivateTarget.name}? It will no longer appear as an active supplier.`}
+          confirmLabel="Deactivate" confirmStyle="warning"
+          onConfirm={() => deactivate(deactivateTarget.id)}
+          onCancel={() => { setDeactivateTarget(null); setDeactivateErr('') }}
+          saving={deactivateSaving} error={deactivateErr} />
+      )}
+      {deleteTarget && (
+        <DeleteConfirmModal dark={dark} itemName={deleteTarget.name} itemType="supplier"
+          reasons={['Duplicate record', 'Created in error', 'No longer required', 'Merged with another supplier', 'Other']}
+          onConfirm={reason => del(deleteTarget.id, reason)}
+          onCancel={() => { setDeleteTarget(null); setDeleteErr('') }}
+          saving={deleteSaving} error={deleteErr} />
+      )}
 
       {showForm && (
         <Modal title={editId != null ? 'Edit Supplier' : 'Add Supplier'} dark={dark} onClose={() => setShowForm(false)} onSubmit={save} error={formErr} saving={saving}>
@@ -1561,23 +1655,45 @@ function SuppliersTab({ dark }: { dark: boolean }) {
 
 // ═══════════════════════════════════════════════════════════
 // ─── PROJECTS ADMIN TAB ─────────────────────────────────────
-// Read-only project list from /api/admin/projects. Full project
-// management (edit/create) is done from the main project view.
+// Full CRUD for projects. RAG status, phase, client, and dates
+// are all editable. Columns: Code, Name, Client, Phase, RAG,
+// Start, End, Status, Actions.
 // ═══════════════════════════════════════════════════════════
 type AdminProject = {
   id: number; code: string; name: string; phase: string; status: string
-  rag: string; client: string; start_date: string; end_date: string
+  rag: string; client: string; startDate: string; endDate: string
+  totalPOs: number; atRisk: number; breached: number
 }
+type ProjForm = { code: string; name: string; phase: string; status: string; rag: string; client: string; startDate: string; endDate: string }
+const EMPTY_PROJ: ProjForm = { code: '', name: '', phase: '', status: 'active', rag: 'grey', client: '', startDate: '', endDate: '' }
+const RAG_OPTS = ['green', 'amber', 'red', 'blue', 'grey']
+const RAG_DOT: Record<string, string> = { green: '#22c55e', amber: '#f59e0b', red: '#ef4444', blue: '#2563eb', grey: '#94a3b8' }
 
 function ProjectsAdminTab({ dark }: { dark: boolean }) {
-  const [rows,  setRows]  = useState<AdminProject[]>([])
-  const [error, setError] = useState('')
+  const [rows,     setRows]     = useState<AdminProject[]>([])
+  const [search,   setSearch]   = useState('')
+  const [error,    setError]    = useState('')
+  const [showForm, setShowForm] = useState(false)
+  const [editId,   setEditId]   = useState<number | null>(null)
+  const [form,     setForm]     = useState<ProjForm>(EMPTY_PROJ)
+  const [formErr,  setFormErr]  = useState('')
+  const [saving,   setSaving]   = useState(false)
+  // ─── DELETE STATE ────────────────────────────────────────────
+  const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string } | null>(null)
+  const [deleteSaving, setDeleteSaving] = useState(false)
+  const [deleteErr,    setDeleteErr]    = useState('')
 
   const load = useCallback(async () => {
     setError('')
     try {
       const { data } = await axios.get(`${API}/projects`)
-      setRows(data)
+      // Map DB snake_case aliases to camelCase
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      setRows(data.map((p: any) => ({
+        ...p,
+        startDate: p.startDate ?? p.start_date ?? '',
+        endDate:   p.endDate   ?? p.end_date   ?? '',
+      })))
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
       setError(err.response?.data?.error ?? 'Failed to load projects')
@@ -1586,50 +1702,758 @@ function ProjectsAdminTab({ dark }: { dark: boolean }) {
 
   useEffect(() => { load() }, [load])
 
-  const RAG_COLOR: Record<string, string> = { green: '#22c55e', amber: '#f59e0b', red: '#ef4444' }
+  const pf = (k: keyof ProjForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setForm(p => ({ ...p, [k]: e.target.value }))
 
+  const openAdd  = () => { setForm(EMPTY_PROJ); setEditId(null); setFormErr(''); setShowForm(true) }
+  const openEdit = (p: AdminProject) => {
+    setForm({ code: p.code, name: p.name, phase: p.phase || '', status: p.status || 'active',
+              rag: p.rag || 'grey', client: p.client || '', startDate: p.startDate?.slice(0,10) || '', endDate: p.endDate?.slice(0,10) || '' })
+    setEditId(p.id); setFormErr(''); setShowForm(true)
+  }
+  const save = async () => {
+    if (!form.code.trim()) { setFormErr('Project code is required'); return }
+    if (!form.name.trim()) { setFormErr('Project name is required'); return }
+    setSaving(true); setFormErr('')
+    try {
+      editId != null ? await axios.put(`${API}/projects/${editId}`, form) : await axios.post(`${API}/projects`, form)
+      setShowForm(false); load()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setFormErr(err.response?.data?.error ?? 'Save failed')
+    } finally { setSaving(false) }
+  }
+  const del = async (id: number, reason: string) => {
+    setDeleteSaving(true); setDeleteErr('')
+    try {
+      await axios.delete(`${API}/projects/${id}`, { data: { reason } })
+      setDeleteTarget(null); load()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setDeleteErr(err.response?.data?.error ?? 'Delete failed')
+    } finally { setDeleteSaving(false) }
+  }
+
+  const filtered = search.trim()
+    ? rows.filter(p => p.code.toLowerCase().includes(search.toLowerCase()) || p.name.toLowerCase().includes(search.toLowerCase()) || (p.client || '').toLowerCase().includes(search.toLowerCase()))
+    : rows
+
+  const GRID = '100px 1fr 130px 100px 60px 60px 60px 110px 110px 120px'
   return (
     <>
-      <div style={{ marginBottom: 12 }}>
-        <span style={{ fontSize: 12, color: '#94a3b8' }}>{rows.length} project{rows.length !== 1 ? 's' : ''}</span>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search code, name, client…" style={{ ...inp(dark), width: 260 }} />
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: '#94a3b8' }}>{filtered.length} project{filtered.length !== 1 ? 's' : ''}</span>
+        <AddBtn onClick={openAdd} label="+ Add Project" />
       </div>
       {error && <Err msg={error} />}
       <TableCard dark={dark}>
-        <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr 120px 100px 70px 120px 110px', background: dark ? '#0f172a' : '#f4f7fb', borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}`, height: 36, userSelect: 'none' }}>
-          {['Code', 'Name', 'Client', 'Phase', 'RAG', 'Start', 'End'].map(h => (
+        <div style={{ display: 'grid', gridTemplateColumns: GRID, background: dark ? '#0f172a' : '#f4f7fb', borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}`, height: 36, userSelect: 'none', position: 'sticky', top: 0, zIndex: 1 }}>
+          {['Code','Name','Client','Phase','POs','Risk','Breach','Start','End',''].map(h => (
             <div key={h} style={{ padding: '0 12px', display: 'flex', alignItems: 'center', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase' }}>{h}</div>
           ))}
         </div>
-        {rows.length === 0 && <Empty msg="No projects found." />}
-        {rows.map(p => (
-          <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '100px 1fr 120px 100px 70px 120px 110px', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, minHeight: 40, alignItems: 'center' }}>
-            <TD dark={dark} mono>{p.code}</TD>
+        {filtered.length === 0 && <Empty msg="No projects found." />}
+        {filtered.map(p => (
+          <div key={p.id} style={{ display: 'grid', gridTemplateColumns: GRID, borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, minHeight: 40, alignItems: 'center' }}>
+            <div style={{ padding: '0 12px', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: RAG_DOT[p.rag] ?? '#94a3b8' }} />
+              <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: dark ? '#f1f5f9' : '#0f172a' }}>{p.code}</span>
+            </div>
             <TD dark={dark}>{p.name}</TD>
             <TD dark={dark} muted>{p.client || '—'}</TD>
             <TD dark={dark} muted>{p.phase || '—'}</TD>
-            <div style={{ padding: '0 12px' }}>
-              <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: RAG_COLOR[p.rag] ?? '#64748b' }} title={p.rag} />
+            <TD dark={dark} muted center>{p.totalPOs ?? 0}</TD>
+            <TD dark={dark} muted center>{p.atRisk ?? 0}</TD>
+            <TD dark={dark} muted center>{p.breached ?? 0}</TD>
+            <TD dark={dark} muted mono>{p.startDate?.slice(0, 10) || '—'}</TD>
+            <TD dark={dark} muted mono>{p.endDate?.slice(0, 10) || '—'}</TD>
+            <div style={{ padding: '0 8px', display: 'flex', gap: 4 }}>
+              <button onClick={() => openEdit(p)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
+              <button onClick={() => { setDeleteTarget({ id: p.id, name: `${p.code} — ${p.name}` }); setDeleteErr('') }} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
             </div>
-            <TD dark={dark} muted mono>{p.start_date?.slice(0, 10) ?? '—'}</TD>
-            <TD dark={dark} muted mono>{p.end_date?.slice(0, 10) ?? '—'}</TD>
           </div>
         ))}
       </TableCard>
+      {showForm && (
+        <Modal title={editId != null ? 'Edit Project' : 'Add Project'} dark={dark} onClose={() => setShowForm(false)} onSubmit={save} error={formErr} saving={saving}>
+          <Field label="Project Code *"><input value={form.code} onChange={pf('code')} placeholder="e.g. PGAS-001" style={inp(dark)} /></Field>
+          <Field label="RAG Status">
+            <select value={form.rag} onChange={pf('rag')} style={inp(dark)}>
+              {RAG_OPTS.map(r => <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>)}
+            </select>
+          </Field>
+          <Field label="Project Name *" wide>
+            <input value={form.name} onChange={pf('name')} placeholder="e.g. Pilbara Gas Processing Plant" style={inp(dark)} />
+          </Field>
+          <Field label="Phase">
+            <input value={form.phase} onChange={pf('phase')} placeholder="e.g. Execution" style={inp(dark)} />
+          </Field>
+          <Field label="Status">
+            <select value={form.status} onChange={pf('status')} style={inp(dark)}>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+          </Field>
+          <Field label="Client">
+            <input value={form.client} onChange={pf('client')} placeholder="Client name" style={inp(dark)} />
+          </Field>
+          <Field label="Start Date">
+            <input type="date" value={form.startDate} onChange={pf('startDate')} style={inp(dark)} />
+          </Field>
+          <Field label="End Date">
+            <input type="date" value={form.endDate} onChange={pf('endDate')} style={inp(dark)} />
+          </Field>
+        </Modal>
+      )}
+      {/* ─── DELETE MODAL ─────────────────────────────────── */}
+      {deleteTarget && (
+        <DeleteConfirmModal dark={dark} itemName={deleteTarget.name} itemType="project"
+          reasons={['Project cancelled', 'Duplicate record', 'Created in error', 'No longer required', 'Other']}
+          onConfirm={reason => del(deleteTarget.id, reason)}
+          onCancel={() => { setDeleteTarget(null); setDeleteErr('') }}
+          saving={deleteSaving} error={deleteErr} />
+      )}
     </>
   )
 }
 
-// ─── STUB TABS ───────────────────────────────────────────────
-// Warehouses, UoM, and Acronyms match the wireframe tab bar but
-// are not yet implemented. They display a placeholder until the
-// backend and UI design are finalised.
-const ComingSoonTab = ({ dark, label }: { dark: boolean; label: string }) => (
-  <div style={{ padding: '48px 0', textAlign: 'center' }}>
-    <div style={{ fontSize: 32, marginBottom: 12 }}>🔧</div>
-    <div style={{ fontSize: 15, fontWeight: 600, color: dark ? '#f1f5f9' : '#0f172a', marginBottom: 6 }}>{label}</div>
-    <div style={{ fontSize: 13, color: '#94a3b8' }}>This module is coming soon.</div>
-  </div>
-)
+// ═══════════════════════════════════════════════════════════
+// ─── WAREHOUSES TAB ─────────────────────────────────────────
+// Full CRUD for physical storage locations (laydown yards,
+// stores, site warehouses). Columns: Name, Code, Address,
+// State, Contact, Phone, Status.
+// ═══════════════════════════════════════════════════════════
+type Warehouse = {
+  id: number; name: string; code: string; address: string
+  state: string; contactName: string; phone: string; status: string
+}
+type WhForm = { name: string; code: string; address: string; state: string; contactName: string; phone: string; status: string }
+const EMPTY_WH: WhForm = { name: '', code: '', address: '', state: '', contactName: '', phone: '', status: 'active' }
+type WhKey = 'whname' | 'whcode' | 'whaddr' | 'whstate' | 'whcontact' | 'whphone' | 'whstatus'
+const WH_DEF: Record<WhKey, number> = { whname: 200, whcode: 80, whaddr: 220, whstate: 80, whcontact: 140, whphone: 130, whstatus: 90 }
+const WH_MIN: Record<WhKey, number> = { whname: 120, whcode: 60, whaddr: 120, whstate: 60, whcontact: 90,  whphone: 90,  whstatus: 70 }
+
+function WarehousesTab({ dark }: { dark: boolean }) {
+  const [rows,     setRows]     = useState<Warehouse[]>([])
+  const [total,    setTotal]    = useState<number | null>(null)
+  const [search,   setSearch]   = useState('')
+  const [filterSt, setFilterSt] = useState('')
+  const [error,    setError]    = useState('')
+  const [showForm, setShowForm] = useState(false)
+  const [editId,   setEditId]   = useState<number | null>(null)
+  const [form,     setForm]     = useState<WhForm>(EMPTY_WH)
+  const [formErr,  setFormErr]  = useState('')
+  const [saving,   setSaving]   = useState(false)
+  const [deleteTarget,   setDeleteTarget]   = useState<Warehouse | null>(null)
+  const [deleteSaving,   setDeleteSaving]   = useState(false)
+  const [deleteErr,      setDeleteErr]      = useState('')
+  const [deactivateTarget,  setDeactivateTarget]  = useState<Warehouse | null>(null)
+  const [deactivateSaving,  setDeactivateSaving]  = useState(false)
+  const [deactivateErr,     setDeactivateErr]     = useState('')
+  const { containerRef, startResize } = useTableResize(WH_DEF, WH_MIN)
+  const GRID = [
+    `var(--col-whname,${WH_DEF.whname}px)`,
+    `var(--col-whcode,${WH_DEF.whcode}px)`,
+    `var(--col-whaddr,${WH_DEF.whaddr}px)`,
+    `var(--col-whstate,${WH_DEF.whstate}px)`,
+    `var(--col-whcontact,${WH_DEF.whcontact}px)`,
+    `var(--col-whphone,${WH_DEF.whphone}px)`,
+    `var(--col-whstatus,${WH_DEF.whstatus}px)`,
+    '100px',
+  ].join(' ')
+
+  const load = useCallback(async () => {
+    setError('')
+    try {
+      const p: Record<string, string> = {}
+      if (search.trim()) p.search = search.trim()
+      if (filterSt)      p.status = filterSt
+      const { data } = await axios.get(`${API}/warehouses`, { params: p })
+      setRows(data.rows ?? data); setTotal(data.total ?? (data.rows ?? data).length)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setError(err.response?.data?.error ?? 'Failed to load warehouses')
+    }
+  }, [search, filterSt])
+
+  useEffect(() => { load() }, [load])
+
+  const wf = (k: keyof WhForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
+    setForm(p => ({ ...p, [k]: e.target.value }))
+
+  const openAdd  = () => { setForm(EMPTY_WH); setEditId(null); setFormErr(''); setShowForm(true) }
+  const openEdit = (w: Warehouse) => {
+    setForm({ name: w.name, code: w.code, address: w.address, state: w.state, contactName: w.contactName, phone: w.phone, status: w.status })
+    setEditId(w.id); setFormErr(''); setShowForm(true)
+  }
+  const save = async () => {
+    if (!form.name.trim()) { setFormErr('Name is required'); return }
+    if (!form.code.trim()) { setFormErr('Code is required'); return }
+    setSaving(true); setFormErr('')
+    try {
+      editId != null ? await axios.put(`${API}/warehouses/${editId}`, form) : await axios.post(`${API}/warehouses`, form)
+      setShowForm(false); load()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setFormErr(err.response?.data?.error ?? 'Save failed')
+    } finally { setSaving(false) }
+  }
+  const del = async (id: number, reason: string) => {
+    setDeleteSaving(true); setDeleteErr('')
+    try { await axios.delete(`${API}/warehouses/${id}`, { data: { reason } }); setDeleteTarget(null); load() }
+    catch (e: unknown) { const err = e as { response?: { data?: { error?: string } } }; setDeleteErr(err.response?.data?.error ?? 'Delete failed') }
+    finally { setDeleteSaving(false) }
+  }
+  const deactivate = async (id: number) => {
+    setDeactivateSaving(true); setDeactivateErr('')
+    try { await axios.patch(`${API}/warehouses/${id}/status`, { status: 'inactive' }); setDeactivateTarget(null); load() }
+    catch (e: unknown) { const err = e as { response?: { data?: { error?: string } } }; setDeactivateErr(err.response?.data?.error ?? 'Deactivate failed') }
+    finally { setDeactivateSaving(false) }
+  }
+
+  return (
+    <>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, code, state…" style={{ ...inp(dark), width: 240 }} />
+        <select value={filterSt} onChange={e => setFilterSt(e.target.value)} style={{ ...inp(dark), width: 120 }}>
+          <option value="">All statuses</option>
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+        </select>
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: '#94a3b8' }}>{total == null ? 'Loading…' : `${total} warehouse${total !== 1 ? 's' : ''}`}</span>
+        <AddBtn onClick={openAdd} label="+ Add Warehouse" />
+      </div>
+      {error && <Err msg={error} />}
+      <TableCard dark={dark}>
+        <div ref={containerRef}>
+          <TH dark={dark} grid={GRID}>
+            <HeaderCell label="Name"    col="whname"    align="left" onResize={startResize} />
+            <HeaderCell label="Code"    col="whcode"    align="left" onResize={startResize} />
+            <HeaderCell label="Address" col="whaddr"    align="left" onResize={startResize} />
+            <HeaderCell label="State"   col="whstate"   align="left" onResize={startResize} />
+            <HeaderCell label="Contact" col="whcontact" align="left" onResize={startResize} />
+            <HeaderCell label="Phone"   col="whphone"   align="left" onResize={startResize} />
+            <HeaderCell label="Status"  col="whstatus"              onResize={startResize} />
+            <div />
+          </TH>
+          {rows.length === 0 && total !== null && <Empty msg="No warehouses found." />}
+          {rows.map(w => (
+            <TR key={w.id} dark={dark} grid={GRID}>
+              <TD dark={dark}>{w.name}</TD>
+              <TD dark={dark} mono>{w.code}</TD>
+              <TD dark={dark} muted><span title={w.address} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{w.address || '—'}</span></TD>
+              <TD dark={dark} muted>{w.state || '—'}</TD>
+              <TD dark={dark} muted>{w.contactName || '—'}</TD>
+              <TD dark={dark} muted mono>{w.phone || '—'}</TD>
+              <div style={{ padding: '0 12px' }}>
+                <StatusPill active={w.status === 'active'} label={w.status === 'active' ? 'Active' : 'Inactive'} />
+              </div>
+              <div style={{ padding: '0 8px', display: 'flex', gap: 4 }}>
+                <button onClick={() => openEdit(w)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
+                {w.status === 'active' && (
+                  <button onClick={() => setDeactivateTarget(w)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(217,119,6,0.3)', background: 'rgba(217,119,6,0.08)', color: '#d97706', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Deactivate</button>
+                )}
+                <button onClick={() => setDeleteTarget(w)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
+              </div>
+            </TR>
+          ))}
+        </div>
+      </TableCard>
+      {showForm && (
+        <Modal title={editId != null ? 'Edit Warehouse' : 'Add Warehouse'} dark={dark} onClose={() => setShowForm(false)} onSubmit={save} error={formErr} saving={saving}>
+          <Field label="Name *"><input value={form.name} onChange={wf('name')} placeholder="e.g. Perth Laydown Yard" style={inp(dark)} /></Field>
+          <Field label="Code *"><input value={form.code} onChange={wf('code')} placeholder="e.g. PLY" style={inp(dark)} /></Field>
+          <Field label="State"><input value={form.state} onChange={wf('state')} placeholder="WA / QLD / VIC…" style={inp(dark)} /></Field>
+          <Field label="Contact Name"><input value={form.contactName} onChange={wf('contactName')} placeholder="Site contact" style={inp(dark)} /></Field>
+          <Field label="Phone"><input value={form.phone} onChange={wf('phone')} placeholder="+61 8 1234 5678" style={inp(dark)} /></Field>
+          <Field label="Status">
+            <select value={form.status} onChange={wf('status')} style={inp(dark)}>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+          </Field>
+          <Field label="Address" wide>
+            <input value={form.address} onChange={wf('address')} placeholder="Street address" style={inp(dark)} />
+          </Field>
+        </Modal>
+      )}
+      {deactivateTarget && (
+        <SimpleConfirmModal dark={dark} title="Deactivate Warehouse"
+          message={`Are you sure you want to deactivate ${deactivateTarget.name}? It will no longer appear in active lists.`}
+          confirmLabel="Deactivate" confirmStyle="warning"
+          onConfirm={() => deactivate(deactivateTarget.id)}
+          onCancel={() => { setDeactivateTarget(null); setDeactivateErr('') }}
+          saving={deactivateSaving} error={deactivateErr} />
+      )}
+      {deleteTarget && (
+        <DeleteConfirmModal dark={dark} itemName={deleteTarget.name} itemType="warehouse"
+          reasons={['Duplicate record', 'Created in error', 'No longer required', 'Facility closed', 'Other']}
+          onConfirm={reason => del(deleteTarget.id, reason)}
+          onCancel={() => { setDeleteTarget(null); setDeleteErr('') }}
+          saving={deleteSaving} error={deleteErr} />
+      )}
+    </>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
+// ─── UNITS OF MEASURE TAB ───────────────────────────────────
+// Reference list of UoM codes used on POs and MTO lines.
+// Columns: Code, Description, Status, Actions.
+// ═══════════════════════════════════════════════════════════
+type Uom = { id: number; code: string; description: string; status: string }
+type UomForm = { code: string; description: string; status: string }
+const EMPTY_UOM: UomForm = { code: '', description: '', status: 'active' }
+
+function UomTab({ dark }: { dark: boolean }) {
+  const [rows,     setRows]     = useState<Uom[]>([])
+  const [search,   setSearch]   = useState('')
+  const [filterSt, setFilterSt] = useState('')
+  const [error,    setError]    = useState('')
+  const [showForm, setShowForm] = useState(false)
+  const [editId,   setEditId]   = useState<number | null>(null)
+  const [form,     setForm]     = useState<UomForm>(EMPTY_UOM)
+  const [formErr,  setFormErr]  = useState('')
+  const [saving,   setSaving]   = useState(false)
+  const [deleteTarget,      setDeleteTarget]      = useState<Uom | null>(null)
+  const [deleteSaving,      setDeleteSaving]      = useState(false)
+  const [deleteErr,         setDeleteErr]         = useState('')
+  const [deactivateTarget,  setDeactivateTarget]  = useState<Uom | null>(null)
+  const [deactivateSaving,  setDeactivateSaving]  = useState(false)
+  const [deactivateErr,     setDeactivateErr]     = useState('')
+
+  const load = useCallback(async () => {
+    setError('')
+    try {
+      const p: Record<string, string> = {}
+      if (search.trim()) p.search = search.trim()
+      if (filterSt)      p.status = filterSt
+      const { data } = await axios.get(`${API}/uom`, { params: p })
+      setRows(data)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setError(err.response?.data?.error ?? 'Failed to load UoM')
+    }
+  }, [search, filterSt])
+
+  useEffect(() => { load() }, [load])
+
+  const uf = (k: keyof UomForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setForm(p => ({ ...p, [k]: e.target.value }))
+
+  const openAdd  = () => { setForm(EMPTY_UOM); setEditId(null); setFormErr(''); setShowForm(true) }
+  const openEdit = (u: Uom) => { setForm({ code: u.code, description: u.description, status: u.status }); setEditId(u.id); setFormErr(''); setShowForm(true) }
+  const save = async () => {
+    if (!form.code.trim())        { setFormErr('Code is required'); return }
+    if (!form.description.trim()) { setFormErr('Description is required'); return }
+    setSaving(true); setFormErr('')
+    try {
+      editId != null ? await axios.put(`${API}/uom/${editId}`, form) : await axios.post(`${API}/uom`, form)
+      setShowForm(false); load()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setFormErr(err.response?.data?.error ?? 'Save failed')
+    } finally { setSaving(false) }
+  }
+  const del = async (id: number, reason: string) => {
+    setDeleteSaving(true); setDeleteErr('')
+    try { await axios.delete(`${API}/uom/${id}`, { data: { reason } }); setDeleteTarget(null); load() }
+    catch (e: unknown) { const err = e as { response?: { data?: { error?: string } } }; setDeleteErr(err.response?.data?.error ?? 'Delete failed') }
+    finally { setDeleteSaving(false) }
+  }
+  const deactivate = async (id: number) => {
+    setDeactivateSaving(true); setDeactivateErr('')
+    try { await axios.patch(`${API}/uom/${id}/status`, { status: 'inactive' }); setDeactivateTarget(null); load() }
+    catch (e: unknown) { const err = e as { response?: { data?: { error?: string } } }; setDeactivateErr(err.response?.data?.error ?? 'Deactivate failed') }
+    finally { setDeactivateSaving(false) }
+  }
+
+  const GRID = '80px 1fr 100px 100px'
+  return (
+    <>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search code or description…" style={{ ...inp(dark), width: 260 }} />
+        <select value={filterSt} onChange={e => setFilterSt(e.target.value)} style={{ ...inp(dark), width: 120 }}>
+          <option value="">All statuses</option>
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+        </select>
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: '#94a3b8' }}>{rows.length} unit{rows.length !== 1 ? 's' : ''}</span>
+        <AddBtn onClick={openAdd} label="+ Add UoM" />
+      </div>
+      {error && <Err msg={error} />}
+      <TableCard dark={dark}>
+        <TH dark={dark} grid={GRID}>
+          <div style={{ padding: '0 12px', display: 'flex', alignItems: 'center', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Code</div>
+          <div style={{ padding: '0 12px', display: 'flex', alignItems: 'center', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Description</div>
+          <div style={{ padding: '0 12px', display: 'flex', alignItems: 'center', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Status</div>
+          <div />
+        </TH>
+        {rows.length === 0 && <Empty msg="No units of measure found." />}
+        {rows.map(u => (
+          <TR key={u.id} dark={dark} grid={GRID}>
+            <TD dark={dark} mono>{u.code}</TD>
+            <TD dark={dark} muted>{u.description}</TD>
+            <div style={{ padding: '0 12px' }}>
+              <StatusPill active={u.status === 'active'} label={u.status === 'active' ? 'Active' : 'Inactive'} />
+            </div>
+            <div style={{ padding: '0 8px', display: 'flex', gap: 4 }}>
+              <button onClick={() => openEdit(u)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
+              {u.status === 'active' && (
+                <button onClick={() => setDeactivateTarget(u)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(217,119,6,0.3)', background: 'rgba(217,119,6,0.08)', color: '#d97706', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Deactivate</button>
+              )}
+              <button onClick={() => setDeleteTarget(u)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
+            </div>
+          </TR>
+        ))}
+      </TableCard>
+      {showForm && (
+        <Modal title={editId != null ? 'Edit Unit of Measure' : 'Add Unit of Measure'} dark={dark} onClose={() => setShowForm(false)} onSubmit={save} error={formErr} saving={saving}>
+          <Field label="Code *"><input value={form.code} onChange={uf('code')} placeholder="e.g. EA" style={inp(dark)} /></Field>
+          <Field label="Description *"><input value={form.description} onChange={uf('description')} placeholder="e.g. Each" style={inp(dark)} /></Field>
+          <Field label="Status">
+            <select value={form.status} onChange={uf('status')} style={inp(dark)}>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+          </Field>
+        </Modal>
+      )}
+      {deactivateTarget && (
+        <SimpleConfirmModal dark={dark} title="Deactivate Unit of Measure"
+          message={`Are you sure you want to deactivate "${deactivateTarget.code} — ${deactivateTarget.description}"? It will no longer appear in active lists.`}
+          confirmLabel="Deactivate" confirmStyle="warning"
+          onConfirm={() => deactivate(deactivateTarget.id)}
+          onCancel={() => { setDeactivateTarget(null); setDeactivateErr('') }}
+          saving={deactivateSaving} error={deactivateErr} />
+      )}
+      {deleteTarget && (
+        <DeleteConfirmModal dark={dark} itemName={`${deleteTarget.code} — ${deleteTarget.description}`} itemType="unit of measure"
+          reasons={['Duplicate record', 'Created in error', 'No longer required', 'Other']}
+          onConfirm={reason => del(deleteTarget.id, reason)}
+          onCancel={() => { setDeleteTarget(null); setDeleteErr('') }}
+          saving={deleteSaving} error={deleteErr} />
+      )}
+    </>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
+// ─── ACRONYMS TAB ───────────────────────────────────────────
+// Searchable glossary of acronyms used across all MMS modules.
+// Columns: Acronym, Definition, Module, Notes, Actions.
+// ═══════════════════════════════════════════════════════════
+type AcronymRow = { id: number; acronym: string; definition: string; module: string; notes: string }
+type AcrForm    = { acronym: string; definition: string; module: string; notes: string }
+const EMPTY_ACR: AcrForm = { acronym: '', definition: '', module: '', notes: '' }
+const ACR_MODULES = ['', 'Procurement', 'Expediting', 'VDRL', 'Logistics', 'Material Control', 'Traceability', 'Document Inbox', 'Audit', 'Admin', 'Foundational', 'Foundational']
+
+function AcronymsTab({ dark }: { dark: boolean }) {
+  const [rows,     setRows]     = useState<AcronymRow[]>([])
+  const [search,   setSearch]   = useState('')
+  const [filterMod, setFilterMod] = useState('')
+  const [error,    setError]    = useState('')
+  const [showForm, setShowForm] = useState(false)
+  const [editId,   setEditId]   = useState<number | null>(null)
+  const [form,     setForm]     = useState<AcrForm>(EMPTY_ACR)
+  const [formErr,  setFormErr]  = useState('')
+  const [saving,   setSaving]   = useState(false)
+  const [deleteTarget,  setDeleteTarget]  = useState<AcronymRow | null>(null)
+  const [deleteSaving,  setDeleteSaving]  = useState(false)
+  const [deleteErr,     setDeleteErr]     = useState('')
+
+  const load = useCallback(async () => {
+    setError('')
+    try {
+      const p: Record<string, string> = {}
+      if (search.trim())   p.search = search.trim()
+      if (filterMod.trim()) p.module = filterMod.trim()
+      const { data } = await axios.get(`${API}/acronyms`, { params: p })
+      setRows(data)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setError(err.response?.data?.error ?? 'Failed to load acronyms')
+    }
+  }, [search, filterMod])
+
+  useEffect(() => { load() }, [load])
+
+  const af = (k: keyof AcrForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
+    setForm(p => ({ ...p, [k]: e.target.value }))
+
+  const openAdd  = () => { setForm(EMPTY_ACR); setEditId(null); setFormErr(''); setShowForm(true) }
+  const openEdit = (a: AcronymRow) => { setForm({ acronym: a.acronym, definition: a.definition, module: a.module, notes: a.notes }); setEditId(a.id); setFormErr(''); setShowForm(true) }
+  const save = async () => {
+    if (!form.acronym.trim())    { setFormErr('Acronym is required'); return }
+    if (!form.definition.trim()) { setFormErr('Definition is required'); return }
+    setSaving(true); setFormErr('')
+    try {
+      editId != null ? await axios.put(`${API}/acronyms/${editId}`, form) : await axios.post(`${API}/acronyms`, form)
+      setShowForm(false); load()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setFormErr(err.response?.data?.error ?? 'Save failed')
+    } finally { setSaving(false) }
+  }
+  const del = async (id: number, reason: string) => {
+    setDeleteSaving(true); setDeleteErr('')
+    try { await axios.delete(`${API}/acronyms/${id}`, { data: { reason } }); setDeleteTarget(null); load() }
+    catch (e: unknown) { const err = e as { response?: { data?: { error?: string } } }; setDeleteErr(err.response?.data?.error ?? 'Delete failed') }
+    finally { setDeleteSaving(false) }
+  }
+
+  const GRID = '90px 1fr 140px 200px 110px'
+  return (
+    <>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search acronym or definition…" style={{ ...inp(dark), width: 260 }} />
+        <select value={filterMod} onChange={e => setFilterMod(e.target.value)} style={{ ...inp(dark), width: 160 }}>
+          <option value="">All modules</option>
+          {['Procurement','Expediting','VDRL','Logistics','Material Control','Traceability','Document Inbox','Audit','Admin','Foundational'].map(m => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: '#94a3b8' }}>{rows.length} acronym{rows.length !== 1 ? 's' : ''}</span>
+        <AddBtn onClick={openAdd} label="+ Add Acronym" />
+      </div>
+      {error && <Err msg={error} />}
+      <TableCard dark={dark}>
+        <TH dark={dark} grid={GRID}>
+          {['Acronym','Definition','Module','Notes',''].map(h => (
+            <div key={h} style={{ padding: '0 12px', display: 'flex', alignItems: 'center', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase' }}>{h}</div>
+          ))}
+        </TH>
+        {rows.length === 0 && <Empty msg="No acronyms found." />}
+        {rows.map(a => (
+          <TR key={a.id} dark={dark} grid={GRID}>
+            <TD dark={dark} mono>{a.acronym}</TD>
+            <TD dark={dark}><span title={a.definition} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{a.definition}</span></TD>
+            <TD dark={dark} muted>{a.module || '—'}</TD>
+            <TD dark={dark} muted><span title={a.notes} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{a.notes || '—'}</span></TD>
+            <div style={{ padding: '0 8px', display: 'flex', gap: 4 }}>
+              <button onClick={() => openEdit(a)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
+              <button onClick={() => setDeleteTarget(a)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
+            </div>
+          </TR>
+        ))}
+      </TableCard>
+      {showForm && (
+        <Modal title={editId != null ? 'Edit Acronym' : 'Add Acronym'} dark={dark} onClose={() => setShowForm(false)} onSubmit={save} error={formErr} saving={saving}>
+          <Field label="Acronym *"><input value={form.acronym} onChange={af('acronym')} placeholder="e.g. PO" style={inp(dark)} /></Field>
+          <Field label="Module">
+            <select value={form.module} onChange={af('module')} style={inp(dark)}>
+              {ACR_MODULES.map((m, i) => <option key={i} value={m}>{m || '— None —'}</option>)}
+            </select>
+          </Field>
+          <Field label="Full Definition *" wide>
+            <input value={form.definition} onChange={af('definition')} placeholder="e.g. Purchase Order" style={inp(dark)} />
+          </Field>
+          <Field label="Notes" wide>
+            <input value={form.notes} onChange={af('notes')} placeholder="Optional notes" style={inp(dark)} />
+          </Field>
+        </Modal>
+      )}
+      {deleteTarget && (
+        <DeleteConfirmModal dark={dark} itemName={`${deleteTarget.acronym} — ${deleteTarget.definition}`} itemType="acronym"
+          reasons={['Duplicate record', 'Created in error', 'No longer required', 'Superseded', 'Other']}
+          onConfirm={reason => del(deleteTarget.id, reason)}
+          onCancel={() => { setDeleteTarget(null); setDeleteErr('') }}
+          saving={deleteSaving} error={deleteErr} />
+      )}
+    </>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
+// ─── INCO TERMS TAB ─────────────────────────────────────────
+// International commercial terms defining risk transfer and
+// freight cost responsibility on Purchase Orders.
+// Columns: Code, Full Name, Description, Risk Transfer Point,
+//          Transport Mode, Status, Actions.
+// ═══════════════════════════════════════════════════════════
+type IncoTerm = {
+  id: number; code: string; fullName: string; description: string
+  riskTransferPoint: string; transportMode: string; status: string
+}
+type IncForm = { code: string; fullName: string; description: string; riskTransferPoint: string; transportMode: string; status: string }
+const EMPTY_INC: IncForm = { code: '', fullName: '', description: '', riskTransferPoint: '', transportMode: 'Any mode', status: 'active' }
+type IKey = 'icode' | 'iname' | 'idesc' | 'irisk' | 'imode' | 'istatus'
+const I_DEF: Record<IKey, number> = { icode: 70, iname: 200, idesc: 260, irisk: 200, imode: 150, istatus: 90 }
+const I_MIN: Record<IKey, number> = { icode: 50, iname: 130, idesc: 130, irisk: 120, imode: 100, istatus: 70 }
+
+function IncoTermsTab({ dark }: { dark: boolean }) {
+  const [rows,     setRows]     = useState<IncoTerm[]>([])
+  const [search,   setSearch]   = useState('')
+  const [filterSt, setFilterSt] = useState('')
+  const [error,    setError]    = useState('')
+  const [showForm, setShowForm] = useState(false)
+  const [editId,   setEditId]   = useState<number | null>(null)
+  const [form,     setForm]     = useState<IncForm>(EMPTY_INC)
+  const [formErr,  setFormErr]  = useState('')
+  const [saving,   setSaving]   = useState(false)
+  const [deleteTarget,      setDeleteTarget]      = useState<IncoTerm | null>(null)
+  const [deleteSaving,      setDeleteSaving]      = useState(false)
+  const [deleteErr,         setDeleteErr]         = useState('')
+  const [deactivateTarget,  setDeactivateTarget]  = useState<IncoTerm | null>(null)
+  const [deactivateSaving,  setDeactivateSaving]  = useState(false)
+  const [deactivateErr,     setDeactivateErr]     = useState('')
+  const { containerRef, startResize } = useTableResize(I_DEF, I_MIN)
+  const GRID = [
+    `var(--col-icode,${I_DEF.icode}px)`,
+    `var(--col-iname,${I_DEF.iname}px)`,
+    `var(--col-idesc,${I_DEF.idesc}px)`,
+    `var(--col-irisk,${I_DEF.irisk}px)`,
+    `var(--col-imode,${I_DEF.imode}px)`,
+    `var(--col-istatus,${I_DEF.istatus}px)`,
+    '100px',
+  ].join(' ')
+
+  const load = useCallback(async () => {
+    setError('')
+    try {
+      const p: Record<string, string> = {}
+      if (search.trim()) p.search = search.trim()
+      if (filterSt)      p.status = filterSt
+      const { data } = await axios.get(`${API}/inco-terms`, { params: p })
+      setRows(data)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setError(err.response?.data?.error ?? 'Failed to load INCO terms')
+    }
+  }, [search, filterSt])
+
+  useEffect(() => { load() }, [load])
+
+  const inf = (k: keyof IncForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
+    setForm(p => ({ ...p, [k]: e.target.value }))
+
+  const openAdd  = () => { setForm(EMPTY_INC); setEditId(null); setFormErr(''); setShowForm(true) }
+  const openEdit = (t: IncoTerm) => {
+    setForm({ code: t.code, fullName: t.fullName, description: t.description, riskTransferPoint: t.riskTransferPoint, transportMode: t.transportMode, status: t.status })
+    setEditId(t.id); setFormErr(''); setShowForm(true)
+  }
+  const save = async () => {
+    if (!form.code.trim())     { setFormErr('Code is required'); return }
+    if (!form.fullName.trim()) { setFormErr('Full name is required'); return }
+    setSaving(true); setFormErr('')
+    try {
+      editId != null ? await axios.put(`${API}/inco-terms/${editId}`, form) : await axios.post(`${API}/inco-terms`, form)
+      setShowForm(false); load()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setFormErr(err.response?.data?.error ?? 'Save failed')
+    } finally { setSaving(false) }
+  }
+  const del = async (id: number, reason: string) => {
+    setDeleteSaving(true); setDeleteErr('')
+    try { await axios.delete(`${API}/inco-terms/${id}`, { data: { reason } }); setDeleteTarget(null); load() }
+    catch (e: unknown) { const err = e as { response?: { data?: { error?: string } } }; setDeleteErr(err.response?.data?.error ?? 'Delete failed') }
+    finally { setDeleteSaving(false) }
+  }
+  const deactivate = async (id: number) => {
+    setDeactivateSaving(true); setDeactivateErr('')
+    try { await axios.patch(`${API}/inco-terms/${id}/status`, { status: 'inactive' }); setDeactivateTarget(null); load() }
+    catch (e: unknown) { const err = e as { response?: { data?: { error?: string } } }; setDeactivateErr(err.response?.data?.error ?? 'Deactivate failed') }
+    finally { setDeactivateSaving(false) }
+  }
+
+  return (
+    <>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search code, name, mode…" style={{ ...inp(dark), width: 260 }} />
+        <select value={filterSt} onChange={e => setFilterSt(e.target.value)} style={{ ...inp(dark), width: 120 }}>
+          <option value="">All statuses</option>
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+        </select>
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: '#94a3b8' }}>{rows.length} term{rows.length !== 1 ? 's' : ''}</span>
+        <AddBtn onClick={openAdd} label="+ Add INCO Term" />
+      </div>
+      {error && <Err msg={error} />}
+      <TableCard dark={dark}>
+        <div ref={containerRef}>
+          <TH dark={dark} grid={GRID}>
+            <HeaderCell label="Code"              col="icode"   align="left" onResize={startResize} />
+            <HeaderCell label="Full Name"         col="iname"   align="left" onResize={startResize} />
+            <HeaderCell label="Description"       col="idesc"   align="left" onResize={startResize} />
+            <HeaderCell label="Risk Transfer"     col="irisk"   align="left" onResize={startResize} />
+            <HeaderCell label="Transport Mode"    col="imode"   align="left" onResize={startResize} />
+            <HeaderCell label="Status"            col="istatus"              onResize={startResize} />
+            <div />
+          </TH>
+          {rows.length === 0 && <Empty msg="No INCO terms found." />}
+          {rows.map(t => (
+            <TR key={t.id} dark={dark} grid={GRID}>
+              <TD dark={dark} mono>{t.code}</TD>
+              <TD dark={dark}><span title={t.fullName} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{t.fullName}</span></TD>
+              <TD dark={dark} muted><span title={t.description} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{t.description || '—'}</span></TD>
+              <TD dark={dark} muted><span title={t.riskTransferPoint} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{t.riskTransferPoint || '—'}</span></TD>
+              <TD dark={dark} muted>{t.transportMode || '—'}</TD>
+              <div style={{ padding: '0 12px' }}>
+                <StatusPill active={t.status === 'active'} label={t.status === 'active' ? 'Active' : 'Inactive'} />
+              </div>
+              <div style={{ padding: '0 8px', display: 'flex', gap: 4 }}>
+                <button onClick={() => openEdit(t)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
+                {t.status === 'active' && (
+                  <button onClick={() => setDeactivateTarget(t)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(217,119,6,0.3)', background: 'rgba(217,119,6,0.08)', color: '#d97706', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Deactivate</button>
+                )}
+                <button onClick={() => setDeleteTarget(t)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
+              </div>
+            </TR>
+          ))}
+        </div>
+      </TableCard>
+      {showForm && (
+        <Modal title={editId != null ? 'Edit INCO Term' : 'Add INCO Term'} dark={dark} onClose={() => setShowForm(false)} onSubmit={save} error={formErr} saving={saving}>
+          <Field label="Code *"><input value={form.code} onChange={inf('code')} placeholder="e.g. FOB" style={inp(dark)} /></Field>
+          <Field label="Status">
+            <select value={form.status} onChange={inf('status')} style={inp(dark)}>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+          </Field>
+          <Field label="Full Name *" wide>
+            <input value={form.fullName} onChange={inf('fullName')} placeholder="e.g. Free On Board" style={inp(dark)} />
+          </Field>
+          <Field label="Transport Mode" wide>
+            <select value={form.transportMode} onChange={inf('transportMode')} style={inp(dark)}>
+              <option value="Any mode">Any mode</option>
+              <option value="Sea and inland waterway">Sea and inland waterway</option>
+              <option value="Air">Air</option>
+              <option value="Road">Road</option>
+              <option value="Rail">Rail</option>
+            </select>
+          </Field>
+          <Field label="Risk Transfer Point" wide>
+            <input value={form.riskTransferPoint} onChange={inf('riskTransferPoint')} placeholder="e.g. On board vessel at named port" style={inp(dark)} />
+          </Field>
+          <Field label="Description" wide>
+            <input value={form.description} onChange={inf('description')} placeholder="Brief description of the term" style={inp(dark)} />
+          </Field>
+        </Modal>
+      )}
+      {deactivateTarget && (
+        <SimpleConfirmModal dark={dark} title="Deactivate INCO Term"
+          message={`Are you sure you want to deactivate "${deactivateTarget.code} — ${deactivateTarget.fullName}"? It will no longer appear in active lists.`}
+          confirmLabel="Deactivate" confirmStyle="warning"
+          onConfirm={() => deactivate(deactivateTarget.id)}
+          onCancel={() => { setDeactivateTarget(null); setDeactivateErr('') }}
+          saving={deactivateSaving} error={deactivateErr} />
+      )}
+      {deleteTarget && (
+        <DeleteConfirmModal dark={dark} itemName={`${deleteTarget.code} — ${deleteTarget.fullName}`} itemType="INCO term"
+          reasons={['Duplicate record', 'Created in error', 'No longer required', 'Superseded by updated standard', 'Other']}
+          onConfirm={reason => del(deleteTarget.id, reason)}
+          onCancel={() => { setDeleteTarget(null); setDeleteErr('') }}
+          saving={deleteSaving} error={deleteErr} />
+      )}
+    </>
+  )
+}
 
 // ═══════════════════════════════════════════════════════════
 // ─── ADMIN ──────────────────────────────────────────────────
@@ -1637,27 +2461,13 @@ const ComingSoonTab = ({ dark, label }: { dark: boolean; label: string }) => (
 // Only users with role='admin' reach this page (guarded both
 // in App.tsx and on every /api/admin route server-side).
 //
-// activeAdminCount is fetched on mount and passed to tabs that
-// need it. A persistent warning banner is shown when count ≤ 1
-// because the system requires a minimum of 2 active admins.
+// Single-admin workflow: any admin can perform any user-management
+// action immediately. Every mutation is logged to the audit trail.
 // ═══════════════════════════════════════════════════════════
-type AdminTab = 'users' | 'suppliers' | 'warehouses' | 'uom' | 'acronyms' | 'projects' | 'permissions' | 'external' | 'notifications' | 'settings'
+type AdminTab = 'users' | 'suppliers' | 'warehouses' | 'uom' | 'acronyms' | 'incoterms' | 'projects' | 'permissions' | 'notifications' | 'settings'
 
 export function Admin({ dark }: { dark: boolean }) {
-  const [tab,        setTab]        = useState<AdminTab>('users')
-  const [adminCount, setAdminCount] = useState<number | null>(null)
-
-  // ─── LOAD ACTIVE ADMIN COUNT ─────────────────────────────────
-  // Refreshed on mount. If this returns 1, the warning banner is shown
-  // and emergency single-admin approval is enabled in the External Users tab.
-  const loadAdminCount = useCallback(async () => {
-    try {
-      const { data } = await axios.get(`${API}/admin-count`)
-      setAdminCount(data.count)
-    } catch { /* non-critical — fail silently */ }
-  }, [])
-
-  useEffect(() => { loadAdminCount() }, [loadAdminCount])
+  const [tab, setTab] = useState<AdminTab>('users')
 
   const tabs: { key: AdminTab; label: string; icon: string }[] = [
     { key: 'users',         label: 'Users & Roles',      icon: '👤' },
@@ -1665,9 +2475,9 @@ export function Admin({ dark }: { dark: boolean }) {
     { key: 'warehouses',    label: 'Warehouses',         icon: '🏗️' },
     { key: 'uom',           label: 'Units of Measure',   icon: '📏' },
     { key: 'acronyms',      label: 'Acronyms',           icon: '🔤' },
+    { key: 'incoterms',     label: 'INCO Terms',         icon: '🚢' },
     { key: 'projects',      label: 'Projects',           icon: '📁' },
     { key: 'permissions',   label: 'Permission Matrix',  icon: '🔐' },
-    { key: 'external',      label: 'External Users',     icon: '🌐' },
     { key: 'notifications', label: 'Notifications',      icon: '🔔' },
     { key: 'settings',      label: 'System Settings',    icon: '⚙️' },
   ]
@@ -1683,22 +2493,6 @@ export function Admin({ dark }: { dark: boolean }) {
           Manage users, permissions, external access and system settings.
         </p>
       </div>
-
-      {/* ─── SINGLE-ADMIN WARNING BANNER ──────────────────── */}
-      {/* Persistent — only dismisses when a second admin is added. */}
-      {adminCount !== null && adminCount <= 1 && (
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px 16px', borderRadius: 8, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.4)', marginBottom: 20, fontFamily: 'IBM Plex Sans, sans-serif' }}>
-          <span style={{ fontSize: 18, flexShrink: 0, marginTop: 1 }}>⚠️</span>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#b45309', marginBottom: 2 }}>
-              Warning: Only {adminCount === 0 ? 'no' : '1'} active administrator{adminCount === 0 ? 's exist' : ' exists'}
-            </div>
-            <div style={{ fontSize: 12, color: '#92400e', lineHeight: 1.5 }}>
-              The system requires a minimum of 2 active administrators. Please assign a second administrator immediately to maintain system security and restore normal two-admin approval workflows.
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ─── TAB BAR ──────────────────────────────────────── */}
       <div style={{ display: 'flex', gap: 2, marginBottom: 20, borderBottom: `2px solid ${dark ? '#334155' : '#e2e8f0'}`, paddingBottom: 0, overflowX: 'auto' }}>
@@ -1717,14 +2511,14 @@ export function Admin({ dark }: { dark: boolean }) {
       </div>
 
       {/* ─── TAB CONTENT ──────────────────────────────────── */}
-      {tab === 'users'         && <UsersTab          dark={dark} onSave={loadAdminCount} />}
+      {tab === 'users'         && <UsersTab          dark={dark} />}
       {tab === 'suppliers'     && <SuppliersTab      dark={dark} />}
-      {tab === 'warehouses'    && <ComingSoonTab     dark={dark} label="Warehouses" />}
-      {tab === 'uom'           && <ComingSoonTab     dark={dark} label="Units of Measure" />}
-      {tab === 'acronyms'      && <ComingSoonTab     dark={dark} label="Acronyms" />}
+      {tab === 'warehouses'    && <WarehousesTab     dark={dark} />}
+      {tab === 'uom'           && <UomTab            dark={dark} />}
+      {tab === 'acronyms'      && <AcronymsTab       dark={dark} />}
+      {tab === 'incoterms'     && <IncoTermsTab      dark={dark} />}
       {tab === 'projects'      && <ProjectsAdminTab  dark={dark} />}
       {tab === 'permissions'   && <PermissionsTab    dark={dark} />}
-      {tab === 'external'      && <ExternalUsersTab  dark={dark} activeAdminCount={adminCount} />}
       {tab === 'notifications' && <NotificationsTab  dark={dark} />}
       {tab === 'settings'      && <SystemSettingsTab dark={dark} />}
     </div>

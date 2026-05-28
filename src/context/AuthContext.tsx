@@ -10,6 +10,7 @@ type User = {
   full_name: string;
   role: string;
   company: string | null;
+  phone: string | null;
   forcePasswordChange: boolean;
   passwordExpiresAt: string | null;
 };
