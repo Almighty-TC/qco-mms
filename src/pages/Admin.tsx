@@ -1075,7 +1075,7 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
   const [usersList,       setUsersList]       = useState<{ id: number; fullName: string; role: string }[]>([])
   const [selUserId,       setSelUserId]       = useState<number | null>(null)
   const [userRole,        setUserRole]        = useState<string>('')
-  const [rolePerms,       setRolePerms]       = useState<RolePerm[]>([])
+  // rolePerms removed — base dots now derived from global lookup via selUserRole
   const [userOverrides,   setUserOverrides]   = useState<Record<string, Record<PermKey, OverrideVal>>>({})
   const [overrideSaving,  setOverrideSaving]  = useState(false)
   const [overrideError,   setOverrideError]   = useState('')
@@ -1117,16 +1117,12 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
   }, [permMode])
 
   // ─── LOAD USER OVERRIDES ──────────────────────────────────────
-  // Call 1: GET /permissions/user/:userId — overrides + user's role
-  // Call 2: GET /permissions/role?role=... — base role permissions
-  //   (separate call so admin role, which was previously unseedable, works correctly)
-  // Each call has its own try-catch so one failure does not block the other.
+  // Fetches only the user's existing overrides — base role dots come from
+  // the global perms lookup (already loaded) via selUserRole, no second call needed.
   const loadUserOverrides = useCallback(async (userId: number) => {
-    let role = ''
     try {
       const { data } = await axios.get(`${API}/permissions/user/${userId}`)
-      role = data.user?.role ?? ''
-      setUserRole(role)
+      setUserRole(data.user?.role ?? '')
       const ovr: Record<string, Record<PermKey, OverrideVal>> = {}
       for (const o of data.overrides ?? []) {
         ovr[o.module] = {} as Record<PermKey, OverrideVal>
@@ -1137,14 +1133,7 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
       }
       setUserOverrides(ovr)
     } catch (e) {
-      console.error('[loadUserOverrides] user/overrides call failed:', e)
-    }
-    if (!role) return
-    try {
-      const { data: rp } = await axios.get(`${API}/permissions/role`, { params: { role } })
-      setRolePerms(Array.isArray(rp) ? rp : [])
-    } catch (e) {
-      console.error('[loadUserOverrides] role perms call failed:', e)
+      console.error('[loadUserOverrides] failed:', e)
     }
   }, [])
 
@@ -1157,7 +1146,7 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
   const cycleOverride = (module: string, key: PermKey) => {
     setUserOverrides(prev => {
       const cur = prev[module]?.[key] ?? 'inherit'
-      const isAdminUser = userRole === 'admin'
+      const isAdminUser = selUserRole === 'admin'
       const next: OverrideVal = cur === 'inherit' ? 'grant' : cur === 'grant' ? (isAdminUser ? 'inherit' : 'restrict') : 'inherit'
       return { ...prev, [module]: { ...(prev[module] ?? {} as Record<PermKey, OverrideVal>), [key]: next } }
     })
@@ -1219,19 +1208,17 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
     return acc
   }, {})
 
-  // Build lookup for the selected user's base role — used by user-overrides mode.
-  // rolePermsLookup comes from the dedicated /permissions/role endpoint.
-  // Falls back to the global lookup (from GET /permissions) so that if the
-  // separate call fails the dots still render from already-loaded data.
-  const rolePermsLookup = useMemo(
-    () => rolePerms.reduce<Record<string, RolePerm>>((acc, p) => { acc[p.module] = p; return acc }, {}),
-    [rolePerms]
+  // Derive selected user's role synchronously from usersList — no async timing issues.
+  // Falls back to userRole (from API) in case usersList entry is somehow missing.
+  const selUserRole = useMemo(
+    () => usersList.find(u => u.id === selUserId)?.role ?? userRole,
+    [usersList, selUserId, userRole]
   )
+  // Base permissions for selected user — sourced directly from global lookup (already loaded).
+  // admin role is handled separately in render (synthesised full access).
   const effectiveRolePermsLookup = useMemo(
-    () => Object.keys(rolePermsLookup).length > 0
-      ? rolePermsLookup
-      : (lookup[userRole] ?? {}),
-    [rolePermsLookup, lookup, userRole]
+    () => lookup[selUserRole] ?? {},
+    [lookup, selUserRole]
   )
 
   const getVal = (module: string, key: PermKey): boolean => {
@@ -1306,7 +1293,7 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
             <label style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>User:</label>
             <select
               value={selUserId ?? ''}
-              onChange={e => { setSelUserId(e.target.value ? Number(e.target.value) : null); setUserOverrides({}); setRolePerms([]) }}
+              onChange={e => { setSelUserId(e.target.value ? Number(e.target.value) : null); setUserOverrides({}) }}
               style={{ ...inp(dark), width: 280, height: 34 }}>
               <option value="">— Select a user —</option>
               {usersList.map(u => (
@@ -1375,10 +1362,10 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
               Select a user above to view and edit their permission overrides.
             </div>
           ) : (<>
-            {userRole && (
+            {selUserRole && (
               <div style={{ marginBottom: 10, padding: '8px 12px', borderRadius: 6, background: dark ? 'rgba(37,99,235,0.08)' : 'rgba(37,99,235,0.05)', border: `1px solid ${dark ? 'rgba(37,99,235,0.2)' : 'rgba(37,99,235,0.15)'}`, fontSize: 12, color: '#2563eb' }}>
-                Base role: <strong>{userRole.replace(/_/g, ' ')}</strong>
-                {userRole === 'admin' && ' — admin users can only be granted permissions, not restricted'}
+                Base role: <strong>{selUserRole.replace(/_/g, ' ')}</strong>
+                {selUserRole === 'admin' && ' — admin users can only be granted permissions, not restricted'}
               </div>
             )}
             {/* ─── OVERRIDE MATRIX ────────────────────── */}
@@ -1389,14 +1376,14 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
                   <AdminRow key={mod} dark={dark}>
                     <AdminCell title={mod.replace(/_/g, ' ')}>{mod.replace(/_/g, ' ')}</AdminCell>
                     {PERM_KEYS.map(key => {
-                      // admin role always has full access; for others read from effective lookup
-                      const baseVal = userRole === 'admin' ? (key !== 'wbs_scoped') : !!(basePerm?.[key] ?? 0)
+                      // admin role always has full access; for others read from global lookup
+                      const baseVal = selUserRole === 'admin' ? (key !== 'wbs_scoped') : !!(basePerm?.[key] ?? 0)
                       const ovr = userOverrides[mod]?.[key] ?? 'inherit'
                       return (
                         <AdminCell key={key} center>
                           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
                             {/* base role indicator — larger dot */}
-                            <span title={`Role ${userRole}: ${baseVal ? 'has' : 'no'} ${key}`} style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: baseVal ? 'rgba(34,197,94,0.5)' : 'rgba(100,116,139,0.2)' }} />
+                            <span title={`Role ${selUserRole}: ${baseVal ? 'has' : 'no'} ${key}`} style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: baseVal ? 'rgba(34,197,94,0.5)' : 'rgba(100,116,139,0.2)' }} />
                             {/* override toggle */}
                             <button
                               onClick={() => cycleOverride(mod, key)}

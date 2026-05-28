@@ -1,6 +1,6 @@
 # QCO MMS - Claude Context & Build Tracker
 Last updated: 2026-05-29
-Last commit: (pending — see session 9 below)
+Last commit: (pending — see session 10 below)
 
 ## MODULE STATUS
 - Login: ✅ Complete
@@ -86,6 +86,13 @@ forward (Procurement, Expediting, VDRL, Logistics, etc.).
 3. Next modules to build: Procurement (PO list, add PO, supplier/WBS linkage)
    — read QMAT-prototype.html and WIREFRAME_INVENTORY.md first
 
+## DB DATA STATUS (session 10)
+- 4 Project Team dummy users added (is_external=0, company != 'QCO Group'):
+  IDs 60-63: James O'Connor (project_manager, Pilbara Gas Co),
+  Sarah Lim (project_director, Hunter Valley Energy),
+  David Nguyen (viewer, Ord River Authority),
+  Michelle Park (project_manager, Port Hedland LNG)
+
 ## DB DATA STATUS (session 5)
 - 4 external dummy users added: john.doe, mary.jones (expired), peter.chan, lisa.park (expiring soon)
 - 21 internal QCO Group users got contract_start = 2024-01-01
@@ -104,6 +111,22 @@ forward (Procurement, Expediting, VDRL, Logistics, etc.).
 See docs/USER_MANUAL_STATUS.md
 
 ## SESSION HISTORY
+
+### Session 2026-05-29 (session 10)
+Fixed in this session:
+- src/pages/Admin.tsx (PermissionsTab — definitive permission dots fix):
+  - Root cause: `effectiveRolePermsLookup` depended on `userRole` state set by an
+    async API call. If the call failed or server was stale, `userRole` stayed ''
+    and all dots rendered grey.
+  - Fix: added `selUserRole` useMemo that derives the selected user's role directly
+    from `usersList` (already synchronously populated). Dots are now computed from
+    `lookup[selUserRole]` (global perms, loaded on mount) — zero async dependency.
+  - Removed `rolePerms` state, `rolePermsLookup` memo, and the second API call
+    (GET /permissions/role) from loadUserOverrides — no longer needed.
+  - Updated `cycleOverride`, role banner, and override matrix render to use `selUserRole`.
+- server/scripts/seed-project-team-users.js (new, run ✓):
+  - 4 Project Team users inserted (is_external=0, company != 'QCO Group')
+  - IDs 60-63: James O'Connor, Sarah Lim, David Nguyen, Michelle Park
 
 ### Session 2026-05-29 (session 9)
 Fixed in this session:
