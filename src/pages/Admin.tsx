@@ -5,6 +5,8 @@ import { useAuth } from '../context/AuthContext'
 import { DeleteConfirmModal, SimpleConfirmModal } from '../components'
 import { AdminTable, AdminRow, AdminCell, AdminActions } from '../components/AdminTable'
 import type { AdminCol } from '../components/AdminTable'
+import { ActionMenu } from '../components/ActionMenu'
+import type { ActionItem } from '../components/ActionMenu'
 import { HelpModal } from '../components/HelpModal'
 import type { HelpSection } from '../components/HelpModal'
 import '../styles/admin.css'
@@ -297,7 +299,7 @@ const U_COLS: AdminCol[] = [
   { label: 'Contract End',   width: 135, minWidth: 130 },
   { label: 'Status',         width: 105, minWidth: 100 },
   { label: 'Last Login',     width: 125, minWidth: 120 },
-  { label: '',               width: 300, minWidth: 300, noResize: true },
+  { label: '',               width: 90,  minWidth: 90,  noResize: true },
 ]
 
 type UserForm = {
@@ -645,22 +647,17 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
             <AdminCell muted mono>{u.lastLogin ? u.lastLogin.slice(0, 10) : 'Never'}</AdminCell>
             {/* ─── ROW ACTIONS ────────────────────────────── */}
             <AdminActions>
-              <button onClick={() => openEdit(u)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>Edit</button>
-              {u.id !== me?.id && (<>
-                <button
-                  onClick={() => setResetPwTarget({ userId: u.id, email: u.email })}
-                  title="Generate a new temp password and email it to the user"
-                  style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: `1px solid ${resetPwDone === u.id ? 'rgba(34,197,94,0.4)' : 'rgba(100,116,139,0.3)'}`, background: resetPwDone === u.id ? 'rgba(34,197,94,0.1)' : 'transparent', color: resetPwDone === u.id ? '#22c55e' : '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>
-                  {resetPwDone === u.id ? '✓ Sent' : 'Reset Password'}
-                </button>
-                {!!u.isActive && (
-                  <button onClick={() => { setDeactivateTarget({ userId: u.id, fullName: u.fullName }); setDeactivateErr('') }} title="Disable this account — user cannot log in but all data is kept" style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(245,158,11,0.35)', background: 'rgba(245,158,11,0.08)', color: '#d97706', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>Deactivate</button>
-                )}
-                {!u.isActive && (
-                  <button onClick={() => { setReactivateTarget({ userId: u.id, fullName: u.fullName }); setReactivateErr('') }} title="Re-enable this account so the user can log in again" style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(34,197,94,0.35)', background: 'rgba(34,197,94,0.08)', color: '#16a34a', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>Reactivate</button>
-                )}
-                <button onClick={() => { setDeleteTarget({ userId: u.id, fullName: u.fullName }); setDeleteErr('') }} title="Permanently delete this user — cannot be undone" style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>Delete</button>
-              </>)}
+              <ActionMenu dark={dark} actions={[
+                { label: 'Edit',           icon: '✏', onClick: () => openEdit(u) },
+                { label: 'Reset Password', icon: '🔑', onClick: () => setResetPwTarget({ userId: u.id, email: u.email }), hidden: u.id === me?.id },
+                { label: !!u.isActive ? 'Deactivate' : 'Reactivate', icon: '⊙',
+                  variant: !!u.isActive ? 'warning' : 'default',
+                  onClick: () => !!u.isActive
+                    ? (setDeactivateTarget({ userId: u.id, fullName: u.fullName }), setDeactivateErr(''))
+                    : (setReactivateTarget({ userId: u.id, fullName: u.fullName }), setReactivateErr('')),
+                  hidden: u.id === me?.id },
+                { label: 'Delete',         icon: '🗑', variant: 'danger', onClick: () => { setDeleteTarget({ userId: u.id, fullName: u.fullName }); setDeleteErr('') }, hidden: u.id === me?.id },
+              ] satisfies ActionItem[]} />
             </AdminActions>
           </AdminRow>
         ))}
@@ -923,6 +920,8 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
   const [overrideSaving,  setOverrideSaving]  = useState(false)
   const [overrideError,   setOverrideError]   = useState('')
   const [overrideSuccess, setOverrideSuccess] = useState('')
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
+  const [resetSaving,     setResetSaving]     = useState(false)
 
   const load = useCallback(async () => {
     setError('')
@@ -968,11 +967,12 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
   }, [selUserId, loadUserOverrides])
 
   // ─── CYCLE OVERRIDE ───────────────────────────────────────────
-  // inherit → grant → restrict → inherit
+  // inherit → grant → restrict → inherit (admin users skip restrict)
   const cycleOverride = (module: string, key: PermKey) => {
     setUserOverrides(prev => {
       const cur = prev[module]?.[key] ?? 'inherit'
-      const next: OverrideVal = cur === 'inherit' ? 'grant' : cur === 'grant' ? 'restrict' : 'inherit'
+      const isAdminUser = userRole === 'admin'
+      const next: OverrideVal = cur === 'inherit' ? 'grant' : cur === 'grant' ? (isAdminUser ? 'inherit' : 'restrict') : 'inherit'
       return { ...prev, [module]: { ...(prev[module] ?? {} as Record<PermKey, OverrideVal>), [key]: next } }
     })
   }
@@ -1001,6 +1001,23 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
       const err = e as { response?: { data?: { error?: string } } }
       setOverrideError(err.response?.data?.error ?? 'Save failed')
     } finally { setOverrideSaving(false) }
+  }
+
+  // ─── RESET TO ROLE DEFAULTS ───────────────────────────────────
+  const resetToRoleDefaults = async () => {
+    if (!selUserId) return
+    setResetSaving(true)
+    try {
+      await axios.delete(`${API}/permissions/user/${selUserId}`)
+      setUserOverrides({})
+      setResetConfirmOpen(false)
+      setOverrideSuccess('Overrides reset to role defaults.')
+      setTimeout(() => setOverrideSuccess(''), 3000)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setOverrideError(err.response?.data?.error ?? 'Reset failed')
+      setResetConfirmOpen(false)
+    } finally { setResetSaving(false) }
   }
 
   const overrideCount = ALL_MODULES.reduce((n, mod) => {
@@ -1051,117 +1068,40 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
 
   return (
     <div>
-      {/* ─── MODE TOGGLE ─────────────────────────────────── */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 16 }}>
-        {(['roles', 'users'] as const).map(m => (
-          <button key={m} onClick={() => setPermMode(m)} style={{ padding: '6px 16px', borderRadius: 6, fontSize: 12, fontWeight: permMode === m ? 600 : 400, border: `1px solid ${permMode === m ? '#E84E0F' : (dark ? '#334155' : '#dde3ed')}`, background: permMode === m ? 'rgba(232,78,15,0.1)' : 'transparent', color: permMode === m ? '#E84E0F' : '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
-            {m === 'roles' ? 'Role Permissions' : 'User Overrides'}
-          </button>
-        ))}
-      </div>
-
-      {permMode === 'roles' && (<>
-      {/* ─── ROLE SELECTOR + SAVE ───────────────────────── */}
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16 }}>
-        <label style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>Role:</label>
-        <select value={selRole} onChange={(e) => { setSelRole(e.target.value); setEditing({}) }} style={{ ...inp(dark), width: 220, height: 34 }}>
-          {ALL_ROLES.filter(r => r !== 'admin').map(r => (
-            <option key={r} value={r}>{r.replace(/_/g, ' ')}</option>
+      {/* ─── STICKY HEADER (mode toggle + selector) ──────── */}
+      <div style={{ position: 'sticky', top: headerHeight ?? 0, zIndex: 10, background: 'inherit', paddingBottom: 12 }}>
+        {/* Mode toggle */}
+        <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
+          {(['roles', 'users'] as const).map(m => (
+            <button key={m} onClick={() => setPermMode(m)} style={{ padding: '6px 16px', borderRadius: 6, fontSize: 12, fontWeight: permMode === m ? 600 : 400, border: `1px solid ${permMode === m ? '#E84E0F' : (dark ? '#334155' : '#dde3ed')}`, background: permMode === m ? 'rgba(232,78,15,0.1)' : 'transparent', color: permMode === m ? '#E84E0F' : '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
+              {m === 'roles' ? 'Role Permissions' : 'User Overrides'}
+            </button>
           ))}
-        </select>
-        {isDirty && !isAdmin && (
-          <button onClick={saveRole} disabled={saving} style={{ padding: '7px 18px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#E84E0F', color: '#fff', cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, fontFamily: 'IBM Plex Sans, sans-serif' }}>
-            {saving ? 'Saving…' : 'Save changes'}
-          </button>
-        )}
-        {isDirty && (
-          <button onClick={() => setEditing({})} style={{ padding: '7px 14px', borderRadius: 6, fontSize: 13, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
-            Discard
-          </button>
-        )}
-      </div>
-
-      {error   && <Err msg={error} />}
-      {success && <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 6, background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)', fontSize: 12, color: '#22c55e' }}>{success}</div>}
-
-      {isAdmin && (
-        <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 6, background: 'rgba(232,78,15,0.06)', border: '1px solid rgba(232,78,15,0.2)', fontSize: 12, color: '#E84E0F' }}>
-          Admin role has full access to everything and cannot be modified.
         </div>
-      )}
-
-      {/* ─── PERMISSION GRID ────────────────────────────── */}
-      <AdminTable tableId="admin_perm_roles" columns={PERM_MATRIX_COLS} dark={dark} top={headerHeight}>
-        {ALL_MODULES.map(mod => (
-          <AdminRow key={mod} dark={dark}>
-            <AdminCell title={mod.replace(/_/g, ' ')}>{mod.replace(/_/g, ' ')}</AdminCell>
-            {PERM_KEYS.map(key => (
-              <AdminCell key={key} center>
-                <input
-                  type="checkbox"
-                  checked={isAdmin ? true : getVal(mod, key)}
-                  disabled={isAdmin}
-                  onChange={() => !isAdmin && toggle(mod, key)}
-                  style={{ width: 16, height: 16, accentColor: '#E84E0F', cursor: isAdmin ? 'not-allowed' : 'pointer' }}
-                />
-              </AdminCell>
-            ))}
-          </AdminRow>
-        ))}
-      </AdminTable>
-
-      {/* ─── ROLE SUMMARY (all roles overview) ──────────── */}
-      <div style={{ marginTop: 24 }}>
-        <h3 style={{ fontSize: 13, fontWeight: 600, color: dark ? '#94a3b8' : '#64748b', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-          All Roles Overview
-        </h3>
-        <div style={{ overflowX: 'auto' }}>
-          <TableCard dark={dark}>
-            <div style={{ display: 'grid', gridTemplateColumns: `160px repeat(${ALL_MODULES.length}, 80px)`, minWidth: 'max-content' }}>
-              {/* Header */}
-              <div style={{ background: dark ? '#0f172a' : '#f4f7fb', borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}`, padding: '10px 12px', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Role</div>
-              {ALL_MODULES.map(m => (
-                <div key={m} style={{ background: dark ? '#0f172a' : '#f4f7fb', borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}`, padding: '10px 4px', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase', textAlign: 'center' }}>
-                  {m.replace(/_/g, ' ').slice(0, 7)}
-                </div>
+        {/* ─── ROLE SELECTOR ───────────────────────────────── */}
+        {permMode === 'roles' && (
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <label style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>Role:</label>
+            <select value={selRole} onChange={(e) => { setSelRole(e.target.value); setEditing({}) }} style={{ ...inp(dark), width: 220, height: 34 }}>
+              {ALL_ROLES.filter(r => r !== 'admin').map(r => (
+                <option key={r} value={r}>{r.replace(/_/g, ' ')}</option>
               ))}
-              {/* Rows */}
-              {ALL_ROLES.map(role => (
-                <>
-                  <div key={`${role}-name`} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, padding: '10px 12px', fontSize: 12, color: dark ? '#f1f5f9' : '#0f172a' }}>
-                    {role.replace(/_/g, ' ')}
-                  </div>
-                  {ALL_MODULES.map(mod => {
-                    const p = lookup[role]?.[mod]
-                    return (
-                      <div key={`${role}-${mod}`} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2, padding: '10px 4px' }}>
-                        {p ? (
-                          <>
-                            {!!p.can_view    && <PermDot value={1} title={`${role}/${mod}: view`} />}
-                            {!!p.can_create  && <PermDot value={1} title={`${role}/${mod}: create`} />}
-                            {!!p.can_edit    && <PermDot value={1} title={`${role}/${mod}: edit`} />}
-                            {!!p.can_approve && <PermDot value={1} title={`${role}/${mod}: approve`} />}
-                            {!!p.can_delete  && <PermDot value={1} title={`${role}/${mod}: delete`} />}
-                            {!p.can_view && !p.can_create && !p.can_edit && !p.can_approve && !p.can_delete &&
-                              <span style={{ fontSize: 11, color: '#475569' }}>—</span>}
-                          </>
-                        ) : <span style={{ fontSize: 11, color: '#475569' }}>—</span>}
-                      </div>
-                    )
-                  })}
-                </>
-              ))}
-            </div>
-          </TableCard>
-        </div>
-      </div>
-      </>)}
-
-      {/* ─── USER OVERRIDES MODE ─────────────────────────── */}
-      {permMode === 'users' && (
-        <div>
-          {/* ─── USER SELECTOR ────────────────────────────── */}
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'nowrap' }}>
+            </select>
+            {isDirty && !isAdmin && (
+              <button onClick={saveRole} disabled={saving} style={{ padding: '7px 18px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#E84E0F', color: '#fff', cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, fontFamily: 'IBM Plex Sans, sans-serif' }}>
+                {saving ? 'Saving…' : 'Save changes'}
+              </button>
+            )}
+            {isDirty && (
+              <button onClick={() => setEditing({})} style={{ padding: '7px 14px', borderRadius: 6, fontSize: 13, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
+                Discard
+              </button>
+            )}
+          </div>
+        )}
+        {/* ─── USER SELECTOR ───────────────────────────────── */}
+        {permMode === 'users' && (
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <label style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>User:</label>
             <select
               value={selUserId ?? ''}
@@ -1174,7 +1114,7 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
             </select>
             {selUserId != null && overrideCount > 0 && (
               <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 9999, background: 'rgba(232,78,15,0.1)', color: '#E84E0F', fontWeight: 600 }}>
-                {overrideCount} permission{overrideCount !== 1 ? 's' : ''} overridden
+                {overrideCount} override{overrideCount !== 1 ? 's' : ''}
               </span>
             )}
             {selUserId != null && (
@@ -1182,13 +1122,91 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
                 {overrideSaving ? 'Saving…' : 'Save overrides'}
               </button>
             )}
-            {selUserId != null && overrideCount > 0 && (
-              <button onClick={() => setUserOverrides({})} style={{ padding: '7px 14px', borderRadius: 6, fontSize: 13, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
-                Clear all
+            {selUserId != null && (
+              <button onClick={() => setResetConfirmOpen(true)} style={{ padding: '7px 14px', borderRadius: 6, fontSize: 13, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
+                Reset to role defaults
               </button>
             )}
           </div>
+        )}
+      </div>
 
+      {/* ─── ROLES MODE CONTENT ───────────────────────────── */}
+      {permMode === 'roles' && (<>
+        {error   && <Err msg={error} />}
+        {success && <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 6, background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)', fontSize: 12, color: '#22c55e' }}>{success}</div>}
+        {isAdmin && (
+          <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 6, background: 'rgba(232,78,15,0.06)', border: '1px solid rgba(232,78,15,0.2)', fontSize: 12, color: '#E84E0F' }}>
+            Admin role has full access to everything and cannot be modified.
+          </div>
+        )}
+        {/* ─── PERMISSION GRID ──────────────────────────── */}
+        <AdminTable tableId="admin_perm_roles" columns={PERM_MATRIX_COLS} dark={dark} top={headerHeight}>
+          {ALL_MODULES.map(mod => (
+            <AdminRow key={mod} dark={dark}>
+              <AdminCell title={mod.replace(/_/g, ' ')}>{mod.replace(/_/g, ' ')}</AdminCell>
+              {PERM_KEYS.map(key => (
+                <AdminCell key={key} center>
+                  <input
+                    type="checkbox"
+                    checked={isAdmin ? true : getVal(mod, key)}
+                    disabled={isAdmin}
+                    onChange={() => !isAdmin && toggle(mod, key)}
+                    style={{ width: 16, height: 16, accentColor: '#E84E0F', cursor: isAdmin ? 'not-allowed' : 'pointer' }}
+                  />
+                </AdminCell>
+              ))}
+            </AdminRow>
+          ))}
+        </AdminTable>
+        {/* ─── ROLE SUMMARY (all roles overview) ───────── */}
+        <div style={{ marginTop: 24 }}>
+          <h3 style={{ fontSize: 13, fontWeight: 600, color: dark ? '#94a3b8' : '#64748b', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            All Roles Overview
+          </h3>
+          <div style={{ overflowX: 'auto' }}>
+            <TableCard dark={dark}>
+              <div style={{ display: 'grid', gridTemplateColumns: `160px repeat(${ALL_MODULES.length}, 80px)`, minWidth: 'max-content' }}>
+                <div style={{ background: dark ? '#0f172a' : '#f4f7fb', borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}`, padding: '10px 12px', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Role</div>
+                {ALL_MODULES.map(m => (
+                  <div key={m} style={{ background: dark ? '#0f172a' : '#f4f7fb', borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}`, padding: '10px 4px', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase', textAlign: 'center' }}>
+                    {m.replace(/_/g, ' ').slice(0, 7)}
+                  </div>
+                ))}
+                {ALL_ROLES.map(role => (
+                  <>
+                    <div key={`${role}-name`} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, padding: '10px 12px', fontSize: 12, color: dark ? '#f1f5f9' : '#0f172a' }}>
+                      {role.replace(/_/g, ' ')}
+                    </div>
+                    {ALL_MODULES.map(mod => {
+                      const p = lookup[role]?.[mod]
+                      return (
+                        <div key={`${role}-${mod}`} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2, padding: '10px 4px' }}>
+                          {p ? (
+                            <>
+                              {!!p.can_view    && <PermDot value={1} title={`${role}/${mod}: view`} />}
+                              {!!p.can_create  && <PermDot value={1} title={`${role}/${mod}: create`} />}
+                              {!!p.can_edit    && <PermDot value={1} title={`${role}/${mod}: edit`} />}
+                              {!!p.can_approve && <PermDot value={1} title={`${role}/${mod}: approve`} />}
+                              {!!p.can_delete  && <PermDot value={1} title={`${role}/${mod}: delete`} />}
+                              {!p.can_view && !p.can_create && !p.can_edit && !p.can_approve && !p.can_delete &&
+                                <span style={{ fontSize: 11, color: '#475569' }}>—</span>}
+                            </>
+                          ) : <span style={{ fontSize: 11, color: '#475569' }}>—</span>}
+                        </div>
+                      )
+                    })}
+                  </>
+                ))}
+              </div>
+            </TableCard>
+          </div>
+        </div>
+      </>)}
+
+      {/* ─── USER OVERRIDES MODE CONTENT ─────────────────── */}
+      {permMode === 'users' && (
+        <div>
           {overrideError   && <Err msg={overrideError} />}
           {overrideSuccess && <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 6, background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)', fontSize: 12, color: '#22c55e' }}>{overrideSuccess}</div>}
 
@@ -1196,52 +1214,91 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
             <div style={{ padding: '40px 20px', textAlign: 'center', fontSize: 13, color: '#64748b' }}>
               Select a user above to view and edit their permission overrides.
             </div>
-          ) : (
-            <>
-              {userRole && (
-                <div style={{ marginBottom: 10, padding: '8px 12px', borderRadius: 6, background: dark ? 'rgba(37,99,235,0.08)' : 'rgba(37,99,235,0.05)', border: `1px solid ${dark ? 'rgba(37,99,235,0.2)' : 'rgba(37,99,235,0.15)'}`, fontSize: 12, color: '#2563eb' }}>
-                  Base role: <strong>{userRole.replace(/_/g, ' ')}</strong> — small dots show base role permissions (read-only). Click the badge below each dot to cycle: inherit → grant (✓) → restrict (✕).
-                </div>
-              )}
+          ) : (<>
+            {userRole && (
+              <div style={{ marginBottom: 10, padding: '8px 12px', borderRadius: 6, background: dark ? 'rgba(37,99,235,0.08)' : 'rgba(37,99,235,0.05)', border: `1px solid ${dark ? 'rgba(37,99,235,0.2)' : 'rgba(37,99,235,0.15)'}`, fontSize: 12, color: '#2563eb' }}>
+                Base role: <strong>{userRole.replace(/_/g, ' ')}</strong>
+                {userRole === 'admin' && ' — admin users can only be granted permissions, not restricted'}
+              </div>
+            )}
+            {/* ─── OVERRIDE MATRIX ────────────────────── */}
+            <AdminTable tableId="admin_perm_users" columns={PERM_MATRIX_COLS} dark={dark} top={headerHeight}>
+              {ALL_MODULES.map(mod => {
+                const basePerm = lookup[userRole]?.[mod]
+                return (
+                  <AdminRow key={mod} dark={dark}>
+                    <AdminCell title={mod.replace(/_/g, ' ')}>{mod.replace(/_/g, ' ')}</AdminCell>
+                    {PERM_KEYS.map(key => {
+                      const baseVal = !!(basePerm?.[key] ?? 0)
+                      const ovr = userOverrides[mod]?.[key] ?? 'inherit'
+                      return (
+                        <AdminCell key={key} center>
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                            {/* base role indicator — larger dot */}
+                            <span title={`Role ${userRole}: ${baseVal ? 'has' : 'no'} ${key}`} style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: baseVal ? 'rgba(34,197,94,0.5)' : 'rgba(100,116,139,0.2)' }} />
+                            {/* override toggle */}
+                            <button
+                              onClick={() => cycleOverride(mod, key)}
+                              title={`Override: ${ovr}. Click to cycle.`}
+                              style={{
+                                width: 22, height: 22, borderRadius: 4, cursor: 'pointer',
+                                border: ovr === 'inherit' ? `1px solid ${dark ? '#334155' : '#dde3ed'}` : 'none',
+                                background: ovr === 'grant' ? 'rgba(34,197,94,0.15)' : ovr === 'restrict' ? 'rgba(239,68,68,0.15)' : 'transparent',
+                                color: ovr === 'grant' ? '#22c55e' : ovr === 'restrict' ? '#ef4444' : '#64748b',
+                                fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              }}>
+                              {ovr === 'grant' ? '✓' : ovr === 'restrict' ? '✕' : '—'}
+                            </button>
+                          </div>
+                        </AdminCell>
+                      )
+                    })}
+                  </AdminRow>
+                )
+              })}
+            </AdminTable>
+            {/* ─── LEGEND ─────────────────────────────── */}
+            <div style={{ marginTop: 12, display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', fontSize: 11, color: '#64748b' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ width: 12, height: 12, borderRadius: '50%', background: 'rgba(34,197,94,0.5)', display: 'inline-block', flexShrink: 0 }} />
+                Role has permission
+              </span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ width: 12, height: 12, borderRadius: '50%', background: 'rgba(100,116,139,0.2)', display: 'inline-block', flexShrink: 0 }} />
+                Role does not have permission
+              </span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ width: 20, height: 20, borderRadius: 4, background: 'rgba(34,197,94,0.15)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: '#22c55e', fontWeight: 700, flexShrink: 0 }}>✓</span>
+                Override: grant
+              </span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ width: 20, height: 20, borderRadius: 4, background: 'rgba(239,68,68,0.15)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: '#ef4444', fontWeight: 700, flexShrink: 0 }}>✕</span>
+                Override: restrict
+              </span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ width: 20, height: 20, borderRadius: 4, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: '#64748b', fontWeight: 700, flexShrink: 0 }}>—</span>
+                Inheriting from role
+              </span>
+            </div>
+          </>)}
 
-              {/* ─── OVERRIDE MATRIX ──────────────────────── */}
-              <AdminTable tableId="admin_perm_users" columns={PERM_MATRIX_COLS} dark={dark} top={headerHeight}>
-                {ALL_MODULES.map(mod => {
-                  const basePerm = lookup[userRole]?.[mod]
-                  return (
-                    <AdminRow key={mod} dark={dark}>
-                      <AdminCell title={mod.replace(/_/g, ' ')}>{mod.replace(/_/g, ' ')}</AdminCell>
-                      {PERM_KEYS.map(key => {
-                        const baseVal = !!(basePerm?.[key] ?? 0)
-                        const ovr = userOverrides[mod]?.[key] ?? 'inherit'
-                        return (
-                          <AdminCell key={key} center>
-                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
-                              {/* base role dot */}
-                              <span title={`Base: ${baseVal ? 'allowed' : 'denied'}`} style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: baseVal ? 'rgba(34,197,94,0.4)' : 'rgba(100,116,139,0.25)' }} />
-                              {/* override toggle */}
-                              <button
-                                onClick={() => cycleOverride(mod, key)}
-                                title={`Override: ${ovr}. Click to cycle.`}
-                                style={{
-                                  width: 22, height: 22, borderRadius: 4, cursor: 'pointer',
-                                  border: ovr === 'inherit' ? `1px solid ${dark ? '#334155' : '#dde3ed'}` : 'none',
-                                  background: ovr === 'grant' ? 'rgba(34,197,94,0.15)' : ovr === 'restrict' ? 'rgba(239,68,68,0.15)' : 'transparent',
-                                  color: ovr === 'grant' ? '#22c55e' : ovr === 'restrict' ? '#ef4444' : '#64748b',
-                                  fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                }}>
-                                {ovr === 'grant' ? '✓' : ovr === 'restrict' ? '✕' : '—'}
-                              </button>
-                            </div>
-                          </AdminCell>
-                        )
-                      })}
-                    </AdminRow>
-                  )
-                })}
-              </AdminTable>
-            </>
-          )}
+          {/* ─── RESET CONFIRM MODAL ───────────────────── */}
+          {resetConfirmOpen && selUserId != null && (() => {
+            const u = usersList.find(x => x.id === selUserId)
+            return (
+              <SimpleConfirmModal
+                dark={dark}
+                title="Reset to Role Defaults"
+                message={`This will remove all custom permission overrides for ${u?.fullName ?? 'this user'} and revert them to their role defaults. Are you sure?`}
+                confirmLabel="Reset overrides"
+                confirmStyle="warning"
+                onConfirm={resetToRoleDefaults}
+                onCancel={() => setResetConfirmOpen(false)}
+                saving={resetSaving}
+                error=""
+              />
+            )
+          })()}
         </div>
       )}
     </div>
@@ -1264,7 +1321,7 @@ const N_COLS: AdminCol[] = [
   { label: 'Type',    width: 130, minWidth: 80  },
   { label: 'Message', width: 400, minWidth: 150, flex: true },
   { label: 'Date',    width: 120, minWidth: 80  },
-  { label: '',        width: 80,  minWidth: 80, noResize: true },
+  { label: '',        width: 90,  minWidth: 90, noResize: true },
 ]
 
 function NotificationsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
@@ -1304,6 +1361,13 @@ function NotificationsTab({ dark, headerHeight }: { dark: boolean; headerHeight?
     } catch { /* silent */ }
   }
 
+  const deleteNotification = async (id: number) => {
+    try {
+      await axios.delete(`${API}/notifications/${id}`)
+      load(page)
+    } catch { /* silent */ }
+  }
+
   const TYPE_COLOR: Record<string, string> = {
     contract_expiry: '#f59e0b',
     contract_expired: '#ef4444',
@@ -1333,11 +1397,11 @@ function NotificationsTab({ dark, headerHeight }: { dark: boolean; headerHeight?
         {rows.map(n => (
           <AdminRow key={n.id} dark={dark}>
             <AdminCell><span title={n.userEmail}>{n.userName}</span></AdminCell>
-            <div style={{ padding: '0 12px' }}>
-              <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 7px', borderRadius: 9999, background: `${TYPE_COLOR[n.type] ?? '#94a3b8'}22`, color: TYPE_COLOR[n.type] ?? '#94a3b8' }}>
+            <AdminCell>
+              <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 7px', borderRadius: 9999, background: `${TYPE_COLOR[n.type] ?? '#94a3b8'}22`, color: TYPE_COLOR[n.type] ?? '#94a3b8', whiteSpace: 'nowrap' }}>
                 {n.type.replace(/_/g, ' ')}
               </span>
-            </div>
+            </AdminCell>
             <AdminCell muted>
               <span title={n.message} style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: n.isRead ? 0.6 : 1, fontWeight: n.isRead ? 400 : 500 }}>
                 {n.message}
@@ -1345,11 +1409,10 @@ function NotificationsTab({ dark, headerHeight }: { dark: boolean; headerHeight?
             </AdminCell>
             <AdminCell muted mono>{n.createdAt?.slice(0, 10) ?? '—'}</AdminCell>
             <AdminActions>
-              {!n.isRead && (
-                <button onClick={() => markRead(n.id)} title="Mark as read" style={{ fontSize: 11, padding: '3px 8px', borderRadius: 5, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
-                  ✓ Read
-                </button>
-              )}
+              <ActionMenu dark={dark} actions={[
+                { label: 'Mark as read', icon: '✓', onClick: () => markRead(n.id), hidden: !!n.isRead },
+                { label: 'Delete',       icon: '🗑', variant: 'danger', onClick: () => deleteNotification(n.id) },
+              ] satisfies ActionItem[]} />
             </AdminActions>
           </AdminRow>
         ))}
@@ -1611,7 +1674,7 @@ const S_COLS: AdminCol[] = [
   { label: 'Phone',     width: 130, minWidth: 90  },
   { label: 'Addresses', width: 130, minWidth: 80  },
   { label: 'Status',    width: 90,  minWidth: 70  },
-  { label: '',          width: 150, minWidth: 150, noResize: true },
+  { label: '',          width: 90,  minWidth: 90,  noResize: true },
 ]
 
 function SuppliersTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
@@ -1734,7 +1797,7 @@ function SuppliersTab({ dark, headerHeight }: { dark: boolean; headerHeight?: nu
     } finally { setDeleteSaving(false) }
   }
 
-  // ─── DEACTIVATE (reversible) ─────────────────────────────────
+  // ─── DEACTIVATE / REACTIVATE (reversible) ───────────────────
   const deactivate = async (id: number) => {
     setDeactivateSaving(true); setDeactivateErr('')
     try {
@@ -1744,6 +1807,13 @@ function SuppliersTab({ dark, headerHeight }: { dark: boolean; headerHeight?: nu
       const err = e as { response?: { data?: { error?: string } } }
       setDeactivateErr(err.response?.data?.error ?? 'Deactivation failed')
     } finally { setDeactivateSaving(false) }
+  }
+
+  const reactivate = async (id: number) => {
+    try {
+      await axios.patch(`${API}/suppliers/${id}/status`, { status: 'active' })
+      load()
+    } catch { /* silent */ }
   }
 
   return (
@@ -1786,11 +1856,12 @@ function SuppliersTab({ dark, headerHeight }: { dark: boolean; headerHeight?: nu
               <StatusPill active={s.status === 'active'} label={s.status === 'active' ? 'Active' : 'Inactive'} />
             </AdminCell>
             <AdminActions>
-              <button onClick={() => openEdit(s)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
-              {s.status === 'active' && (
-                <button onClick={() => { setDeactivateTarget({ id: s.id, name: s.name }); setDeactivateErr('') }} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(245,158,11,0.35)', background: 'rgba(245,158,11,0.08)', color: '#d97706', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Deactivate</button>
-              )}
-              <button onClick={() => { setDeleteTarget({ id: s.id, name: s.name }); setDeleteErr('') }} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
+              <ActionMenu dark={dark} actions={[
+                { label: 'Edit',       icon: '✏', onClick: () => openEdit(s) },
+                { label: 'Deactivate', icon: '⊙', variant: 'warning', onClick: () => { setDeactivateTarget({ id: s.id, name: s.name }); setDeactivateErr('') }, hidden: s.status !== 'active' },
+                { label: 'Reactivate', icon: '↺', onClick: () => reactivate(s.id), hidden: s.status === 'active' },
+                { label: 'Delete',     icon: '🗑', variant: 'danger', onClick: () => { setDeleteTarget({ id: s.id, name: s.name }); setDeleteErr('') } },
+              ] satisfies ActionItem[]} />
             </AdminActions>
           </AdminRow>
         ))}
@@ -1936,7 +2007,7 @@ const P_COLS: AdminCol[] = [
   { label: 'Breach', width: 60,  minWidth: 50  },
   { label: 'Start',  width: 110, minWidth: 80  },
   { label: 'End',    width: 110, minWidth: 80  },
-  { label: '',       width: 120, minWidth: 120, noResize: true },
+  { label: '',       width: 90,  minWidth: 90,  noResize: true },
 ]
 
 function ProjectsAdminTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
@@ -1948,11 +2019,14 @@ function ProjectsAdminTab({ dark, headerHeight }: { dark: boolean; headerHeight?
   const [form,     setForm]     = useState<ProjForm>(EMPTY_PROJ)
   const [formErr,  setFormErr]  = useState('')
   const [saving,   setSaving]   = useState(false)
-  // ─── DELETE STATE ────────────────────────────────────────────
-  const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string } | null>(null)
-  const [deleteSaving, setDeleteSaving] = useState(false)
-  const [deleteErr,    setDeleteErr]    = useState('')
-  const [showHelp,     setShowHelp]     = useState(false)
+  // ─── DELETE / DEACTIVATE STATE ──────────────────────────────
+  const [deleteTarget,     setDeleteTarget]     = useState<{ id: number; name: string } | null>(null)
+  const [deleteSaving,     setDeleteSaving]     = useState(false)
+  const [deleteErr,        setDeleteErr]        = useState('')
+  const [deactivateTarget, setDeactivateTarget] = useState<{ id: number; name: string } | null>(null)
+  const [deactivateSaving, setDeactivateSaving] = useState(false)
+  const [deactivateErr,    setDeactivateErr]    = useState('')
+  const [showHelp,         setShowHelp]         = useState(false)
 
   const load = useCallback(async () => {
     setError('')
@@ -2004,6 +2078,22 @@ function ProjectsAdminTab({ dark, headerHeight }: { dark: boolean; headerHeight?
       setDeleteErr(err.response?.data?.error ?? 'Delete failed')
     } finally { setDeleteSaving(false) }
   }
+  const deactivate = async (id: number) => {
+    setDeactivateSaving(true); setDeactivateErr('')
+    try {
+      await axios.patch(`${API}/projects/${id}/status`, { status: 'inactive' })
+      setDeactivateTarget(null); load()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setDeactivateErr(err.response?.data?.error ?? 'Deactivation failed')
+    } finally { setDeactivateSaving(false) }
+  }
+  const reactivate = async (id: number) => {
+    try {
+      await axios.patch(`${API}/projects/${id}/status`, { status: 'active' })
+      load()
+    } catch { /* silent */ }
+  }
 
   const filtered = search.trim()
     ? rows.filter(p => p.code.toLowerCase().includes(search.toLowerCase()) || p.name.toLowerCase().includes(search.toLowerCase()) || (p.client || '').toLowerCase().includes(search.toLowerCase()))
@@ -2041,8 +2131,12 @@ function ProjectsAdminTab({ dark, headerHeight }: { dark: boolean; headerHeight?
             <AdminCell muted mono>{p.startDate?.slice(0, 10) || '—'}</AdminCell>
             <AdminCell muted mono>{p.endDate?.slice(0, 10) || '—'}</AdminCell>
             <AdminActions>
-              <button onClick={() => openEdit(p)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
-              <button onClick={() => { setDeleteTarget({ id: p.id, name: `${p.code} — ${p.name}` }); setDeleteErr('') }} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
+              <ActionMenu dark={dark} actions={[
+                { label: 'Edit',       icon: '✏', onClick: () => openEdit(p) },
+                { label: 'Deactivate', icon: '⊙', variant: 'warning', onClick: () => { setDeactivateTarget({ id: p.id, name: `${p.code} — ${p.name}` }); setDeactivateErr('') }, hidden: p.status === 'inactive' },
+                { label: 'Reactivate', icon: '↺', onClick: () => reactivate(p.id), hidden: p.status !== 'inactive' },
+                { label: 'Delete',     icon: '🗑', variant: 'danger', onClick: () => { setDeleteTarget({ id: p.id, name: `${p.code} — ${p.name}` }); setDeleteErr('') } },
+              ] satisfies ActionItem[]} />
             </AdminActions>
           </AdminRow>
         ))}
@@ -2087,12 +2181,22 @@ function ProjectsAdminTab({ dark, headerHeight }: { dark: boolean; headerHeight?
           saving={deleteSaving} error={deleteErr} />
       )}
 
+      {/* ─── DEACTIVATE MODAL ────────────────────────────── */}
+      {deactivateTarget && (
+        <SimpleConfirmModal dark={dark} title="Deactivate Project"
+          message={`Are you sure you want to deactivate ${deactivateTarget.name}? It will be hidden from active project lists.`}
+          confirmLabel="Deactivate" confirmStyle="warning"
+          onConfirm={() => deactivate(deactivateTarget.id)}
+          onCancel={() => { setDeactivateTarget(null); setDeactivateErr('') }}
+          saving={deactivateSaving} error={deactivateErr} />
+      )}
+
       {/* ─── HELP MODAL ──────────────────────────────────── */}
       {showHelp && (
         <HelpModal dark={dark} title="Projects — Help" subtitle="Project master list management" onClose={() => setShowHelp(false)} sections={[
           { icon: '📁', title: 'What this tab is for', items: ['Manage the master list of projects. Projects are referenced by Purchase Orders, WBS codes, and user access assignments.'] },
           { icon: '📋', title: 'Column Reference', items: [<><strong>Code</strong> — unique project code. RAG dot shows status (Green/Amber/Red/Blue/Grey).</>, <><strong>Client</strong> — client organisation.</>, <><strong>Phase</strong> — current project phase (e.g. Execution, Close-out).</>, <><strong>POs / Risk / Breach</strong> — purchase order summary counts from the Procurement module.</>, <><strong>Start / End</strong> — project date range.</> ] },
-          { icon: '⚙️', title: 'Actions', items: [<><strong>Edit</strong> — update project details, RAG status, and dates.</>, <><strong>Delete</strong> — permanent. Requires reason. Does not delete linked POs.</> ] },
+          { icon: '⚙️', title: 'Actions', items: [<><strong>Edit</strong> — update project details, RAG status, and dates.</>, <><strong>Deactivate</strong> — hides from active lists; reversible.</>, <><strong>Delete</strong> — permanent. Requires reason. Does not delete linked POs.</> ] },
         ] satisfies HelpSection[]} />
       )}
     </>
@@ -2120,7 +2224,7 @@ const WH_COLS: AdminCol[] = [
   { label: 'Contact', width: 140, minWidth: 90  },
   { label: 'Phone',   width: 130, minWidth: 90  },
   { label: 'Status',  width: 90,  minWidth: 70  },
-  { label: '',        width: 160, minWidth: 160, noResize: true },
+  { label: '',        width: 90,  minWidth: 90,  noResize: true },
 ]
 
 function WarehousesTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
@@ -2190,6 +2294,10 @@ function WarehousesTab({ dark, headerHeight }: { dark: boolean; headerHeight?: n
     catch (e: unknown) { const err = e as { response?: { data?: { error?: string } } }; setDeactivateErr(err.response?.data?.error ?? 'Deactivate failed') }
     finally { setDeactivateSaving(false) }
   }
+  const reactivate = async (id: number) => {
+    try { await axios.patch(`${API}/warehouses/${id}/status`, { status: 'active' }); load() }
+    catch { /* silent */ }
+  }
 
   return (
     <>
@@ -2218,15 +2326,14 @@ function WarehousesTab({ dark, headerHeight }: { dark: boolean; headerHeight?: n
             <AdminCell muted>{w.state || '—'}</AdminCell>
             <AdminCell muted>{w.contactName || '—'}</AdminCell>
             <AdminCell muted mono>{w.phone || '—'}</AdminCell>
-            <div style={{ padding: '0 12px' }}>
-              <StatusPill active={w.status === 'active'} label={w.status === 'active' ? 'Active' : 'Inactive'} />
-            </div>
+            <AdminCell><StatusPill active={w.status === 'active'} label={w.status === 'active' ? 'Active' : 'Inactive'} /></AdminCell>
             <AdminActions>
-              <button onClick={() => openEdit(w)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
-              {w.status === 'active' && (
-                <button onClick={() => setDeactivateTarget(w)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(245,158,11,0.35)', background: 'rgba(245,158,11,0.08)', color: '#d97706', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Deactivate</button>
-              )}
-              <button onClick={() => setDeleteTarget(w)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
+              <ActionMenu dark={dark} actions={[
+                { label: 'Edit',       icon: '✏', onClick: () => openEdit(w) },
+                { label: 'Deactivate', icon: '⊙', variant: 'warning', onClick: () => setDeactivateTarget(w), hidden: w.status !== 'active' },
+                { label: 'Reactivate', icon: '↺', onClick: () => reactivate(w.id), hidden: w.status === 'active' },
+                { label: 'Delete',     icon: '🗑', variant: 'danger', onClick: () => setDeleteTarget(w) },
+              ] satisfies ActionItem[]} />
             </AdminActions>
           </AdminRow>
         ))}
@@ -2291,7 +2398,7 @@ const UOM_COLS: AdminCol[] = [
   { label: 'Code',        width: 80,  minWidth: 70  },
   { label: 'Description', width: 300, minWidth: 150, flex: true },
   { label: 'Status',      width: 100, minWidth: 80  },
-  { label: '',            width: 160, minWidth: 160, noResize: true },
+  { label: '',            width: 90,  minWidth: 90,  noResize: true },
 ]
 
 function UomTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
@@ -2357,6 +2464,10 @@ function UomTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }
     catch (e: unknown) { const err = e as { response?: { data?: { error?: string } } }; setDeactivateErr(err.response?.data?.error ?? 'Deactivate failed') }
     finally { setDeactivateSaving(false) }
   }
+  const reactivate = async (id: number) => {
+    try { await axios.patch(`${API}/uom/${id}/status`, { status: 'active' }); load() }
+    catch { /* silent */ }
+  }
 
   return (
     <>
@@ -2381,15 +2492,14 @@ function UomTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }
           <AdminRow key={u.id} dark={dark}>
             <AdminCell mono>{u.code}</AdminCell>
             <AdminCell muted>{u.description}</AdminCell>
-            <div style={{ padding: '0 12px' }}>
-              <StatusPill active={u.status === 'active'} label={u.status === 'active' ? 'Active' : 'Inactive'} />
-            </div>
+            <AdminCell><StatusPill active={u.status === 'active'} label={u.status === 'active' ? 'Active' : 'Inactive'} /></AdminCell>
             <AdminActions>
-              <button onClick={() => openEdit(u)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
-              {u.status === 'active' && (
-                <button onClick={() => setDeactivateTarget(u)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(245,158,11,0.35)', background: 'rgba(245,158,11,0.08)', color: '#d97706', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Deactivate</button>
-              )}
-              <button onClick={() => setDeleteTarget(u)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
+              <ActionMenu dark={dark} actions={[
+                { label: 'Edit',        icon: '✏',  onClick: () => openEdit(u) },
+                { label: 'Deactivate',  icon: '⊙',  variant: 'warning', onClick: () => setDeactivateTarget(u), hidden: u.status !== 'active' },
+                { label: 'Reactivate',  icon: '↺',  onClick: () => reactivate(u.id), hidden: u.status === 'active' },
+                { label: 'Delete',      icon: '🗑', variant: 'danger',  onClick: () => setDeleteTarget(u) },
+              ] satisfies ActionItem[]} />
             </AdminActions>
           </AdminRow>
         ))}
@@ -2450,7 +2560,7 @@ const ACR_COLS: AdminCol[] = [
   { label: 'Definition', width: 260, minWidth: 130, flex: true },
   { label: 'Module',     width: 140, minWidth: 100 },
   { label: 'Notes',      width: 200, minWidth: 120 },
-  { label: '',           width: 120, minWidth: 120, noResize: true },
+  { label: '',           width: 90,  minWidth: 90,  noResize: true },
 ]
 
 function AcronymsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
@@ -2533,8 +2643,10 @@ function AcronymsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: num
             <AdminCell muted>{a.module || '—'}</AdminCell>
             <AdminCell muted><span title={a.notes}>{a.notes || '—'}</span></AdminCell>
             <AdminActions>
-              <button onClick={() => openEdit(a)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
-              <button onClick={() => setDeleteTarget(a)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
+              <ActionMenu dark={dark} actions={[
+                { label: 'Edit',   icon: '✏',  onClick: () => openEdit(a) },
+                { label: 'Delete', icon: '🗑', variant: 'danger', onClick: () => setDeleteTarget(a) },
+              ] satisfies ActionItem[]} />
             </AdminActions>
           </AdminRow>
         ))}
@@ -2597,7 +2709,7 @@ const INC_COLS: AdminCol[] = [
   { label: 'Risk Transfer',  width: 200, minWidth: 120 },
   { label: 'Transport Mode', width: 150, minWidth: 100 },
   { label: 'Status',         width: 90,  minWidth: 70  },
-  { label: '',               width: 120, minWidth: 120, noResize: true },
+  { label: '',               width: 90,  minWidth: 90,  noResize: true },
 ]
 
 function IncoTermsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
@@ -2666,6 +2778,10 @@ function IncoTermsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: nu
     catch (e: unknown) { const err = e as { response?: { data?: { error?: string } } }; setDeactivateErr(err.response?.data?.error ?? 'Deactivate failed') }
     finally { setDeactivateSaving(false) }
   }
+  const reactivate = async (id: number) => {
+    try { await axios.patch(`${API}/inco-terms/${id}/status`, { status: 'active' }); load() }
+    catch { /* silent */ }
+  }
 
   return (
     <>
@@ -2693,15 +2809,14 @@ function IncoTermsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: nu
             <AdminCell muted><span title={t.description}>{t.description || '—'}</span></AdminCell>
             <AdminCell muted><span title={t.riskTransferPoint}>{t.riskTransferPoint || '—'}</span></AdminCell>
             <AdminCell muted>{t.transportMode || '—'}</AdminCell>
-            <div style={{ padding: '0 12px' }}>
-              <StatusPill active={t.status === 'active'} label={t.status === 'active' ? 'Active' : 'Inactive'} />
-            </div>
+            <AdminCell><StatusPill active={t.status === 'active'} label={t.status === 'active' ? 'Active' : 'Inactive'} /></AdminCell>
             <AdminActions>
-              <button onClick={() => openEdit(t)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Edit</button>
-              {t.status === 'active' && (
-                <button onClick={() => setDeactivateTarget(t)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(245,158,11,0.35)', background: 'rgba(245,158,11,0.08)', color: '#d97706', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Deactivate</button>
-              )}
-              <button onClick={() => setDeleteTarget(t)} style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>Delete</button>
+              <ActionMenu dark={dark} actions={[
+                { label: 'Edit',        icon: '✏',  onClick: () => openEdit(t) },
+                { label: 'Deactivate',  icon: '⊙',  variant: 'warning', onClick: () => setDeactivateTarget(t), hidden: t.status !== 'active' },
+                { label: 'Reactivate',  icon: '↺',  onClick: () => reactivate(t.id), hidden: t.status === 'active' },
+                { label: 'Delete',      icon: '🗑', variant: 'danger',  onClick: () => setDeleteTarget(t) },
+              ] satisfies ActionItem[]} />
             </AdminActions>
           </AdminRow>
         ))}

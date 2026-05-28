@@ -1,6 +1,6 @@
 # QCO MMS - Claude Context & Build Tracker
 Last updated: 2026-05-29
-Last commit: (pending — see session 3 below)
+Last commit: (pending — see session 4 below)
 
 ## MODULE STATUS
 - Login: ✅ Complete
@@ -78,10 +78,39 @@ Last commit: (pending — see session 3 below)
 3. Next modules to build: Procurement (PO list, add PO, supplier/WBS linkage)
    — read QMAT-prototype.html and WIREFRAME_INVENTORY.md first
 
+## DESIGN NOTES (session 4)
+- ActionMenu: portal-rendered dropdown (zIndex 9100), module-level _closeActive for
+  single-open coordination. All actions columns are 90px noResize.
+- PermissionsTab sticky header: position:sticky top=headerHeight wraps mode toggle +
+  selector row. Content (tables, legends) scrolls below.
+- Override cycle: admin-role users skip 'restrict' (inherit → grant → inherit only).
+- Override legend below matrix; base role dot is 12px (was 8px).
+- Reset to role defaults: DELETE /permissions/user/:userId — clears all overrides.
+
 ## USER MANUAL STATUS
 See docs/USER_MANUAL_STATUS.md
 
 ## SESSION HISTORY
+
+### Session 2026-05-29 (session 4)
+Fixed in this session:
+- src/components/ActionMenu.tsx: new component — portal-rendered Actions ▾ dropdown,
+  single-open coordination via module-level _closeActive, keyboard (Escape) + outside-
+  click close, variant colours (warning=amber, danger=red)
+- Admin.tsx:
+  - All 8 action-bearing tabs converted to ActionMenu (Users, Suppliers, Warehouses,
+    UoM, Acronyms, INCO Terms, Projects, Notifications)
+  - div-in-tr StatusPill fixed in WarehousesTab, UoM, INCO Terms, NotificationsTab
+  - reactivate() added to UoM and INCO Terms tabs
+  - PermissionsTab:
+    - Mode toggle + selector row now sticky (position:sticky, top=headerHeight)
+    - User selector moved inside sticky header; roles selector also sticky
+    - Base role dot enlarged 8→12px; cycle skip 'restrict' for admin-role users
+    - Legend added below override matrix
+    - "Reset to role defaults" button → SimpleConfirmModal → DELETE /permissions/user/:id
+- server/routes/admin.js:
+  - PATCH /projects/:id/status (deactivate/reactivate projects)
+  - DELETE /permissions/user/:userId (reset all overrides for a user)
 
 ### Session 2026-05-29 (session 3)
 Fixed in this session:

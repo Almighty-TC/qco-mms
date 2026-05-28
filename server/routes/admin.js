@@ -129,6 +129,18 @@ router.delete('/projects/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
+router.patch('/projects/:id/status', async (req, res) => {
+  const id     = parseInt(req.params.id)
+  const status = req.body?.status
+  if (!VALID_STATUS.has(status)) return res.status(400).json({ error: 'Status must be active or inactive' })
+  try {
+    const [r] = await db.query('UPDATE projects SET status=? WHERE id=?', [status, id])
+    if (!r.affectedRows) return res.status(404).json({ error: 'Project not found' })
+    audit(req, 'project.status', `id=${id} status=${status}`)
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
 // ═══════════════════════════════════════════════════════════
 // ─── SUPPLIERS CRUD ─────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════
@@ -836,6 +848,17 @@ router.post('/permissions/user/:userId', async (req, res) => {
       }
     }
     audit(req, 'override.batch', `user=${userId} count=${overrides.length}`)
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ─── DELETE ALL USER PERMISSION OVERRIDES ───────────────────
+// DELETE /permissions/user/:userId — resets user to role defaults.
+router.delete('/permissions/user/:userId', async (req, res) => {
+  const userId = parseInt(req.params.userId)
+  try {
+    await db.query('DELETE FROM user_permission_overrides WHERE user_id=?', [userId])
+    audit(req, 'override.reset', `user=${userId}`)
     res.json({ ok: true })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
