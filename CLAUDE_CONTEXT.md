@@ -1,6 +1,6 @@
 # QCO MMS - Claude Context & Build Tracker
 Last updated: 2026-05-29
-Last commit: (pending — see session 6 below)
+Last commit: (pending — see session 7 below)
 
 ## MODULE STATUS
 - Login: ✅ Complete
@@ -96,6 +96,25 @@ Last commit: (pending — see session 6 below)
 See docs/USER_MANUAL_STATUS.md
 
 ## SESSION HISTORY
+
+### Session 2026-05-29 (session 7)
+Fixed in this session:
+- server/routes/admin.js:
+  - GET /permissions/role?role=... new endpoint — returns role_permissions rows for
+    a single role; admin role synthesises full access (no DB rows for admin)
+- src/pages/Admin.tsx (PermissionsTab):
+  - Added rolePerms state + rolePermsLookup memo (replaces lookup[userRole] approach)
+  - loadUserOverrides: second API call GET /permissions/role?role=... after getting
+    user's role; stores result in rolePerms. Admin role now shows green dots correctly.
+  - basePerm = rolePermsLookup[mod] (was lookup[userRole]?.[mod] — was empty for admin)
+  - User selector onChange: now also resets rolePerms([]) alongside userOverrides({})
+- src/pages/Admin.tsx (UsersTab):
+  - EXT indicator: borderLeft → boxShadow: inset 3px 0 0 #E84E0F (immune to
+    overflow:clip clipping; legend icon updated to match)
+- src/pages/Admin.tsx (SuppliersTab):
+  - filterCountry state + countries memo (unique sorted list from rows)
+  - Country dropdown added to toolbar (only renders when >0 countries exist)
+  - filtered() checks filterCountry against s.country
 
 ### Session 2026-05-29 (session 6)
 Fixed in this session:

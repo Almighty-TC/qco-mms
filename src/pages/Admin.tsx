@@ -622,8 +622,8 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
             <td title={u.fullName} style={{
               padding: '0 12px', height: 44, overflow: 'hidden', boxSizing: 'border-box',
               borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`,
-              borderLeft: !!u.isExternal ? '3px solid #E84E0F' : undefined,
-              paddingLeft: !!u.isExternal ? 9 : 12,
+              boxShadow: u.isExternal ? 'inset 3px 0 0 #E84E0F' : undefined,
+              paddingLeft: u.isExternal ? 9 : 12,
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: '100%' }}>
                 <span style={{ fontSize: 13, fontWeight: 500, color: dark ? '#f1f5f9' : '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.fullName}</span>
@@ -677,7 +677,7 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
       {/* ─── EXTERNAL LEGEND ──────────────────────────────── */}
       {rows.some(u => u.isExternal) && (
         <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#94a3b8' }}>
-          <span style={{ display: 'inline-block', width: 18, height: 13, borderLeft: '3px solid #E84E0F', flexShrink: 0 }} />
+          <span style={{ display: 'inline-block', width: 18, height: 13, boxShadow: 'inset 3px 0 0 #E84E0F', flexShrink: 0 }} />
           External user
         </div>
       )}
@@ -1049,6 +1049,7 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
   const [usersList,       setUsersList]       = useState<{ id: number; fullName: string; role: string }[]>([])
   const [selUserId,       setSelUserId]       = useState<number | null>(null)
   const [userRole,        setUserRole]        = useState<string>('')
+  const [rolePerms,       setRolePerms]       = useState<RolePerm[]>([])
   const [userOverrides,   setUserOverrides]   = useState<Record<string, Record<PermKey, OverrideVal>>>({})
   const [overrideSaving,  setOverrideSaving]  = useState(false)
   const [overrideError,   setOverrideError]   = useState('')
@@ -1090,11 +1091,15 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
   }, [permMode])
 
   // ─── LOAD USER OVERRIDES ──────────────────────────────────────
-  // Fetches the selected user's base role perms and saved overrides.
+  // Two parallel calls: user overrides + base role permissions.
+  // The base role perms are fetched separately (not from the global
+  // perms state) because the admin role has no DB rows — the backend
+  // synthesises full access for it.
   const loadUserOverrides = useCallback(async (userId: number) => {
     try {
       const { data } = await axios.get(`${API}/permissions/user/${userId}`)
-      setUserRole(data.user?.role ?? '')
+      const role = data.user?.role ?? ''
+      setUserRole(role)
       const ovr: Record<string, Record<PermKey, OverrideVal>> = {}
       for (const o of data.overrides ?? []) {
         ovr[o.module] = {} as Record<PermKey, OverrideVal>
@@ -1104,6 +1109,10 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
         }
       }
       setUserOverrides(ovr)
+      if (role) {
+        const { data: rp } = await axios.get(`${API}/permissions/role`, { params: { role } })
+        setRolePerms(rp)
+      }
     } catch { /* silent */ }
   }, [])
 
@@ -1171,12 +1180,19 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
     return n + PERM_KEYS.filter(k => (row[k] ?? 'inherit') !== 'inherit').length
   }, 0)
 
-  // Build lookup: perms[role][module] = { can_view, … }
+  // Build lookup: perms[role][module] = { can_view, … } — used by roles mode
   const lookup = perms.reduce<Record<string, Record<string, RolePerm>>>((acc, p) => {
     acc[p.role] = acc[p.role] ?? {}
     acc[p.role][p.module] = p
     return acc
   }, {})
+
+  // Build lookup for the selected user's base role — used by user-overrides mode.
+  // Separate from global lookup so admin role (no DB rows) also works correctly.
+  const rolePermsLookup = useMemo(
+    () => rolePerms.reduce<Record<string, RolePerm>>((acc, p) => { acc[p.module] = p; return acc }, {}),
+    [rolePerms]
+  )
 
   const getVal = (module: string, key: PermKey): boolean => {
     if (editing[module]?.[key] !== undefined) return editing[module][key]
@@ -1250,7 +1266,7 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
             <label style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>User:</label>
             <select
               value={selUserId ?? ''}
-              onChange={e => { setSelUserId(e.target.value ? Number(e.target.value) : null); setUserOverrides({}) }}
+              onChange={e => { setSelUserId(e.target.value ? Number(e.target.value) : null); setUserOverrides({}); setRolePerms([]) }}
               style={{ ...inp(dark), width: 280, height: 34 }}>
               <option value="">— Select a user —</option>
               {usersList.map(u => (
@@ -1328,13 +1344,12 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
             {/* ─── OVERRIDE MATRIX ────────────────────── */}
             <AdminTable tableId="admin_perm_users" columns={PERM_MATRIX_COLS} dark={dark} top={(headerHeight ?? 0) + stickyH}>
               {ALL_MODULES.map(mod => {
-                const basePerm = lookup[userRole]?.[mod]
+                const basePerm = rolePermsLookup[mod]
                 return (
                   <AdminRow key={mod} dark={dark}>
                     <AdminCell title={mod.replace(/_/g, ' ')}>{mod.replace(/_/g, ' ')}</AdminCell>
                     {PERM_KEYS.map(key => {
-                      // admin role has full access — always show green indicator
-                      const baseVal = userRole === 'admin' ? true : !!(basePerm?.[key] ?? 0)
+                      const baseVal = !!(basePerm?.[key] ?? 0)
                       const ovr = userOverrides[mod]?.[key] ?? 'inherit'
                       return (
                         <AdminCell key={key} center>
@@ -1783,11 +1798,12 @@ const S_COLS: AdminCol[] = [
 ]
 
 function SuppliersTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
-  const [rows,     setRows]     = useState<Supplier[]>([])
-  const [total,    setTotal]    = useState<number | null>(null)
-  const [search,   setSearch]   = useState('')
-  const [filterSt, setFilterSt] = useState('')
-  const [error,    setError]    = useState('')
+  const [rows,           setRows]           = useState<Supplier[]>([])
+  const [total,          setTotal]          = useState<number | null>(null)
+  const [search,         setSearch]         = useState('')
+  const [filterSt,       setFilterSt]       = useState('')
+  const [filterCountry,  setFilterCountry]  = useState('')
+  const [error,          setError]          = useState('')
   const [showForm, setShowForm] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [editId,   setEditId]   = useState<number | null>(null)
@@ -1816,8 +1832,14 @@ function SuppliersTab({ dark, headerHeight }: { dark: boolean; headerHeight?: nu
   useEffect(() => { load() }, [load])
 
   // ─── CLIENT-SIDE FILTER ──────────────────────────────────────
+  const countries = useMemo(() => {
+    const set = new Set(rows.map(s => s.country).filter(Boolean))
+    return [...set].sort() as string[]
+  }, [rows])
+
   const filtered = rows.filter(s => {
-    if (filterSt && s.status !== filterSt) return false
+    if (filterSt      && s.status  !== filterSt)      return false
+    if (filterCountry && s.country !== filterCountry)  return false
     if (search.trim()) {
       const q = search.toLowerCase()
       return s.name.toLowerCase().includes(q) || (s.code || '').toLowerCase().includes(q) || (s.country || '').toLowerCase().includes(q)
@@ -1930,6 +1952,12 @@ function SuppliersTab({ dark, headerHeight }: { dark: boolean; headerHeight?: nu
           <option value="active">Active</option>
           <option value="inactive">Inactive</option>
         </select>
+        {countries.length > 0 && (
+          <select value={filterCountry} onChange={e => setFilterCountry(e.target.value)} style={{ ...inp(dark), width: 140 }}>
+            <option value="">All countries</option>
+            {countries.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        )}
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: '#94a3b8' }}>{filtered.length} supplier{filtered.length !== 1 ? 's' : ''}</span>
         <button onClick={() => setShowHelp(true)} title="Suppliers help" style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>ℹ</button>

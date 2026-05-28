@@ -715,6 +715,31 @@ router.get('/permissions', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
+// ─── GET PERMISSIONS FOR A SINGLE ROLE ──────────────────────
+// Used by the User Overrides UI to show the base role dots.
+// Admin role synthesises full access since it has no DB rows.
+router.get('/permissions/role', async (req, res) => {
+  const { role } = req.query
+  if (!role || !VALID_ROLES.has(role)) return res.status(400).json({ error: 'Invalid role' })
+  try {
+    if (role === 'admin') {
+      const rows = [...VALID_MODULES].map(module => ({
+        id: null, role: 'admin', module,
+        can_view: 1, can_create: 1, can_edit: 1,
+        can_approve: 1, can_delete: 1, wbs_scoped: 0,
+      }))
+      return res.json(rows)
+    }
+    const [rows] = await db.query(
+      `SELECT id, role, module, can_view, can_create, can_edit,
+              can_approve, can_delete, wbs_scoped
+       FROM role_permissions WHERE role = ?`,
+      [role]
+    )
+    res.json(rows)
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
 // ─── UPDATE PERMISSIONS FOR ROLE + MODULE ───────────────────
 router.put('/permissions/:role/:module', async (req, res) => {
   const { role, module } = req.params
