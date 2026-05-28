@@ -127,6 +127,12 @@ router.post('/change-password', authMiddleware, async (req, res) => {
     // ── Record in history ─────────────────────────────────
     await addToHistory(userId, newHash)
 
+    // ── Audit trail ───────────────────────────────────────
+    db.query(
+      `INSERT INTO audit_log (user_id, action, resource, ip) VALUES (?, ?, ?, ?)`,
+      [userId, 'user.change_password', `id=${userId}`, req.ip ?? null]
+    ).catch(() => { /* audit_log table may not exist yet */ })
+
     // ── Re-issue JWT with updated flags ───────────────────
     // Fetches fresh DB values so the token reflects the new state.
     const [updated] = await db.query(

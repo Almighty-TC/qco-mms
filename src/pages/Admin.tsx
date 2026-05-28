@@ -287,8 +287,8 @@ const HelpDivider = ({ dark }: { dark: boolean }) => (
 // Name and Email are split into two columns. Actions column
 // (last) has noResize: true — no drag handle, always 300px.
 const U_COLS: AdminCol[] = [
-  { label: 'Name',           width: 180, minWidth: 180 },
-  { label: 'Email',          width: 220, minWidth: 200 },
+  { label: 'Name',           width: 180, minWidth: 160 },
+  { label: 'Email',          width: 220, minWidth: 160, flex: true },
   { label: 'Role',           width: 165, minWidth: 160 },
   { label: 'Projects',       width: 210, minWidth: 200 },
   { label: 'Company',        width: 155, minWidth: 150 },
@@ -353,42 +353,53 @@ function ProjectsCell({ userId, count, fullAccess, dark }: {
     return () => { cancelled = true }
   }, [userId, fullAccess, count])
 
+  // ─── TD STYLE ─────────────────────────────────────────────────
+  // ProjectsCell is always used as a direct child of <AdminRow> (<tr>),
+  // so it must render a <td> (not a <div>) to produce valid HTML.
+  const tdStyle: React.CSSProperties = {
+    padding: '0 12px', height: 44, boxSizing: 'border-box',
+    verticalAlign: 'middle', overflow: 'hidden',
+    borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`,
+  }
+
   if (fullAccess) {
     return (
-      <div style={{ padding: '0 12px', display: 'flex', alignItems: 'center' }}>
+      <td style={tdStyle}>
         <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, background: 'rgba(100,116,139,0.1)', color: '#64748b', whiteSpace: 'nowrap' }}>
           All Projects
         </span>
-      </div>
+      </td>
     )
   }
 
   if (count === 0) {
-    return <div style={{ padding: '0 12px', fontSize: 13, color: dark ? '#475569' : '#94a3b8' }}>—</div>
+    return <td style={tdStyle}><span style={{ fontSize: 13, color: dark ? '#475569' : '#94a3b8' }}>—</span></td>
   }
 
   if (projects === null) {
-    return <div style={{ padding: '0 12px', fontSize: 12, color: '#64748b' }}>…</div>
+    return <td style={tdStyle}><span style={{ fontSize: 12, color: '#64748b' }}>…</span></td>
   }
 
   const visible = projects.slice(0, 2)
   const hidden  = projects.slice(2)
 
   return (
-    <div style={{ padding: '0 12px', display: 'flex', gap: 4, alignItems: 'center', overflow: 'hidden', flexWrap: 'nowrap' }}>
-      {visible.map(p => (
-        <span key={p.id} title={p.name} style={{ fontSize: 11, fontWeight: 600, padding: '2px 7px', borderRadius: 4, border: '1px solid rgba(232,78,15,0.35)', color: '#E84E0F', whiteSpace: 'nowrap', flexShrink: 0 }}>
-          {p.code}
-        </span>
-      ))}
-      {hidden.length > 0 && (
-        <span
-          title={hidden.map(p => `${p.code} — ${p.name}`).join('\n')}
-          style={{ fontSize: 11, color: '#64748b', whiteSpace: 'nowrap', cursor: 'default', flexShrink: 0 }}>
-          +{hidden.length} more
-        </span>
-      )}
-    </div>
+    <td style={tdStyle}>
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center', overflow: 'hidden', flexWrap: 'nowrap' }}>
+        {visible.map(p => (
+          <span key={p.id} title={p.name} style={{ fontSize: 11, fontWeight: 600, padding: '2px 7px', borderRadius: 4, border: '1px solid rgba(232,78,15,0.35)', color: '#E84E0F', whiteSpace: 'nowrap', flexShrink: 0 }}>
+            {p.code}
+          </span>
+        ))}
+        {hidden.length > 0 && (
+          <span
+            title={hidden.map(p => `${p.code} — ${p.name}`).join('\n')}
+            style={{ fontSize: 11, color: '#64748b', whiteSpace: 'nowrap', cursor: 'default', flexShrink: 0 }}>
+            +{hidden.length} more
+          </span>
+        )}
+      </div>
+    </td>
   )
 }
 
@@ -604,28 +615,32 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
         {rows.map(u => (
           <AdminRow key={u.id} dark={dark}>
             {/* ─── NAME ───────────────────────────────────── */}
-            <div style={{ padding: '4px 12px', overflow: 'hidden', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span title={u.fullName} style={{ fontSize: 13, fontWeight: 500, color: dark ? '#f1f5f9' : '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.fullName}</span>
-              {!!u.isExternal && <ExtBadge />}
-              {u.staffId && <span style={{ fontSize: 10, color: '#94a3b8', flexShrink: 0 }}>#{u.staffId}</span>}
-            </div>
+            <td title={u.fullName} style={{ padding: '0 12px', height: 44, overflow: 'hidden', boxSizing: 'border-box', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: '100%' }}>
+                <span style={{ fontSize: 13, fontWeight: 500, color: dark ? '#f1f5f9' : '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.fullName}</span>
+                {!!u.isExternal && <ExtBadge />}
+                {u.staffId && <span style={{ fontSize: 10, color: '#94a3b8', flexShrink: 0 }}>#{u.staffId}</span>}
+              </div>
+            </td>
             {/* ─── EMAIL ──────────────────────────────────── */}
-            <AdminCell muted><span title={u.email}>{u.email}</span></AdminCell>
+            <AdminCell muted title={u.email}>{u.email}</AdminCell>
             {/* ─── ROLE (with Custom badge if overrides exist) */}
-            <div style={{ padding: '0 12px', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <RoleBadge role={u.role} />
-              {!!u.hasCustomPermissions && (
-                <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 3, background: 'rgba(232,78,15,0.12)', color: '#E84E0F', letterSpacing: '0.04em' }}>Custom</span>
-              )}
-            </div>
+            <td style={{ padding: '0 12px', height: 44, boxSizing: 'border-box', verticalAlign: 'middle', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <RoleBadge role={u.role} />
+                {!!u.hasCustomPermissions && (
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 3, background: 'rgba(232,78,15,0.12)', color: '#E84E0F', letterSpacing: '0.04em' }}>Custom</span>
+                )}
+              </div>
+            </td>
             {/* ─── PROJECTS ───────────────────────────────── */}
             <ProjectsCell userId={u.id} count={u.projectCount ?? 0} fullAccess={FULL_ACCESS_ROLES.has(u.role)} dark={dark} />
             {/* ─── COMPANY / PHONE / DATES / STATUS / LAST LOGIN */}
-            <AdminCell muted>{u.company || '—'}</AdminCell>
-            <AdminCell muted mono>{u.phone || '—'}</AdminCell>
+            <AdminCell muted title={u.company || undefined}>{u.company || '—'}</AdminCell>
+            <AdminCell muted mono title={u.phone || undefined}>{u.phone || '—'}</AdminCell>
             <AdminCell muted mono>{u.contractStart ? u.contractStart.slice(0, 10) : '—'}</AdminCell>
             <AdminCell muted mono>{u.contractEnd ? u.contractEnd.slice(0, 10) : '—'}</AdminCell>
-            <div style={{ padding: '0 12px' }}><StatusPill active={!!u.isActive} /></div>
+            <AdminCell center><StatusPill active={!!u.isActive} /></AdminCell>
             <AdminCell muted mono>{u.lastLogin ? u.lastLogin.slice(0, 10) : 'Never'}</AdminCell>
             {/* ─── ROW ACTIONS ────────────────────────────── */}
             <AdminActions>
@@ -875,7 +890,20 @@ const PERM_LABELS: Record<PermKey, string> = { can_view: 'View', can_create: 'Cr
 // grant (force allow), restrict (force deny).
 type OverrideVal = 'inherit' | 'grant' | 'restrict'
 
-function PermissionsTab({ dark }: { dark: boolean }) {
+// ─── PERMISSION MATRIX COLUMN DEFINITIONS ───────────────────
+// Module column is flex so it fills all remaining width.
+// Permission columns are fixed — just wide enough for the checkbox/toggle.
+const PERM_MATRIX_COLS: AdminCol[] = [
+  { label: 'Module',     flex: true, width: 180, minWidth: 120 },
+  { label: 'View',       width: 72, minWidth: 60, noResize: true },
+  { label: 'Create',     width: 72, minWidth: 60, noResize: true },
+  { label: 'Edit',       width: 72, minWidth: 60, noResize: true },
+  { label: 'Approve',    width: 80, minWidth: 60, noResize: true },
+  { label: 'Delete',     width: 72, minWidth: 60, noResize: true },
+  { label: 'WBS Scoped', width: 90, minWidth: 70, noResize: true },
+]
+
+function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
   // ─── MODE TOGGLE ──────────────────────────────────────────────
   const [permMode, setPermMode] = useState<'roles' | 'users'>('roles')
 
@@ -1062,24 +1090,12 @@ function PermissionsTab({ dark }: { dark: boolean }) {
       )}
 
       {/* ─── PERMISSION GRID ────────────────────────────── */}
-      <TableCard dark={dark}>
-        {/* Header */}
-        <div style={{ display: 'grid', gridTemplateColumns: '180px repeat(6, 1fr)', background: dark ? '#0f172a' : '#f4f7fb', borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}`, padding: '0 12px' }}>
-          <div style={{ padding: '10px 0', fontSize: 11, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Module</div>
-          {PERM_KEYS.map(k => (
-            <div key={k} style={{ padding: '10px 4px', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase', textAlign: 'center' }}>
-              {PERM_LABELS[k]}
-            </div>
-          ))}
-        </div>
-
+      <AdminTable tableId="admin_perm_roles" columns={PERM_MATRIX_COLS} dark={dark} top={headerHeight}>
         {ALL_MODULES.map(mod => (
-          <div key={mod} style={{ display: 'grid', gridTemplateColumns: '180px repeat(6, 1fr)', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, padding: '0 12px', alignItems: 'center', minHeight: 44 }}>
-            <div style={{ fontSize: 13, color: dark ? '#f1f5f9' : '#0f172a', textTransform: 'capitalize' }}>
-              {mod.replace(/_/g, ' ')}
-            </div>
+          <AdminRow key={mod} dark={dark}>
+            <AdminCell title={mod.replace(/_/g, ' ')}>{mod.replace(/_/g, ' ')}</AdminCell>
             {PERM_KEYS.map(key => (
-              <div key={key} style={{ display: 'flex', justifyContent: 'center' }}>
+              <AdminCell key={key} center>
                 <input
                   type="checkbox"
                   checked={isAdmin ? true : getVal(mod, key)}
@@ -1087,11 +1103,11 @@ function PermissionsTab({ dark }: { dark: boolean }) {
                   onChange={() => !isAdmin && toggle(mod, key)}
                   style={{ width: 16, height: 16, accentColor: '#E84E0F', cursor: isAdmin ? 'not-allowed' : 'pointer' }}
                 />
-              </div>
+              </AdminCell>
             ))}
-          </div>
+          </AdminRow>
         ))}
-      </TableCard>
+      </AdminTable>
 
       {/* ─── ROLE SUMMARY (all roles overview) ──────────── */}
       <div style={{ marginTop: 24 }}>
@@ -1188,49 +1204,41 @@ function PermissionsTab({ dark }: { dark: boolean }) {
               )}
 
               {/* ─── OVERRIDE MATRIX ──────────────────────── */}
-              <TableCard dark={dark}>
-                <div style={{ display: 'grid', gridTemplateColumns: '180px repeat(6, 1fr)', background: dark ? '#0f172a' : '#f4f7fb', borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}`, padding: '0 12px' }}>
-                  <div style={{ padding: '10px 0', fontSize: 11, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Module</div>
-                  {PERM_KEYS.map(k => (
-                    <div key={k} style={{ padding: '10px 4px', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase', textAlign: 'center' }}>
-                      {PERM_LABELS[k]}
-                    </div>
-                  ))}
-                </div>
+              <AdminTable tableId="admin_perm_users" columns={PERM_MATRIX_COLS} dark={dark} top={headerHeight}>
                 {ALL_MODULES.map(mod => {
                   const basePerm = lookup[userRole]?.[mod]
                   return (
-                    <div key={mod} style={{ display: 'grid', gridTemplateColumns: '180px repeat(6, 1fr)', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, padding: '0 12px', alignItems: 'center', minHeight: 48 }}>
-                      <div style={{ fontSize: 13, color: dark ? '#f1f5f9' : '#0f172a', textTransform: 'capitalize' }}>
-                        {mod.replace(/_/g, ' ')}
-                      </div>
+                    <AdminRow key={mod} dark={dark}>
+                      <AdminCell title={mod.replace(/_/g, ' ')}>{mod.replace(/_/g, ' ')}</AdminCell>
                       {PERM_KEYS.map(key => {
                         const baseVal = !!(basePerm?.[key] ?? 0)
                         const ovr = userOverrides[mod]?.[key] ?? 'inherit'
                         return (
-                          <div key={key} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3 }}>
-                            {/* base role dot */}
-                            <span title={`Base: ${baseVal ? 'allowed' : 'denied'}`} style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: baseVal ? 'rgba(34,197,94,0.4)' : 'rgba(100,116,139,0.25)' }} />
-                            {/* override toggle */}
-                            <button
-                              onClick={() => cycleOverride(mod, key)}
-                              title={`Override: ${ovr}. Click to cycle.`}
-                              style={{
-                                width: 22, height: 22, borderRadius: 4, cursor: 'pointer',
-                                border: ovr === 'inherit' ? `1px solid ${dark ? '#334155' : '#dde3ed'}` : 'none',
-                                background: ovr === 'grant' ? 'rgba(34,197,94,0.15)' : ovr === 'restrict' ? 'rgba(239,68,68,0.15)' : 'transparent',
-                                color: ovr === 'grant' ? '#22c55e' : ovr === 'restrict' ? '#ef4444' : '#64748b',
-                                fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                              }}>
-                              {ovr === 'grant' ? '✓' : ovr === 'restrict' ? '✕' : '—'}
-                            </button>
-                          </div>
+                          <AdminCell key={key} center>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                              {/* base role dot */}
+                              <span title={`Base: ${baseVal ? 'allowed' : 'denied'}`} style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: baseVal ? 'rgba(34,197,94,0.4)' : 'rgba(100,116,139,0.25)' }} />
+                              {/* override toggle */}
+                              <button
+                                onClick={() => cycleOverride(mod, key)}
+                                title={`Override: ${ovr}. Click to cycle.`}
+                                style={{
+                                  width: 22, height: 22, borderRadius: 4, cursor: 'pointer',
+                                  border: ovr === 'inherit' ? `1px solid ${dark ? '#334155' : '#dde3ed'}` : 'none',
+                                  background: ovr === 'grant' ? 'rgba(34,197,94,0.15)' : ovr === 'restrict' ? 'rgba(239,68,68,0.15)' : 'transparent',
+                                  color: ovr === 'grant' ? '#22c55e' : ovr === 'restrict' ? '#ef4444' : '#64748b',
+                                  fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                }}>
+                                {ovr === 'grant' ? '✓' : ovr === 'restrict' ? '✕' : '—'}
+                              </button>
+                            </div>
+                          </AdminCell>
                         )
                       })}
-                    </div>
+                    </AdminRow>
                   )
                 })}
-              </TableCard>
+              </AdminTable>
             </>
           )}
         </div>
@@ -1253,7 +1261,7 @@ function PermissionsTab({ dark }: { dark: boolean }) {
 const N_COLS: AdminCol[] = [
   { label: 'User',    width: 180, minWidth: 100 },
   { label: 'Type',    width: 130, minWidth: 80  },
-  { label: 'Message', width: 400, minWidth: 150 },
+  { label: 'Message', width: 400, minWidth: 150, flex: true },
   { label: 'Date',    width: 120, minWidth: 80  },
   { label: '',        width: 80,  minWidth: 80, noResize: true },
 ]
@@ -1594,7 +1602,7 @@ const EMPTY_SUP: SupplierForm = {
 
 // ─── SUPPLIERS COLUMN DEFINITIONS ───────────────────────────
 const S_COLS: AdminCol[] = [
-  { label: 'Name',      width: 200, minWidth: 120 },
+  { label: 'Name',      width: 200, minWidth: 120, flex: true },
   { label: 'Code',      width: 100, minWidth: 70  },
   { label: 'Country',   width: 110, minWidth: 80  },
   { label: 'Contact',   width: 150, minWidth: 100 },
@@ -1902,7 +1910,7 @@ const RAG_DOT: Record<string, string> = { green: '#22c55e', amber: '#f59e0b', re
 // ─── PROJECTS COLUMN DEFINITIONS ────────────────────────────
 const P_COLS: AdminCol[] = [
   { label: 'Code',   width: 100, minWidth: 80  },
-  { label: 'Name',   width: 200, minWidth: 120 },
+  { label: 'Name',   width: 200, minWidth: 120, flex: true },
   { label: 'Client', width: 130, minWidth: 100 },
   { label: 'Phase',  width: 100, minWidth: 80  },
   { label: 'POs',    width: 60,  minWidth: 50  },
@@ -2087,7 +2095,7 @@ const EMPTY_WH: WhForm = { name: '', code: '', address: '', state: '', contactNa
 const WH_COLS: AdminCol[] = [
   { label: 'Name',    width: 200, minWidth: 120 },
   { label: 'Code',    width: 80,  minWidth: 60  },
-  { label: 'Address', width: 220, minWidth: 120 },
+  { label: 'Address', width: 220, minWidth: 120, flex: true },
   { label: 'State',   width: 80,  minWidth: 60  },
   { label: 'Contact', width: 140, minWidth: 90  },
   { label: 'Phone',   width: 130, minWidth: 90  },
@@ -2261,7 +2269,7 @@ const EMPTY_UOM: UomForm = { code: '', description: '', status: 'active' }
 // ─── UNITS OF MEASURE COLUMN DEFINITIONS ────────────────────
 const UOM_COLS: AdminCol[] = [
   { label: 'Code',        width: 80,  minWidth: 70  },
-  { label: 'Description', width: 300, minWidth: 150 },
+  { label: 'Description', width: 300, minWidth: 150, flex: true },
   { label: 'Status',      width: 100, minWidth: 80  },
   { label: '',            width: 160, minWidth: 160, noResize: true },
 ]
@@ -2419,7 +2427,7 @@ const ACR_MODULES = ['', 'Procurement', 'Expediting', 'VDRL', 'Logistics', 'Mate
 // ─── ACRONYMS COLUMN DEFINITIONS ────────────────────────────
 const ACR_COLS: AdminCol[] = [
   { label: 'Acronym',    width: 90,  minWidth: 70  },
-  { label: 'Definition', width: 260, minWidth: 130 },
+  { label: 'Definition', width: 260, minWidth: 130, flex: true },
   { label: 'Module',     width: 140, minWidth: 100 },
   { label: 'Notes',      width: 200, minWidth: 120 },
   { label: '',           width: 120, minWidth: 120, noResize: true },
@@ -2565,7 +2573,7 @@ const EMPTY_INC: IncForm = { code: '', fullName: '', description: '', riskTransf
 const INC_COLS: AdminCol[] = [
   { label: 'Code',           width: 70,  minWidth: 50  },
   { label: 'Full Name',      width: 200, minWidth: 130 },
-  { label: 'Description',    width: 260, minWidth: 130 },
+  { label: 'Description',    width: 260, minWidth: 130, flex: true },
   { label: 'Risk Transfer',  width: 200, minWidth: 120 },
   { label: 'Transport Mode', width: 150, minWidth: 100 },
   { label: 'Status',         width: 90,  minWidth: 70  },
@@ -2752,14 +2760,16 @@ export function Admin({ dark }: { dark: boolean }) {
   const headerRef = useRef<HTMLDivElement>(null)
 
   // ─── STICKY HEADER HEIGHT ─────────────────────────────────────
-  // Measures the rendered height of the sticky admin-header-wrap and
-  // passes it to AdminTable as the `top` offset so column headers pin
-  // exactly below the sticky admin header.
+  // Measures the CSS-pixel height of the sticky admin-header-wrap and
+  // passes it to AdminTable as the `top` offset so the sticky thead
+  // pins exactly below it. offsetHeight is used (not getBoundingClientRect)
+  // because getBoundingClientRect returns viewport pixels which are
+  // scaled down by the app's CSS zoom; offsetHeight is in CSS pixels.
   useEffect(() => {
     const el = headerRef.current
     if (!el) return
     const obs = new ResizeObserver(() => {
-      setHeaderHeight(el.getBoundingClientRect().height)
+      setHeaderHeight(el.offsetHeight)
     })
     obs.observe(el)
     return () => obs.disconnect()
@@ -2767,13 +2777,13 @@ export function Admin({ dark }: { dark: boolean }) {
 
   const tabs: { key: AdminTab; label: string; icon: string }[] = [
     { key: 'users',         label: 'Users & Roles',      icon: '👤' },
+    { key: 'permissions',   label: 'Permission Matrix',  icon: '🔐' },
     { key: 'suppliers',     label: 'Suppliers',          icon: '🏭' },
     { key: 'warehouses',    label: 'Warehouses',         icon: '🏗️' },
     { key: 'uom',           label: 'Units of Measure',   icon: '📏' },
     { key: 'acronyms',      label: 'Acronyms',           icon: '🔤' },
     { key: 'incoterms',     label: 'INCO Terms',         icon: '🚢' },
     { key: 'projects',      label: 'Projects',           icon: '📁' },
-    { key: 'permissions',   label: 'Permission Matrix',  icon: '🔐' },
     { key: 'notifications', label: 'Notifications',      icon: '🔔' },
     { key: 'settings',      label: 'System Settings',    icon: '⚙️' },
   ]
@@ -2815,7 +2825,7 @@ export function Admin({ dark }: { dark: boolean }) {
       {tab === 'acronyms'      && <AcronymsTab       dark={dark} headerHeight={headerHeight} />}
       {tab === 'incoterms'     && <IncoTermsTab      dark={dark} headerHeight={headerHeight} />}
       {tab === 'projects'      && <ProjectsAdminTab  dark={dark} headerHeight={headerHeight} />}
-      {tab === 'permissions'   && <PermissionsTab    dark={dark} />}
+      {tab === 'permissions'   && <PermissionsTab    dark={dark} headerHeight={headerHeight} />}
       {tab === 'notifications' && <NotificationsTab  dark={dark} headerHeight={headerHeight} />}
       {tab === 'settings'      && <SystemSettingsTab dark={dark} />}
     </div>

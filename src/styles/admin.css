@@ -4,9 +4,12 @@
    ═══════════════════════════════════════════════════════════════ */
 
 /* ─── PAGE WRAPPER ─────────────────────────────────────────────── */
+/* background:inherit passes the main-content-div colour down the tree
+   so admin-header-wrap (sticky) covers rows that scroll behind it. */
 .admin-page {
   padding-top: 12px;
   padding-bottom: 0;
+  background: inherit;
 }
 
 /* ─── PAGE TITLE ───────────────────────────────────────────────── */

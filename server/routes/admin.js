@@ -32,11 +32,18 @@ router.use((req, res, next) => {
 })
 
 // ─── AUDIT LOG ──────────────────────────────────────────────
-// Logs every admin action with the acting user's ID, action type,
-// target resource, and a timestamp.  Written to console in dev;
-// can be wired to an audit_log table if needed.
+// Persists every admin action to the audit_log table.
+// Falls back to console-only if the table doesn't exist yet.
 function audit(req, action, resource) {
-  console.log(`[audit] user=${req.user.id} action=${action} resource=${resource} ip=${req.ip}`)
+  const userId = req.user?.id
+  const ip     = req.ip ?? null
+  db.query(
+    `INSERT INTO audit_log (user_id, action, resource, ip) VALUES (?, ?, ?, ?)`,
+    [userId, action, resource, ip]
+  ).catch(() => {
+    // table may not exist yet; fall back to console log
+    console.log(`[audit] user=${userId} action=${action} resource=${resource} ip=${ip}`)
+  })
 }
 
 // ─── PAGINATION HELPER ──────────────────────────────────────

@@ -1,14 +1,15 @@
 // QCO MMS - Global Admin Table Component with Column Resize
 // Used by all Admin module tabs. Edit here to affect all tabs globally.
-import React, { createContext, useContext, useCallback, useEffect, useRef, useState } from 'react'
+import React, { createContext, useContext, useState } from 'react'
 import { useColumnResize } from '../hooks/useColumnResize'
 
 // ─── COLUMN DEFINITION ──────────────────────────────────────────
 export type AdminCol = {
   label: string
-  width: number       // default px width
+  width: number       // default px width (ignored when flex: true)
   minWidth?: number   // minimum px width during drag
-  noResize?: boolean  // suppress drag handle (use on actions column)
+  noResize?: boolean  // suppress drag handle
+  flex?: boolean      // fills remaining table width; no explicit width in colgroup
 }
 
 // ─── CONTEXT: ROW ───────────────────────────────────────────────
@@ -57,132 +58,143 @@ function DragHandle({
 }
 
 // ─── ADMIN TABLE ────────────────────────────────────────────────
-// Split-table design: a fixed non-scrolling header table sits above a
-// separately scrollable body div. The header never moves; the body fills
-// all remaining viewport height. Both tables use colgroup with identical
-// pixel widths from useColumnResize (persisted to localStorage).
+// Single-table design with a sticky <thead>. The main content scroll
+// container (App.tsx, position:fixed, overflow:auto) handles all
+// scrolling. overflow:clip on the outer div preserves border-radius
+// without creating a new scroll container that would break sticky.
 type AdminTableProps = {
   tableId: string
   columns: AdminCol[]
   dark: boolean
   children: React.ReactNode
   empty?: string
-  top?: number   // admin header height — triggers body-height re-measure when it changes
+  top?: number   // sticky top offset for thead (admin header height)
 }
 
 export function AdminTable({ tableId, columns, dark, children, empty, top }: AdminTableProps) {
   const defaultWidths = columns.map(c => c.width)
-  const minWidths     = columns.map(c => c.minWidth ?? 60)
-  const { widths, onMouseDown } = useColumnResize(tableId, defaultWidths, minWidths)
-
-  // ─── BODY MAX HEIGHT ─────────────────────────────────────────
-  // Measures the header table's bottom viewport edge so the body div
-  // fills exactly the remaining space. Re-fires on resize and whenever
-  // the admin header height (top prop) changes (tab switches, etc.).
-  const headerRef = useRef<HTMLTableElement>(null)
-  const [bodyMaxH, setBodyMaxH] = useState(400)
-
-  const updateBodyHeight = useCallback(() => {
-    const el = headerRef.current
-    if (!el) return
-    const bottom = el.getBoundingClientRect().bottom
-    setBodyMaxH(Math.max(200, window.innerHeight - bottom - 20))
-  }, [])
-
-  useEffect(() => {
-    updateBodyHeight()
-    const obs = new ResizeObserver(updateBodyHeight)
-    if (headerRef.current) obs.observe(headerRef.current)
-    window.addEventListener('resize', updateBodyHeight)
-    return () => { obs.disconnect(); window.removeEventListener('resize', updateBodyHeight) }
-  }, [updateBodyHeight])
-
-  useEffect(() => { updateBodyHeight() }, [top, updateBodyHeight])
+  const minWidths     = columns.map(c => c.minWidth ?? 40)
+  const { widths, onMouseDown, resetWidths } = useColumnResize(tableId, defaultWidths, minWidths)
 
   const headerBg  = dark ? '#0f172a' : '#f4f7fb'
   const borderCol = dark ? '#334155' : '#dde3ed'
   const isEmpty   = React.Children.count(children) === 0
-  const totalWidth = widths.reduce((a, b) => a + b, 0)
 
+  // ─── COLGROUP ─────────────────────────────────────────────────
+  // Flex columns have no explicit width — browser fills remaining space.
+  // Fixed columns get their configured (and drag-adjusted) pixel width.
   const colgroup = (
     <colgroup>
-      {widths.map((w, i) => <col key={i} style={{ width: w }} />)}
+      {columns.map((col, i) => (
+        col.flex
+          ? <col key={i} />
+          : <col key={i} style={{ width: widths[i] }} />
+      ))}
     </colgroup>
   )
+
+  // ─── MINIMUM TABLE WIDTH ──────────────────────────────────────
+  // Sum of all fixed column widths. Ensures the table is at least
+  // this wide even when the flex column has no remaining space.
+  const minTableWidth = columns.reduce((acc, col, i) => acc + (col.flex ? 0 : widths[i]), 0)
 
   return (
     <div style={{
       background: dark ? '#1e293b' : '#ffffff',
       border: `1px solid ${borderCol}`,
       borderRadius: 10,
-      overflow: 'hidden',
+      // overflow:clip preserves border-radius clipping WITHOUT creating
+      // a scroll container, so position:sticky in thead still works
+      // relative to the main content scroll container (App.tsx).
+      overflow: 'clip',
       boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
     }}>
-      {/* ─── HORIZONTAL SCROLL WRAPPER ──────────────────────── */}
-      <div style={{ overflowX: 'auto' }}>
+      <table style={{
+        width: '100%',
+        minWidth: minTableWidth,
+        borderCollapse: 'separate',
+        borderSpacing: 0,
+        tableLayout: 'fixed',
+      }}>
+        {colgroup}
 
-        {/* ─── HEADER TABLE (never scrolls) ─────────────────── */}
-        <table ref={headerRef} style={{
-          width: totalWidth,
-          borderCollapse: 'separate',
-          borderSpacing: 0,
-          tableLayout: 'fixed',
+        {/* ─── STICKY HEADER ──────────────────────────────── */}
+        {/* top prop = admin-header-wrap height, passed from each tab */}
+        <thead style={{
+          position: 'sticky',
+          top: top ?? 0,
+          zIndex: 10,
           background: headerBg,
-          borderBottom: `1px solid ${borderCol}`,
         }}>
-          {colgroup}
-          <thead>
-            <tr>
-              {columns.map((col, i) => {
-                const isLast  = i === columns.length - 1
-                const canDrag = !col.noResize && !isLast
-                return (
-                  <th key={i} style={{
-                    height: 36,
-                    padding: '0 12px',
-                    fontSize: 10,
-                    fontWeight: 700,
-                    color: '#94a3b8',
-                    letterSpacing: '0.06em',
-                    textTransform: 'uppercase',
-                    fontFamily: 'IBM Plex Sans, sans-serif',
-                    textAlign: 'left',
-                    position: isLast ? 'sticky' : 'relative',
-                    overflow: 'hidden',
-                    whiteSpace: 'nowrap',
-                    boxSizing: 'border-box',
-                    ...(isLast ? { right: 0, background: headerBg, zIndex: 1 } : {}),
-                  } as React.CSSProperties}>
-                    {col.label}
-                    {canDrag && <DragHandle dark={dark} onMouseDown={e => onMouseDown(i, e)} />}
-                  </th>
-                )
-              })}
-            </tr>
-          </thead>
-        </table>
+          <tr>
+            {columns.map((col, i) => {
+              const isLast  = i === columns.length - 1
+              const canDrag = !col.noResize && !isLast && !col.flex
+              return (
+                <th key={i} title={col.label} style={{
+                  height: 36,
+                  padding: '0 12px',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  color: '#94a3b8',
+                  letterSpacing: '0.06em',
+                  textTransform: 'uppercase',
+                  fontFamily: 'IBM Plex Sans, sans-serif',
+                  textAlign: 'left',
+                  position: 'relative',
+                  overflow: 'hidden',
+                  whiteSpace: 'nowrap',
+                  boxSizing: 'border-box',
+                  borderBottom: `1px solid ${borderCol}`,
+                  ...(isLast ? { position: 'sticky' as const, right: 0, background: headerBg, zIndex: 1 } : {}),
+                }}>
+                  {col.label}
+                  {canDrag && <DragHandle dark={dark} onMouseDown={e => onMouseDown(i, e)} />}
+                  {/* ↺ reset button in the last header cell */}
+                  {isLast && (
+                    <button
+                      onClick={resetWidths}
+                      title="Reset column widths"
+                      style={{
+                        position: 'absolute', right: 8, top: '50%',
+                        transform: 'translateY(-50%)',
+                        width: 22, height: 22, borderRadius: 4,
+                        border: `1px solid ${dark ? '#334155' : '#dde3ed'}`,
+                        background: 'transparent',
+                        color: '#94a3b8',
+                        cursor: 'pointer', fontSize: 13, lineHeight: 1,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontFamily: 'IBM Plex Sans, sans-serif',
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.color = '#E84E0F'; e.currentTarget.style.borderColor = 'rgba(232,78,15,0.4)' }}
+                      onMouseLeave={e => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.borderColor = dark ? '#334155' : '#dde3ed' }}
+                    >
+                      ↺
+                    </button>
+                  )}
+                </th>
+              )
+            })}
+          </tr>
+        </thead>
 
-        {/* ─── BODY SCROLL DIV ──────────────────────────────── */}
-        <div style={{ overflowY: 'auto', maxHeight: bodyMaxH }}>
+        {/* ─── BODY ───────────────────────────────────────── */}
+        <tbody>
           {isEmpty && empty
-            ? <div style={{ padding: '40px 20px', textAlign: 'center', fontSize: 13, color: '#94a3b8' }}>{empty}</div>
-            : (
-              <table style={{
-                width: totalWidth,
-                borderCollapse: 'separate',
-                borderSpacing: 0,
-                tableLayout: 'fixed',
-              }}>
-                {colgroup}
-                <tbody>
-                  {children}
-                </tbody>
-              </table>
+            ? (
+              <tr>
+                <td
+                  colSpan={columns.length}
+                  style={{ padding: '40px 20px', textAlign: 'center', fontSize: 13, color: '#94a3b8' }}
+                >
+                  {empty}
+                </td>
+              </tr>
             )
+            : children
           }
-        </div>
-
-      </div>
+        </tbody>
+      </table>
     </div>
   )
 }
@@ -210,15 +222,16 @@ export function AdminRow({ dark, children }: { dark: boolean; children: React.Re
 
 // ─── ADMIN CELL ─────────────────────────────────────────────────
 // Standard table data cell. Reads dark mode from RowCtx.
-export function AdminCell({ children, mono, muted, center }: {
+export function AdminCell({ children, mono, muted, center, title }: {
   children: React.ReactNode
   mono?: boolean
   muted?: boolean
   center?: boolean
+  title?: string
 }) {
   const { dark } = useContext(RowCtx)
   return (
-    <td style={{
+    <td title={title} style={{
       padding: '0 12px',
       height: 44,
       overflow: 'hidden',

@@ -46,7 +46,7 @@ export function useColumnResize(
     e.preventDefault()
     const startX = e.clientX
     const startW = widthsRef.current[colIndex]
-    const minW   = minWidths?.[colIndex] ?? 60
+    const minW   = minWidths?.[colIndex] ?? 40
 
     document.body.style.userSelect = 'none'
     document.body.style.cursor     = 'col-resize'
