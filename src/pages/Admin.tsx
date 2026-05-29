@@ -2438,10 +2438,11 @@ const WH_COLS: AdminCol[] = [
 
 function WarehousesTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
   const { addToast } = useToast()
-  const [rows,     setRows]     = useState<Warehouse[]>([])
-  const [total,    setTotal]    = useState<number | null>(null)
-  const [search,   setSearch]   = useState('')
-  const [filterSt, setFilterSt] = useState('')
+  const [rows,        setRows]        = useState<Warehouse[]>([])
+  const [total,       setTotal]       = useState<number | null>(null)
+  const [search,      setSearch]      = useState('')
+  const [filterSt,    setFilterSt]    = useState('')
+  const [filterState, setFilterState] = useState('')
   const [error,    setError]    = useState('')
   const [showForm, setShowForm] = useState(false)
   const [editId,   setEditId]   = useState<number | null>(null)
@@ -2469,6 +2470,9 @@ function WarehousesTab({ dark, headerHeight }: { dark: boolean; headerHeight?: n
       setError(err.response?.data?.error ?? 'Failed to load warehouses')
     }
   }, [search, filterSt])
+
+  const states      = useMemo(() => [...new Set(rows.map(w => w.state).filter(Boolean))].sort(), [rows])
+  const filteredWH  = useMemo(() => filterState ? rows.filter(w => w.state === filterState) : rows, [rows, filterState])
 
   useEffect(() => { load() }, [load])
 
@@ -2541,8 +2545,18 @@ function WarehousesTab({ dark, headerHeight }: { dark: boolean; headerHeight?: n
           <option value="active">Active</option>
           <option value="inactive">Inactive</option>
         </select>
+        {states.length > 0 && (
+          <select value={filterState} onChange={e => setFilterState(e.target.value)} style={{ ...inp(dark), width: 130 }}>
+            <option value="">All states</option>
+            {states.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        )}
         <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 12, color: '#94a3b8' }}>{total == null ? 'Loading…' : `${total} warehouse${total !== 1 ? 's' : ''}`}</span>
+        <span style={{ fontSize: 12, color: '#94a3b8' }}>
+          {total == null ? 'Loading…' : filterState
+            ? `${filteredWH.length} of ${total} warehouse${total !== 1 ? 's' : ''}`
+            : `${total} warehouse${total !== 1 ? 's' : ''}`}
+        </span>
         <button onClick={() => setShowHelp(true)} title="Warehouses help" style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>ℹ</button>
         <AddBtn onClick={openAdd} label="+ Add Warehouse" />
       </div>
@@ -2550,7 +2564,7 @@ function WarehousesTab({ dark, headerHeight }: { dark: boolean; headerHeight?: n
 
       {/* ─── TABLE ──────────────────────────────────────── */}
       <AdminTable tableId="admin_warehouses" columns={WH_COLS} dark={dark} empty="No warehouses found." top={headerHeight}>
-        {rows.map(w => (
+        {filteredWH.map(w => (
           <AdminRow key={w.id} dark={dark}>
             <AdminCell>{w.name}</AdminCell>
             <AdminCell mono>{w.code}</AdminCell>
@@ -2608,6 +2622,7 @@ function WarehousesTab({ dark, headerHeight }: { dark: boolean; headerHeight?: n
       {showHelp && (
         <HelpModal dark={dark} title="Warehouses — Help" subtitle="Physical storage locations and laydown yards" onClose={() => setShowHelp(false)} sections={[
           { icon: '🏗️', title: 'What this tab is for', items: ['Manage the master list of physical warehouses, laydown yards, and storage facilities used for material receipt and dispatch.'] },
+          { icon: '🔍', title: 'Filters', items: [<><strong>Search</strong> — filters by name, code or state (live as you type).</>, <><strong>Status filter</strong> — show All, Active, or Inactive warehouses.</>, <><strong>State filter</strong> — narrow to a specific state or territory (QLD, NSW, WA…). Populated dynamically from the loaded warehouse list. Only appears when warehouses have state values recorded.</> ] },
           { icon: '📋', title: 'Column Reference', items: [<><strong>Name</strong> — full warehouse name.</>, <><strong>Code</strong> — short identifier used on transfers and tags.</>, <><strong>Address</strong> — full street address. Hover for full text.</>, <><strong>State</strong> — state or territory.</>, <><strong>Contact</strong> — site contact person.</>, <><strong>Status</strong> — Active warehouses appear in material transfer forms.</> ] },
           { icon: '⚙️', title: 'Actions', items: [<><strong>Edit</strong> — update warehouse details.</>, <><strong>Deactivate</strong> — hides from active lists. Reversible.</>, <><strong>Delete</strong> — permanent. Requires reason confirmation.</> ] },
         ] satisfies HelpSection[]} />

@@ -1,6 +1,6 @@
 # QCO MMS - Claude Context & Build Tracker
 Last updated: 2026-05-29
-Last commit: (pending — see session 12 below)
+Last commit: (pending — see session 13 below)
 
 ## MODULE STATUS
 - Login: ✅ Complete
@@ -153,6 +153,24 @@ po_lines.uom_id, purchase_orders.supplier_id/inco_term_id/warehouse_id
 See docs/USER_MANUAL_STATUS.md
 
 ## SESSION HISTORY
+
+### Session 2026-05-29 (session 13)
+Fixed in this session:
+- server/routes/admin.js:
+  - Root cause of save/reset failing: backend server (PID 71121) was started before
+    admin.js was last saved — stale process had no GET/POST/DELETE /permissions/user/:userId
+    routes. Fix: restart the server (routes were already correctly defined in code).
+  - Fixed restrict (-1) coercion bug in POST /permissions/user/:userId: changed
+    `o.can_view?1:0` → `o.can_view ?? 0` so restrict (-1) is preserved in the DB.
+    Previously any 'restrict' override was silently saved as 'grant' (1).
+- src/pages/Admin.tsx (WarehousesTab):
+  - Added filterState state + states useMemo (unique sorted state values from rows)
+  - Added filteredWH useMemo (client-side filter, consistent with SuppliersTab approach)
+  - Added State dropdown to toolbar after Status filter, only renders when state data exists
+  - Count display: "N of M warehouses" when state filter active, "M warehouses" otherwise
+  - Updated table to render filteredWH instead of rows
+  - Updated ℹ help modal: added Filters section describing search, status, and state filter
+- CLAUDE_CONTEXT.md: updated
 
 ### Session 2026-05-29 (session 12)
 Fixed in this session:

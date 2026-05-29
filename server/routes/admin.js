@@ -873,8 +873,8 @@ router.post('/permissions/user/:userId', async (req, res) => {
              can_edit=VALUES(can_edit), can_approve=VALUES(can_approve),
              can_delete=VALUES(can_delete), overridden_by=VALUES(overridden_by),
              overridden_at=NOW()`,
-          [userId, o.module, o.can_view?1:0, o.can_create?1:0, o.can_edit?1:0,
-           o.can_approve?1:0, o.can_delete?1:0, req.user.id]
+          [userId, o.module, o.can_view ?? 0, o.can_create ?? 0, o.can_edit ?? 0,
+           o.can_approve ?? 0, o.can_delete ?? 0, req.user.id]
         )
       }
     }
