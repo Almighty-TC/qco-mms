@@ -1,17 +1,17 @@
 # QCO MMS - Claude Context & Build Tracker
 Last updated: 2026-05-30
-Last commit: da17595
+Last commit: (see below — updated after push)
 
 ## MODULE STATUS
 - Login: ✅ Complete
 - Dashboard: ✅ Complete
-- Admin: 🔨 In Progress (visual QA remaining)
+- Admin: ✅ Complete
 - All other modules: ⏳ Not started
 
 ## ADMIN MODULE - OUTSTANDING ISSUES
 
 ### Layout & Scroll
-- [ ] Responsive layout: test at 1440/1280/1024/768px widths (visual test only)
+- [x] Responsive layout: tested at 1440/1280/1024/768px — sticky header, horizontal scroll, and sidebar collapse all pass
 - [x] **RESOLVED: Sticky thead fixed on ALL admin tabs** (commit da17595)
       Solution: AdminTable wrapper overflowX:'clip' + overflowY:'visible';
       single shared useLayoutEffect in Admin component sets --thead-top CSS var
@@ -25,8 +25,9 @@ Last commit: da17595
 - [x] Actions column sticky-right: REMOVED in session 15 — all columns scroll freely
 - [x] Horizontal scroll: AdminTable wrapper now has overflowX:auto / overflowY:clip
 - [x] Role Permissions: Reset to defaults + always-visible Save button added (session 15)
-- [ ] Toolbar ↺ reset button position: currently inside last th (table header),
-      not left of + Add button in toolbar — visually correct but position differs from spec
+- [x] Toolbar ↺ reset button: added to all 7 tabs with toolbars (Users, Suppliers,
+      Warehouses, UoM, Acronyms, INCO Terms, Projects) — positioned left of + Add button,
+      resets all filters/search to defaults on click (commit 3f80108)
 
 ### DB Connectivity (all confirmed wired to MySQL):
 - ✅ Users & Roles: full CRUD via /api/admin/users
@@ -44,20 +45,23 @@ Last commit: da17595
 ## GLOBAL RULES
 
 ### User Colour System (ALL modules — permanent)
-All user/company colour coding must use `src/utils/userColours.ts`. Never hardcode
-colours inline in any component. Three tiers:
+All user-type colour coding must use `src/utils/userColours.ts`. Never hardcode
+colours inline in any component. Colour is conveyed by LEFT BORDER STRIPE only —
+company names render as plain text (no pill badges).
+
+Three tiers:
 - **QCO Group internal** → orange `#E84E0F` (company = 'QCO Group', not external)
 - **Project team / partner** → green `#2E7D32` (not QCO Group, not external role)
 - **External** → blue `#1D6FA4` (isExternal=1 OR role in vendor/freight_forwarder/site_contractor/subcontractor)
 
-Exported helpers:
-- `getUserColour(company, role, isExternal?)` → returns `{ border, bg, label }`
-- `getUserRowStyle(company, role, isExternal?)` → CSSProperties for left-edge `boxShadow: inset 3px 0 0 <colour>` + `paddingLeft: 9`
-- `getUserPillStyle(company, role, isExternal?)` → CSSProperties for filled pill badge
-- `USER_COLOURS` → constant record with all three tier objects (use for legends, never repeat hex values)
+Exported API (`src/utils/userColours.ts`):
+- `USER_COLOURS` → `{ qco, project, external }` each with `{ border, label }` — use for legends, never repeat hex values
+- `EXTERNAL_ROLE_SET` → Set of role names always treated as external
+- `getUserColour(company, role, isExternal?)` → returns the matching tier object
+- `getUserRowStyle(company, role, isExternal?)` → CSSProperties: `boxShadow: inset 3px 0 0 <colour>` + `paddingLeft: 9`
 
-Applied in Admin → Users & Roles today. Every future module that lists users in a
-table MUST apply `getUserRowStyle()` on the leftmost cell.
+Applied: Admin → Users & Roles (row stripes + 3-entry footer legend + ? help panel section).
+Every future module that lists users in a table MUST apply `getUserRowStyle()` on the leftmost `<td>`.
 
 ### Toast Rule (ALL modules — permanent)
 All save, create, update, delete, deactivate and reactivate actions MUST show
@@ -178,14 +182,13 @@ po_lines.uom_id, purchase_orders.supplier_id/inco_term_id/warehouse_id
 
 ## NEXT SESSION - START HERE
 
-1. Fix toolbar reset button (↺) position — currently inside last th (table header);
-   should be left of the + Add button in the toolbar row instead
-2. Responsive layout test at 1440/1280/1024/768px — check sticky header and horizontal scroll
-3. Admin module can be marked ✅ Complete once above two items pass
-4. Next module: Procurement (PO list, add PO, supplier/WBS linkage)
-   — read QMAT-prototype.html and WIREFRAME_INVENTORY.md first
-   — purchase_orders now has supplier_id FK + inco_term_id FK + warehouse_id FK
-   — po_lines now has uom_id FK + unit_price + total_price (GENERATED)
+1. Start Procurement module — read QMAT-prototype.html and WIREFRAME_INVENTORY.md first
+   before writing any code to understand the full wireframe and UX spec.
+   Key schema facts already in place:
+   — purchase_orders has supplier_id FK + inco_term_id FK + warehouse_id FK
+   — po_lines has uom_id FK + unit_price + total_price (GENERATED STORED)
+   — apply getUserRowStyle() on any table that lists users or vendors
+   — apply global Toast rule and Help Modal rule from GLOBAL RULES to every screen built
 
 ## DB DATA STATUS (session 10)
 - 4 Project Team dummy users added (is_external=0, company != 'QCO Group'):
