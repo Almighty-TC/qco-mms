@@ -3257,7 +3257,7 @@ export function Admin({ dark }: { dark: boolean }) {
         </p>
 
         {/* ─── TAB BAR ────────────────────────────────────── */}
-        <div className="admin-tab-bar" style={{ display: 'flex', gap: 2, borderBottom: `2px solid ${dark ? '#334155' : '#e2e8f0'}`, overflowX: 'auto' }}>
+        <div className="admin-tab-bar" style={{ display: 'flex', gap: 2, borderBottom: `2px solid ${dark ? '#334155' : '#e2e8f0'}`, overflowX: 'clip' }}>
           {tabs.map(t => {
             const active = tab === t.key
             return (
