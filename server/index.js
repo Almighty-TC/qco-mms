@@ -29,6 +29,10 @@ app.use('/api/projects', authMiddleware, require('./routes/projects'))
 // additionally enforces role === 'admin' on every endpoint.
 app.use('/api/admin', authMiddleware, require('./routes/admin'))
 
+// ─── PROCUREMENT ROUTES ──────────────────────────────────────
+// Project-scoped PO management: list, create, approve, line items.
+app.use('/api/procurement', authMiddleware, require('./routes/procurement'))
+
 // ─── START SERVER ───────────────────────────────────────────
 const PORT = process.env.PORT || 3001
 app.listen(PORT, () => {

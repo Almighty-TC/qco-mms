@@ -72,10 +72,9 @@ type AdminTableProps = {
   dark: boolean
   children: React.ReactNode
   empty?: string
-  top?: string | number   // sticky top offset for thead; defaults to CSS calc of header + toolbar
 }
 
-export function AdminTable({ tableId, columns, dark, children, empty, top }: AdminTableProps) {
+export function AdminTable({ tableId, columns, dark, children, empty }: AdminTableProps) {
   const defaultWidths = columns.map(c => c.width)
   const minWidths     = columns.map(c => c.minWidth ?? 40)
   const { widths, onMouseDown, resetWidths } = useColumnResize(tableId, defaultWidths, minWidths)
@@ -123,15 +122,10 @@ export function AdminTable({ tableId, columns, dark, children, empty, top }: Adm
       background: dark ? '#1e293b' : '#ffffff',
       border: `1px solid ${borderCol}`,
       borderRadius: 10,
-      // overflowX:auto  — horizontal scroll at the table level.
-      // overflowY:clip  — clips vertical overflow WITHOUT creating a Y scroll
-      //                   container (unlike overflow:hidden/auto). This lets
-      //                   position:sticky on thead find the main content div
-      //                   (App.tsx) as its scroll ancestor instead of stopping
-      //                   here. Do NOT use overflowY:visible — CSS spec converts
-      //                   it to auto when overflowX is non-visible, breaking sticky.
-      overflowX: 'auto',
-      overflowY: 'clip',
+      // overflowX:clip  — clips horizontal overflow without creating a scroll container.
+      // overflowY:visible — allows thead sticky to propagate to the main scroll ancestor.
+      overflowX: 'clip',
+      overflowY: 'visible',
       boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
     }}>
       {/* ── Left scroll fade — shows when content is hidden to the left ── */}
@@ -158,13 +152,10 @@ export function AdminTable({ tableId, columns, dark, children, empty, top }: Adm
         tableLayout: 'fixed',
       }}>
         {/* ─── STICKY HEADER ──────────────────────────────── */}
-        {/* thead is the FIRST child of table — no colgroup before it.
-            Column widths live on each <th> (tableLayout:fixed makes
-            th-widths authoritative; colgroup is not required).
-            top prop = admin-header-wrap height, passed from each tab. */}
+        {/* position:sticky and top are set by .admin-page thead in admin.css.
+            background must stay inline — varies by dark mode. */}
         <thead style={{
           position: 'sticky',
-          top: top ?? 195,
           zIndex: 10,
           background: headerBg,
         }}>

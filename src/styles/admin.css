@@ -69,3 +69,12 @@
 .admin-table-wrap {
   margin-top: 0;
 }
+
+/* ─── STICKY THEAD ─────────────────────────────────────────────── */
+/* top:195px = admin-header-wrap (~108px) + admin-toolbar (~87px). */
+.admin-page thead {
+  position: sticky;
+  top: var(--thead-top, 200px);
+  z-index: 10;
+  background: inherit;
+}
