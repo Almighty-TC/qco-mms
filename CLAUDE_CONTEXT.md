@@ -1,6 +1,6 @@
 # QCO MMS - Claude Context & Build Tracker
 Last updated: 2026-05-29
-Last commit: (pending — see session 10 below)
+Last commit: (pending — see session 11 below)
 
 ## MODULE STATUS
 - Login: ✅ Complete
@@ -32,6 +32,16 @@ Last commit: (pending — see session 10 below)
 - ✅ System Settings: GET/PUT via /api/admin/system-settings
 
 ## GLOBAL RULES
+
+### Toast Rule (ALL modules — permanent)
+All save, create, update, delete, deactivate and reactivate actions MUST show
+a toast notification confirming the result. Use the shared `useToast` hook
+(`src/hooks/useToast.ts`) and `ToastContainer` (`src/components/Toast.tsx`).
+- Success toast (green, 3s): confirm the action with the item name
+- Error toast (red, 5s): show the specific API error message, never "Save failed"
+- Warning toast (amber, 4s): for deactivate actions
+- Load errors (tab data failing to fetch) stay as inline banners (not toasts)
+- Form validation errors (client-side) stay in the modal form (not toasts)
 
 ### Help Modal Rule (ALL modules — permanent)
 Whenever any feature, column, filter, colour coding or behaviour is added or
@@ -111,6 +121,31 @@ forward (Procurement, Expediting, VDRL, Logistics, etc.).
 See docs/USER_MANUAL_STATUS.md
 
 ## SESSION HISTORY
+
+### Session 2026-05-29 (session 11)
+Fixed in this session:
+- src/hooks/useToast.ts (new):
+  - ToastProvider + useToast hook; context-based shared state
+  - addToast(type, message): auto-dismisses at 3s/4s/5s for success/warning/error
+  - dismiss(id): manual dismiss on ×
+- src/components/Toast.tsx (new):
+  - ToastContainer: portal-rendered fixed top-right stack
+  - Green/amber/red backgrounds; ✓/⚠/✕ icons; × dismiss button
+- src/pages/Admin.tsx:
+  - Admin export: wrapped with ToastProvider, ToastContainer rendered inside
+  - ALL 10 tab functions: added useToast() + addToast calls on every
+    save/create/update/delete/deactivate/reactivate/reset action
+  - PermissionsTab: removed success/overrideSuccess states + inline renders
+    (replaced by toasts); saveRole/saveUserOverrides/resetToRoleDefaults all toast
+  - SystemSettingsTab: removed saved/saveErr/testResult/testError states
+    (replaced by toasts); saveAll and sendTest both toast
+  - Silent error catches (reactivate, markRead, deleteNotification) now toast errors
+  - Form save API errors: addToast('error', msg) in addition to setFormErr
+- server/scripts/seed-project-team-assignments.js (new, run ✓):
+  - 4 user_wbs_access rows inserted (wbs_code='ALL'):
+    James O'Connor → PRJ-2024-001, Sarah Lim → PRJ-2024-002,
+    David Nguyen → PRJ-2023-008, Michelle Park → PRJ-2025-001
+- CLAUDE_CONTEXT.md: added Toast Rule to GLOBAL RULES
 
 ### Session 2026-05-29 (session 10)
 Fixed in this session:

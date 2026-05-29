@@ -4,6 +4,8 @@ import axios from 'axios'
 import { useAuth } from '../context/AuthContext'
 import { DeleteConfirmModal, SimpleConfirmModal } from '../components'
 import { AdminTable, AdminRow, AdminCell, AdminActions } from '../components/AdminTable'
+import { ToastProvider, useToast } from '../hooks/useToast'
+import { ToastContainer } from '../components/Toast'
 import type { AdminCol } from '../components/AdminTable'
 import { useColumnResize } from '../hooks/useColumnResize'
 import { ActionMenu } from '../components/ActionMenu'
@@ -411,6 +413,7 @@ function ProjectsCell({ userId, count, fullAccess, dark }: {
 // step required. onSave is optional for future parent callbacks.
 function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () => void; headerHeight?: number }) {
   const { user: me } = useAuth()
+  const { addToast } = useToast()
   const [rows,      setRows]      = useState<AdminUser[]>([])
   const [total,     setTotal]     = useState<number | null>(null)
   const [page,      setPage]      = useState(1)
@@ -523,13 +526,16 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
         ? await axios.put(`${API}/users/${editId}`, form)
         : await axios.post(`${API}/users`, form)
       setShowForm(false); load(); onSave?.()
+      addToast('success', editId != null ? `User ${form.fullName} updated successfully` : `User ${form.fullName} created successfully`)
     } catch (e: unknown) {
       const err = e as { response?: { data?: unknown }; message?: string }
       const d = err.response?.data
       const raw = (d && typeof d === 'object')
         ? ((d as Record<string, string>).error || (d as Record<string, string>).message || '')
         : (typeof d === 'string' ? (d as string).slice(0, 400) : '')
-      setFormErr(raw ? friendlyUserError(raw) : (err.message || 'Save failed — check the server console for details'))
+      const friendlyMsg = raw ? friendlyUserError(raw) : (err.message || 'Save failed — check the server console for details')
+      setFormErr(friendlyMsg)
+      addToast('error', friendlyMsg)
     } finally { setSaving(false) }
   }
 
@@ -540,10 +546,14 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
     setDeactivateSaving(true); setDeactivateErr('')
     try {
       await axios.post(`${API}/users/${deactivateTarget.userId}/deactivate`, { reason: 'Manually deactivated by admin' })
+      const name = deactivateTarget.fullName
       setDeactivateTarget(null); load(); onSave?.()
+      addToast('warning', `User ${name} has been deactivated`)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setDeactivateErr(err.response?.data?.error ?? 'Deactivation failed')
+      const msg = err.response?.data?.error ?? 'Deactivation failed'
+      setDeactivateErr(msg)
+      addToast('error', msg)
     } finally { setDeactivateSaving(false) }
   }
 
@@ -555,10 +565,14 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
     setDeleteSaving(true); setDeleteErr('')
     try {
       await axios.delete(`${API}/users/${deleteTarget.userId}`, { data: { reason } })
+      const name = deleteTarget.fullName
       setDeleteTarget(null); load(); onSave?.()
+      addToast('success', `User ${name} has been deleted`)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setDeleteErr(err.response?.data?.error ?? 'Delete failed')
+      const msg = err.response?.data?.error ?? 'Delete failed'
+      setDeleteErr(msg)
+      addToast('error', msg)
     } finally { setDeleteSaving(false) }
   }
 
@@ -569,10 +583,14 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
     setReactivateSaving(true); setReactivateErr('')
     try {
       await axios.post(`${API}/users/${reactivateTarget.userId}/activate`)
+      const name = reactivateTarget.fullName
       setReactivateTarget(null); load(); onSave?.()
+      addToast('success', `User ${name} has been reactivated`)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setReactivateErr(err.response?.data?.error ?? 'Reactivation failed')
+      const msg = err.response?.data?.error ?? 'Reactivation failed'
+      setReactivateErr(msg)
+      addToast('error', msg)
     } finally { setReactivateSaving(false) }
   }
 
@@ -583,12 +601,14 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
     setResetPwSaving(true); setResetPwErr('')
     try {
       await axios.post(`${API}/users/${resetPwTarget.userId}/reset-password`)
-      setResetPwDone(resetPwTarget.userId)
+      const email = resetPwTarget.email
       setResetPwTarget(null)
-      setTimeout(() => setResetPwDone(null), 3000)
+      addToast('success', `Password reset email sent to ${email}`)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setResetPwErr(err.response?.data?.error ?? 'Reset failed')
+      const msg = err.response?.data?.error ?? 'Reset failed'
+      setResetPwErr(msg)
+      addToast('error', msg)
     } finally { setResetPwSaving(false) }
   }
 
@@ -1061,6 +1081,7 @@ const PERM_MATRIX_COLS: AdminCol[] = [
 ]
 
 function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
+  const { addToast } = useToast()
   // ─── MODE TOGGLE ──────────────────────────────────────────────
   const [permMode, setPermMode] = useState<'roles' | 'users'>('roles')
 
@@ -1069,7 +1090,6 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
   const [editing,  setEditing]  = useState<Record<string, Record<PermKey, boolean>>>({})
   const [saving,   setSaving]   = useState(false)
   const [error,    setError]    = useState('')
-  const [success,  setSuccess]  = useState('')
 
   // ─── USER OVERRIDES STATE ─────────────────────────────────────
   const [usersList,       setUsersList]       = useState<{ id: number; fullName: string; role: string }[]>([])
@@ -1078,8 +1098,6 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
   // rolePerms removed — base dots now derived from global lookup via selUserRole
   const [userOverrides,   setUserOverrides]   = useState<Record<string, Record<PermKey, OverrideVal>>>({})
   const [overrideSaving,  setOverrideSaving]  = useState(false)
-  const [overrideError,   setOverrideError]   = useState('')
-  const [overrideSuccess, setOverrideSuccess] = useState('')
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
   const [resetSaving,     setResetSaving]     = useState(false)
   const [stickyH,         setStickyH]         = useState(0)
@@ -1155,7 +1173,7 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
   // ─── SAVE USER OVERRIDES ──────────────────────────────────────
   const saveUserOverrides = async () => {
     if (!selUserId) return
-    setOverrideSaving(true); setOverrideError(''); setOverrideSuccess('')
+    setOverrideSaving(true)
     const overrides = ALL_MODULES.flatMap(mod => {
       const row = userOverrides[mod]
       if (!row) return []
@@ -1170,11 +1188,11 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
     })
     try {
       await axios.post(`${API}/permissions/user/${selUserId}`, { overrides })
-      setOverrideSuccess('User permission overrides saved.')
-      setTimeout(() => setOverrideSuccess(''), 3000)
+      const uName = usersList.find(u => u.id === selUserId)?.fullName ?? 'user'
+      addToast('success', `Permissions updated for ${uName}`)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setOverrideError(err.response?.data?.error ?? 'Save failed')
+      addToast('error', err.response?.data?.error ?? 'Save failed')
     } finally { setOverrideSaving(false) }
   }
 
@@ -1186,12 +1204,12 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
       await axios.delete(`${API}/permissions/user/${selUserId}`)
       setUserOverrides({})
       setResetConfirmOpen(false)
-      setOverrideSuccess('Overrides reset to role defaults.')
-      setTimeout(() => setOverrideSuccess(''), 3000)
+      const uName = usersList.find(u => u.id === selUserId)?.fullName ?? 'user'
+      addToast('success', `Permissions reset to role defaults for ${uName}`)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setOverrideError(err.response?.data?.error ?? 'Reset failed')
       setResetConfirmOpen(false)
+      addToast('error', err.response?.data?.error ?? 'Reset failed')
     } finally { setResetSaving(false) }
   }
 
@@ -1234,7 +1252,7 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
   }
 
   const saveRole = async () => {
-    setSaving(true); setError(''); setSuccess('')
+    setSaving(true); setError('')
     const modules = Object.keys(editing)
     try {
       for (const module of modules) {
@@ -1243,11 +1261,13 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
         await axios.put(`${API}/permissions/${selRole}/${module}`, payload)
       }
       setEditing({})
-      setSuccess(`Permissions saved for ${selRole.replace(/_/g, ' ')}`)
       load()
+      addToast('success', `Role permissions updated for ${selRole.replace(/_/g, ' ')}`)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setError(err.response?.data?.error ?? 'Save failed')
+      const msg = err.response?.data?.error ?? 'Save failed'
+      setError(msg)
+      addToast('error', msg)
     } finally { setSaving(false) }
   }
 
@@ -1321,8 +1341,7 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
 
       {/* ─── ROLES MODE CONTENT ───────────────────────────── */}
       {permMode === 'roles' && (<>
-        {error   && <Err msg={error} />}
-        {success && <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 6, background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)', fontSize: 12, color: '#22c55e' }}>{success}</div>}
+        {error && <Err msg={error} />}
         {isAdmin && (
           <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 6, background: 'rgba(232,78,15,0.06)', border: '1px solid rgba(232,78,15,0.2)', fontSize: 12, color: '#E84E0F' }}>
             Admin role has full access to everything and cannot be modified.
@@ -1354,8 +1373,6 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
       {/* ─── USER OVERRIDES MODE CONTENT ─────────────────── */}
       {permMode === 'users' && (
         <div>
-          {overrideError   && <Err msg={overrideError} />}
-          {overrideSuccess && <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 6, background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)', fontSize: 12, color: '#22c55e' }}>{overrideSuccess}</div>}
 
           {selUserId == null ? (
             <div style={{ padding: '40px 20px', textAlign: 'center', fontSize: 13, color: '#64748b' }}>
@@ -1473,6 +1490,7 @@ const N_COLS: AdminCol[] = [
 ]
 
 function NotificationsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
+  const { addToast } = useToast()
   const [rows,     setRows]     = useState<Notification[]>([])
   const [total,    setTotal]    = useState<number | null>(null)
   const [page,     setPage]     = useState(1)
@@ -1499,21 +1517,30 @@ function NotificationsTab({ dark, headerHeight }: { dark: boolean; headerHeight?
     try {
       await axios.put(`${API}/notifications/${id}/read`)
       load(page)
-    } catch { /* silent */ }
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      addToast('error', err.response?.data?.error ?? 'Failed to mark notification as read')
+    }
   }
 
   const markAllRead = async () => {
     try {
       await axios.put(`${API}/notifications/read-all`)
       load(page)
-    } catch { /* silent */ }
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      addToast('error', err.response?.data?.error ?? 'Failed to mark all as read')
+    }
   }
 
   const deleteNotification = async (id: number) => {
     try {
       await axios.delete(`${API}/notifications/${id}`)
       load(page)
-    } catch { /* silent */ }
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      addToast('error', err.response?.data?.error ?? 'Failed to delete notification')
+    }
   }
 
   const TYPE_COLOR: Record<string, string> = {
@@ -1608,16 +1635,13 @@ const SETTINGS_META: Record<string, { label: string; desc: string; placeholder: 
 }
 
 function SystemSettingsTab({ dark }: { dark: boolean }) {
+  const { addToast } = useToast()
   // ─── LOCAL STATE ─────────────────────────────────────────────
   // Each editable setting is held in a single Record so adding
   // new settings only requires updating SETTINGS_META above.
-  const [settings,   setSettings]   = useState<Record<string, string>>({})
-  const [saving,     setSaving]     = useState(false)
-  const [saved,      setSaved]      = useState(false)
-  const [saveErr,    setSaveErr]    = useState('')
-  const [testing,    setTesting]    = useState(false)
-  const [testResult, setTestResult] = useState('')
-  const [testError,  setTestError]  = useState('')
+  const [settings, setSettings] = useState<Record<string, string>>({})
+  const [saving,   setSaving]   = useState(false)
+  const [testing,  setTesting]  = useState(false)
 
   // ─── LOAD SETTINGS ON MOUNT ──────────────────────────────────
   // Degrades silently if the table doesn't exist yet.
@@ -1633,14 +1657,13 @@ function SystemSettingsTab({ dark }: { dark: boolean }) {
   const setSetting = (k: string, v: string) => setSettings(p => ({ ...p, [k]: v }))
 
   const saveAll = async () => {
-    setSaving(true); setSaved(false); setSaveErr('')
+    setSaving(true)
     try {
       await axios.put(`${API}/system-settings`, settings)
-      setSaved(true)
-      setTimeout(() => setSaved(false), 3000)
+      addToast('success', 'System settings saved successfully')
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setSaveErr(err.response?.data?.error ?? 'Save failed')
+      addToast('error', err.response?.data?.error ?? 'Save failed')
     } finally { setSaving(false) }
   }
 
@@ -1655,13 +1678,13 @@ function SystemSettingsTab({ dark }: { dark: boolean }) {
   }
 
   const sendTest = async () => {
-    setTesting(true); setTestResult(''); setTestError('')
+    setTesting(true)
     try {
       const { data } = await axios.post(`${API}/test-email`)
-      setTestResult(`Test email sent to ${data.sentTo}`)
+      addToast('success', `Test email sent to ${data.sentTo}`)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setTestError(err.response?.data?.error ?? 'Email test failed')
+      addToast('error', err.response?.data?.error ?? 'Email test failed')
     } finally { setTesting(false) }
   }
 
@@ -1695,10 +1718,9 @@ function SystemSettingsTab({ dark }: { dark: boolean }) {
             />
           </div>
         ))}
-        {saveErr && <p style={{ margin: 0, fontSize: 12, color: '#ef4444' }}>{saveErr}</p>}
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           <button onClick={saveAll} disabled={saving} style={{ padding: '8px 22px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#E84E0F', color: '#fff', cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, fontFamily: 'IBM Plex Sans, sans-serif' }}>
-            {saving ? 'Saving…' : saved ? '✓ Saved' : 'Save Settings'}
+            {saving ? 'Saving…' : 'Save Settings'}
           </button>
           <button onClick={resetDefaults} style={{ padding: '8px 18px', borderRadius: 6, fontSize: 13, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
             Reset to Defaults
@@ -1719,8 +1741,6 @@ function SystemSettingsTab({ dark }: { dark: boolean }) {
         <button onClick={sendTest} disabled={testing} style={{ padding: '8px 20px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#E84E0F', color: '#fff', cursor: testing ? 'not-allowed' : 'pointer', opacity: testing ? 0.7 : 1, fontFamily: 'IBM Plex Sans, sans-serif' }}>
           {testing ? 'Sending…' : 'Send test email to me'}
         </button>
-        {testResult && <p style={{ marginTop: 8, fontSize: 12, color: '#22c55e' }}>{testResult}</p>}
-        {testError  && <p style={{ marginTop: 8, fontSize: 12, color: '#ef4444' }}>{testError}</p>}
       </div>
 
       {/* ─── ROLES REFERENCE ────────────────────────────────────── */}
@@ -1826,6 +1846,7 @@ const S_COLS: AdminCol[] = [
 ]
 
 function SuppliersTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
+  const { addToast } = useToast()
   const [rows,           setRows]           = useState<Supplier[]>([])
   const [total,          setTotal]          = useState<number | null>(null)
   const [search,         setSearch]         = useState('')
@@ -1933,9 +1954,11 @@ function SuppliersTab({ dark, headerHeight }: { dark: boolean; headerHeight?: nu
         ? await axios.put(`${API}/suppliers/${editId}`, form)
         : await axios.post(`${API}/suppliers`, form)
       setShowForm(false); load()
+      addToast('success', `Supplier ${form.name} saved successfully`)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setFormErr(err.response?.data?.error ?? 'Save failed')
+      const msg = err.response?.data?.error ?? 'Save failed'
+      setFormErr(msg); addToast('error', msg)
     } finally { setSaving(false) }
   }
 
@@ -1945,10 +1968,13 @@ function SuppliersTab({ dark, headerHeight }: { dark: boolean; headerHeight?: nu
     setDeleteSaving(true); setDeleteErr('')
     try {
       await axios.delete(`${API}/suppliers/${id}`, { data: { reason } })
+      const name = deleteTarget?.name ?? ''
       setDeleteTarget(null); load()
+      if (name) addToast('success', `Supplier ${name} has been deleted`)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setDeleteErr(err.response?.data?.error ?? 'Delete failed')
+      const msg = err.response?.data?.error ?? 'Delete failed'
+      setDeleteErr(msg); addToast('error', msg)
     } finally { setDeleteSaving(false) }
   }
 
@@ -1957,18 +1983,26 @@ function SuppliersTab({ dark, headerHeight }: { dark: boolean; headerHeight?: nu
     setDeactivateSaving(true); setDeactivateErr('')
     try {
       await axios.patch(`${API}/suppliers/${id}/status`, { status: 'inactive' })
+      const name = deactivateTarget?.name ?? ''
       setDeactivateTarget(null); load()
+      if (name) addToast('warning', `Supplier ${name} has been deactivated`)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setDeactivateErr(err.response?.data?.error ?? 'Deactivation failed')
+      const msg = err.response?.data?.error ?? 'Deactivation failed'
+      setDeactivateErr(msg); addToast('error', msg)
     } finally { setDeactivateSaving(false) }
   }
 
   const reactivate = async (id: number) => {
+    const s = rows.find(r => r.id === id)
     try {
       await axios.patch(`${API}/suppliers/${id}/status`, { status: 'active' })
       load()
-    } catch { /* silent */ }
+      if (s) addToast('success', `Supplier ${s.name} has been reactivated`)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      addToast('error', err.response?.data?.error ?? 'Reactivation failed')
+    }
   }
 
   return (
@@ -2172,6 +2206,7 @@ const P_COLS: AdminCol[] = [
 ]
 
 function ProjectsAdminTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
+  const { addToast } = useToast()
   const [rows,     setRows]     = useState<AdminProject[]>([])
   const [search,   setSearch]   = useState('')
   const [error,    setError]    = useState('')
@@ -2224,36 +2259,49 @@ function ProjectsAdminTab({ dark, headerHeight }: { dark: boolean; headerHeight?
     try {
       editId != null ? await axios.put(`${API}/projects/${editId}`, form) : await axios.post(`${API}/projects`, form)
       setShowForm(false); load()
+      addToast('success', `Project ${form.code} saved successfully`)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setFormErr(err.response?.data?.error ?? 'Save failed')
+      const msg = err.response?.data?.error ?? 'Save failed'
+      setFormErr(msg); addToast('error', msg)
     } finally { setSaving(false) }
   }
   const del = async (id: number, reason: string) => {
     setDeleteSaving(true); setDeleteErr('')
     try {
       await axios.delete(`${API}/projects/${id}`, { data: { reason } })
+      const name = deleteTarget?.name ?? ''
       setDeleteTarget(null); load()
+      if (name) addToast('success', `Project ${name} has been deleted`)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setDeleteErr(err.response?.data?.error ?? 'Delete failed')
+      const msg = err.response?.data?.error ?? 'Delete failed'
+      setDeleteErr(msg); addToast('error', msg)
     } finally { setDeleteSaving(false) }
   }
   const deactivate = async (id: number) => {
     setDeactivateSaving(true); setDeactivateErr('')
     try {
       await axios.patch(`${API}/projects/${id}/status`, { status: 'inactive' })
+      const name = deactivateTarget?.name ?? ''
       setDeactivateTarget(null); load()
+      if (name) addToast('warning', `Project ${name} has been deactivated`)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setDeactivateErr(err.response?.data?.error ?? 'Deactivation failed')
+      const msg = err.response?.data?.error ?? 'Deactivation failed'
+      setDeactivateErr(msg); addToast('error', msg)
     } finally { setDeactivateSaving(false) }
   }
   const reactivate = async (id: number) => {
+    const p = rows.find(r => r.id === id)
     try {
       await axios.patch(`${API}/projects/${id}/status`, { status: 'active' })
       load()
-    } catch { /* silent */ }
+      if (p) addToast('success', `Project ${p.code} has been reactivated`)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      addToast('error', err.response?.data?.error ?? 'Reactivation failed')
+    }
   }
 
   const filtered = search.trim()
@@ -2389,6 +2437,7 @@ const WH_COLS: AdminCol[] = [
 ]
 
 function WarehousesTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
+  const { addToast } = useToast()
   const [rows,     setRows]     = useState<Warehouse[]>([])
   const [total,    setTotal]    = useState<number | null>(null)
   const [search,   setSearch]   = useState('')
@@ -2438,26 +2487,48 @@ function WarehousesTab({ dark, headerHeight }: { dark: boolean; headerHeight?: n
     try {
       editId != null ? await axios.put(`${API}/warehouses/${editId}`, form) : await axios.post(`${API}/warehouses`, form)
       setShowForm(false); load()
+      addToast('success', `Warehouse ${form.name} saved successfully`)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setFormErr(err.response?.data?.error ?? 'Save failed')
+      const msg = err.response?.data?.error ?? 'Save failed'
+      setFormErr(msg); addToast('error', msg)
     } finally { setSaving(false) }
   }
   const del = async (id: number, reason: string) => {
     setDeleteSaving(true); setDeleteErr('')
-    try { await axios.delete(`${API}/warehouses/${id}`, { data: { reason } }); setDeleteTarget(null); load() }
-    catch (e: unknown) { const err = e as { response?: { data?: { error?: string } } }; setDeleteErr(err.response?.data?.error ?? 'Delete failed') }
-    finally { setDeleteSaving(false) }
+    try {
+      await axios.delete(`${API}/warehouses/${id}`, { data: { reason } })
+      const name = deleteTarget?.name ?? ''
+      setDeleteTarget(null); load()
+      if (name) addToast('success', `Warehouse ${name} has been deleted`)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      const msg = err.response?.data?.error ?? 'Delete failed'
+      setDeleteErr(msg); addToast('error', msg)
+    } finally { setDeleteSaving(false) }
   }
   const deactivate = async (id: number) => {
     setDeactivateSaving(true); setDeactivateErr('')
-    try { await axios.patch(`${API}/warehouses/${id}/status`, { status: 'inactive' }); setDeactivateTarget(null); load() }
-    catch (e: unknown) { const err = e as { response?: { data?: { error?: string } } }; setDeactivateErr(err.response?.data?.error ?? 'Deactivate failed') }
-    finally { setDeactivateSaving(false) }
+    try {
+      await axios.patch(`${API}/warehouses/${id}/status`, { status: 'inactive' })
+      const name = deactivateTarget?.name ?? ''
+      setDeactivateTarget(null); load()
+      if (name) addToast('warning', `Warehouse ${name} has been deactivated`)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      const msg = err.response?.data?.error ?? 'Deactivate failed'
+      setDeactivateErr(msg); addToast('error', msg)
+    } finally { setDeactivateSaving(false) }
   }
   const reactivate = async (id: number) => {
-    try { await axios.patch(`${API}/warehouses/${id}/status`, { status: 'active' }); load() }
-    catch { /* silent */ }
+    const w = rows.find(r => r.id === id)
+    try {
+      await axios.patch(`${API}/warehouses/${id}/status`, { status: 'active' }); load()
+      if (w) addToast('success', `Warehouse ${w.name} has been reactivated`)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      addToast('error', err.response?.data?.error ?? 'Reactivation failed')
+    }
   }
 
   return (
@@ -2563,6 +2634,7 @@ const UOM_COLS: AdminCol[] = [
 ]
 
 function UomTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
+  const { addToast } = useToast()
   const [rows,     setRows]     = useState<Uom[]>([])
   const [search,   setSearch]   = useState('')
   const [filterSt, setFilterSt] = useState('')
@@ -2608,26 +2680,48 @@ function UomTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }
     try {
       editId != null ? await axios.put(`${API}/uom/${editId}`, form) : await axios.post(`${API}/uom`, form)
       setShowForm(false); load()
+      addToast('success', `Unit of measure ${form.code} saved successfully`)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setFormErr(err.response?.data?.error ?? 'Save failed')
+      const msg = err.response?.data?.error ?? 'Save failed'
+      setFormErr(msg); addToast('error', msg)
     } finally { setSaving(false) }
   }
   const del = async (id: number, reason: string) => {
     setDeleteSaving(true); setDeleteErr('')
-    try { await axios.delete(`${API}/uom/${id}`, { data: { reason } }); setDeleteTarget(null); load() }
-    catch (e: unknown) { const err = e as { response?: { data?: { error?: string } } }; setDeleteErr(err.response?.data?.error ?? 'Delete failed') }
-    finally { setDeleteSaving(false) }
+    try {
+      await axios.delete(`${API}/uom/${id}`, { data: { reason } })
+      const code = deleteTarget?.code ?? ''
+      setDeleteTarget(null); load()
+      if (code) addToast('success', `Unit of measure ${code} has been deleted`)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      const msg = err.response?.data?.error ?? 'Delete failed'
+      setDeleteErr(msg); addToast('error', msg)
+    } finally { setDeleteSaving(false) }
   }
   const deactivate = async (id: number) => {
     setDeactivateSaving(true); setDeactivateErr('')
-    try { await axios.patch(`${API}/uom/${id}/status`, { status: 'inactive' }); setDeactivateTarget(null); load() }
-    catch (e: unknown) { const err = e as { response?: { data?: { error?: string } } }; setDeactivateErr(err.response?.data?.error ?? 'Deactivate failed') }
-    finally { setDeactivateSaving(false) }
+    try {
+      await axios.patch(`${API}/uom/${id}/status`, { status: 'inactive' })
+      const code = deactivateTarget?.code ?? ''
+      setDeactivateTarget(null); load()
+      if (code) addToast('warning', `Unit of measure ${code} has been deactivated`)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      const msg = err.response?.data?.error ?? 'Deactivate failed'
+      setDeactivateErr(msg); addToast('error', msg)
+    } finally { setDeactivateSaving(false) }
   }
   const reactivate = async (id: number) => {
-    try { await axios.patch(`${API}/uom/${id}/status`, { status: 'active' }); load() }
-    catch { /* silent */ }
+    const u = rows.find(r => r.id === id)
+    try {
+      await axios.patch(`${API}/uom/${id}/status`, { status: 'active' }); load()
+      if (u) addToast('success', `Unit of measure ${u.code} has been reactivated`)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      addToast('error', err.response?.data?.error ?? 'Reactivation failed')
+    }
   }
 
   return (
@@ -2725,6 +2819,7 @@ const ACR_COLS: AdminCol[] = [
 ]
 
 function AcronymsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
+  const { addToast } = useToast()
   const [rows,     setRows]     = useState<AcronymRow[]>([])
   const [search,   setSearch]   = useState('')
   const [filterMod, setFilterMod] = useState('')
@@ -2767,16 +2862,25 @@ function AcronymsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: num
     try {
       editId != null ? await axios.put(`${API}/acronyms/${editId}`, form) : await axios.post(`${API}/acronyms`, form)
       setShowForm(false); load()
+      addToast('success', `Acronym ${form.acronym} saved successfully`)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setFormErr(err.response?.data?.error ?? 'Save failed')
+      const msg = err.response?.data?.error ?? 'Save failed'
+      setFormErr(msg); addToast('error', msg)
     } finally { setSaving(false) }
   }
   const del = async (id: number, reason: string) => {
     setDeleteSaving(true); setDeleteErr('')
-    try { await axios.delete(`${API}/acronyms/${id}`, { data: { reason } }); setDeleteTarget(null); load() }
-    catch (e: unknown) { const err = e as { response?: { data?: { error?: string } } }; setDeleteErr(err.response?.data?.error ?? 'Delete failed') }
-    finally { setDeleteSaving(false) }
+    try {
+      await axios.delete(`${API}/acronyms/${id}`, { data: { reason } })
+      const code = deleteTarget?.acronym ?? ''
+      setDeleteTarget(null); load()
+      if (code) addToast('success', `Acronym ${code} has been deleted`)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      const msg = err.response?.data?.error ?? 'Delete failed'
+      setDeleteErr(msg); addToast('error', msg)
+    } finally { setDeleteSaving(false) }
   }
 
   return (
@@ -2874,6 +2978,7 @@ const INC_COLS: AdminCol[] = [
 ]
 
 function IncoTermsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
+  const { addToast } = useToast()
   const [rows,     setRows]     = useState<IncoTerm[]>([])
   const [search,   setSearch]   = useState('')
   const [filterSt, setFilterSt] = useState('')
@@ -2922,26 +3027,48 @@ function IncoTermsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: nu
     try {
       editId != null ? await axios.put(`${API}/inco-terms/${editId}`, form) : await axios.post(`${API}/inco-terms`, form)
       setShowForm(false); load()
+      addToast('success', `INCO Term ${form.code} saved successfully`)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
-      setFormErr(err.response?.data?.error ?? 'Save failed')
+      const msg = err.response?.data?.error ?? 'Save failed'
+      setFormErr(msg); addToast('error', msg)
     } finally { setSaving(false) }
   }
   const del = async (id: number, reason: string) => {
     setDeleteSaving(true); setDeleteErr('')
-    try { await axios.delete(`${API}/inco-terms/${id}`, { data: { reason } }); setDeleteTarget(null); load() }
-    catch (e: unknown) { const err = e as { response?: { data?: { error?: string } } }; setDeleteErr(err.response?.data?.error ?? 'Delete failed') }
-    finally { setDeleteSaving(false) }
+    try {
+      await axios.delete(`${API}/inco-terms/${id}`, { data: { reason } })
+      const code = deleteTarget?.code ?? ''
+      setDeleteTarget(null); load()
+      if (code) addToast('success', `INCO Term ${code} has been deleted`)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      const msg = err.response?.data?.error ?? 'Delete failed'
+      setDeleteErr(msg); addToast('error', msg)
+    } finally { setDeleteSaving(false) }
   }
   const deactivate = async (id: number) => {
     setDeactivateSaving(true); setDeactivateErr('')
-    try { await axios.patch(`${API}/inco-terms/${id}/status`, { status: 'inactive' }); setDeactivateTarget(null); load() }
-    catch (e: unknown) { const err = e as { response?: { data?: { error?: string } } }; setDeactivateErr(err.response?.data?.error ?? 'Deactivate failed') }
-    finally { setDeactivateSaving(false) }
+    try {
+      await axios.patch(`${API}/inco-terms/${id}/status`, { status: 'inactive' })
+      const code = deactivateTarget?.code ?? ''
+      setDeactivateTarget(null); load()
+      if (code) addToast('warning', `INCO Term ${code} has been deactivated`)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      const msg = err.response?.data?.error ?? 'Deactivate failed'
+      setDeactivateErr(msg); addToast('error', msg)
+    } finally { setDeactivateSaving(false) }
   }
   const reactivate = async (id: number) => {
-    try { await axios.patch(`${API}/inco-terms/${id}/status`, { status: 'active' }); load() }
-    catch { /* silent */ }
+    const t = rows.find(r => r.id === id)
+    try {
+      await axios.patch(`${API}/inco-terms/${id}/status`, { status: 'active' }); load()
+      if (t) addToast('success', `INCO Term ${t.code} has been reactivated`)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      addToast('error', err.response?.data?.error ?? 'Reactivation failed')
+    }
   }
 
   return (
@@ -3085,7 +3212,9 @@ export function Admin({ dark }: { dark: boolean }) {
   ]
 
   return (
+    <ToastProvider>
     <div className="admin-page">
+      <ToastContainer />
       {/* ─── STICKY HEADER (title + tab bar) ─────────────────── */}
       <div ref={headerRef} className="admin-header-wrap">
         <h2 className="admin-title" style={{ color: dark ? '#f1f5f9' : '#0f172a' }}>
@@ -3125,5 +3254,6 @@ export function Admin({ dark }: { dark: boolean }) {
       {tab === 'notifications' && <NotificationsTab  dark={dark} headerHeight={headerHeight} />}
       {tab === 'settings'      && <SystemSettingsTab dark={dark} />}
     </div>
+    </ToastProvider>
   )
 }
