@@ -55,6 +55,20 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [token]);
 
+  // ── Belt-and-suspenders: interceptor reads fresh token on every request ──
+  // Guards against any race where the default header isn't set yet.
+  useEffect(() => {
+    const id = axios.interceptors.request.use(config => {
+      const stored = localStorage.getItem(AUTH_TOKEN_KEY);
+      if (stored && !config.headers?.Authorization) {
+        config.headers = config.headers ?? {};
+        config.headers.Authorization = `Bearer ${stored}`;
+      }
+      return config;
+    });
+    return () => { axios.interceptors.request.eject(id); };
+  }, []);
+
   // ── Login ────────────────────────────────────────────────
   const login = useCallback(async (email: string, password: string) => {
     const response = await axios.post('http://localhost:3001/api/auth/login', { email, password });

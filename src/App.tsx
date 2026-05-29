@@ -818,7 +818,7 @@ function App() {
         {/* ─── MAIN CONTENT — the one-and-only scroll container ──
             Fixed below topbar, beside sidebar. overflow: auto so
             position:sticky children work relative to this element. */}
-        <div style={{ position: 'fixed', top: 48, left: sidebarOpen ? 224 : 0, right: 0, bottom: 0, overflowY: 'auto', overflowX: 'auto', zIndex: 1, transition: 'left 200ms ease', background: dark ? '#0f172a' : '#f1f4f8', color: dark ? '#f1f5f9' : '#0f172a', padding: '0 20px 20px' }}>
+        <div style={{ position: 'fixed', top: 48, left: sidebarOpen ? 224 : 0, right: 0, bottom: 0, overflowY: 'auto', overflowX: 'hidden', zIndex: 1, transition: 'left 200ms ease', background: dark ? '#0f172a' : '#f1f4f8', color: dark ? '#f1f5f9' : '#0f172a', padding: '0 20px 20px' }}>
 
           {/* ─── PASSWORD EXPIRY BANNER ────────────────────────
               Scrolls with page content; visible at top of scroll area. */}
