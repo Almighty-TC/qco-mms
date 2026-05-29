@@ -15,6 +15,8 @@ Last commit: (pending — see session 13 below)
 - [ ] Verify sticky thead stays behind sticky admin-header-wrap at all zoom levels
 
 ### Table UX
+- [x] Resize handle on last data column (before Actions): fixed — z-index:2 on
+      last resizable th, DragHandle z-index:3, hit target 8px (was 6px)
 - [ ] Toolbar ↺ reset button position: currently inside last th (table header),
       not left of + Add button in toolbar — visually correct but position differs from spec
 
@@ -153,6 +155,23 @@ po_lines.uom_id, purchase_orders.supplier_id/inco_term_id/warehouse_id
 See docs/USER_MANUAL_STATUS.md
 
 ## SESSION HISTORY
+
+### Session 2026-05-29 (session 14)
+Fixed in this session:
+- src/components/AdminTable.tsx (new component, first commit):
+  - Fix: DragHandle z-index raised to 3 (was 1) so it always paints above the
+    sticky Actions `<th>` when the table is scrolled horizontally.
+  - Fix: last resizable `<th>` (second-to-last column, i === columns.length-2)
+    gets zIndex:2 so its stacking context sits above the sticky Actions `<th>` (z:1).
+  - DragHandle hit target widened: 8px (was 6px) for easier grabbing.
+  - Root cause: sticky Actions th (z:1) was covering the DragHandle of the
+    adjacent last data column when the table was scrolled; DragHandle is at
+    right:0 of the last data column th, exactly at the Actions left boundary.
+- src/hooks/useColumnResize.ts (new, first commit): companion hook for AdminTable
+- src/styles/admin.css (new, first commit): shared Admin spacing/layout CSS
+- server/scripts/migrate-supplier-addresses.js (new, first commit): idempotent
+  migration for supplier_addresses table structure
+- CLAUDE_CONTEXT.md: updated
 
 ### Session 2026-05-29 (session 13)
 Fixed in this session:

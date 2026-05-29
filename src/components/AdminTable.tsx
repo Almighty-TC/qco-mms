@@ -18,8 +18,9 @@ type RowCtx = { hov: boolean; dark: boolean }
 const RowCtx = createContext<RowCtx>({ hov: false, dark: false })
 
 // ─── DRAG HANDLE ────────────────────────────────────────────────
-// Two-layer design: 1px subtle grey divider always present; 6px orange
+// Two-layer design: 1px subtle grey divider always present; 8px orange
 // drag target appears on hover so orange is never a resting state.
+// The hit target is 8px wide (widened from 6px for easier grabbing).
 function DragHandle({
   onMouseDown,
   dark,
@@ -38,19 +39,19 @@ function DragHandle({
         background: dividerColor,
         pointerEvents: 'none',
       }} />
-      {/* ── 6px drag target — transparent at rest, orange on hover ── */}
+      {/* ── 8px drag target — transparent at rest, orange on hover ── */}
       <div
         onMouseDown={onMouseDown}
         onMouseEnter={() => setHov(true)}
         onMouseLeave={() => setHov(false)}
         style={{
           position: 'absolute', right: 0, top: 0,
-          width: 6, height: '100%',
+          width: 8, height: '100%',
           cursor: 'col-resize',
           background: hov ? '#E84E0F' : 'transparent',
           opacity: hov ? 0.6 : 1,
           transition: 'background 150ms, opacity 150ms',
-          zIndex: 1,
+          zIndex: 3,
         }}
       />
     </>
@@ -129,8 +130,9 @@ export function AdminTable({ tableId, columns, dark, children, empty, top }: Adm
         }}>
           <tr>
             {columns.map((col, i) => {
-              const isLast  = i === columns.length - 1
-              const canDrag = !col.noResize
+              const isLast         = i === columns.length - 1
+              const isLastResizable = i === columns.length - 2  // last column before Actions
+              const canDrag        = !col.noResize
               return (
                 <th key={i} title={col.label} style={{
                   height: 36,
@@ -147,6 +149,10 @@ export function AdminTable({ tableId, columns, dark, children, empty, top }: Adm
                   whiteSpace: 'nowrap',
                   boxSizing: 'border-box',
                   borderBottom: `1px solid ${borderCol}`,
+                  // Last data column before Actions: z-index:2 ensures its
+                  // DragHandle stays visible above the sticky Actions header
+                  // when the table is scrolled horizontally.
+                  ...(isLastResizable && canDrag ? { zIndex: 2 } : {}),
                   ...(isLast ? { position: 'sticky' as const, right: 0, background: headerBg, zIndex: 1 } : {}),
                 }}>
                   {col.label}
