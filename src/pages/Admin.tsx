@@ -618,7 +618,7 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
   return (
     <>
       {/* ─── FILTERS + TOOLBAR ──────────────────────────── */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'nowrap' }}>
+      <div className="admin-toolbar" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'nowrap' }}>
         <input
           value={search} onChange={(e) => onSearch(e.target.value)}
           placeholder="Search name, email, company…"
@@ -1587,7 +1587,7 @@ function NotificationsTab({ dark }: { dark: boolean }) {
   return (
     <>
       {/* ─── FILTERS + TOOLBAR ──────────────────────────── */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+      <div className="admin-toolbar" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         {(['all', 'unread'] as const).map(f => (
           <button key={f} onClick={() => setFilter(f)} style={{ padding: '6px 14px', borderRadius: 6, fontSize: 12, fontWeight: filter === f ? 600 : 400, border: `1px solid ${filter === f ? '#E84E0F' : (dark ? '#334155' : '#dde3ed')}`, background: filter === f ? 'rgba(232,78,15,0.1)' : 'transparent', color: filter === f ? '#E84E0F' : '#64748b', cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
             {f.charAt(0).toUpperCase() + f.slice(1)}
@@ -2043,7 +2043,7 @@ function SuppliersTab({ dark }: { dark: boolean }) {
 
   return (
     <>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+      <div className="admin-toolbar" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, code, country…" style={{ ...inp(dark), width: 240 }} />
         <select value={filterSt} onChange={e => setFilterSt(e.target.value)} style={{ ...inp(dark), width: 120 }}>
           <option value="">All statuses</option>
@@ -2347,7 +2347,7 @@ function ProjectsAdminTab({ dark }: { dark: boolean }) {
   return (
     <>
       {/* ─── FILTERS + TOOLBAR ──────────────────────────── */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+      <div className="admin-toolbar" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search code, name, client…" style={{ ...inp(dark), width: 260 }} />
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: '#94a3b8' }}>{filtered.length} project{filtered.length !== 1 ? 's' : ''}</span>
@@ -2574,7 +2574,7 @@ function WarehousesTab({ dark }: { dark: boolean }) {
   return (
     <>
       {/* ─── FILTERS + TOOLBAR ──────────────────────────── */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+      <div className="admin-toolbar" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, code, state…" style={{ ...inp(dark), width: 240 }} />
         <select value={filterSt} onChange={e => setFilterSt(e.target.value)} style={{ ...inp(dark), width: 120 }}>
           <option value="">All statuses</option>
@@ -2778,7 +2778,7 @@ function UomTab({ dark }: { dark: boolean }) {
   return (
     <>
       {/* ─── FILTERS + TOOLBAR ──────────────────────────── */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+      <div className="admin-toolbar" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search code or description…" style={{ ...inp(dark), width: 260 }} />
         <select value={filterSt} onChange={e => setFilterSt(e.target.value)} style={{ ...inp(dark), width: 120 }}>
           <option value="">All statuses</option>
@@ -2937,7 +2937,7 @@ function AcronymsTab({ dark }: { dark: boolean }) {
   return (
     <>
       {/* ─── FILTERS + TOOLBAR ──────────────────────────── */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+      <div className="admin-toolbar" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search acronym or definition…" style={{ ...inp(dark), width: 260 }} />
         <select value={filterMod} onChange={e => setFilterMod(e.target.value)} style={{ ...inp(dark), width: 160 }}>
           <option value="">All modules</option>
@@ -3125,7 +3125,7 @@ function IncoTermsTab({ dark }: { dark: boolean }) {
   return (
     <>
       {/* ─── FILTERS + TOOLBAR ──────────────────────────── */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+      <div className="admin-toolbar" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search code, name, mode…" style={{ ...inp(dark), width: 260 }} />
         <select value={filterSt} onChange={e => setFilterSt(e.target.value)} style={{ ...inp(dark), width: 120 }}>
           <option value="">All statuses</option>

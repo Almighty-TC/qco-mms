@@ -7,8 +7,8 @@
 /* Used to offset sticky thead so it pins below the sticky elements above.
    Adjust these if the rendered heights change (inspect in browser DevTools). */
 :root {
-  --admin-header-height: 104px; /* .admin-header-wrap: title + subtitle + tab bar */
-  --toolbar-height:       44px; /* .admin-toolbar: 6px padding + 32px inputs + 6px padding */
+  --admin-header-height: 117px; /* .admin-header-wrap measured clientHeight */
+  --toolbar-height:       44px; /* .admin-toolbar: 6px padding-top + 32px inputs + 6px padding-bottom */
 }
 
 /* ─── PAGE WRAPPER ─────────────────────────────────────────────── */
@@ -59,13 +59,17 @@
 }
 
 /* ─── FILTER / TOOLBAR ROW ─────────────────────────────────────── */
-/* Applied to the search + filter + action-button row above each table. */
+/* Sticky so it stays visible while the table body scrolls under it.
+   padding-bottom (not margin-bottom) so background covers the gap below. */
 .admin-toolbar {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 6px;
   padding: 6px 0;
+  position: sticky;
+  top: var(--admin-header-height);
+  z-index: 19;
+  background: inherit;
 }
 
 /* ─── TABLE WRAPPER ────────────────────────────────────────────── */
