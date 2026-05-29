@@ -1,6 +1,6 @@
 # QCO MMS - Claude Context & Build Tracker
 Last updated: 2026-05-29
-Last commit: (pending — see session 11 below)
+Last commit: (pending — see session 12 below)
 
 ## MODULE STATUS
 - Login: ✅ Complete
@@ -88,13 +88,45 @@ forward (Procurement, Expediting, VDRL, Logistics, etc.).
   — ON DUPLICATE KEY UPDATE now works correctly
 - projects table: client, start_date, end_date columns added via migration
 - 27 users total in DB; project-scoped roles have user_wbs_access rows
+- Full schema audit complete (session 12): 39 changes applied, 31 tables total
+- qmat_schema.sql exported (mysqldump --no-data, 899 lines, all 31 tables)
+
+## DB SCHEMA STATUS (session 12 — authoritative)
+All tables verified and patched via server/scripts/migrate-full-schema.js (idempotent).
+
+### Tables created (were missing):
+- `supplier_addresses` — normalised supplier address rows (type, line1/2, city, state, postcode, country)
+- `user_project_access` — project-level access control (UNIQUE user_id+project_id; view/edit/manage)
+
+### Columns added:
+- `warehouses`: city, postcode, country (VARCHAR 100/20/100)
+- `units_of_measure`: created_by (INT FK→users), updated_at (auto-update)
+- `acronyms`: created_by (INT FK→users), updated_at (auto-update)
+- `inco_terms`: created_by (INT FK→users), updated_at (auto-update)
+- `notifications`: related_entity_type (VARCHAR 50), related_entity_id (INT)
+- `audit_log`: entity_type, entity_id, before_value (JSON), after_value (JSON), reason_category, reason_detail
+- `purchase_orders`: supplier_id (FK→suppliers), inco_term_id (FK→inco_terms), warehouse_id (FK→warehouses)
+  (vendor_name/vendor_code kept for backwards compat)
+- `po_lines`: uom_id (FK→units_of_measure), unit_price (DECIMAL 15,4),
+  total_price (GENERATED STORED = qty * unit_price) — uom varchar kept for backwards compat
+
+### Foreign keys added:
+warehouses.created_by, units_of_measure.created_by, acronyms.created_by, inco_terms.created_by,
+suppliers.created_by, audit_log.user_id, user_wbs_access.created_by, password_history.user_id,
+po_lines.uom_id, purchase_orders.supplier_id/inco_term_id/warehouse_id
+
+### Unique indexes added:
+- role_permissions: UNIQUE KEY uq_role_module (role, module)
+- user_wbs_access: UNIQUE KEY uq_wbs_access (user_id, project_id, wbs_code)
 
 ## NEXT SESSION - START HERE
 
 1. Visual test at 1440/1280/1024/768px — check sticky header and table widths
 2. Admin module can be marked ✅ Complete once visual testing passes
-3. Next modules to build: Procurement (PO list, add PO, supplier/WBS linkage)
+3. Next module: Procurement (PO list, add PO, supplier/WBS linkage)
    — read QMAT-prototype.html and WIREFRAME_INVENTORY.md first
+   — purchase_orders now has supplier_id FK + inco_term_id FK + warehouse_id FK
+   — po_lines now has uom_id FK + unit_price + total_price (GENERATED)
 
 ## DB DATA STATUS (session 10)
 - 4 Project Team dummy users added (is_external=0, company != 'QCO Group'):
@@ -121,6 +153,20 @@ forward (Procurement, Expediting, VDRL, Logistics, etc.).
 See docs/USER_MANUAL_STATUS.md
 
 ## SESSION HISTORY
+
+### Session 2026-05-29 (session 12)
+Fixed in this session:
+- server/scripts/migrate-full-schema.js (new, run ✓):
+  - Full idempotent schema migration — 39 changes applied across all tables
+  - Created missing tables: supplier_addresses, user_project_access
+  - Added missing columns to: warehouses, units_of_measure, acronyms, inco_terms,
+    notifications, audit_log, purchase_orders, po_lines
+  - Added missing FKs to: warehouses, units_of_measure, acronyms, inco_terms,
+    suppliers, audit_log, user_wbs_access, password_history, po_lines, purchase_orders
+  - Added UNIQUE KEY uq_role_module on role_permissions (role, module)
+  - Added UNIQUE KEY uq_wbs_access on user_wbs_access (user_id, project_id, wbs_code)
+- qmat_schema.sql (new): full schema export via mysqldump --no-data (31 tables, 899 lines)
+- CLAUDE_CONTEXT.md: added DB SCHEMA STATUS section, updated NEXT SESSION
 
 ### Session 2026-05-29 (session 11)
 Fixed in this session:
