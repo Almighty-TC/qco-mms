@@ -72,7 +72,7 @@ type AdminTableProps = {
   dark: boolean
   children: React.ReactNode
   empty?: string
-  top?: number   // sticky top offset for thead (admin header height)
+  top?: string | number   // sticky top offset for thead; defaults to CSS calc of header + toolbar
 }
 
 export function AdminTable({ tableId, columns, dark, children, empty, top }: AdminTableProps) {
@@ -164,7 +164,7 @@ export function AdminTable({ tableId, columns, dark, children, empty, top }: Adm
             top prop = admin-header-wrap height, passed from each tab. */}
         <thead style={{
           position: 'sticky',
-          top: top ?? 0,
+          top: top ?? 'calc(var(--admin-header-height) + var(--toolbar-height))',
           zIndex: 10,
           background: headerBg,
         }}>

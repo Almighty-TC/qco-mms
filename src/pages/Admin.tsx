@@ -411,7 +411,7 @@ function ProjectsCell({ userId, count, fullAccess, dark }: {
 // ─── USERS TAB COMPONENT ────────────────────────────────────
 // Manages all user operations. Single-admin workflow — no approval
 // step required. onSave is optional for future parent callbacks.
-function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () => void; headerHeight?: number }) {
+function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
   const { user: me } = useAuth()
   const { addToast } = useToast()
   const [rows,      setRows]      = useState<AdminUser[]>([])
@@ -650,7 +650,7 @@ function UsersTab({ dark, onSave, headerHeight }: { dark: boolean; onSave?: () =
       {error && <Err msg={error} />}
 
       {/* ─── TABLE ──────────────────────────────────────── */}
-      <AdminTable tableId="admin_users" columns={U_COLS} dark={dark} empty="No users found." top={headerHeight}>
+      <AdminTable tableId="admin_users" columns={U_COLS} dark={dark} empty="No users found.">
         {filteredRows.map(u => (
           <AdminRow key={u.id} dark={dark}>
             {/* ─── NAME ───────────────────────────────────── */}
@@ -961,7 +961,7 @@ function OvDragHandle({ onMouseDown, dark }: { onMouseDown: (e: React.MouseEvent
 // showing all roles × modules as colour dots. Sticky thead sticks
 // relative to main content scroll container. 4-char column headers
 // with full module name in title tooltip.
-function AllRolesOverview({ dark, perms, top }: { dark: boolean; perms: RolePerm[]; top: number }) {
+function AllRolesOverview({ dark, perms, top }: { dark: boolean; perms: RolePerm[]; top: string | number }) {
   const ovDefaults = useMemo(() => [150, ...ALL_MODULES.map(() => 52)], [])
   const ovMins     = useMemo(() => [100, ...ALL_MODULES.map(() => 40)], [])
   const { widths, onMouseDown: ovDown, resetWidths: ovReset } = useColumnResize(
@@ -1080,7 +1080,7 @@ const PERM_MATRIX_COLS: AdminCol[] = [
   { label: 'WBS Scoped', width: 90, minWidth: 70, noResize: true },
 ]
 
-function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
+function PermissionsTab({ dark }: { dark: boolean }) {
   const { addToast } = useToast()
   // ─── MODE TOGGLE ──────────────────────────────────────────────
   const [permMode, setPermMode] = useState<'roles' | 'users'>('roles')
@@ -1295,7 +1295,7 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
   return (
     <div>
       {/* ─── STICKY HEADER (mode toggle + selector) ──────── */}
-      <div ref={stickyRef} style={{ position: 'sticky', top: headerHeight ?? 0, zIndex: 20, background: dark ? '#0f172a' : '#f1f4f8', paddingBottom: 12 }}>
+      <div ref={stickyRef} style={{ position: 'sticky', top: 'var(--admin-header-height)', zIndex: 20, background: dark ? '#0f172a' : '#f1f4f8', paddingBottom: 12 }}>
         {/* Mode toggle */}
         <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
           {(['roles', 'users'] as const).map(m => (
@@ -1371,7 +1371,7 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
           </div>
         )}
         {/* ─── PERMISSION GRID ──────────────────────────── */}
-        <AdminTable tableId="admin_perm_roles" columns={PERM_MATRIX_COLS} dark={dark} top={(headerHeight ?? 0) + stickyH}>
+        <AdminTable tableId="admin_perm_roles" columns={PERM_MATRIX_COLS} dark={dark} top={`calc(var(--admin-header-height) + ${stickyH}px)`}>
           {ALL_MODULES.map(mod => (
             <AdminRow key={mod} dark={dark}>
               <AdminCell title={mod.replace(/_/g, ' ')}>{mod.replace(/_/g, ' ')}</AdminCell>
@@ -1390,7 +1390,7 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
           ))}
         </AdminTable>
         {/* ─── ROLE SUMMARY (all roles overview) ───────── */}
-        <AllRolesOverview dark={dark} perms={perms} top={(headerHeight ?? 0) + stickyH} />
+        <AllRolesOverview dark={dark} perms={perms} top={`calc(var(--admin-header-height) + ${stickyH}px)`} />
         {/* ─── RESET ROLE CONFIRM ───────────────────────── */}
         {resetRoleOpen && (
           <SimpleConfirmModal
@@ -1422,7 +1422,7 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
               </div>
             )}
             {/* ─── OVERRIDE MATRIX ────────────────────── */}
-            <AdminTable tableId="admin_perm_users" columns={PERM_MATRIX_COLS} dark={dark} top={(headerHeight ?? 0) + stickyH}>
+            <AdminTable tableId="admin_perm_users" columns={PERM_MATRIX_COLS} dark={dark} top={`calc(var(--admin-header-height) + ${stickyH}px)`}>
               {ALL_MODULES.map(mod => {
                 const basePerm = effectiveRolePermsLookup[mod] as RolePerm | undefined
                 return (
@@ -1525,7 +1525,7 @@ const N_COLS: AdminCol[] = [
   { label: '',        width: 90,  minWidth: 90, noResize: true },
 ]
 
-function NotificationsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
+function NotificationsTab({ dark }: { dark: boolean }) {
   const { addToast } = useToast()
   const [rows,     setRows]     = useState<Notification[]>([])
   const [total,    setTotal]    = useState<number | null>(null)
@@ -1604,7 +1604,7 @@ function NotificationsTab({ dark, headerHeight }: { dark: boolean; headerHeight?
       {error && <Err msg={error} />}
 
       {/* ─── TABLE ──────────────────────────────────────── */}
-      <AdminTable tableId="admin_notifications" columns={N_COLS} dark={dark} empty="No notifications." top={headerHeight}>
+      <AdminTable tableId="admin_notifications" columns={N_COLS} dark={dark} empty="No notifications.">
         {rows.map(n => (
           <AdminRow key={n.id} dark={dark}>
             <AdminCell><span title={n.userEmail}>{n.userName}</span></AdminCell>
@@ -1881,7 +1881,7 @@ const S_COLS: AdminCol[] = [
   { label: '',          width: 90,  minWidth: 90,  noResize: true },
 ]
 
-function SuppliersTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
+function SuppliersTab({ dark }: { dark: boolean }) {
   const { addToast } = useToast()
   const [rows,           setRows]           = useState<Supplier[]>([])
   const [total,          setTotal]          = useState<number | null>(null)
@@ -2064,7 +2064,7 @@ function SuppliersTab({ dark, headerHeight }: { dark: boolean; headerHeight?: nu
 
       {error && <Err msg={error} />}
 
-      <AdminTable tableId="admin_suppliers" columns={S_COLS} dark={dark} empty="No suppliers found." top={headerHeight}>
+      <AdminTable tableId="admin_suppliers" columns={S_COLS} dark={dark} empty="No suppliers found.">
         {filtered.map(s => (
           <AdminRow key={s.id} dark={dark}>
             <AdminCell>{s.name}</AdminCell>
@@ -2241,7 +2241,7 @@ const P_COLS: AdminCol[] = [
   { label: '',       width: 90,  minWidth: 90,  noResize: true },
 ]
 
-function ProjectsAdminTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
+function ProjectsAdminTab({ dark }: { dark: boolean }) {
   const { addToast } = useToast()
   const [rows,     setRows]     = useState<AdminProject[]>([])
   const [search,   setSearch]   = useState('')
@@ -2357,7 +2357,7 @@ function ProjectsAdminTab({ dark, headerHeight }: { dark: boolean; headerHeight?
       {error && <Err msg={error} />}
 
       {/* ─── TABLE ──────────────────────────────────────── */}
-      <AdminTable tableId="admin_projects" columns={P_COLS} dark={dark} empty="No projects found." top={headerHeight}>
+      <AdminTable tableId="admin_projects" columns={P_COLS} dark={dark} empty="No projects found.">
         {filtered.map(p => (
           <AdminRow key={p.id} dark={dark}>
             {/* ─── CODE cell with inline RAG dot ───────────── */}
@@ -2472,7 +2472,7 @@ const WH_COLS: AdminCol[] = [
   { label: '',        width: 90,  minWidth: 90,  noResize: true },
 ]
 
-function WarehousesTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
+function WarehousesTab({ dark }: { dark: boolean }) {
   const { addToast } = useToast()
   const [rows,        setRows]        = useState<Warehouse[]>([])
   const [total,       setTotal]       = useState<number | null>(null)
@@ -2599,7 +2599,7 @@ function WarehousesTab({ dark, headerHeight }: { dark: boolean; headerHeight?: n
       {error && <Err msg={error} />}
 
       {/* ─── TABLE ──────────────────────────────────────── */}
-      <AdminTable tableId="admin_warehouses" columns={WH_COLS} dark={dark} empty="No warehouses found." top={headerHeight}>
+      <AdminTable tableId="admin_warehouses" columns={WH_COLS} dark={dark} empty="No warehouses found.">
         {filteredWH.map(w => (
           <AdminRow key={w.id} dark={dark}>
             <AdminCell>{w.name}</AdminCell>
@@ -2684,7 +2684,7 @@ const UOM_COLS: AdminCol[] = [
   { label: '',            width: 90,  minWidth: 90,  noResize: true },
 ]
 
-function UomTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
+function UomTab({ dark }: { dark: boolean }) {
   const { addToast } = useToast()
   const [rows,     setRows]     = useState<Uom[]>([])
   const [search,   setSearch]   = useState('')
@@ -2793,7 +2793,7 @@ function UomTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }
       {error && <Err msg={error} />}
 
       {/* ─── TABLE ──────────────────────────────────────── */}
-      <AdminTable tableId="admin_uom" columns={UOM_COLS} dark={dark} empty="No units of measure found." top={headerHeight}>
+      <AdminTable tableId="admin_uom" columns={UOM_COLS} dark={dark} empty="No units of measure found.">
         {rows.map(u => (
           <AdminRow key={u.id} dark={dark}>
             <AdminCell mono>{u.code}</AdminCell>
@@ -2869,7 +2869,7 @@ const ACR_COLS: AdminCol[] = [
   { label: '',           width: 90,  minWidth: 90,  noResize: true },
 ]
 
-function AcronymsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
+function AcronymsTab({ dark }: { dark: boolean }) {
   const { addToast } = useToast()
   const [rows,     setRows]     = useState<AcronymRow[]>([])
   const [search,   setSearch]   = useState('')
@@ -2951,7 +2951,7 @@ function AcronymsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: num
       {error && <Err msg={error} />}
 
       {/* ─── TABLE ──────────────────────────────────────── */}
-      <AdminTable tableId="admin_acronyms" columns={ACR_COLS} dark={dark} empty="No acronyms found." top={headerHeight}>
+      <AdminTable tableId="admin_acronyms" columns={ACR_COLS} dark={dark} empty="No acronyms found.">
         {rows.map(a => (
           <AdminRow key={a.id} dark={dark}>
             <AdminCell mono>{a.acronym}</AdminCell>
@@ -3028,7 +3028,7 @@ const INC_COLS: AdminCol[] = [
   { label: '',               width: 90,  minWidth: 90,  noResize: true },
 ]
 
-function IncoTermsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: number }) {
+function IncoTermsTab({ dark }: { dark: boolean }) {
   const { addToast } = useToast()
   const [rows,     setRows]     = useState<IncoTerm[]>([])
   const [search,   setSearch]   = useState('')
@@ -3140,7 +3140,7 @@ function IncoTermsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: nu
       {error && <Err msg={error} />}
 
       {/* ─── TABLE ──────────────────────────────────────── */}
-      <AdminTable tableId="admin_incoterms" columns={INC_COLS} dark={dark} empty="No INCO terms found." top={headerHeight}>
+      <AdminTable tableId="admin_incoterms" columns={INC_COLS} dark={dark} empty="No INCO terms found.">
         {rows.map(t => (
           <AdminRow key={t.id} dark={dark}>
             <AdminCell mono>{t.code}</AdminCell>
@@ -3230,25 +3230,6 @@ type AdminTab = 'users' | 'suppliers' | 'warehouses' | 'uom' | 'acronyms' | 'inc
 
 export function Admin({ dark }: { dark: boolean }) {
   const [tab, setTab] = useState<AdminTab>('users')
-  const [headerHeight, setHeaderHeight] = useState(0)
-  const headerRef = useRef<HTMLDivElement>(null)
-
-  // ─── STICKY HEADER HEIGHT ─────────────────────────────────────
-  // Measures the CSS-pixel height of the sticky admin-header-wrap and
-  // passes it to AdminTable as the `top` offset so the sticky thead
-  // pins exactly below it. offsetHeight is used (not getBoundingClientRect)
-  // because getBoundingClientRect returns viewport pixels which are
-  // scaled down by the app's CSS zoom; offsetHeight is in CSS pixels.
-  useEffect(() => {
-    const el = headerRef.current
-    if (!el) return
-    const obs = new ResizeObserver(() => {
-      setHeaderHeight(el.offsetHeight)
-    })
-    obs.observe(el)
-    return () => obs.disconnect()
-  }, [])
-
   const tabs: { key: AdminTab; label: string; icon: string }[] = [
     { key: 'users',         label: 'Users & Roles',      icon: '👤' },
     { key: 'permissions',   label: 'Permission Matrix',  icon: '🔐' },
@@ -3267,7 +3248,7 @@ export function Admin({ dark }: { dark: boolean }) {
     <div className="admin-page">
       <ToastContainer />
       {/* ─── STICKY HEADER (title + tab bar) ─────────────────── */}
-      <div ref={headerRef} className="admin-header-wrap">
+      <div className="admin-header-wrap">
         <h2 className="admin-title" style={{ color: dark ? '#f1f5f9' : '#0f172a' }}>
           Admin
         </h2>
@@ -3294,15 +3275,15 @@ export function Admin({ dark }: { dark: boolean }) {
       </div>
 
       {/* ─── TAB CONTENT ──────────────────────────────────── */}
-      {tab === 'users'         && <UsersTab          dark={dark} headerHeight={headerHeight} />}
-      {tab === 'suppliers'     && <SuppliersTab      dark={dark} headerHeight={headerHeight} />}
-      {tab === 'warehouses'    && <WarehousesTab     dark={dark} headerHeight={headerHeight} />}
-      {tab === 'uom'           && <UomTab            dark={dark} headerHeight={headerHeight} />}
-      {tab === 'acronyms'      && <AcronymsTab       dark={dark} headerHeight={headerHeight} />}
-      {tab === 'incoterms'     && <IncoTermsTab      dark={dark} headerHeight={headerHeight} />}
-      {tab === 'projects'      && <ProjectsAdminTab  dark={dark} headerHeight={headerHeight} />}
-      {tab === 'permissions'   && <PermissionsTab    dark={dark} headerHeight={headerHeight} />}
-      {tab === 'notifications' && <NotificationsTab  dark={dark} headerHeight={headerHeight} />}
+      {tab === 'users'         && <UsersTab          dark={dark} />}
+      {tab === 'suppliers'     && <SuppliersTab      dark={dark} />}
+      {tab === 'warehouses'    && <WarehousesTab     dark={dark} />}
+      {tab === 'uom'           && <UomTab            dark={dark} />}
+      {tab === 'acronyms'      && <AcronymsTab       dark={dark} />}
+      {tab === 'incoterms'     && <IncoTermsTab      dark={dark} />}
+      {tab === 'projects'      && <ProjectsAdminTab  dark={dark} />}
+      {tab === 'permissions'   && <PermissionsTab    dark={dark} />}
+      {tab === 'notifications' && <NotificationsTab  dark={dark} />}
       {tab === 'settings'      && <SystemSettingsTab dark={dark} />}
     </div>
     </ToastProvider>
