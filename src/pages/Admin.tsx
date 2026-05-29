@@ -1088,8 +1088,10 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
   const [perms,    setPerms]    = useState<RolePerm[]>([])
   const [selRole,  setSelRole]  = useState<string>('procurement_officer')
   const [editing,  setEditing]  = useState<Record<string, Record<PermKey, boolean>>>({})
-  const [saving,   setSaving]   = useState(false)
-  const [error,    setError]    = useState('')
+  const [saving,           setSaving]           = useState(false)
+  const [error,            setError]            = useState('')
+  const [resetRoleOpen,    setResetRoleOpen]    = useState(false)
+  const [resetRoleSaving,  setResetRoleSaving]  = useState(false)
 
   // ─── USER OVERRIDES STATE ─────────────────────────────────────
   const [usersList,       setUsersList]       = useState<{ id: number; fullName: string; role: string }[]>([])
@@ -1271,6 +1273,22 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
     } finally { setSaving(false) }
   }
 
+  // ─── RESET ROLE TO DEFAULTS ──────────────────────────────────
+  const resetRoleDefaults = async () => {
+    setResetRoleSaving(true)
+    try {
+      await axios.delete(`${API}/permissions/role/${selRole}`)
+      setEditing({})
+      load()
+      setResetRoleOpen(false)
+      addToast('success', `Permissions for ${selRole.replace(/_/g, ' ')} reset to defaults`)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setResetRoleOpen(false)
+      addToast('error', err.response?.data?.error ?? 'Reset failed')
+    } finally { setResetRoleSaving(false) }
+  }
+
   const isDirty = Object.keys(editing).length > 0
   const isAdmin = selRole === 'admin'
 
@@ -1288,16 +1306,21 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
         </div>
         {/* ─── ROLE SELECTOR ───────────────────────────────── */}
         {permMode === 'roles' && (
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <label style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>Role:</label>
             <select value={selRole} onChange={(e) => { setSelRole(e.target.value); setEditing({}) }} style={{ ...inp(dark), width: 220, height: 34 }}>
               {ALL_ROLES.filter(r => r !== 'admin').map(r => (
                 <option key={r} value={r}>{r.replace(/_/g, ' ')}</option>
               ))}
             </select>
-            {isDirty && !isAdmin && (
-              <button onClick={saveRole} disabled={saving} style={{ padding: '7px 18px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#E84E0F', color: '#fff', cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, fontFamily: 'IBM Plex Sans, sans-serif' }}>
-                {saving ? 'Saving…' : 'Save changes'}
+            {!isAdmin && (
+              <button onClick={saveRole} disabled={saving || !isDirty} style={{ padding: '7px 18px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#E84E0F', color: '#fff', cursor: (saving || !isDirty) ? 'not-allowed' : 'pointer', opacity: (saving || !isDirty) ? 0.45 : 1, fontFamily: 'IBM Plex Sans, sans-serif' }}>
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            )}
+            {!isAdmin && (
+              <button onClick={() => setResetRoleOpen(true)} disabled={resetRoleSaving} style={{ padding: '7px 14px', borderRadius: 6, fontSize: 13, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: resetRoleSaving ? 'not-allowed' : 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>
+                Reset to defaults
               </button>
             )}
             {isDirty && (
@@ -1368,6 +1391,19 @@ function PermissionsTab({ dark, headerHeight }: { dark: boolean; headerHeight?: 
         </AdminTable>
         {/* ─── ROLE SUMMARY (all roles overview) ───────── */}
         <AllRolesOverview dark={dark} perms={perms} top={(headerHeight ?? 0) + stickyH} />
+        {/* ─── RESET ROLE CONFIRM ───────────────────────── */}
+        {resetRoleOpen && (
+          <SimpleConfirmModal
+            dark={dark}
+            title="Reset to Defaults"
+            message={`Reset all permissions for "${selRole.replace(/_/g, ' ')}" to system defaults? This cannot be undone.`}
+            confirmLabel="Reset"
+            confirmStyle="warning"
+            onConfirm={resetRoleDefaults}
+            onCancel={() => setResetRoleOpen(false)}
+            saving={resetRoleSaving}
+          />
+        )}
       </>)}
 
       {/* ─── USER OVERRIDES MODE CONTENT ─────────────────── */}

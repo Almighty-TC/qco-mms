@@ -59,10 +59,11 @@ function DragHandle({
 }
 
 // ─── ADMIN TABLE ────────────────────────────────────────────────
-// Single-table design with a sticky <thead>. The main content scroll
-// container (App.tsx, position:fixed, overflow:auto) handles all
-// scrolling. overflow:clip on the outer div preserves border-radius
-// without creating a new scroll container that would break sticky.
+// Single-table design with a sticky <thead>. overflowX:auto enables
+// horizontal scroll at the table wrapper level. overflowY:clip clips
+// vertically without creating a Y scroll container, so position:sticky
+// on thead still works relative to the main content scroll container
+// (App.tsx). No column is sticky to the right — all columns scroll freely.
 type AdminTableProps = {
   tableId: string
   columns: AdminCol[]
@@ -105,10 +106,11 @@ export function AdminTable({ tableId, columns, dark, children, empty, top }: Adm
       background: dark ? '#1e293b' : '#ffffff',
       border: `1px solid ${borderCol}`,
       borderRadius: 10,
-      // overflow:clip preserves border-radius clipping WITHOUT creating
-      // a scroll container, so position:sticky in thead still works
-      // relative to the main content scroll container (App.tsx).
-      overflow: 'clip',
+      // overflowX:auto — horizontal scroll at table level.
+      // overflowY:clip — visual clip only, does NOT create a Y scroll
+      // container, so position:sticky on thead works relative to App.tsx.
+      overflowX: 'auto',
+      overflowY: 'clip',
       boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
     }}>
       <table style={{
@@ -130,9 +132,8 @@ export function AdminTable({ tableId, columns, dark, children, empty, top }: Adm
         }}>
           <tr>
             {columns.map((col, i) => {
-              const isLast         = i === columns.length - 1
-              const isLastResizable = i === columns.length - 2  // last column before Actions
-              const canDrag        = !col.noResize
+              const isLast  = i === columns.length - 1
+              const canDrag = !col.noResize
               return (
                 <th key={i} title={col.label} style={{
                   height: 36,
@@ -149,11 +150,6 @@ export function AdminTable({ tableId, columns, dark, children, empty, top }: Adm
                   whiteSpace: 'nowrap',
                   boxSizing: 'border-box',
                   borderBottom: `1px solid ${borderCol}`,
-                  // Last data column before Actions: z-index:2 ensures its
-                  // DragHandle stays visible above the sticky Actions header
-                  // when the table is scrolled horizontally.
-                  ...(isLastResizable && canDrag ? { zIndex: 2 } : {}),
-                  ...(isLast ? { position: 'sticky' as const, right: 0, background: headerBg, zIndex: 1 } : {}),
                 }}>
                   {col.label}
                   {canDrag && <DragHandle dark={dark} onMouseDown={e => onMouseDown(i, e)} />}
@@ -258,19 +254,12 @@ export function AdminCell({ children, mono, muted, center, title }: {
 }
 
 // ─── ADMIN ACTIONS ──────────────────────────────────────────────
-// Sticky-right action cell for Edit / Deactivate / Delete buttons.
-// Background from RowCtx matches the row on hover — prevents the
-// transparent "hole" that appears when sticky cells overlap.
+// Action cell for Edit / Deactivate / Delete buttons. Flows naturally
+// at the end of the row — not sticky. Table scrolls horizontally to reach it.
 export function AdminActions({ children }: { children: React.ReactNode }) {
-  const { hov, dark } = useContext(RowCtx)
-  const bg = hov ? (dark ? '#1e2d4a' : '#f8fafc') : (dark ? '#1e293b' : '#ffffff')
+  const { dark } = useContext(RowCtx)
   return (
     <td style={{
-      position: 'sticky',
-      right: 0,
-      zIndex: 2,
-      background: bg,
-      transition: 'background 100ms',
       padding: '0 8px',
       height: 44,
       verticalAlign: 'middle',

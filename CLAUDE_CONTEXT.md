@@ -1,6 +1,6 @@
 # QCO MMS - Claude Context & Build Tracker
 Last updated: 2026-05-29
-Last commit: (pending — see session 13 below)
+Last commit: 3a23233
 
 ## MODULE STATUS
 - Login: ✅ Complete
@@ -15,8 +15,10 @@ Last commit: (pending — see session 13 below)
 - [ ] Verify sticky thead stays behind sticky admin-header-wrap at all zoom levels
 
 ### Table UX
-- [x] Resize handle on last data column (before Actions): fixed — z-index:2 on
-      last resizable th, DragHandle z-index:3, hit target 8px (was 6px)
+- [x] Resize handle on last data column (before Actions): fixed in session 14
+- [x] Actions column sticky-right: REMOVED in session 15 — all columns scroll freely
+- [x] Horizontal scroll: AdminTable wrapper now has overflowX:auto / overflowY:clip
+- [x] Role Permissions: Reset to defaults + always-visible Save button added (session 15)
 - [ ] Toolbar ↺ reset button position: currently inside last th (table header),
       not left of + Add button in toolbar — visually correct but position differs from spec
 
@@ -51,14 +53,22 @@ changed in any screen, the ℹ help modal for that screen MUST be updated in the
 same commit to reflect the change. This applies to every module built going
 forward (Procurement, Expediting, VDRL, Logistics, etc.).
 
+### Table Scroll Rule (ALL modules — permanent)
+- Tables NEVER clip or hide content — always scrollable horizontally
+- AdminTable wrapper: overflowX:auto (scroll) + overflowY:clip (visual only, no Y scroll container)
+- No column is ever sticky to the right — only thead sticks to the top
+- Users scroll horizontally to reach the Actions column on narrow screens
+
 ## DECISIONS MADE
 
 ### Architecture
 - Fixed-position layout: topbar (z:100), sidebar (z:90), main content (z:1)
   Main content is `position:fixed; overflow:auto` — the ONLY scroll container
-- AdminTable: single <table> with sticky <thead top={headerHeight}> 
-  overflow:clip on outer div — preserves border-radius, does NOT create BFC,
-  so position:sticky on thead works relative to main content scroll container
+- AdminTable: single <table> with sticky <thead top={headerHeight}>
+  overflowX:auto on outer div — enables horizontal scroll at table level.
+  overflowY:clip on outer div — visual clip only, does NOT create Y scroll container,
+  so position:sticky on thead still works relative to main content scroll container.
+  NO column is ever sticky to the right — only thead is sticky (to the top).
 - Flex column: AdminCol with flex:true — colgroup uses <col /> (no width) until
   user drags it; after drag, explicit width applied. All tabs have one flex column.
 - canDrag = !col.noResize (flex columns are NOW resizable)
@@ -155,6 +165,29 @@ po_lines.uom_id, purchase_orders.supplier_id/inco_term_id/warehouse_id
 See docs/USER_MANUAL_STATUS.md
 
 ## SESSION HISTORY
+
+### Session 2026-05-29 (session 15)
+Fixed in this session:
+- src/components/AdminTable.tsx:
+  - Removed position:sticky / right:0 / zIndex:2 from AdminActions td (global rule:
+    no column is ever sticky to the right; Actions scrolls with the table).
+  - Removed position:sticky / right:0 / zIndex:1 from last <th> (Actions header).
+  - Removed isLastResizable zIndex:2 (no longer needed without sticky Actions).
+  - Changed outer wrapper overflow from 'clip' to overflowX:'auto' + overflowY:'clip'.
+    overflowY:'clip' is a visual-only clip that does NOT create a Y scroll container,
+    so position:sticky on thead still works relative to App.tsx main content area.
+- server/routes/admin.js:
+  - Added ROLE_DEFAULTS constant (canonical per-role permission spec, matching
+    seed-role-permissions.js) for use by the reset endpoint.
+  - Added DELETE /permissions/role/:role — wipes and re-seeds from ROLE_DEFAULTS.
+- src/pages/Admin.tsx (PermissionsTab — roles mode):
+  - Added resetRoleOpen / resetRoleSaving state.
+  - Added resetRoleDefaults() function: DELETE /api/admin/permissions/role/:role,
+    reloads permissions, clears editing, shows success/error toast.
+  - Role selector row: Save button now always visible (disabled + faded when not
+    dirty); Reset to defaults button always visible next to Save.
+  - Added SimpleConfirmModal for role reset with warning style.
+- CLAUDE_CONTEXT.md: updated
 
 ### Session 2026-05-29 (session 14)
 Fixed in this session:

@@ -20,6 +20,29 @@ const VALID_MODULES = new Set([
 const VALID_RAG    = new Set(['red', 'amber', 'green', 'blue', 'grey'])
 const VALID_STATUS = new Set(['active', 'inactive'])
 
+// ─── DEFAULT ROLE PERMISSIONS ────────────────────────────────
+// Canonical per-role defaults from seed-role-permissions.js.
+// Format per entry: [module, can_view, can_create, can_edit, can_approve, can_delete, wbs_scoped]
+// Used by DELETE /permissions/role/:role to restore a role to defaults.
+const T = 1, F = 0
+const ROLE_DEFAULTS = {
+  ceo:               [['dashboard',T,F,F,F,F,F],['procurement',T,F,F,F,F,F],['expediting',T,F,F,F,F,F],['vdrl',T,F,F,F,F,F],['logistics',T,F,F,F,F,F],['material_control',T,F,F,F,F,F],['traceability',T,F,F,F,F,F],['document_inbox',T,F,F,F,F,F],['audit',T,F,F,F,F,F],['admin',T,F,F,F,F,F]],
+  director:          [['dashboard',T,F,F,F,F,F],['procurement',T,F,F,F,F,F],['expediting',T,F,F,F,F,F],['vdrl',T,F,F,F,F,F],['logistics',T,F,F,F,F,F],['material_control',T,F,F,F,F,F],['traceability',T,F,F,F,F,F],['document_inbox',T,F,F,F,F,F],['audit',T,F,F,F,F,F],['admin',T,F,F,F,F,F]],
+  project_director:  [['dashboard',T,F,F,F,F,F],['procurement',T,F,F,F,F,F],['expediting',T,F,F,F,F,F],['vdrl',T,F,F,F,F,F],['logistics',T,F,F,F,F,F],['material_control',T,F,F,F,F,F],['traceability',T,F,F,F,F,F],['document_inbox',T,F,F,F,F,F],['audit',T,F,F,F,F,F],['admin',F,F,F,F,F,F]],
+  project_manager:   [['dashboard',T,F,F,F,F,F],['procurement',T,T,T,F,F,F],['expediting',T,T,T,F,F,F],['vdrl',T,T,T,F,F,F],['logistics',T,T,F,F,F,F],['material_control',T,F,F,F,F,F],['traceability',T,F,F,F,F,F],['document_inbox',T,T,F,F,F,F],['audit',F,F,F,F,F,F],['admin',F,F,F,F,F,F]],
+  procurement_manager: [['dashboard',T,F,F,F,F,F],['procurement',T,T,T,T,T,F],['expediting',T,F,F,F,F,F],['vdrl',T,T,F,F,F,F],['logistics',T,F,F,F,F,F],['material_control',F,F,F,F,F,F],['traceability',F,F,F,F,F,F],['document_inbox',T,T,F,F,F,F],['audit',T,F,F,F,F,F],['admin',F,F,F,F,F,F]],
+  procurement_officer: [['dashboard',T,F,F,F,F,F],['procurement',T,T,T,F,F,F],['expediting',T,F,F,F,F,F],['vdrl',T,T,F,F,F,F],['logistics',F,F,F,F,F,F],['material_control',F,F,F,F,F,F],['traceability',F,F,F,F,F,F],['document_inbox',T,F,F,F,F,F],['audit',F,F,F,F,F,F],['admin',F,F,F,F,F,F]],
+  expediting_manager: [['dashboard',T,F,F,F,F,F],['procurement',T,F,F,F,F,F],['expediting',T,T,T,T,T,F],['vdrl',T,T,T,F,F,F],['logistics',T,T,T,F,F,F],['material_control',F,F,F,F,F,F],['traceability',F,F,F,F,F,F],['document_inbox',T,T,T,F,F,F],['audit',T,F,F,F,F,F],['admin',F,F,F,F,F,F]],
+  expeditor:         [['dashboard',T,F,F,F,F,F],['procurement',T,F,F,F,F,F],['expediting',T,T,T,F,F,F],['vdrl',T,T,F,F,F,F],['logistics',T,F,F,F,F,F],['material_control',F,F,F,F,F,F],['traceability',F,F,F,F,F,F],['document_inbox',T,T,F,F,F,F],['audit',F,F,F,F,F,F],['admin',F,F,F,F,F,F]],
+  logistics_manager: [['dashboard',T,F,F,F,F,F],['procurement',T,F,F,F,F,F],['expediting',T,F,F,F,F,F],['vdrl',F,F,F,F,F,F],['logistics',T,T,T,T,T,F],['material_control',T,T,T,F,F,F],['traceability',T,F,F,F,F,F],['document_inbox',T,T,T,F,F,F],['audit',F,F,F,F,F,F],['admin',F,F,F,F,F,F]],
+  warehouse:         [['dashboard',T,F,F,F,F,F],['procurement',F,F,F,F,F,F],['expediting',F,F,F,F,F,F],['vdrl',F,F,F,F,F,F],['logistics',T,F,T,F,F,F],['material_control',T,T,T,T,F,F],['traceability',T,T,F,F,F,F],['document_inbox',T,F,F,F,F,F],['audit',F,F,F,F,F,F],['admin',F,F,F,F,F,F]],
+  vendor:            [['dashboard',F,F,F,F,F,F],['procurement',T,F,F,F,F,F],['expediting',T,F,F,F,F,F],['vdrl',T,T,F,F,F,F],['logistics',F,F,F,F,F,F],['material_control',F,F,F,F,F,F],['traceability',F,F,F,F,F,F],['document_inbox',T,T,F,F,F,F],['audit',F,F,F,F,F,F],['admin',F,F,F,F,F,F]],
+  freight_forwarder: [['dashboard',F,F,F,F,F,F],['procurement',F,F,F,F,F,F],['expediting',F,F,F,F,F,F],['vdrl',F,F,F,F,F,F],['logistics',T,F,T,F,F,F],['material_control',F,F,F,F,F,F],['traceability',F,F,F,F,F,F],['document_inbox',T,T,F,F,F,F],['audit',F,F,F,F,F,F],['admin',F,F,F,F,F,F]],
+  site_contractor:   [['dashboard',F,F,F,F,F,F],['procurement',F,F,F,F,F,F],['expediting',F,F,F,F,F,F],['vdrl',F,F,F,F,F,F],['logistics',F,F,F,F,F,F],['material_control',T,F,F,F,F,F],['traceability',T,F,F,F,F,F],['document_inbox',T,F,F,F,F,F],['audit',F,F,F,F,F,F],['admin',F,F,F,F,F,F]],
+  subcontractor:     [['dashboard',F,F,F,F,F,F],['procurement',F,F,F,F,F,F],['expediting',F,F,F,F,F,F],['vdrl',F,F,F,F,F,F],['logistics',F,F,F,F,F,F],['material_control',T,F,F,F,F,F],['traceability',F,F,F,F,F,F],['document_inbox',T,F,F,F,F,F],['audit',F,F,F,F,F,F],['admin',F,F,F,F,F,F]],
+  viewer:            [['dashboard',T,F,F,F,F,F],['procurement',T,F,F,F,F,F],['expediting',T,F,F,F,F,F],['vdrl',T,F,F,F,F,F],['logistics',T,F,F,F,F,F],['material_control',T,F,F,F,F,F],['traceability',T,F,F,F,F,F],['document_inbox',T,F,F,F,F,F],['audit',T,F,F,F,F,F],['admin',F,F,F,F,F,F]],
+}
+
 // ─── ADMIN GUARD ────────────────────────────────────────────
 // All routes in this file require role = 'admin' in the JWT.
 // authenticateToken (applied in index.js) has already verified the
@@ -766,6 +789,29 @@ router.put('/permissions/:role/:module', async (req, res) => {
        can_approve?1:0, can_delete?1:0, wbs_scoped?1:0]
     )
     audit(req, 'permissions.update', `role=${role} module=${module}`)
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ─── RESET ROLE PERMISSIONS TO DEFAULTS ─────────────────────
+// DELETE /permissions/role/:role — wipes and re-seeds from ROLE_DEFAULTS.
+router.delete('/permissions/role/:role', async (req, res) => {
+  const { role } = req.params
+  if (!VALID_ROLES.has(role))  return res.status(400).json({ error: 'Invalid role' })
+  if (role === 'admin')        return res.status(400).json({ error: 'Admin role cannot be reset' })
+  const defaults = ROLE_DEFAULTS[role]
+  if (!defaults)               return res.status(400).json({ error: `No defaults for role ${role}` })
+  try {
+    await db.query('DELETE FROM role_permissions WHERE role = ?', [role])
+    for (const [module, v, c, e, a, d, w] of defaults) {
+      await db.query(
+        `INSERT INTO role_permissions
+           (role, module, can_view, can_create, can_edit, can_approve, can_delete, wbs_scoped, is_default)
+         VALUES (?,?,?,?,?,?,?,?,1)`,
+        [role, module, v, c, e, a, d, w]
+      )
+    }
+    audit(req, 'permissions.reset_role', `role=${role}`)
     res.json({ ok: true })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
