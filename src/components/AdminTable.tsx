@@ -164,7 +164,7 @@ export function AdminTable({ tableId, columns, dark, children, empty, top }: Adm
             top prop = admin-header-wrap height, passed from each tab. */}
         <thead style={{
           position: 'sticky',
-          top: top ?? 'calc(var(--admin-header-height) + var(--toolbar-height))',
+          top: top ?? 195,
           zIndex: 10,
           background: headerBg,
         }}>

@@ -3,14 +3,6 @@
    All Admin page and tab spacing lives here. Edit once, all tabs inherit.
    ═══════════════════════════════════════════════════════════════ */
 
-/* ─── STICKY HEIGHT CONSTANTS ──────────────────────────────────── */
-/* Used to offset sticky thead so it pins below the sticky elements above.
-   Adjust these if the rendered heights change (inspect in browser DevTools). */
-:root {
-  --admin-header-height: 108px; /* .admin-header-wrap measured clientHeight */
-  --toolbar-height:       44px; /* .admin-toolbar: 6px padding-top + 32px inputs + 6px padding-bottom */
-}
-
 /* ─── PAGE WRAPPER ─────────────────────────────────────────────── */
 /* background:inherit passes the main-content-div colour down the tree
    so admin-header-wrap (sticky) covers rows that scroll behind it. */
@@ -59,7 +51,8 @@
 }
 
 /* ─── FILTER / TOOLBAR ROW ─────────────────────────────────────── */
-/* Sticky so it stays visible while the table body scrolls under it.
+/* Sticky below admin-header-wrap. top is set via JS (toolbarRef.current.style.top)
+   so it tracks the header's actual rendered height at any zoom level.
    padding-bottom (not margin-bottom) so background covers the gap below. */
 .admin-toolbar {
   display: flex;
@@ -67,7 +60,7 @@
   gap: 8px;
   padding: 6px 0;
   position: sticky;
-  top: var(--admin-header-height);
+  top: 108px; /* fallback; overridden by JS useLayoutEffect in each tab */
   z-index: 19;
   background: inherit;
 }
