@@ -1,6 +1,6 @@
 # QCO MMS - Claude Context & Build Tracker
 Last updated: 2026-05-29
-Last commit: 3a23233
+Last commit: c6a97fb
 
 ## MODULE STATUS
 - Login: ✅ Complete
@@ -13,6 +13,9 @@ Last commit: 3a23233
 ### Layout & Scroll
 - [ ] Responsive layout: test at 1440/1280/1024/768px widths (visual test only)
 - [ ] Verify sticky thead stays behind sticky admin-header-wrap at all zoom levels
+- [x] Sticky thead offset: replaced ResizeObserver/headerHeight with CSS custom properties
+      --admin-header-height: 108px (measured), --toolbar-height: 44px
+      thead top = calc(108px + 44px) = 152px (admin.css, AdminTable.tsx)
 
 ### Table UX
 - [x] Resize handle on last data column (before Actions): fixed in session 14
@@ -72,7 +75,7 @@ forward (Procurement, Expediting, VDRL, Logistics, etc.).
 ### Architecture
 - Fixed-position layout: topbar (z:100), sidebar (z:90), main content (z:1)
   Main content is `position:fixed; overflow:auto` — the ONLY scroll container
-- AdminTable: single <table> with sticky <thead top={headerHeight}>
+- AdminTable: single <table> with sticky thead.
   overflowX:auto on outer div — enables horizontal scroll at table level.
   overflowY:clip on outer div — does NOT create a Y scroll container, so
   position:sticky on thead finds the main content div as scroll ancestor.
@@ -80,11 +83,19 @@ forward (Procurement, Expediting, VDRL, Logistics, etc.).
   making the wrapper a Y scroll container and breaking sticky — never use it.
   NO column is ever sticky to the right — only thead is sticky (to the top).
   Right/left fade gradient overlays indicate hidden horizontal content.
-- Flex column: AdminCol with flex:true — colgroup uses <col /> (no width) until
-  user drags it; after drag, explicit width applied. All tabs have one flex column.
+- Sticky thead offset: CSS custom properties in admin.css (not ResizeObserver).
+  --admin-header-height: 108px (.admin-header-wrap measured clientHeight)
+  --toolbar-height: 44px (.admin-toolbar: 6px padding + 32px inputs + 6px padding)
+  AdminTable thead default top: calc(var(--admin-header-height) + var(--toolbar-height))
+  Override with top prop (string|number) for tabs with extra sticky sub-headers
+  (PermissionsTab passes calc(var(--admin-header-height) + {stickyH}px)).
+  If header/toolbar heights change, update the two vars in admin.css only.
+- .admin-toolbar: position:sticky top:var(--admin-header-height) z-index:19
+  background:inherit. All 8 tab filter rows have className="admin-toolbar".
+  padding (not margin) for bottom gap so background covers content below.
+- Flex column: AdminCol with flex:true — no explicit width until user drags it;
+  after drag, stored width applied. All tabs have one flex column.
 - canDrag = !col.noResize (flex columns are NOW resizable)
-- Sticky top measurement: use element.offsetHeight (CSS pixels) NOT
-  getBoundingClientRect().height (viewport pixels) to avoid zoom mismatch
 - AuthContext uses lazy useState initialiser to set axios defaults before
   first render (fixes "no token" race condition on page load)
 - All Admin API calls use axios global default header (set in AuthContext)
@@ -93,7 +104,8 @@ forward (Procurement, Expediting, VDRL, Logistics, etc.).
 ### Design
 - Column drag handle: 1px grey divider at rest, 6px transparent hit target
   that turns #E84E0F at 0.6 opacity on hover. ALL columns (incl flex) resizable.
-- Tab bar: overflowX:auto so all 10 tabs stay visible at any width
+- Tab bar: overflowX:clip (NOT auto — auto forces overflowY to auto per CSS spec
+  §overflow-3, creating a scroll container that breaks position:sticky on thead)
 - Modals: portal-rendered to document.body so zoom CSS doesn't affect position
 - ↺ reset button: inside last th, absolutely positioned right edge, appears on all tables
 - Tab order: users → permissions → suppliers → warehouses → uom → acronyms →
@@ -176,6 +188,37 @@ po_lines.uom_id, purchase_orders.supplier_id/inco_term_id/warehouse_id
 See docs/USER_MANUAL_STATUS.md
 
 ## SESSION HISTORY
+
+### Session 2026-05-29 (session 16)
+Fixed in this session:
+- src/context/AuthContext.tsx:
+  - Added axios request interceptor as belt-and-suspenders: reads localStorage on
+    every request and sets Authorization header if not already present. Guards
+    against race where global default header isn't set before first API call.
+- src/components/AdminTable.tsx:
+  - Removed colgroup; column widths moved to <th> elements (tableLayout:fixed
+    makes th-widths authoritative; colgroup is not required).
+  - thead is now the FIRST child of <table> — no elements between table tag and thead.
+  - Added horizontal scroll indicator: scrollLeft/scrollRight state + ResizeObserver
+    on wrapper div; left/right gradient overlays appear when content is hidden.
+  - top prop type changed from number to string|number.
+  - Default thead top: calc(var(--admin-header-height) + var(--toolbar-height)).
+- src/pages/Admin.tsx:
+  - Removed headerHeight state, headerRef, and ResizeObserver from Admin component.
+  - Removed headerHeight prop from all 9 tab function signatures.
+  - Removed top={headerHeight} from all 8 simple AdminTable calls.
+  - PermissionsTab sticky sub-header: top changed from headerHeight??0 to
+    'var(--admin-header-height)'. AdminTable top changed from
+    (headerHeight??0)+stickyH to `calc(var(--admin-header-height) + ${stickyH}px)`.
+  - Added className="admin-toolbar" to all 8 filter/toolbar rows.
+  - Removed marginBottom:12 inline from all toolbar rows (spacing via CSS padding).
+  - Tab bar: overflowX changed from 'auto' to 'clip' — auto forced overflowY to
+    auto (CSS spec §overflow-3), creating a scroll container breaking sticky.
+- src/styles/admin.css:
+  - Added CSS custom properties: --admin-header-height: 108px, --toolbar-height: 44px.
+  - .admin-toolbar: added position:sticky, top:var(--admin-header-height),
+    z-index:19, background:inherit. Removed margin-bottom (uses padding only).
+- CLAUDE_CONTEXT.md: updated
 
 ### Session 2026-05-29 (session 15)
 Fixed in this session:
