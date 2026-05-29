@@ -9,7 +9,7 @@ export type AdminCol = {
   width: number       // default px width (ignored when flex: true)
   minWidth?: number   // minimum px width during drag
   noResize?: boolean  // suppress drag handle
-  flex?: boolean      // fills remaining table width; no explicit width in colgroup
+  flex?: boolean      // fills remaining table width; no explicit width on th until dragged
 }
 
 // ─── CONTEXT: ROW ───────────────────────────────────────────────
@@ -59,10 +59,12 @@ function DragHandle({
 }
 
 // ─── ADMIN TABLE ────────────────────────────────────────────────
-// Single-table design with a sticky <thead>. overflowX:auto on the
-// wrapper enables horizontal scroll. overflowY:visible lets vertical
-// overflow bleed through to App.tsx (the real Y scroll container) so
-// position:sticky on thead works relative to the main content area.
+// Single-table design. <thead> is the first child of <table> — no
+// <colgroup> precedes it. Column widths are set directly on <th>
+// elements; tableLayout:fixed makes th-widths authoritative.
+// overflowX:auto on wrapper for horizontal scroll; overflowY:clip
+// avoids creating a Y scroll container so position:sticky on thead
+// works relative to App.tsx (the real vertical scroll container).
 // No column is sticky to the right — all columns scroll freely.
 type AdminTableProps = {
   tableId: string
@@ -104,20 +106,6 @@ export function AdminTable({ tableId, columns, dark, children, empty, top }: Adm
     ro.observe(el)
     return () => { el.removeEventListener('scroll', update); ro.disconnect() }
   }, [])
-
-  // ─── COLGROUP ─────────────────────────────────────────────────
-  // Flex columns start with no explicit width so the browser fills
-  // remaining space. Once dragged (widths diverge from defaultWidths)
-  // an explicit width is applied so the user-set size persists.
-  const colgroup = (
-    <colgroup>
-      {columns.map((col, i) => (
-        col.flex && widths[i] === defaultWidths[i]
-          ? <col key={i} />
-          : <col key={i} style={{ width: widths[i] }} />
-      ))}
-    </colgroup>
-  )
 
   // ─── MINIMUM TABLE WIDTH ──────────────────────────────────────
   // Sum of all fixed column widths. Ensures the table is at least
@@ -169,10 +157,11 @@ export function AdminTable({ tableId, columns, dark, children, empty, top }: Adm
         borderSpacing: 0,
         tableLayout: 'fixed',
       }}>
-        {colgroup}
-
         {/* ─── STICKY HEADER ──────────────────────────────── */}
-        {/* top prop = admin-header-wrap height, passed from each tab */}
+        {/* thead is the FIRST child of table — no colgroup before it.
+            Column widths live on each <th> (tableLayout:fixed makes
+            th-widths authoritative; colgroup is not required).
+            top prop = admin-header-wrap height, passed from each tab. */}
         <thead style={{
           position: 'sticky',
           top: top ?? 0,
@@ -183,8 +172,15 @@ export function AdminTable({ tableId, columns, dark, children, empty, top }: Adm
             {columns.map((col, i) => {
               const isLast  = i === columns.length - 1
               const canDrag = !col.noResize
+              // Flex columns have no explicit width until the user drags them,
+              // so the browser fills remaining space. Once dragged, apply the
+              // stored width. Fixed columns always have an explicit width.
+              const thWidth = col.flex && widths[i] === defaultWidths[i]
+                ? undefined
+                : widths[i]
               return (
                 <th key={i} title={col.label} style={{
+                  width: thWidth,
                   height: 36,
                   padding: '0 12px',
                   fontSize: 10,
