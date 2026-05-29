@@ -1,6 +1,6 @@
 # QCO MMS - Claude Context & Build Tracker
-Last updated: 2026-05-29
-Last commit: c9a5ba9
+Last updated: 2026-05-30
+Last commit: da17595
 
 ## MODULE STATUS
 - Login: ✅ Complete
@@ -12,22 +12,13 @@ Last commit: c9a5ba9
 
 ### Layout & Scroll
 - [ ] Responsive layout: test at 1440/1280/1024/768px widths (visual test only)
-- [ ] **CRITICAL: Sticky thead broken on ALL admin tabs** — column header row
-      appears mid-table on scroll. thead computed top is 195px but still wrong.
-      Root cause unknown: either scroll container detection is wrong, or the
-      top value is not being applied to the right element.
-
-      NEXT SESSION — try this first (single CSS rule, no JS needed):
-        .admin-page thead th { position: sticky; top: 195px; z-index: 10; }
-      This bypasses all JS/prop plumbing and targets the th elements directly.
-      If that works, delete the useLayoutEffect + stickyTop machinery entirely.
-
-      Current state (commit c9a5ba9):
-      - Each tab has toolbarRef + useLayoutEffect computing stickyTop
-      - stickyTop passed as top prop to AdminTable
-      - AdminTable applies it as thead style.top
-      - CSS vars removed; .admin-toolbar top fallback 108px in admin.css
-      - PermissionsTab uses stickyRef instead of toolbarRef
+- [x] **RESOLVED: Sticky thead fixed on ALL admin tabs** (commit da17595)
+      Solution: AdminTable wrapper overflowX:'clip' + overflowY:'visible';
+      single shared useLayoutEffect in Admin component sets --thead-top CSS var
+      to toolbar.cssTop + toolbar.clientHeight (pure CSS-px, zoom-safe);
+      .admin-page thead { position:sticky; top:var(--thead-top,200px); }
+      Gap measured ≤ 1px on all 9 tabs. PermissionsTab uses data-thead-anchor
+      on its sticky selector div so the same formula covers its taller header.
 
 ### Table UX
 - [x] Resize handle on last data column (before Actions): fixed in session 14
@@ -52,6 +43,22 @@ Last commit: c9a5ba9
 
 ## GLOBAL RULES
 
+### User Colour System (ALL modules — permanent)
+All user/company colour coding must use `src/utils/userColours.ts`. Never hardcode
+colours inline in any component. Three tiers:
+- **QCO Group internal** → orange `#E84E0F` (company = 'QCO Group', not external)
+- **Project team / partner** → green `#2E7D32` (not QCO Group, not external role)
+- **External** → blue `#1D6FA4` (isExternal=1 OR role in vendor/freight_forwarder/site_contractor/subcontractor)
+
+Exported helpers:
+- `getUserColour(company, role, isExternal?)` → returns `{ border, bg, label }`
+- `getUserRowStyle(company, role, isExternal?)` → CSSProperties for left-edge `boxShadow: inset 3px 0 0 <colour>` + `paddingLeft: 9`
+- `getUserPillStyle(company, role, isExternal?)` → CSSProperties for filled pill badge
+- `USER_COLOURS` → constant record with all three tier objects (use for legends, never repeat hex values)
+
+Applied in Admin → Users & Roles today. Every future module that lists users in a
+table MUST apply `getUserRowStyle()` on the leftmost cell.
+
 ### Toast Rule (ALL modules — permanent)
 All save, create, update, delete, deactivate and reactivate actions MUST show
 a toast notification confirming the result. Use the shared `useToast` hook
@@ -70,14 +77,16 @@ forward (Procurement, Expediting, VDRL, Logistics, etc.).
 
 ### Table Scroll Rule (ALL modules — permanent)
 - Tables NEVER clip or hide content — always scrollable horizontally
-- AdminTable wrapper: overflowX:auto + overflowY:clip
-  overflowY:clip does NOT create a scroll container (unlike auto/hidden), so
-  position:sticky on thead finds the main content div (App.tsx) as its scroll
-  ancestor. Do NOT use overflowY:visible — CSS spec §overflow-3 converts
-  visible→auto when overflowX is non-visible, making the wrapper a Y scroll
-  container and breaking sticky. Do NOT use overflowY:auto — same problem.
-- App.tsx main content div: overflowY:auto + overflowX:hidden. Hidden on X
-  is required so the table wrapper (overflowX:auto) provides the H scroll.
+- AdminTable wrapper: overflowX:'clip' + overflowY:'visible'
+  overflowX:clip clips without creating a scroll container.
+  overflowY:visible is safe with clip on the other axis (CSS spec §overflow-3
+  only upgrades visible→auto when the other axis is non-visible AND non-clip).
+  Both values avoid creating a Y scroll container, so position:sticky on
+  thead finds the main content div (App.tsx) as its scroll ancestor.
+- --thead-top CSS var: set by a single useLayoutEffect in Admin to
+  toolbar.cssTop + toolbar.clientHeight (CSS layout px, zoom-safe).
+  .admin-page thead { position:sticky; top:var(--thead-top,200px); }
+- App.tsx main content div: overflowY:auto + overflowX:hidden.
 - No column is ever sticky to the right — only thead sticks to the top
 - Users scroll horizontally to reach the Actions column on narrow screens
 - Right/left fade gradients appear on table edges when content is hidden
@@ -95,12 +104,14 @@ forward (Procurement, Expediting, VDRL, Logistics, etc.).
   making the wrapper a Y scroll container and breaking sticky — never use it.
   NO column is ever sticky to the right — only thead is sticky (to the top).
   Right/left fade gradient overlays indicate hidden horizontal content.
-- Sticky thead offset: STILL BROKEN as of c9a5ba9. Current approach uses
-  useLayoutEffect in each tab to compute stickyTop = toolbarRef.bottom -
-  scrollContainer.top, passed as top prop to AdminTable. Value is correct
-  (195px measured) but thead still appears mid-table. Possible causes:
-  the top prop is not reaching the th elements, or sticky is finding the
-  wrong scroll ancestor. NEXT SESSION: try plain CSS on th elements first.
+- Sticky thead offset: FIXED (commit da17595). Single useLayoutEffect in
+  Admin component reads toolbar.cssTop + toolbar.clientHeight (CSS layout px,
+  zoom-safe) and writes to --thead-top CSS var. .admin-page thead uses
+  top:var(--thead-top,200px). AdminTable wrapper: overflowX:'clip' +
+  overflowY:'visible' (clip does not create a scroll container; visible is
+  safe with clip on the other axis per CSS spec). Gap ≤ 1px on all 9 tabs.
+  PermissionsTab sticky selector div gets data-thead-anchor attr so the same
+  formula handles its taller header (108px CSS top + 87px client height).
 - .admin-toolbar: position:sticky top:108px (CSS fallback) z-index:19
   background:inherit. All 8 tab filter rows have className="admin-toolbar".
   padding (not margin) for bottom gap so background covers content below.
@@ -167,9 +178,11 @@ po_lines.uom_id, purchase_orders.supplier_id/inco_term_id/warehouse_id
 
 ## NEXT SESSION - START HERE
 
-1. Visual test at 1440/1280/1024/768px — check sticky header and horizontal scroll
-2. Admin module can be marked ✅ Complete once visual testing passes
-3. Next module: Procurement (PO list, add PO, supplier/WBS linkage)
+1. Fix toolbar reset button (↺) position — currently inside last th (table header);
+   should be left of the + Add button in the toolbar row instead
+2. Responsive layout test at 1440/1280/1024/768px — check sticky header and horizontal scroll
+3. Admin module can be marked ✅ Complete once above two items pass
+4. Next module: Procurement (PO list, add PO, supplier/WBS linkage)
    — read QMAT-prototype.html and WIREFRAME_INVENTORY.md first
    — purchase_orders now has supplier_id FK + inco_term_id FK + warehouse_id FK
    — po_lines now has uom_id FK + unit_price + total_price (GENERATED)

@@ -57,8 +57,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   // ── Belt-and-suspenders: interceptor reads fresh token on every request ──
   // Guards against any race where the default header isn't set yet.
+  // Response interceptor auto-logs out on 401 (expired / invalid token) so
+  // the app always redirects to Login rather than getting stuck on an error.
   useEffect(() => {
-    const id = axios.interceptors.request.use(config => {
+    const reqId = axios.interceptors.request.use(config => {
       const stored = localStorage.getItem(AUTH_TOKEN_KEY);
       if (stored && !config.headers?.Authorization) {
         config.headers = config.headers ?? {};
@@ -66,7 +68,29 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       }
       return config;
     });
-    return () => { axios.interceptors.request.eject(id); };
+
+    // ─── AUTO-LOGOUT ON 401 ─────────────────────────────────────
+    // Skips login requests (wrong password returns 401 too — that
+    // error belongs to the Login form, not to session management).
+    const resId = axios.interceptors.response.use(
+      res => res,
+      err => {
+        const isLoginReq = (err.config?.url as string | undefined)?.includes('/auth/login');
+        if (err.response?.status === 401 && !isLoginReq) {
+          localStorage.removeItem(AUTH_TOKEN_KEY);
+          localStorage.removeItem(AUTH_USER_KEY);
+          setToken(null);
+          setUser(null);
+          delete axios.defaults.headers.common.Authorization;
+        }
+        return Promise.reject(err);
+      }
+    );
+
+    return () => {
+      axios.interceptors.request.eject(reqId);
+      axios.interceptors.response.eject(resId);
+    };
   }, []);
 
   // ── Login ────────────────────────────────────────────────

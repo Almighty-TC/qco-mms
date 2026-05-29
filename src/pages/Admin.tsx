@@ -2,6 +2,10 @@ import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } fr
 import { createPortal } from 'react-dom'
 import axios from 'axios'
 import { useAuth } from '../context/AuthContext'
+// ─── USER COLOUR SYSTEM ──────────────────────────────────────────────────────
+// Central colour logic — never hardcode user-type colours here; always import.
+// getUserPillStyle not imported: company names render as plain text, not pills.
+import { USER_COLOURS, getUserColour, getUserRowStyle } from '../utils/userColours'
 import { DeleteConfirmModal, SimpleConfirmModal } from '../components'
 import { AdminTable, AdminRow, AdminCell, AdminActions } from '../components/AdminTable'
 import { ToastProvider, useToast } from '../hooks/useToast'
@@ -235,6 +239,29 @@ const AddBtn = ({ onClick, label }: { onClick: () => void; label: string }) => (
     {label}
   </button>
 )
+
+// ─── RESET FILTERS BUTTON ────────────────────────────────────
+// Icon-only ↺ button, subtle grey at rest. Appears immediately left
+// of the + Add button in every tab toolbar that has one.
+const ResetBtn = ({ onClick, dark }: { onClick: () => void; dark: boolean }) => (
+  <button
+    onClick={onClick}
+    title="Reset filters"
+    style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'IBM Plex Sans, sans-serif', flexShrink: 0 }}
+    onMouseEnter={e => { e.currentTarget.style.color = dark ? '#f1f5f9' : '#0f172a'; e.currentTarget.style.borderColor = dark ? '#475569' : '#94a3b8' }}
+    onMouseLeave={e => { e.currentTarget.style.color = '#64748b'; e.currentTarget.style.borderColor = dark ? '#334155' : '#dde3ed' }}
+  >↺</button>
+)
+
+// ─── COMPANY TEXT ────────────────────────────────────────────
+// Renders the company name as plain muted text with no badge or pill.
+// Colour tier is conveyed by the row's left-border stripe only — not repeated
+// in the cell. Blank/null company → grey dash. Kept as a component so the
+// call sites remain unchanged if styling requirements change later.
+const CompanyText = ({ company }: { company: string | null }) => {
+  if (!company) return <span style={{ color: '#94a3b8' }}>—</span>
+  return <span style={{ fontSize: 13, color: '#94a3b8', fontFamily: 'IBM Plex Sans, sans-serif' }}>{company}</span>
+}
 
 // ─── DELETE CONFIRM BUTTON ──────────────────────────────────
 // ─── DELETION REASONS ───────────────────────────────────────
@@ -644,6 +671,8 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
           style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'IBM Plex Sans, sans-serif', flexShrink: 0 }}>
           ℹ
         </button>
+        {/* ─── RESET — clears search + all dropdowns ──── */}
+        <ResetBtn dark={dark} onClick={() => { setSearch(''); setFilterRole(''); setFilterType(''); setPage(1); load(1, '') }} />
         <AddBtn onClick={openAdd} label="+ Add User" />
       </div>
 
@@ -653,12 +682,14 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
       <AdminTable tableId="admin_users" columns={U_COLS} dark={dark} empty="No users found.">
         {filteredRows.map(u => (
           <AdminRow key={u.id} dark={dark}>
-            {/* ─── NAME ───────────────────────────────────── */}
+            {/* ─── NAME — left stripe encodes user type ───────
+                getUserRowStyle() from userColours.ts supplies the
+                3px inset stripe + 9px paddingLeft so text clears it.
+                Colour tier: orange=QCO, green=project, blue=external. */}
             <td title={u.fullName} style={{
               padding: '0 12px', height: 44, overflow: 'hidden', boxSizing: 'border-box',
               borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`,
-              boxShadow: u.isExternal ? 'inset 3px 0 0 #E84E0F' : undefined,
-              paddingLeft: u.isExternal ? 9 : 12,
+              ...getUserRowStyle(u.company, u.role, !!u.isExternal),
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: '100%' }}>
                 <span style={{ fontSize: 13, fontWeight: 500, color: dark ? '#f1f5f9' : '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.fullName}</span>
@@ -679,7 +710,10 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
             {/* ─── PROJECTS ───────────────────────────────── */}
             <ProjectsCell userId={u.id} count={u.projectCount ?? 0} fullAccess={FULL_ACCESS_ROLES.has(u.role)} dark={dark} />
             {/* ─── COMPANY / PHONE / DATES / STATUS / LAST LOGIN */}
-            <AdminCell muted title={u.company || undefined}>{u.company || '—'}</AdminCell>
+            {/* Company name is plain text — colour tier is the row stripe only */}
+            <AdminCell title={u.company || undefined}>
+              <CompanyText company={u.company} />
+            </AdminCell>
             <AdminCell muted mono title={u.phone || undefined}>{u.phone || '—'}</AdminCell>
             <AdminCell muted mono>{u.contractStart ? u.contractStart.slice(0, 10) : '—'}</AdminCell>
             <AdminCell mono>{(() => {
@@ -709,13 +743,25 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
         ))}
       </AdminTable>
 
-      {/* ─── EXTERNAL LEGEND ──────────────────────────────── */}
-      {filteredRows.some(u => u.isExternal) && (
-        <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#94a3b8' }}>
-          <span style={{ display: 'inline-block', width: 18, height: 13, boxShadow: 'inset 3px 0 0 #E84E0F', flexShrink: 0 }} />
-          External user (vendor / freight forwarder / site contractor / subcontractor)
-        </div>
-      )}
+      {/* ─── ROW STRIPE LEGEND ────────────────────────────────
+          Three-tier colour key shown below the Users & Roles table.
+          Each entry has a 3px × 14px coloured bar that mirrors the
+          exact left-border stripe used on the table rows.
+          Colours sourced from USER_COLOURS (userColours.ts) — never
+          duplicated inline so the legend can never drift. */}
+      <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 18, fontSize: 11, color: '#94a3b8', flexWrap: 'wrap' }}>
+        {([
+          { colour: USER_COLOURS.qco,      desc: 'QCO Group — Internal staff'               },
+          { colour: USER_COLOURS.project,   desc: 'Project team — Client / Partner staff'    },
+          { colour: USER_COLOURS.external,  desc: 'External — Vendor / Contractor / Freight' },
+        ] as const).map(({ colour, desc }) => (
+          <span key={desc} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {/* 3px wide bar matches the exact stripe width used on rows */}
+            <span style={{ display: 'inline-block', width: 3, height: 14, borderRadius: 2, background: colour.border, flexShrink: 0 }} />
+            {desc}
+          </span>
+        ))}
+      </div>
 
       {/* ─── PAGINATION ─────────────────────────────────── */}
       {total != null && total > 50 && (
@@ -2045,6 +2091,8 @@ function SuppliersTab({ dark }: { dark: boolean }) {
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: '#94a3b8' }}>{filtered.length} supplier{filtered.length !== 1 ? 's' : ''}</span>
         <button onClick={() => setShowHelp(true)} title="Suppliers help" style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>ℹ</button>
+        {/* ─── RESET — clears search + status + country ── */}
+        <ResetBtn dark={dark} onClick={() => { setSearch(''); setFilterSt(''); setFilterCountry('') }} />
         <AddBtn onClick={openAdd} label="+ Add Supplier" />
       </div>
 
@@ -2338,6 +2386,8 @@ function ProjectsAdminTab({ dark }: { dark: boolean }) {
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: '#94a3b8' }}>{filtered.length} project{filtered.length !== 1 ? 's' : ''}</span>
         <button onClick={() => setShowHelp(true)} title="Projects help" style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>ℹ</button>
+        {/* ─── RESET — clears search input ─────────────── */}
+        <ResetBtn dark={dark} onClick={() => setSearch('')} />
         <AddBtn onClick={openAdd} label="+ Add Project" />
       </div>
       {error && <Err msg={error} />}
@@ -2580,6 +2630,8 @@ function WarehousesTab({ dark }: { dark: boolean }) {
             : `${total} warehouse${total !== 1 ? 's' : ''}`}
         </span>
         <button onClick={() => setShowHelp(true)} title="Warehouses help" style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>ℹ</button>
+        {/* ─── RESET — clears search + status + state ──── */}
+        <ResetBtn dark={dark} onClick={() => { setSearch(''); setFilterSt(''); setFilterState('') }} />
         <AddBtn onClick={openAdd} label="+ Add Warehouse" />
       </div>
       {error && <Err msg={error} />}
@@ -2774,6 +2826,8 @@ function UomTab({ dark }: { dark: boolean }) {
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: '#94a3b8' }}>{rows.length} unit{rows.length !== 1 ? 's' : ''}</span>
         <button onClick={() => setShowHelp(true)} title="Units of Measure help" style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>ℹ</button>
+        {/* ─── RESET — clears search + status ──────────── */}
+        <ResetBtn dark={dark} onClick={() => { setSearch(''); setFilterSt('') }} />
         <AddBtn onClick={openAdd} label="+ Add UoM" />
       </div>
       {error && <Err msg={error} />}
@@ -2932,6 +2986,8 @@ function AcronymsTab({ dark }: { dark: boolean }) {
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: '#94a3b8' }}>{rows.length} acronym{rows.length !== 1 ? 's' : ''}</span>
         <button onClick={() => setShowHelp(true)} title="Acronyms help" style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>ℹ</button>
+        {/* ─── RESET — clears search + module filter ───── */}
+        <ResetBtn dark={dark} onClick={() => { setSearch(''); setFilterMod('') }} />
         <AddBtn onClick={openAdd} label="+ Add Acronym" />
       </div>
       {error && <Err msg={error} />}
@@ -3121,6 +3177,8 @@ function IncoTermsTab({ dark }: { dark: boolean }) {
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: '#94a3b8' }}>{rows.length} term{rows.length !== 1 ? 's' : ''}</span>
         <button onClick={() => setShowHelp(true)} title="INCO Terms help" style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>ℹ</button>
+        {/* ─── RESET — clears search + status ──────────── */}
+        <ResetBtn dark={dark} onClick={() => { setSearch(''); setFilterSt('') }} />
         <AddBtn onClick={openAdd} label="+ Add INCO Term" />
       </div>
       {error && <Err msg={error} />}

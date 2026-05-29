@@ -1,4 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
+// ─── USER COLOUR SYSTEM ──────────────────────────────────────────────────────
+// Import from the shared utility so the legend always matches actual stripe colours.
+import { USER_COLOURS } from '../utils/userColours'
 
 // ─── CONSTANTS ───────────────────────────────────────────────
 // localStorage key that tracks whether the user has already seen the guide.
@@ -15,6 +18,15 @@ const RAG_ITEMS = [
   { color: '#22c55e', label: 'Green / On track',   desc: 'Good — no action required'             },
   { color: '#2563eb', label: 'Blue / In progress', desc: 'Active — currently being worked on'    },
   { color: '#8899aa', label: 'Grey / Not started', desc: 'Not started or no data available'      },
+] as const
+
+// ─── ROW STRIPE LEGEND DATA ──────────────────────────────────
+// Derived from USER_COLOURS in userColours.ts — colours and labels stay in sync
+// automatically. Three tiers identify user type at a glance in any table.
+const STRIPE_ITEMS = [
+  { color: USER_COLOURS.qco.border,      label: `Orange stripe — ${USER_COLOURS.qco.label}`,      desc: 'Internal QCO Group staff'                             },
+  { color: USER_COLOURS.external.border, label: `Blue stripe — ${USER_COLOURS.external.label}`,   desc: 'Vendor / Freight forwarder / Contractor / Subcontractor' },
+  { color: USER_COLOURS.project.border,  label: `Green stripe — ${USER_COLOURS.project.label}`,   desc: 'Client-side staff (not QCO Group, not external role)'  },
 ] as const
 
 // ─── SECTION LABEL ───────────────────────────────────────────
@@ -256,6 +268,19 @@ export function HelpLegend({ dark }: { dark: boolean }) {
             <SectionLabel label="Colour Guide — RAG Status" />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               {RAG_ITEMS.map(item => (
+                <ColorRow key={item.label} {...item} />
+              ))}
+            </div>
+
+            <Divider />
+
+            {/* ─── ROW STRIPE SECTION ─────────────────────────
+                Three stripe colours = three user tiers. Colours
+                sourced from USER_COLOURS (userColours.ts) so this
+                legend can never drift from the actual stripe values. */}
+            <SectionLabel label="Colour Guide — User Type Stripes" />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {STRIPE_ITEMS.map(item => (
                 <ColorRow key={item.label} {...item} />
               ))}
             </div>

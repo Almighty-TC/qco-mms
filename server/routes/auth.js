@@ -55,7 +55,7 @@ router.post('/login', async (req, res) => {
         : null,
     }
 
-    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '8h' })
+    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '24h' })
 
     await db.query('UPDATE users SET last_login = NOW() WHERE id = ?', [user.id])
 
@@ -151,7 +151,7 @@ router.post('/change-password', authMiddleware, async (req, res) => {
       forcePasswordChange: false,
       passwordExpiresAt:   expiresAt.toISOString(),
     }
-    const newToken = jwt.sign(newPayload, JWT_SECRET, { expiresIn: '8h' })
+    const newToken = jwt.sign(newPayload, JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '24h' })
 
     res.json({ message: 'Password changed successfully', token: newToken, user: newPayload })
   } catch (err) {
@@ -194,7 +194,7 @@ router.put('/profile', authMiddleware, async (req, res) => {
         ? new Date(u.password_expires_at).toISOString()
         : null,
     }
-    const newToken = jwt.sign(newPayload, JWT_SECRET, { expiresIn: '8h' })
+    const newToken = jwt.sign(newPayload, JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '24h' })
 
     res.json({ message: 'Profile updated', token: newToken, user: newPayload })
   } catch (err) {
