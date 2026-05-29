@@ -59,11 +59,11 @@ function DragHandle({
 }
 
 // ─── ADMIN TABLE ────────────────────────────────────────────────
-// Single-table design with a sticky <thead>. overflowX:auto enables
-// horizontal scroll at the table wrapper level. overflowY:clip clips
-// vertically without creating a Y scroll container, so position:sticky
-// on thead still works relative to the main content scroll container
-// (App.tsx). No column is sticky to the right — all columns scroll freely.
+// Single-table design with a sticky <thead>. overflowX:auto on the
+// wrapper enables horizontal scroll. overflowY:visible lets vertical
+// overflow bleed through to App.tsx (the real Y scroll container) so
+// position:sticky on thead works relative to the main content area.
+// No column is sticky to the right — all columns scroll freely.
 type AdminTableProps = {
   tableId: string
   columns: AdminCol[]
@@ -106,11 +106,12 @@ export function AdminTable({ tableId, columns, dark, children, empty, top }: Adm
       background: dark ? '#1e293b' : '#ffffff',
       border: `1px solid ${borderCol}`,
       borderRadius: 10,
-      // overflowX:auto — horizontal scroll at table level.
-      // overflowY:clip — visual clip only, does NOT create a Y scroll
-      // container, so position:sticky on thead works relative to App.tsx.
+      // overflowX:auto — horizontal scroll at the table level.
+      // overflowY:visible — vertical overflow bleeds through to App.tsx
+      // (the real scroll container) so position:sticky on thead keeps
+      // working relative to the main content area, not this wrapper.
       overflowX: 'auto',
-      overflowY: 'clip',
+      overflowY: 'visible',
       boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
     }}>
       <table style={{

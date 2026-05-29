@@ -55,7 +55,10 @@ forward (Procurement, Expediting, VDRL, Logistics, etc.).
 
 ### Table Scroll Rule (ALL modules — permanent)
 - Tables NEVER clip or hide content — always scrollable horizontally
-- AdminTable wrapper: overflowX:auto (scroll) + overflowY:clip (visual only, no Y scroll container)
+- AdminTable wrapper: overflowX:auto + overflowY:visible
+  overflowY:visible lets vertical overflow pass through to App.tsx (the real
+  Y scroll container). Do NOT use overflowY:clip or overflowY:auto — either
+  will create a Y scroll container and break position:sticky on thead.
 - No column is ever sticky to the right — only thead sticks to the top
 - Users scroll horizontally to reach the Actions column on narrow screens
 
@@ -66,8 +69,10 @@ forward (Procurement, Expediting, VDRL, Logistics, etc.).
   Main content is `position:fixed; overflow:auto` — the ONLY scroll container
 - AdminTable: single <table> with sticky <thead top={headerHeight}>
   overflowX:auto on outer div — enables horizontal scroll at table level.
-  overflowY:clip on outer div — visual clip only, does NOT create Y scroll container,
-  so position:sticky on thead still works relative to main content scroll container.
+  overflowY:visible on outer div — vertical overflow bleeds through to App.tsx
+  (the real Y scroll container), so position:sticky on thead works relative
+  to the main content area (NOT the table wrapper).
+  NOTE: overflowY:clip broke sticky in practice — use visible, not clip.
   NO column is ever sticky to the right — only thead is sticky (to the top).
 - Flex column: AdminCol with flex:true — colgroup uses <col /> (no width) until
   user drags it; after drag, explicit width applied. All tabs have one flex column.
