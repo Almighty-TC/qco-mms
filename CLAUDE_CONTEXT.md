@@ -55,12 +55,17 @@ forward (Procurement, Expediting, VDRL, Logistics, etc.).
 
 ### Table Scroll Rule (ALL modules — permanent)
 - Tables NEVER clip or hide content — always scrollable horizontally
-- AdminTable wrapper: overflowX:auto + overflowY:visible
-  overflowY:visible lets vertical overflow pass through to App.tsx (the real
-  Y scroll container). Do NOT use overflowY:clip or overflowY:auto — either
-  will create a Y scroll container and break position:sticky on thead.
+- AdminTable wrapper: overflowX:auto + overflowY:clip
+  overflowY:clip does NOT create a scroll container (unlike auto/hidden), so
+  position:sticky on thead finds the main content div (App.tsx) as its scroll
+  ancestor. Do NOT use overflowY:visible — CSS spec §overflow-3 converts
+  visible→auto when overflowX is non-visible, making the wrapper a Y scroll
+  container and breaking sticky. Do NOT use overflowY:auto — same problem.
+- App.tsx main content div: overflowY:auto + overflowX:hidden. Hidden on X
+  is required so the table wrapper (overflowX:auto) provides the H scroll.
 - No column is ever sticky to the right — only thead sticks to the top
 - Users scroll horizontally to reach the Actions column on narrow screens
+- Right/left fade gradients appear on table edges when content is hidden
 
 ## DECISIONS MADE
 
@@ -69,11 +74,12 @@ forward (Procurement, Expediting, VDRL, Logistics, etc.).
   Main content is `position:fixed; overflow:auto` — the ONLY scroll container
 - AdminTable: single <table> with sticky <thead top={headerHeight}>
   overflowX:auto on outer div — enables horizontal scroll at table level.
-  overflowY:visible on outer div — vertical overflow bleeds through to App.tsx
-  (the real Y scroll container), so position:sticky on thead works relative
-  to the main content area (NOT the table wrapper).
-  NOTE: overflowY:clip broke sticky in practice — use visible, not clip.
+  overflowY:clip on outer div — does NOT create a Y scroll container, so
+  position:sticky on thead finds the main content div as scroll ancestor.
+  CSS spec: overflowY:visible is forced to auto when overflowX is non-visible,
+  making the wrapper a Y scroll container and breaking sticky — never use it.
   NO column is ever sticky to the right — only thead is sticky (to the top).
+  Right/left fade gradient overlays indicate hidden horizontal content.
 - Flex column: AdminCol with flex:true — colgroup uses <col /> (no width) until
   user drags it; after drag, explicit width applied. All tabs have one flex column.
 - canDrag = !col.noResize (flex columns are NOW resizable)
@@ -138,7 +144,7 @@ po_lines.uom_id, purchase_orders.supplier_id/inco_term_id/warehouse_id
 
 ## NEXT SESSION - START HERE
 
-1. Visual test at 1440/1280/1024/768px — check sticky header and table widths
+1. Visual test at 1440/1280/1024/768px — check sticky header and horizontal scroll
 2. Admin module can be marked ✅ Complete once visual testing passes
 3. Next module: Procurement (PO list, add PO, supplier/WBS linkage)
    — read QMAT-prototype.html and WIREFRAME_INVENTORY.md first

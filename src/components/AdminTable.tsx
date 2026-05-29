@@ -1,6 +1,6 @@
 // QCO MMS - Global Admin Table Component with Column Resize
 // Used by all Admin module tabs. Edit here to affect all tabs globally.
-import React, { createContext, useContext, useState } from 'react'
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { useColumnResize } from '../hooks/useColumnResize'
 
 // ─── COLUMN DEFINITION ──────────────────────────────────────────
@@ -82,6 +82,29 @@ export function AdminTable({ tableId, columns, dark, children, empty, top }: Adm
   const borderCol = dark ? '#334155' : '#dde3ed'
   const isEmpty   = React.Children.count(children) === 0
 
+  // ─── HORIZONTAL SCROLL INDICATOR ─────────────────────────────
+  // Tracks whether there is hidden content to the left or right of
+  // the current scroll position. Used to show a fade gradient on the
+  // corresponding edge so users know they can scroll horizontally.
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const [scrollLeft,  setScrollLeft]  = useState(false)
+  const [scrollRight, setScrollRight] = useState(false)
+
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const update = () => {
+      const max = el.scrollWidth - el.clientWidth
+      setScrollLeft(el.scrollLeft > 0)
+      setScrollRight(el.scrollLeft < max - 1)
+    }
+    update()
+    el.addEventListener('scroll', update, { passive: true })
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => { el.removeEventListener('scroll', update); ro.disconnect() }
+  }, [])
+
   // ─── COLGROUP ─────────────────────────────────────────────────
   // Flex columns start with no explicit width so the browser fills
   // remaining space. Once dragged (widths diverge from defaultWidths)
@@ -101,19 +124,44 @@ export function AdminTable({ tableId, columns, dark, children, empty, top }: Adm
   // this wide even when the flex column has no remaining space.
   const minTableWidth = columns.reduce((acc, col, i) => acc + (col.flex ? 0 : widths[i]), 0)
 
+  // ─── GRADIENT COLOURS ────────────────────────────────────────
+  // Match the table wrapper background so the fade blends cleanly.
+  const fadeL = dark ? 'rgba(30,41,59,0.92)' : 'rgba(255,255,255,0.92)'
+  const fadeR = dark ? 'rgba(30,41,59,0.92)' : 'rgba(255,255,255,0.92)'
+
   return (
-    <div style={{
+    <div ref={wrapRef} style={{
+      position: 'relative',
       background: dark ? '#1e293b' : '#ffffff',
       border: `1px solid ${borderCol}`,
       borderRadius: 10,
-      // overflowX:auto — horizontal scroll at the table level.
-      // overflowY:visible — vertical overflow bleeds through to App.tsx
-      // (the real scroll container) so position:sticky on thead keeps
-      // working relative to the main content area, not this wrapper.
+      // overflowX:auto  — horizontal scroll at the table level.
+      // overflowY:clip  — clips vertical overflow WITHOUT creating a Y scroll
+      //                   container (unlike overflow:hidden/auto). This lets
+      //                   position:sticky on thead find the main content div
+      //                   (App.tsx) as its scroll ancestor instead of stopping
+      //                   here. Do NOT use overflowY:visible — CSS spec converts
+      //                   it to auto when overflowX is non-visible, breaking sticky.
       overflowX: 'auto',
-      overflowY: 'visible',
+      overflowY: 'clip',
       boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
     }}>
+      {/* ── Left scroll fade — shows when content is hidden to the left ── */}
+      {scrollLeft && (
+        <div style={{
+          position: 'absolute', left: 0, top: 0, bottom: 0, width: 36,
+          background: `linear-gradient(to right, ${fadeL}, transparent)`,
+          pointerEvents: 'none', zIndex: 4, borderRadius: '10px 0 0 10px',
+        }} />
+      )}
+      {/* ── Right scroll fade — shows when content is hidden to the right ── */}
+      {scrollRight && (
+        <div style={{
+          position: 'absolute', right: 0, top: 0, bottom: 0, width: 36,
+          background: `linear-gradient(to left, ${fadeR}, transparent)`,
+          pointerEvents: 'none', zIndex: 4, borderRadius: '0 10px 10px 0',
+        }} />
+      )}
       <table style={{
         width: '100%',
         minWidth: minTableWidth,
