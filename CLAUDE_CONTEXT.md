@@ -1,6 +1,6 @@
 # QCO MMS - Claude Context & Build Tracker
 Last updated: 2026-05-29
-Last commit: c6a97fb
+Last commit: c9a5ba9
 
 ## MODULE STATUS
 - Login: ✅ Complete
@@ -12,10 +12,22 @@ Last commit: c6a97fb
 
 ### Layout & Scroll
 - [ ] Responsive layout: test at 1440/1280/1024/768px widths (visual test only)
-- [ ] Verify sticky thead stays behind sticky admin-header-wrap at all zoom levels
-- [x] Sticky thead offset: replaced ResizeObserver/headerHeight with CSS custom properties
-      --admin-header-height: 108px (measured), --toolbar-height: 44px
-      thead top = calc(108px + 44px) = 152px (admin.css, AdminTable.tsx)
+- [ ] **CRITICAL: Sticky thead broken on ALL admin tabs** — column header row
+      appears mid-table on scroll. thead computed top is 195px but still wrong.
+      Root cause unknown: either scroll container detection is wrong, or the
+      top value is not being applied to the right element.
+
+      NEXT SESSION — try this first (single CSS rule, no JS needed):
+        .admin-page thead th { position: sticky; top: 195px; z-index: 10; }
+      This bypasses all JS/prop plumbing and targets the th elements directly.
+      If that works, delete the useLayoutEffect + stickyTop machinery entirely.
+
+      Current state (commit c9a5ba9):
+      - Each tab has toolbarRef + useLayoutEffect computing stickyTop
+      - stickyTop passed as top prop to AdminTable
+      - AdminTable applies it as thead style.top
+      - CSS vars removed; .admin-toolbar top fallback 108px in admin.css
+      - PermissionsTab uses stickyRef instead of toolbarRef
 
 ### Table UX
 - [x] Resize handle on last data column (before Actions): fixed in session 14
@@ -83,14 +95,13 @@ forward (Procurement, Expediting, VDRL, Logistics, etc.).
   making the wrapper a Y scroll container and breaking sticky — never use it.
   NO column is ever sticky to the right — only thead is sticky (to the top).
   Right/left fade gradient overlays indicate hidden horizontal content.
-- Sticky thead offset: CSS custom properties in admin.css (not ResizeObserver).
-  --admin-header-height: 108px (.admin-header-wrap measured clientHeight)
-  --toolbar-height: 44px (.admin-toolbar: 6px padding + 32px inputs + 6px padding)
-  AdminTable thead default top: calc(var(--admin-header-height) + var(--toolbar-height))
-  Override with top prop (string|number) for tabs with extra sticky sub-headers
-  (PermissionsTab passes calc(var(--admin-header-height) + {stickyH}px)).
-  If header/toolbar heights change, update the two vars in admin.css only.
-- .admin-toolbar: position:sticky top:var(--admin-header-height) z-index:19
+- Sticky thead offset: STILL BROKEN as of c9a5ba9. Current approach uses
+  useLayoutEffect in each tab to compute stickyTop = toolbarRef.bottom -
+  scrollContainer.top, passed as top prop to AdminTable. Value is correct
+  (195px measured) but thead still appears mid-table. Possible causes:
+  the top prop is not reaching the th elements, or sticky is finding the
+  wrong scroll ancestor. NEXT SESSION: try plain CSS on th elements first.
+- .admin-toolbar: position:sticky top:108px (CSS fallback) z-index:19
   background:inherit. All 8 tab filter rows have className="admin-toolbar".
   padding (not margin) for bottom gap so background covers content below.
 - Flex column: AdminCol with flex:true — no explicit width until user drags it;
@@ -188,6 +199,24 @@ po_lines.uom_id, purchase_orders.supplier_id/inco_term_id/warehouse_id
 See docs/USER_MANUAL_STATUS.md
 
 ## SESSION HISTORY
+
+### Session 2026-05-29 (session 17)
+Changes in this session (commit c9a5ba9 — sticky thead still broken):
+- src/pages/Admin.tsx:
+  - Added useLayoutEffect import
+  - Added getScrollContainerTop() helper (walks DOM to find position:fixed +
+    overflowY:auto ancestor, returns its getBoundingClientRect().top)
+  - Added toolbarRef + stickyTop(195) state + useLayoutEffect to all 8 regular
+    tabs (Users, Notifications, Suppliers, Projects, Warehouses, UoM, Acronyms,
+    IncoTerms). Effect measures toolbarRef.bottom - containerTop on mount+resize.
+  - PermissionsTab: replaced stickyH/ResizeObserver with stickyTop(195) +
+    useLayoutEffect on stickyRef. Sticky sub-header top changed from
+    var(--admin-header-height) to hardcoded 108.
+  - All AdminTable calls updated to top={stickyTop}.
+- src/components/AdminTable.tsx: default top changed from CSS calc string to 195.
+- src/styles/admin.css: removed :root CSS vars block; toolbar top fallback 108px.
+- PROBLEM: thead still appears mid-table despite top=195px being set.
+  thead computed top is 195px but visually wrong. Root cause unknown.
 
 ### Session 2026-05-29 (session 16)
 Fixed in this session:
