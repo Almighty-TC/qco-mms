@@ -93,12 +93,12 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 | Login | ✅ Complete |
 | Dashboard | ⏳ Not started — BUILD LAST |
 | Admin | ✅ Complete |
-| Foundational — WBS | ⏳ Not started — BUILD NEXT AFTER PROCUREMENT |
-| Foundational — Commodity Library | ⏳ Not started |
-| Foundational — Equipment List | ⏳ Not started |
+| Foundational — WBS | ✅ Complete |
+| Foundational — Commodity Library | ✅ Complete |
+| Foundational — Equipment List | ✅ Complete |
 | Procurement — PO Register (Phase 1) | ✅ Complete with fixes |
 | Procurement — New PO Wizard (Phase 2) | ✅ Built, working, tested |
-| Procurement — PO Detail Screen (Phase 3) | ❌ NOT STARTED — BUILD NEXT |
+| Procurement — PO Detail Screen (Phase 3) | ✅ Complete |
 | MTO Register | ⏳ Not started |
 | Expediting | ⏳ Not started |
 | VDRL | ⏳ Not started |
