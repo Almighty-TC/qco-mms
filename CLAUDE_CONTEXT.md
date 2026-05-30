@@ -1,547 +1,865 @@
-# QCO MMS - Claude Context & Build Tracker
-Last updated: 2026-05-30
-Last commit: 95caddc
+# QMAT MMS — Master Context & Specification
+# Last updated: 30 May 2026
+# This file is the BIBLE. Claude Code must read this at the start of every session.
+# Nothing gets built that contradicts this document.
 
-## MODULE STATUS
-- Login: ✅ Complete
-- Dashboard: ✅ Complete
-- Admin: ✅ Complete
-- All other modules: ⏳ Not started
+---
 
-## ADMIN MODULE - OUTSTANDING ISSUES
+## PROJECT IDENTITY
 
-### Layout & Scroll
-- [x] Responsive layout: tested at 1440/1280/1024/768px — sticky header, horizontal scroll, and sidebar collapse all pass
-- [x] **RESOLVED: Sticky thead fixed on ALL admin tabs** (commit da17595)
-      Solution: AdminTable wrapper overflowX:'clip' + overflowY:'visible';
-      single shared useLayoutEffect in Admin component sets --thead-top CSS var
-      to toolbar.cssTop + toolbar.clientHeight (pure CSS-px, zoom-safe);
-      .admin-page thead { position:sticky; top:var(--thead-top,200px); }
-      Gap measured ≤ 1px on all 9 tabs. PermissionsTab uses data-thead-anchor
-      on its sticky selector div so the same formula covers its taller header.
+- **System:** QCO MMS (Material Management System) — supply chain platform for capital infrastructure projects, energy & resources sector
+- **Company:** QCO Group (qcogroup.com.au)
+- **Owner:** Thomas Chang (tchang@qcogroup.com.au) — Super Admin
+- **GitHub:** https://github.com/Almighty-TC/qco-mms.git
 
-### Table UX
-- [x] Resize handle on last data column (before Actions): fixed in session 14
-- [x] Actions column sticky-right: REMOVED in session 15 — all columns scroll freely
-- [x] Horizontal scroll: AdminTable wrapper now has overflowX:auto / overflowY:clip
-- [x] Role Permissions: Reset to defaults + always-visible Save button added (session 15)
-- [x] Toolbar ↺ reset button: added to all 7 tabs with toolbars (Users, Suppliers,
-      Warehouses, UoM, Acronyms, INCO Terms, Projects) — positioned left of + Add button,
-      resets all filters/search to defaults on click (commit 3f80108)
+---
 
-### DB Connectivity (all confirmed wired to MySQL):
-- ✅ Users & Roles: full CRUD via /api/admin/users
-- ✅ Permission Matrix (roles): GET/PUT /api/admin/permissions
-- ✅ Permission Matrix (user overrides): GET/POST /api/admin/permissions/user/:userId
-- ✅ Suppliers: full CRUD via /api/admin/suppliers
-- ✅ Warehouses: full CRUD via /api/admin/warehouses
-- ✅ Units of Measure: full CRUD via /api/admin/uom
-- ✅ Acronyms: full CRUD via /api/admin/acronyms
-- ✅ INCO Terms: confirmed — routes at /api/admin/inco-terms (admin.js line 1328)
-- ✅ Projects: full CRUD via /api/admin/projects
-- ✅ Notifications: GET/PUT(read)/DELETE via /api/admin/notifications
-- ✅ System Settings: GET/PUT via /api/admin/system-settings
+## TECH STACK
 
-## GLOBAL RULES
+- **Frontend:** React + TypeScript + Vite → localhost:5174
+- **Backend:** Node.js + Express → localhost:3001
+- **Database:** MySQL 8.0.44 on Azure — host: qcosystem.mysql.database.azure.com, db: qmat, user: QCO_admin
+- **Project location:** ~/Desktop/qmat
 
-### User Colour System (ALL modules — permanent)
-All user-type colour coding must use `src/utils/userColours.ts`. Never hardcode
-colours inline in any component. Colour is conveyed by LEFT BORDER STRIPE only —
-company names render as plain text (no pill badges).
+---
 
-Three tiers:
-- **QCO Group internal** → orange `#E84E0F` (company = 'QCO Group', not external)
-- **Project team / partner** → green `#2E7D32` (not QCO Group, not external role)
-- **External** → blue `#1D6FA4` (isExternal=1 OR role in vendor/freight_forwarder/site_contractor/subcontractor)
+## HOW TO START
 
-Exported API (`src/utils/userColours.ts`):
-- `USER_COLOURS` → `{ qco, project, external }` each with `{ border, label }` — use for legends, never repeat hex values
-- `EXTERNAL_ROLE_SET` → Set of role names always treated as external
-- `getUserColour(company, role, isExternal?)` → returns the matching tier object
-- `getUserRowStyle(company, role, isExternal?)` → CSSProperties: `boxShadow: inset 3px 0 0 <colour>` + `paddingLeft: 9`
+```bash
+# Terminal 1 - Backend
+cd ~/Desktop/qmat/server && node index.js
 
-Applied: Admin → Users & Roles (row stripes + 3-entry footer legend + ? help panel section).
-Every future module that lists users in a table MUST apply `getUserRowStyle()` on the leftmost `<td>`.
+# Terminal 2 - Frontend
+cd ~/Desktop/qmat && npm run dev
 
-### Toast Rule (ALL modules — permanent)
-All save, create, update, delete, deactivate and reactivate actions MUST show
-a toast notification confirming the result. Use the shared `useToast` hook
-(`src/hooks/useToast.ts`) and `ToastContainer` (`src/components/Toast.tsx`).
-- Success toast (green, 3s): confirm the action with the item name
-- Error toast (red, 5s): show the specific API error message, never "Save failed"
-- Warning toast (amber, 4s): for deactivate actions
-- Load errors (tab data failing to fetch) stay as inline banners (not toasts)
-- Form validation errors (client-side) stay in the modal form (not toasts)
+# Terminal 3 - Claude Code
+cd ~/Desktop/qmat && claude --dangerously-skip-permissions
+```
 
-### Help Modal Rule (ALL modules — permanent)
-Whenever any feature, column, filter, colour coding or behaviour is added or
-changed in any screen, the ℹ help modal for that screen MUST be updated in the
-same commit to reflect the change. This applies to every module built going
-forward (Procurement, Expediting, VDRL, Logistics, etc.).
+**Dev login:** tchang@qcogroup.com.au / password / role: admin
 
-### Table Scroll Rule (ALL modules — permanent)
-- Tables NEVER clip or hide content — always scrollable horizontally
-- AdminTable wrapper: overflowX:'clip' + overflowY:'visible'
-  overflowX:clip clips without creating a scroll container.
-  overflowY:visible is safe with clip on the other axis (CSS spec §overflow-3
-  only upgrades visible→auto when the other axis is non-visible AND non-clip).
-  Both values avoid creating a Y scroll container, so position:sticky on
-  thead finds the main content div (App.tsx) as its scroll ancestor.
-- --thead-top CSS var: set by a single useLayoutEffect in Admin to
-  toolbar.cssTop + toolbar.clientHeight (CSS layout px, zoom-safe).
-  .admin-page thead { position:sticky; top:var(--thead-top,200px); }
-- App.tsx main content div: overflowY:auto + overflowX:hidden.
-- No column is ever sticky to the right — only thead sticks to the top
-- Users scroll horizontally to reach the Actions column on narrow screens
-- Right/left fade gradients appear on table edges when content is hidden
+---
 
-## DECISIONS MADE
+## BRANDING
 
-### Architecture
-- Fixed-position layout: topbar (z:100), sidebar (z:90), main content (z:1)
-  Main content is `position:fixed; overflow:auto` — the ONLY scroll container
-- AdminTable: single <table> with sticky thead.
-  overflowX:auto on outer div — enables horizontal scroll at table level.
-  overflowY:clip on outer div — does NOT create a Y scroll container, so
-  position:sticky on thead finds the main content div as scroll ancestor.
-  CSS spec: overflowY:visible is forced to auto when overflowX is non-visible,
-  making the wrapper a Y scroll container and breaking sticky — never use it.
-  NO column is ever sticky to the right — only thead is sticky (to the top).
-  Right/left fade gradient overlays indicate hidden horizontal content.
-- Sticky thead offset: FIXED (commit da17595). Single useLayoutEffect in
-  Admin component reads toolbar.cssTop + toolbar.clientHeight (CSS layout px,
-  zoom-safe) and writes to --thead-top CSS var. .admin-page thead uses
-  top:var(--thead-top,200px). AdminTable wrapper: overflowX:'clip' +
-  overflowY:'visible' (clip does not create a scroll container; visible is
-  safe with clip on the other axis per CSS spec). Gap ≤ 1px on all 9 tabs.
-  PermissionsTab sticky selector div gets data-thead-anchor attr so the same
-  formula handles its taller header (108px CSS top + 87px client height).
-- .admin-toolbar: position:sticky top:108px (CSS fallback) z-index:19
-  background:inherit. All 8 tab filter rows have className="admin-toolbar".
-  padding (not margin) for bottom gap so background covers content below.
-- Flex column: AdminCol with flex:true — no explicit width until user drags it;
-  after drag, stored width applied. All tabs have one flex column.
-- canDrag = !col.noResize (flex columns are NOW resizable)
-- AuthContext uses lazy useState initialiser to set axios defaults before
-  first render (fixes "no token" race condition on page load)
-- All Admin API calls use axios global default header (set in AuthContext)
-  — no per-call Authorization headers needed
+- Orange accent: #E84E0F
+- Dark background: #0a0a0a
+- White text
+- Logo: public/qco_logo_primary_RGB_transparent.png
 
-### Design
-- Column drag handle: 1px grey divider at rest, 6px transparent hit target
-  that turns #E84E0F at 0.6 opacity on hover. ALL columns (incl flex) resizable.
-- Tab bar: overflowX:clip (NOT auto — auto forces overflowY to auto per CSS spec
-  §overflow-3, creating a scroll container that breaks position:sticky on thead)
-- Modals: portal-rendered to document.body so zoom CSS doesn't affect position
-- ↺ reset button: inside last th, absolutely positioned right edge, appears on all tables
-- Tab order: users → permissions → suppliers → warehouses → uom → acronyms →
-  incoterms → projects → notifications → settings
-- Suppliers tab: client-side search + status filter dropdown
+---
 
-### DB / Backend
-- bcrypt hash `$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi`
-  used for all seeded test users (password = "password")
-- Password change: 5-hash history enforced; complexity: 8+ chars, upper,
-  lower, digit, special; expiry: 90 days internal / 365 days external
-- audit_log table: created — audit() in admin.js + change-password in auth.js
-  both insert with graceful fallback to console
-- user_permission_overrides: UNIQUE KEY uq_user_module (user_id, module) added
-  — ON DUPLICATE KEY UPDATE now works correctly
-- projects table: client, start_date, end_date columns added via migration
-- 27 users total in DB; project-scoped roles have user_wbs_access rows
-- Full schema audit complete (session 12): 39 changes applied, 31 tables total
-- qmat_schema.sql exported (mysqldump --no-data, 899 lines, all 31 tables)
+## TOOL SETUP
 
-## DB SCHEMA STATUS (session 12 — authoritative)
-All tables verified and patched via server/scripts/migrate-full-schema.js (idempotent).
+- Claude in Chrome extension connected — claude.ai has full browser control for visual verification
+- Claude Code runs in terminal with --dangerously-skip-permissions
+- **Rule:** claude.ai verifies EVERY change in Chrome independently. Never trust Claude Code self-reports alone.
 
-### Tables created (were missing):
-- `supplier_addresses` — normalised supplier address rows (type, line1/2, city, state, postcode, country)
-- `user_project_access` — project-level access control (UNIQUE user_id+project_id; view/edit/manage)
+---
 
-### Columns added:
-- `warehouses`: city, postcode, country (VARCHAR 100/20/100)
-- `units_of_measure`: created_by (INT FK→users), updated_at (auto-update)
-- `acronyms`: created_by (INT FK→users), updated_at (auto-update)
-- `inco_terms`: created_by (INT FK→users), updated_at (auto-update)
-- `notifications`: related_entity_type (VARCHAR 50), related_entity_id (INT)
-- `audit_log`: entity_type, entity_id, before_value (JSON), after_value (JSON), reason_category, reason_detail
-- `purchase_orders`: supplier_id (FK→suppliers), inco_term_id (FK→inco_terms), warehouse_id (FK→warehouses)
-  (vendor_name/vendor_code kept for backwards compat)
-- `po_lines`: uom_id (FK→units_of_measure), unit_price (DECIMAL 15,4),
-  total_price (GENERATED STORED = qty * unit_price) — uom varchar kept for backwards compat
+## DATABASE STATE (as of 30 May 2026)
 
-### Foreign keys added:
-warehouses.created_by, units_of_measure.created_by, acronyms.created_by, inco_terms.created_by,
-suppliers.created_by, audit_log.user_id, user_wbs_access.created_by, password_history.user_id,
-po_lines.uom_id, purchase_orders.supplier_id/inco_term_id/warehouse_id
+45 tables total. Schema dump at: ~/Desktop/qmat/qmat_schema.sql
 
-### Unique indexes added:
-- role_permissions: UNIQUE KEY uq_role_module (role, module)
-- user_wbs_access: UNIQUE KEY uq_wbs_access (user_id, project_id, wbs_code)
+### Key tables
+- purchase_orders, po_lines, po_milestones, po_action_notes, po_approvals, po_documents, po_variations, po_hold_reasons
+- vendor_contacts, milestone_templates, milestone_template_steps
+- ros_change_log, itp_requirements, itp_items
+- scn_additional_items, date_change_log
+- projects, users, suppliers, warehouses, wbs_nodes, expediting_register, shipment_control_notes, user_wbs_access
 
-## NEXT SESSION - START HERE
+### Key columns added
+- purchase_orders: expeditor_id, expeditor_assigned_at, expeditor_assigned_by, pre_expediting_enabled, is_critical_path, critical_path_set_by, critical_path_set_at
+- po_lines: cdd, ros_date, heat_number_required, supplier_name_snapshot, wbs_code_snapshot
+- projects: traceability_required, traceability_set_by, traceability_set_at, at_risk_days_threshold, approval_threshold_1, approval_threshold_2
+- suppliers: avl_status, categories, website, abn
+- warehouses: type, capacity, capacity_unit, is_dg_rated, is_secured, is_climate_controlled, default_zone, operating_hours, manager, lifting_capability
+- expediting_register: status, material_desc, group_category
+- shipment_control_notes: supplier_id, forwarder_name, forwarder_user_id, origin_location, destination_warehouse_id, is_critical_path, total_packages, total_weight_kg, rag, pickup_contact fields, forwarder_notified, forwarder_notified_at, forwarder_notified_by
+- user_wbs_access: scope_type
+- wbs_nodes: owner_id, planned_start, planned_end, rag
 
-1. Start Procurement module — read QMAT-prototype.html and WIREFRAME_INVENTORY.md first
-   before writing any code to understand the full wireframe and UX spec.
-   Key schema facts already in place:
-   — purchase_orders has supplier_id FK + inco_term_id FK + warehouse_id FK
-   — po_lines has uom_id FK + unit_price + total_price (GENERATED STORED)
-   — apply getUserRowStyle() on any table that lists users or vendors
-   — apply global Toast rule and Help Modal rule from GLOBAL RULES to every screen built
+### Milestone seed data
+- 4 milestone templates seeded (Standard Equipment, Bulk Materials, Instruments & Electrical, Fabricated Items)
+- 26 milestone template steps seeded
+- Column names: label (not name), is_system_default (not is_default), is_required (not is_mandatory)
 
-## DB DATA STATUS (session 10)
-- 4 Project Team dummy users added (is_external=0, company != 'QCO Group'):
-  IDs 60-63: James O'Connor (project_manager, Pilbara Gas Co),
-  Sarah Lim (project_director, Hunter Valley Energy),
-  David Nguyen (viewer, Ord River Authority),
-  Michelle Park (project_manager, Port Hedland LNG)
+---
 
-## DB DATA STATUS (session 5)
-- 4 external dummy users added: john.doe, mary.jones (expired), peter.chan, lisa.park (expiring soon)
-- 21 internal QCO Group users got contract_start = 2024-01-01
-- Total users now: ~35
+## MODULE BUILD ORDER & STATUS
 
-## DESIGN NOTES (session 4)
-- ActionMenu: portal-rendered dropdown (zIndex 9100), module-level _closeActive for
-  single-open coordination. All actions columns are 90px noResize.
-- PermissionsTab sticky header: position:sticky top=headerHeight wraps mode toggle +
-  selector row. Content (tables, legends) scrolls below.
-- Override cycle: admin-role users skip 'restrict' (inherit → grant → inherit only).
-- Override legend below matrix; base role dot is 12px (was 8px).
-- Reset to role defaults: DELETE /permissions/user/:userId — clears all overrides.
+| Module | Status |
+|--------|--------|
+| Login | ✅ Complete |
+| Dashboard | ⏳ Not started — BUILD LAST |
+| Admin | ✅ Complete |
+| Foundational — WBS | ⏳ Not started — BUILD NEXT AFTER PROCUREMENT |
+| Foundational — Commodity Library | ⏳ Not started |
+| Foundational — Equipment List | ⏳ Not started |
+| Procurement — PO Register (Phase 1) | ✅ Complete with fixes |
+| Procurement — New PO Wizard (Phase 2) | ✅ Built, working, tested |
+| Procurement — PO Detail Screen (Phase 3) | ❌ NOT STARTED — BUILD NEXT |
+| MTO Register | ⏳ Not started |
+| Expediting | ⏳ Not started |
+| VDRL | ⏳ Not started |
+| Logistics | ⏳ Not started |
+| Material Control | ⏳ Not started |
+| Traceability | ⏳ Not started |
+| Document Inbox | ⏳ Not started |
+| Audit | ⏳ Not started |
+| Reports | ⏳ Not started |
 
-## USER MANUAL STATUS
-See docs/USER_MANUAL_STATUS.md
+---
 
-## SESSION HISTORY
+## NAVIGATION (LEFT SIDEBAR)
 
-### Session 2026-05-29 (session 17)
-Changes in this session (commit c9a5ba9 — sticky thead still broken):
-- src/pages/Admin.tsx:
-  - Added useLayoutEffect import
-  - Added getScrollContainerTop() helper (walks DOM to find position:fixed +
-    overflowY:auto ancestor, returns its getBoundingClientRect().top)
-  - Added toolbarRef + stickyTop(195) state + useLayoutEffect to all 8 regular
-    tabs (Users, Notifications, Suppliers, Projects, Warehouses, UoM, Acronyms,
-    IncoTerms). Effect measures toolbarRef.bottom - containerTop on mount+resize.
-  - PermissionsTab: replaced stickyH/ResizeObserver with stickyTop(195) +
-    useLayoutEffect on stickyRef. Sticky sub-header top changed from
-    var(--admin-header-height) to hardcoded 108.
-  - All AdminTable calls updated to top={stickyTop}.
-- src/components/AdminTable.tsx: default top changed from CSS calc string to 195.
-- src/styles/admin.css: removed :root CSS vars block; toolbar top fallback 108px.
-- PROBLEM: thead still appears mid-table despite top=195px being set.
-  thead computed top is 195px but visually wrong. Root cause unknown.
+The left sidebar must contain these items in this order:
+1. Dashboard (🏠)
+2. **MODULES section** (only visible when a project is selected):
+   - Foundational (🏗, collapsible): WBS · Commodity Library · Equipment List
+   - MTO Register (📋)
+   - Procurement (🧾)
+   - VDRL (📑)
+   - Expediting (🚨 — red alert count badge)
+   - Logistics (🚚)
+   - Material Control (📦, collapsible): Receipting · Stock Register · FMR Register · Transfers
+   - Traceability (🔗)
+   - Document Inbox (📥)
+   - Audit (🔍)
+3. **SYSTEM section:**
+   - Admin (⚙️)
+4. User chip at bottom
 
-### Session 2026-05-29 (session 16)
-Fixed in this session:
-- src/context/AuthContext.tsx:
-  - Added axios request interceptor as belt-and-suspenders: reads localStorage on
-    every request and sets Authorization header if not already present. Guards
-    against race where global default header isn't set before first API call.
-- src/components/AdminTable.tsx:
-  - Removed colgroup; column widths moved to <th> elements (tableLayout:fixed
-    makes th-widths authoritative; colgroup is not required).
-  - thead is now the FIRST child of <table> — no elements between table tag and thead.
-  - Added horizontal scroll indicator: scrollLeft/scrollRight state + ResizeObserver
-    on wrapper div; left/right gradient overlays appear when content is hidden.
-  - top prop type changed from number to string|number.
-  - Default thead top: calc(var(--admin-header-height) + var(--toolbar-height)).
-- src/pages/Admin.tsx:
-  - Removed headerHeight state, headerRef, and ResizeObserver from Admin component.
-  - Removed headerHeight prop from all 9 tab function signatures.
-  - Removed top={headerHeight} from all 8 simple AdminTable calls.
-  - PermissionsTab sticky sub-header: top changed from headerHeight??0 to
-    'var(--admin-header-height)'. AdminTable top changed from
-    (headerHeight??0)+stickyH to `calc(var(--admin-header-height) + ${stickyH}px)`.
-  - Added className="admin-toolbar" to all 8 filter/toolbar rows.
-  - Removed marginBottom:12 inline from all toolbar rows (spacing via CSS padding).
-  - Tab bar: overflowX changed from 'auto' to 'clip' — auto forced overflowY to
-    auto (CSS spec §overflow-3), creating a scroll container breaking sticky.
-- src/styles/admin.css:
-  - Added CSS custom properties: --admin-header-height: 108px, --toolbar-height: 44px.
-  - .admin-toolbar: added position:sticky, top:var(--admin-header-height),
-    z-index:19, background:inherit. Removed margin-bottom (uses padding only).
-- CLAUDE_CONTEXT.md: updated
+**IMPORTANT:** Foundational is MISSING from the current live app nav. It must be added.
+**IMPORTANT:** Dashboard has NOT been built yet. Do not touch it.
+**IMPORTANT:** AVL/Suppliers is under Admin, NOT under Foundational.
 
-### Session 2026-05-29 (session 15)
-Fixed in this session:
-- src/components/AdminTable.tsx:
-  - Removed position:sticky / right:0 / zIndex:2 from AdminActions td (global rule:
-    no column is ever sticky to the right; Actions scrolls with the table).
-  - Removed position:sticky / right:0 / zIndex:1 from last <th> (Actions header).
-  - Removed isLastResizable zIndex:2 (no longer needed without sticky Actions).
-  - Changed outer wrapper overflow from 'clip' to overflowX:'auto' + overflowY:'clip'.
-    overflowY:'clip' is a visual-only clip that does NOT create a Y scroll container,
-    so position:sticky on thead still works relative to App.tsx main content area.
-- server/routes/admin.js:
-  - Added ROLE_DEFAULTS constant (canonical per-role permission spec, matching
-    seed-role-permissions.js) for use by the reset endpoint.
-  - Added DELETE /permissions/role/:role — wipes and re-seeds from ROLE_DEFAULTS.
-- src/pages/Admin.tsx (PermissionsTab — roles mode):
-  - Added resetRoleOpen / resetRoleSaving state.
-  - Added resetRoleDefaults() function: DELETE /api/admin/permissions/role/:role,
-    reloads permissions, clears editing, shows success/error toast.
-  - Role selector row: Save button now always visible (disabled + faded when not
-    dirty); Reset to defaults button always visible next to Save.
-  - Added SimpleConfirmModal for role reset with warning style.
-- CLAUDE_CONTEXT.md: updated
+---
 
-### Session 2026-05-29 (session 14)
-Fixed in this session:
-- src/components/AdminTable.tsx (new component, first commit):
-  - Fix: DragHandle z-index raised to 3 (was 1) so it always paints above the
-    sticky Actions `<th>` when the table is scrolled horizontally.
-  - Fix: last resizable `<th>` (second-to-last column, i === columns.length-2)
-    gets zIndex:2 so its stacking context sits above the sticky Actions `<th>` (z:1).
-  - DragHandle hit target widened: 8px (was 6px) for easier grabbing.
-  - Root cause: sticky Actions th (z:1) was covering the DragHandle of the
-    adjacent last data column when the table was scrolled; DragHandle is at
-    right:0 of the last data column th, exactly at the Actions left boundary.
-- src/hooks/useColumnResize.ts (new, first commit): companion hook for AdminTable
-- src/styles/admin.css (new, first commit): shared Admin spacing/layout CSS
-- server/scripts/migrate-supplier-addresses.js (new, first commit): idempotent
-  migration for supplier_addresses table structure
-- CLAUDE_CONTEXT.md: updated
+## CROSS-MODULE DATA FLOW (The Pipeline)
 
-### Session 2026-05-29 (session 13)
-Fixed in this session:
-- server/routes/admin.js:
-  - Root cause of save/reset failing: backend server (PID 71121) was started before
-    admin.js was last saved — stale process had no GET/POST/DELETE /permissions/user/:userId
-    routes. Fix: restart the server (routes were already correctly defined in code).
-  - Fixed restrict (-1) coercion bug in POST /permissions/user/:userId: changed
-    `o.can_view?1:0` → `o.can_view ?? 0` so restrict (-1) is preserved in the DB.
-    Previously any 'restrict' override was silently saved as 'grant' (1).
-- src/pages/Admin.tsx (WarehousesTab):
-  - Added filterState state + states useMemo (unique sorted state values from rows)
-  - Added filteredWH useMemo (client-side filter, consistent with SuppliersTab approach)
-  - Added State dropdown to toolbar after Status filter, only renders when state data exists
-  - Count display: "N of M warehouses" when state filter active, "M warehouses" otherwise
-  - Updated table to render filteredWH instead of rows
-  - Updated ℹ help modal: added Filters section describing search, status, and state filter
-- CLAUDE_CONTEXT.md: updated
+1. **Foundational** → establishes WBS tree, Commodity Library (with trace levels), Equipment List (tagged items), AVL (approved vendors). Everything downstream references a WBS code.
+2. **MTO Register** → captures engineering take-off lines (qty, UOM, WBS, ROS, inspection class, VDRL flag). Revisions diff against each other. MTO lines feed procurement.
+3. **Procurement** → raises POs against MTO lines/WBS. **Approve & Lock** freezes the PO → locks linked MTO lines → passes PO to Expediting.
+4. **VDRL** → tracks vendor document requirements per PO/package. Review cycles, transmittals, MDR closeout.
+5. **Expediting** → monitors milestone chains on locked POs. Logs actions, issues notices, flags critical path.
+6. **Logistics** → creates SCNs when goods ship. Tracks pipeline (pickup → transit → customs → delivery). Proof of Custody at handover.
+7. **Material Control** → receipts incoming SCNs (5-step wizard), creates stock, manages Stock Register, FMRs, inter-warehouse Transfers.
+8. **Traceability** → verifies certs (releasing goods from trace hold), maintains full chain per tag.
+9. **Document Inbox** → universal intake that classifies and routes files into the above registers.
+10. **Audit** → records every state change across all modules.
+11. **Dashboard** → reads across all modules to surface health score, problems, AI analysis. BUILD LAST.
 
-### Session 2026-05-29 (session 12)
-Fixed in this session:
-- server/scripts/migrate-full-schema.js (new, run ✓):
-  - Full idempotent schema migration — 39 changes applied across all tables
-  - Created missing tables: supplier_addresses, user_project_access
-  - Added missing columns to: warehouses, units_of_measure, acronyms, inco_terms,
-    notifications, audit_log, purchase_orders, po_lines
-  - Added missing FKs to: warehouses, units_of_measure, acronyms, inco_terms,
-    suppliers, audit_log, user_wbs_access, password_history, po_lines, purchase_orders
-  - Added UNIQUE KEY uq_role_module on role_permissions (role, module)
-  - Added UNIQUE KEY uq_wbs_access on user_wbs_access (user_id, project_id, wbs_code)
-- qmat_schema.sql (new): full schema export via mysqldump --no-data (31 tables, 899 lines)
-- CLAUDE_CONTEXT.md: added DB SCHEMA STATUS section, updated NEXT SESSION
+---
 
-### Session 2026-05-29 (session 11)
-Fixed in this session:
-- src/hooks/useToast.ts (new):
-  - ToastProvider + useToast hook; context-based shared state
-  - addToast(type, message): auto-dismisses at 3s/4s/5s for success/warning/error
-  - dismiss(id): manual dismiss on ×
-- src/components/Toast.tsx (new):
-  - ToastContainer: portal-rendered fixed top-right stack
-  - Green/amber/red backgrounds; ✓/⚠/✕ icons; × dismiss button
-- src/pages/Admin.tsx:
-  - Admin export: wrapped with ToastProvider, ToastContainer rendered inside
-  - ALL 10 tab functions: added useToast() + addToast calls on every
-    save/create/update/delete/deactivate/reactivate/reset action
-  - PermissionsTab: removed success/overrideSuccess states + inline renders
-    (replaced by toasts); saveRole/saveUserOverrides/resetToRoleDefaults all toast
-  - SystemSettingsTab: removed saved/saveErr/testResult/testError states
-    (replaced by toasts); saveAll and sendTest both toast
-  - Silent error catches (reactivate, markRead, deleteNotification) now toast errors
-  - Form save API errors: addToast('error', msg) in addition to setFormErr
-- server/scripts/seed-project-team-assignments.js (new, run ✓):
-  - 4 user_wbs_access rows inserted (wbs_code='ALL'):
-    James O'Connor → PRJ-2024-001, Sarah Lim → PRJ-2024-002,
-    David Nguyen → PRJ-2023-008, Michelle Park → PRJ-2025-001
-- CLAUDE_CONTEXT.md: added Toast Rule to GLOBAL RULES
+# FULL MODULE SPECIFICATIONS
 
-### Session 2026-05-29 (session 10)
-Fixed in this session:
-- src/pages/Admin.tsx (PermissionsTab — definitive permission dots fix):
-  - Root cause: `effectiveRolePermsLookup` depended on `userRole` state set by an
-    async API call. If the call failed or server was stale, `userRole` stayed ''
-    and all dots rendered grey.
-  - Fix: added `selUserRole` useMemo that derives the selected user's role directly
-    from `usersList` (already synchronously populated). Dots are now computed from
-    `lookup[selUserRole]` (global perms, loaded on mount) — zero async dependency.
-  - Removed `rolePerms` state, `rolePermsLookup` memo, and the second API call
-    (GET /permissions/role) from loadUserOverrides — no longer needed.
-  - Updated `cycleOverride`, role banner, and override matrix render to use `selUserRole`.
-- server/scripts/seed-project-team-users.js (new, run ✓):
-  - 4 Project Team users inserted (is_external=0, company != 'QCO Group')
-  - IDs 60-63: James O'Connor, Sarah Lim, David Nguyen, Michelle Park
+## GLOBAL SHELL
 
-### Session 2026-05-29 (session 9)
-Fixed in this session:
-- src/pages/Admin.tsx (UsersTab):
-  - User type filter: switched from backend param to CLIENT-SIDE filtering via
-    filteredRows useMemo. Removed filterType from load() deps and params.
-    load() now uses limit=200 to pre-load all users for reliable client filtering.
-    filteredRows conditions: qco (company='QCO Group' && !isExternal),
-    project_team (!isExternal && company≠'QCO Group'), external (isExternal).
-    Count display: "N of M users" when filter active.
-  - External legend: updated label text; references filteredRows (not rows)
-- src/pages/Admin.tsx (PermissionsTab):
-  - loadUserOverrides: split into two separate try-catch blocks; each failure
-    logs to console.error instead of silently swallowing. Role var extracted
-    before await so second call still runs if first succeeds.
-  - effectiveRolePermsLookup: falls back to global lookup[userRole] when
-    rolePermsLookup is empty (e.g. if /permissions/role call fails).
-  - basePerm uses effectiveRolePermsLookup; admin role special-case restored:
-    admin always shows green dots (except wbs_scoped which is always false).
-- src/pages/Admin.tsx (UsersTab help modal):
-  - External Users section: added orange border description
-  - New "User Type Filter" section: explains all 4 filter options
-  - Column Reference: updated Name entry (orange border = external, no badge);
-    Contract End entry: full colour-coding legend (red/amber/green/dash)
-- CLAUDE_CONTEXT.md: added GLOBAL RULES section with Help Modal Rule
+**Visual system:**
+- Page background: #f4f7fb / #f8fafd
+- Cards: #ffffff
+- Borders: #dde3ed → #c4cedf
+- Hover row: #f0f3f9
+- Text primary: #0f172a, secondary: #475569, muted: #94a3b8
+- Accent blue: #2563eb (links, active nav, primary buttons)
+- QCO orange: #E84E0F (drag handles, active card borders, critical path indicators)
 
-### Session 2026-05-29 (session 8)
-Fixed in this session:
-- server/scripts/migrate-is-external.js (new, run ✓):
-  - ALTER TABLE IF NOT EXISTS is_external TINYINT(1) DEFAULT 0
-  - UPDATE: 6 users updated to is_external=1 (Hans Mueller, James Wilson, Emma Davis,
-    Sophie Kim, Raj Patel, Mei Lin — all had external roles but flag was 0)
-  - All 10 external-role users now correctly flagged
-- server/scripts/seed-role-permissions.js (new, run ✓):
-  - Deleted 150 stale rows; inserted 160 correct rows (16 roles × 10 modules)
-  - subcontractor role added (was missing from original seed)
-  - Permissions match the canonical spec exactly (wbs_scoped=0 for all)
-- server/routes/admin.js:
-  - Added 'subcontractor' to VALID_ROLES
-  - GET /users (list + single): DATE_FORMAT(contract_start/end, '%Y-%m-%d') so dates
-    return as plain 'YYYY-MM-DD' strings not JS Date objects (fixes UTC timezone
-    offset showing dates 1 day behind for servers in UTC+10)
-- src/pages/Admin.tsx:
-  - Added 'subcontractor' to ALL_ROLES constant
-- Contract End column: CONFIRMED in code (U_COLS line 300, row cell line 650-656)
-  and API (DATE_FORMAT now returns clean 'YYYY-MM-DD' strings). If not visible,
-  scroll right — table is ~1700px wide. Click ↺ to reset column widths.
-  Most internal users show '—' (no contract_end set) — this is expected.
+**RAG status vocabulary (NON-NEGOTIABLE):**
+- Green #22c55e = On track
+- Amber #f59e0b = At risk
+- Red #ef4444 = Breached
+- Grey #64748b = Not started
+- Blue #2563eb = In progress
 
-### Session 2026-05-29 (session 7)
-Fixed in this session:
-- server/routes/admin.js:
-  - GET /permissions/role?role=... new endpoint — returns role_permissions rows for
-    a single role; admin role synthesises full access (no DB rows for admin)
-- src/pages/Admin.tsx (PermissionsTab):
-  - Added rolePerms state + rolePermsLookup memo (replaces lookup[userRole] approach)
-  - loadUserOverrides: second API call GET /permissions/role?role=... after getting
-    user's role; stores result in rolePerms. Admin role now shows green dots correctly.
-  - basePerm = rolePermsLookup[mod] (was lookup[userRole]?.[mod] — was empty for admin)
-  - User selector onChange: now also resets rolePerms([]) alongside userOverrides({})
-- src/pages/Admin.tsx (UsersTab):
-  - EXT indicator: borderLeft → boxShadow: inset 3px 0 0 #E84E0F (immune to
-    overflow:clip clipping; legend icon updated to match)
-- src/pages/Admin.tsx (SuppliersTab):
-  - filterCountry state + countries memo (unique sorted list from rows)
-  - Country dropdown added to toolbar (only renders when >0 countries exist)
-  - filtered() checks filterCountry against s.country
+**Typography:** IBM Plex Sans for UI; JetBrains Mono for all data, codes, refs, dates, quantities.
 
-### Session 2026-05-29 (session 6)
-Fixed in this session:
-- Admin.tsx (UsersTab):
-  - Actions column 90→120px (was too narrow for ActionMenu button)
-  - EXT badge removed; replaced with 3px #E84E0F left border on Name cell for external users
-  - Orange border legend added below Users table
-  - User type filter: "Internal only / External only" → "QCO Team / Project Team / External"
-    filterExt → filterType state; load() sends user_type param to backend
-- server/routes/admin.js:
-  - GET /users: added user_type param (qco | project_team | external)
-    project_team = is_external=0 AND company != 'QCO Group'
-- Admin.tsx (PermissionsTab):
-  - AllRolesOverview: new resizable-column <table> component replacing div-grid
-    overflow:clip (sticky thead works); useColumnResize hook; OvDragHandle inline
-    4-char module headers with full name tooltip; cell tooltip lists granted permissions
-    ↺ reset button next to heading; dots are 6px green per granted permission
-  - DESIGN: sticky thead uses overflow:clip like AdminTable (not overflow:auto which
-    would break sticky by creating a Y-axis scroll container)
+---
 
-### Session 2026-05-29 (session 5)
-Fixed in this session:
-- ActionMenu.tsx: added dropRef (ref on portal div) — mousedown handler now checks
-  dropRef.current.contains(target) before closing; prevents menu closing before
-  item onClick fires (mousedown fires before click event)
-- Admin.tsx (PermissionsTab):
-  - stickyRef + ResizeObserver to measure sticky header height → stickyH
-  - AdminTable top = (headerHeight ?? 0) + stickyH (table thead sticks below selector)
-  - Sticky header background: explicit dark ? '#0f172a' : '#f1f4f8' (was 'inherit')
-  - zIndex 10 → 20 on sticky header
-  - baseVal = userRole === 'admin' ? true : existing logic (admin dots now green)
-- Admin.tsx (UsersTab):
-  - Contract End cell: color coded — red if expired, amber if ≤30 days, green if >30 days
-- seed-external-users.js: 4 external users + contract_start on 21 internal users (run ✓)
+## MODULE 1: DASHBOARD
+**STATUS: NOT STARTED — DO NOT BUILD YET**
+Dashboard is a 4-level drill-down: Project list → Project (WBS tree + health) → PO list under WBS node → PO detail.
+It reads data from ALL other modules. Build it last when all modules are complete.
 
-### Session 2026-05-29 (session 4)
-Fixed in this session:
-- src/components/ActionMenu.tsx: new component — portal-rendered Actions ▾ dropdown,
-  single-open coordination via module-level _closeActive, keyboard (Escape) + outside-
-  click close, variant colours (warning=amber, danger=red)
-- Admin.tsx:
-  - All 8 action-bearing tabs converted to ActionMenu (Users, Suppliers, Warehouses,
-    UoM, Acronyms, INCO Terms, Projects, Notifications)
-  - div-in-tr StatusPill fixed in WarehousesTab, UoM, INCO Terms, NotificationsTab
-  - reactivate() added to UoM and INCO Terms tabs
-  - PermissionsTab:
-    - Mode toggle + selector row now sticky (position:sticky, top=headerHeight)
-    - User selector moved inside sticky header; roles selector also sticky
-    - Base role dot enlarged 8→12px; cycle skip 'restrict' for admin-role users
-    - Legend added below override matrix
-    - "Reset to role defaults" button → SimpleConfirmModal → DELETE /permissions/user/:id
-- server/routes/admin.js:
-  - PATCH /projects/:id/status (deactivate/reactivate projects)
-  - DELETE /permissions/user/:userId (reset all overrides for a user)
+---
 
-### Session 2026-05-29 (session 3)
-Fixed in this session:
-- AdminTable.tsx: canDrag = !col.noResize (flex columns now resizable);
-  colgroup: flex col uses <col /> until dragged, then explicit width;
-  DragHandle: 6px wide, transparent at rest, #E84E0F @0.6 opacity on hover
-- Admin.tsx:
-  - UsersTab load(): accepts s=search param to fix stale closure on clear/type
-  - PermissionsTab loadUserOverrides: data.role → data.user?.role (fix save bug)
-  - SuppliersTab: added search input + status filter dropdown (client-side);
-    fixed div-in-tr for Addresses and Status cells → AdminCell
-  - ProjectsTab: fixed div-in-tr for Code cell and POs/Risk/Breach cells → AdminCell
-- server/scripts/migrate-projects-columns.js: adds client, start_date, end_date
-  to projects table (run and confirmed successful)
-- server/scripts/migrate-permissions-unique.js: adds UNIQUE KEY uq_user_module
-  on user_permission_overrides (run and confirmed successful)
-- server/scripts/seed-dummy-users.js: run — 9 users inserted
-- server/scripts/seed-users-projects.js: new — 8 more users + WBS assignments
-  + project client/date/RAG data (run and confirmed successful)
+## MODULE 2: FOUNDATIONAL
 
-### Session 2026-05-29 (session 2)
-Fixed in this session:
-- AdminTable.tsx: rewrote as single table with sticky thead; overflow:clip on
-  outer div; flex column support; ↺ reset button in last th; title prop on AdminCell
-- useColumnResize.ts: min-width default 60 → 40
-- Admin.tsx: 
-  - Tab order: permissions moved to 2nd position
-  - All column defs: one flex column per table (fills remaining width)
-  - UsersTab: fixed div→td for Name, Role, Status, ProjectsCell cells
-  - ProjectsCell: now renders <td> (was invalid <div> inside <tr>)
-  - PermissionsTab: converted roles + user-override grids to AdminTable
-  - headerHeight measurement: getBoundingClientRect().height → offsetHeight
-- admin.css: added background:inherit to .admin-page (fixes sticky header background)
-- admin.js: audit() now inserts to audit_log table (graceful fallback to console)
-- auth.js: change-password route now writes to audit_log
-- server/scripts/migrate-audit-log.js: new migration for audit_log table
+### 2.1 WBS (FoundWBSScreen)
+**Route:** /project/:projectId/foundational/wbs
 
-### Session 2026-05-29 (session 1)
-Fixed in this session:
-- App.tsx: converted to fixed-position layout (topbar/sidebar/main content)
-- AdminTable.tsx: rewrote as split header+body tables with colgroup widths
-- AuthContext.tsx: lazy initialiser for axios token (race condition fix)
-- Admin.tsx: all 10 tabs converted to AdminTable; toolbar flexWrap fixed;
-  Permission Matrix user-override mode added; help modals added
-- admin.css: global spacing tokens
-- seed-dummy-users.js: one user per previously-empty role added
-- Column dividers: orange replaced with subtle grey; orange only on drag hover
+**Header:**
+- Title "WBS", subtitle "Work Breakdown Structure — {project name}"
+- Buttons: ↑ Upload XER/Excel (accepts .xer .xml .xlsx .xls .csv) · + Add node (blue → AddWBSNodeModal)
+
+**Tree table columns:** chevron (▸/▾ for parents, · for leaves) · RAG dot · Code (mono) · Node label · ROS (RAG-coloured date) · Notes (clickable) · code-suffix hint ({code}.xx) · 🗑 delete (hover-revealed, red)
+
+**Row behaviour:**
+- Recursive rows, indent 20px per depth level
+- Click parent row → expand/collapse
+- Click Notes cell → WBS Note editor modal (ROS field + Notes textarea + Cancel/Save)
+- Click 🗑 → DeleteWBSWizard
+- Default expanded: first two top-level nodes
+
+**AddWBSNodeModal (2-column form):**
+- Parent node (dropdown, blank = top-level/root)
+- Code suffix (mono input) + live Full code preview (read-only, e.g. parent 02 + suffix 01 → 02.01)
+- Node name/description (required)
+- RAG status dropdown (Not started / On track / At risk / Breached / Complete)
+- Owner/Responsible
+- Planned start + Planned end (date pickers)
+- Notes/scope description (textarea)
+- Footer validity hint ("✓ Ready to save · {code}" or "Required: code and name")
+- Buttons: Cancel + ✓ Add node (disabled until code + name filled)
+- On save: success toast
+
+**DeleteWBSWizard (3-step, red theme):**
+- Step 1 — Impact: red warning panel with 4 metrics (Child nodes · Affected POs · Line items · Codes covered) + Related Purchase Orders table. Green "safe to delete" if nothing references it.
+- Step 2 — Reallocate (skipped if no affected lines): every affected line must be reassigned to a new WBS node. Table shows Line · PO Ref · Description · Qty · Current WBS (red) · New WBS (dropdown). Running status "X of Y lines re-allocated". Continue disabled until all done. **IMPORTANT: when assigning to new WBS, show how much is already allocated there vs MTO quantity — warn if over-allocated.**
+- Step 3 — Confirm: final red warning, re-allocation summary table, mandatory acknowledgement checkbox. Footer: Cancel · ← Back · 🗑 Delete permanently (disabled until acknowledged).
+
+**Upload XER/Excel:** file picker, import WBS nodes from P6 XER or Excel template.
+
+---
+
+### 2.2 Commodity Library (FoundCommodityScreen)
+**Route:** /project/:projectId/foundational/commodities
+
+**Header:** "Commodity Library", live count "N commodities · {project name}". Buttons: ↑ Upload (.xlsx .xls .csv .pdf, multiple) · + Add commodity (blue)
+
+**Tabs (live counts):** All items · Active · Inactive
+
+**Filter bar:**
+- Free-text search (matches code, name, WBS, vendor)
+- Group by: None · WBS · Vendor
+
+**Sortable table columns:** Code · Name · UOM · WBS · Trace level · Preserve · Vendor · Status pill · (actions)
+- Code (mono), Name (greyed if inactive), UOM, WBS (mono), Trace level, Preservation (greyed if "None"), Vendor
+- Status pill: green "Active" / grey "Inactive"
+- Actions: 📎 Certs → CertificatesModal · Edit → AddCommodityModal prefilled
+- When grouped: group header strips with key + item count
+
+**AddCommodityModal (2-col form):**
+- Commodity code (required)
+- WBS (required, dropdown)
+- Name/description (required, full width)
+- Unit of measure: EA/M/M²/M³/KG/T/LT/SET/LOT
+- Estimated qty
+- Trace level: Heat number / Heat + cert / Mill cert / Drum number / Serial / None
+- Preservation: None / Dry storage / Climate controlled / Painted-wrapped / N2 purge
+- Preferred vendor
+- Notes
+- Validity hint + Cancel / ✓ Add commodity
+
+---
+
+### 2.3 Equipment List (FoundEquipmentScreen)
+**Route:** /project/:projectId/foundational/equipment
+
+**Header:** "Equipment List", "N of M items · Tag numbers unique per project". Buttons: ↑ Upload · + Add equipment
+
+**Tabs (live counts):** All · PO raised · RFQ · Not started
+
+**Filter bar:** search (tag, description, WBS, vendor) + Group by: None · WBS · Vendor (unassigned → "Unassigned" bucket)
+
+**Sortable table columns:** Tag · Description · Spec · Trace · WBS · Vendor · Status · (actions)
+- Tag (blue mono), Description (truncates), Spec (e.g. ASME VIII Div 1, API 610, IEC 62271), Trace class (Class I/II), WBS (mono), Vendor (greyed if "—")
+- Status pills: PO raised (green) · RFQ (blue) · Not started (grey) · On site (green) · In transit (amber)
+- Actions: 📎 Certs · Edit
+
+**AddEquipmentModal (3-col form):**
+- Equipment tag (required)
+- Equipment type: Vessel/Pump/Compressor/Heat exchanger/Tank/Filter/Valve/Motor/Skid/Instrument/Pipe spool/Structural/Cable drum/Panel/Package
+- WBS (required)
+- Description (required, full width)
+- Area/location
+- Criticality: A-Critical / B-Major / C-Standard
+- PO reference
+- Vendor
+- Weight (kg)
+- Overall size (L×W×H)
+- Notes
+
+---
+
+### 2.4 Certificates Modal (CertificatesModal) — shared by Commodity + Equipment
+- Header: "📎 Certificates · {code/tag}" + item name + cert count
+- Summary bar: ✓ verified / ⏳ pending / ✕ rejected counts + + Upload certificate
+- Upload form: Cert type (Heat number / Batch-lot / Mill test / Heat-treatment / DG-hazmat / CoC / CoO / Calibration), Heat/batch/ref number, Applies-to scope, Issue date, file picker
+- Cert list grouped by type. Each card row: ref number, applies-to scope + filename, status pill (Verified/Pending QA/Rejected/Expired), date, uploaded-by + size, actions: 👁 Preview · ↓ Download · × Delete
+
+---
+
+## MODULE 3: MTO REGISTER
+
+### 3.1 MTO List (MTOListScreen)
+**Route:** /project/:projectId/mto
+
+**Header:** "MTO Register" + + New MTO (→ NewMTOModal)
+
+**Table columns:** MTO/Reference (name + ref mono + revision count) · Latest Rev (mono "Rev X") · Lines · Last updated · Owner · View button
+- Superseded MTOs: 50% opacity, non-clickable, labelled "Superseded"
+- Click active row or View → MTO detail
+
+### 3.2 New MTO Wizard (NewMTOModal, 4 internal steps)
+- choose: Upload MTO file (Excel/CSV) OR Create manually
+- upload: metadata form + drag-drop dropzone (.xlsx/.xls/.csv) with confirmation
+- manual: metadata form (name, reference, revision A–F, owner, description)
+- manual-lines: add line items with TagPicker autocomplete (Description/Tag, WBS, Qty, UOM, ROS, Inspection Class I/II/III, VDRL Yes/No)
+
+### 3.3 MTO Detail (MTODetailScreen)
+**Tabs:** Lines · Diff
+
+**Lines tab:** filter + search. Each line: line# · WBS · Description · Qty · UOM · ROS · Inspection class · VDRL · status · linked PO ref. Row actions: Edit → MTOLineEditModal · Delete → MTOLineDeleteConfirm or MTOLineBlockedDialog
+
+**Diff tab:** pick diffFrom/diffTo revisions (A–F) → shows added/modified/deleted lines highlighted
+
+**MTOLineEditModal:**
+- **LOCK RULE:** if line status = po-raised, Description/WBS/Qty/UOM/Tag are DISABLED. Only ROS, certification, VDRL, notes editable. Banner directs to raise variation request through Procurement.
+
+**MTOLineBlockedDialog:**
+- Shown when line is locked (PO raised / being expedited)
+- Offers alternatives: raise Variation Request, cancel/reduce PO qty first, or raise FMR if already shipped
+
+---
+
+## MODULE 4: PROCUREMENT
+
+### IMPORTANT NOTES FROM INTERNAL REVIEW:
+1. **PO Detail Screen (Phase 3) is NOT yet built** — it is the most important next build
+2. **Milestones belong in Expediting only** — NOT shown in PO Register table
+3. **Expeditor assignment** belongs on the PO Register itself (column after Status), not inside the PO creation wizard — because assignment may happen months after PO creation
+4. **Owner** = commercial PO owner. **Expeditor** = assigned separately when expediting begins
+5. **PO must be Approved & Locked** before it appears in Expediting (with one exception: pre_expediting_enabled flag allows expeditor to prepare before approval)
+6. **Critical path flag** on a PO propagates to all items below it — visible everywhere (procurement, expediting, logistics)
+
+### 4.1 PO Register (ProcurementScreen)
+**Route:** /project/:projectId/procurement
+
+**Header:** "PO Register", project subtitle. Buttons: ↓ Export · ↓ Template · ↑ Upload POs · ℹ Help · ↺ Reset · + New PO
+
+**5 Summary stat cards (CLICKABLE FILTERS):**
+- Total POs → clears all filters, shows all
+- Ongoing → filters to active/pending POs
+- Complete → filters to completed POs
+- Breached → filters to POs where CDD < today AND status not complete/cancelled (rag=red)
+- At Risk → filters to POs where CDD within project threshold AND status not complete/cancelled (rag=amber)
+- Active card: orange border (#E84E0F) + subtle orange glow. Click active card again → deselects.
+
+**Tabs:** All POs · Approved · Pending approval · ✓ Completed
+
+**Toolbar:** Search (PO ref, description, vendor) · CDD date range from/to · ★ Critical path only toggle · 5 of N POs count
+
+**Sortable table columns:** ★ | PO REF | VENDOR/GROUP | MATERIAL DESCRIPTION | WBS | OWNER/EXPEDITOR | CDD | ROS DATE | STATUS | Actions
+- NO Milestones column (milestones belong in Expediting only)
+- RAG left border stripe (green/amber/red)
+- Colour legend bar at bottom of table
+- Resizable columns with orange #E84E0F drag handles (3px, visible on hover)
+
+**Row:**
+- ★/☆ critical path toggle (SimpleConfirmModal + reason field)
+- PO ref (mono blue, clickable → PO Detail Screen)
+- Vendor name + Group/Category below
+- Material description
+- WBS code (mono)
+- Owner name + Expeditor below (or "— Assign" link with tooltip "Assign an expeditor to this PO")
+- Owner name hover tooltip: "PO Owner"
+- CDD date (RAG-coloured)
+- ROS date (RAG-coloured)
+- Status pill
+- Actions: Approve button (if pending) + row click → PO Detail Screen
+
+**Side drawer** (on row click — TEMPORARY until Phase 3 PO Detail Screen is built):
+- PO details, milestones, signed PO section, owner/expeditor assignment
+- Signed PO upload/download (po_documents table, authenticated streaming)
+- PO number in drawer header is CLICKABLE LINK → navigates to PO Detail Screen (Phase 3)
+
+**↑ Upload POs button:**
+- Bulk upload modal, drag-drop, CSV/XLSX
+- Preview table with 🟢🟡🔴❌ status per row
+- Template must include BOTH header fields AND line items section (see PO Upload Template spec below)
+
+**PO Upload Template (XLSX) — two sections:**
+Section 1 — PO Header (label/value pairs):
+- PO Reference (required)
+- Vendor/Supplier name (required)
+- PO Name/Title (required)
+- Group/Category (Mech/Electrical/Instrumentation/Civil/Piping/Structural)
+- Currency (AUD/USD/EUR/GBP/SGD)
+- INCO Terms (CIF/FOB/EXW/DAP/DDP/FCA/CPT/CIP)
+- INCO Location
+- WBS Code
+- Contract/Order Number
+- Award Date (dd/mm/yyyy)
+- CDD - Contract Delivery Date (dd/mm/yyyy)
+- ROS - Required on Site Date (dd/mm/yyyy)
+- FAT Date (dd/mm/yyyy)
+- ESD - Estimated Ship Date (dd/mm/yyyy)
+- Notes
+
+Section 2 — Line Items (column headers then data rows, minimum 20 blank rows):
+Line # | Item Description | Quantity | UOM | Unit Rate | Total Value | WBS Code | CDD | ROS Date | Heat Number Required (Y/N)
+
+Format: Orange header row (#E84E0F) for section headings, frozen top rows, Instructions tab
+
+---
+
+### 4.2 New PO Entry Choice (NewPOEntryModal)
+Two cards:
+- 📥 Upload PO document ("Recommended") → NewPOUploadFlow (auto-extracts header + lines + milestones from PDF/Excel/Word)
+- ✎ Create manually → NewPOManualForm
+
+### 4.3 New PO Upload Flow (3 stages)
+1. drop: dashed dropzone (PDF/Excel/Word ≤25MB)
+2. extracting: spinner with field-by-field extraction status
+3. review: green "Extracted" banner + auto-filled header grid. Footer "Continue to review →" → hands to manual form for verification
+
+### 4.4 New PO Manual Form (3 steps)
+**Step 1 — Header (2-col grid):**
+- PO Reference (required)
+- WBS (required, dropdown)
+- PO Name (required, full-width)
+- Description (textarea)
+- Vendor (required)
+- Group/Category (Mech/Electrical/Instrumentation/Civil/Piping/Structural)
+- Currency (required: USD/AUD/EUR/GBP/SGD/JPY/CNY)
+- PO Value (number)
+- Incoterms (required: CIF/FOB/EXW/DAP/DDP/FCA/CPT/CIP)
+- Required on Site / ROS (OPTIONAL — can be left blank at PO creation. Hint text: "Can be added later — required before expediting begins" IS WRONG. Correct hint: "Optional — can be entered later in Expediting". When ROS is entered or updated in Expediting, it must write back to the PO record (purchase_orders.ros_date) so PO level always reflects the latest value. No hard block on ROS at PO creation.)
+- Owner/Expeditor (dropdown of staff)
+- **Duplicate PO check on PO number blur (onBlur)**
+
+**Step 2 — Line items:**
+- Header: "N line item(s) · Subtotal: {currency} {subtotal}" + + Add line
+- Columns: # · **Commodity Code / Equipment Tag** · Description · Qty · UoM · Unit price · Total (auto) · ×
+- **Commodity Code / Equipment Tag (CRUCIAL):**
+  - Autocomplete/search field that searches both Commodity Library AND Equipment List for the current project
+  - Selecting a commodity auto-fills: Description, UOM, Trace level
+  - Selecting equipment auto-fills: Description, Tag number, UOM
+  - Field is OPTIONAL at PO creation — if user doesn't have the detail yet, can be left blank
+  - If left blank: line is flagged "commodity/tag not linked" — visible indicator in expediting
+  - In Expediting: user can link the commodity code or equipment tag to the line item at any time
+  - This linkage is critical for: traceability, heat number tracking, cert requirements, ITP requirements, SCN line assignment
+- UoM (select EA/M/M²/M³/KG/T/LT/SET/LOT) — auto-filled from commodity selection if available
+- Total auto = Qty × Unit price
+- × delete disabled when only one line remains
+- At least one line required (description alone is sufficient if no commodity code yet)
+
+**Step 3 — Milestones & review:**
+- Milestone date table: PO Award · FAT · ESD · ETA · ROS (each with date picker, blank allowed)
+- Review summary card: Reference, Vendor, Name, WBS, Currency, PO total, Incoterms, ROS, Lines count
+- **Approval threshold logic:** checks project thresholds (approval_threshold_1, approval_threshold_2), routes to single/dual approval
+
+Footer: Cancel · ← Back · ✓ Create PO (green)
+
+### 4.5 Approve & Lock PO Wizard (ApprovePOWizard, 2 steps)
+**Step 1 — Review:**
+- PO summary card (Reference, Vendor, PO Name, Total value in green, Incoterms + handover, Line items count, ROS/CDD)
+- Approval chain: Procurement Officer (done ✓) → Project Manager (active ← YOU) → Client (informational, pending)
+- Three mandatory acknowledgement checkboxes (each turns green when ticked):
+  1. "I have reviewed all N line items, quantities, UOM and unit values."
+  2. "I confirm the total PO value of {ccy} {amount} is correct."
+  3. "I understand that once approved, this PO will be locked — any future changes require a Variation Request."
+- Note to expediting textarea (optional)
+- Red warning: "⚠ This action cannot be undone."
+- 🔒 Approve & lock PO — DISABLED until all 3 checkboxes ticked
+
+**Step 2 — Success:**
+- Green ✓ confirmation
+- "What happens next": PO locked read-only · Expediting opens milestone monitoring · vendor auto-notified · audit log updated
+- Buttons: Close · Go to Expediting →
+
+**State flow:** on confirm, PO's approved flag flips; PO becomes locked/read-only; passes to Expediting.
+
+---
+
+### 4.6 PO Detail Screen — Phase 3 (PODetailScreen) ❌ NOT YET BUILT
+**Route:** /project/:projectId/procurement/:poId
+**This is a FULL DEDICATED SCREEN — not a modal, not a drawer.**
+**The PO number in the side drawer header is already set up as a clickable link — it should navigate here.**
+
+**IMPORTANT GAP FROM WIREFRAME:** The wireframe only has a basic scrolling detail view. The full tabbed PO Detail Screen below is an ENHANCEMENT that was discussed and agreed in the internal review. It must be built as specified here.
+
+**Top bar:**
+- ← PO Register breadcrumb
+- PO ref (mono grey) above the title
+- PO name (H2) + description
+- Right-side actions (state-dependent):
+  - Pending (not approved), view mode: ✎ Edit + Approve & lock PO (green)
+  - Editing: Cancel + ✓ Save changes (blue)
+  - Approved: static badge "✓ Approved — Locked" (no edit actions)
+
+**PO meta grid (top section, always visible):**
+Currency · Total value (computed from lines) · Incoterms · Handover point · Owner · Expeditor · Vendor · ROS date · CDD · Group/Category · WBS · Contract number · Award date
+
+**Status banner (one at a time):**
+- Approved: green — "This PO is approved and locked. Passed to Expediting."
+- Pending + view: amber — "Pending approval. Click ✎ Edit to amend or Approve & lock when ready."
+- Editing: blue — "✎ Editing — totals recalculate from line items on save."
+
+**Tabs:**
+1. **Line Items** — all po_lines with columns: Line # · Description · Qty · UOM · Unit value · Total value · WBS · CDD · ROS · Heat Number Required
+   - Edit mode: inline editable + × delete per row + + Add line button
+   - Total value per line auto-computes (Qty × Unit value)
+   - Totals row (footer, bold): grand total in PO currency
+   - Approved POs: read-only
+
+2. **Key Dates** — PO placed, FAT, ESD, ETA, ROS
+   - Each date shows: current value + full history log from date_change_log
+   - History log per date: old value → new value, changed by, changed at, mandatory reason
+   - Every date change REQUIRES a mandatory reason (dropdown + free text)
+   - "Changed N times" indicator → click to expand history
+
+3. **ITP** — Inspection & Test Plan requirements
+   - This is the 3rd pillar alongside Line Items and VDRL
+   - Links to itp_requirements table at PO level; itp_items link to PO + optional po_line_id
+   - Columns: ITP Item # · Description · Inspection Type · Linked Line Item (optional) · Planned Date · Forecast Date · Status · Witness Required (Yes/No) · Certificate Required (Yes/No) · Notes
+   - ITP items can be: pre-delivery (must complete before SCN) or post-delivery (can complete after receipt)
+   - Add ITP item button (only if PO not yet approved, or with appropriate permission)
+   - Same forecast date change tracking as Key Dates tab
+
+4. **Documents** — signed PO + other uploaded documents
+   - Upload Signed PO button (uploads to po_documents table)
+   - Document list: filename, type, uploaded by, uploaded at, download/preview/delete actions
+   - Authenticated streaming for download
+
+5. **Action Notes** — expeditor work notes
+   - Chronological notes thread (author, role, timestamp, text)
+   - Add note textarea + post button
+   - Notes visible to all authorised users
+
+6. **Variations** — post-approval change requests
+   - Lists all variation requests against this PO
+   - Each variation: ref, description, raised by, raised at, status, approved/rejected by
+   - Raise new variation button
+
+7. **Audit Trail** — full history of all changes to this PO
+   - Who/what/when/before/after for every field change
+   - Filterable by field, user, date range
+
+**Bottom action bar (if pending approval):** Approve & lock PO button
+
+---
+
+## MODULE 5: VDRL (Vendor Document Requirements List)
+
+**Route:** /project/:projectId/vdrl
+
+**Dual-role screen:** QCO internal staff vs Supplier/vendor portal (role assigned at login)
+**Active package context** with Switch package and New package flow
+
+### QCO Role Tabs:
+- Register · Expediting · Review cycle · Transmittals · Vendor contacts · MDR closeout · Alerts (red count badge)
+
+### Supplier Role Tabs:
+- My documents · Upload & submit (orange count badge) · Review comments · Transmittals · Expediting notices
+
+### Register tab (document table):
+- KPIs: total docs, submitted, overdue, AFC-cleared, action-required, % progress
+- Filters: search (doc no/title/type) · status filter · type filter · discipline filter
+- Configurable columns (show/hide): Doc no · Title · Type · Rev · Required · Promised · Submitted · Status · ABF (defaults on); Discipline · Owner · Transmittal · Version · Notes (defaults off)
+
+### IMPORTANT FROM INTERNAL REVIEW:
+- Documents in VDRL come from the signed PO/contract — they are contractual obligations
+- Cannot remove a VDRL document without a Variation Request (same logic as PO lock)
+- Supplier portal: supplier sees their required documents, uploads, gets feedback
+- Should allow adding a document type not in the database (with reason)
+
+### Modals (QCO):
+- VDRLNewPackageModal, VDRLSwitchPackageModal, VDRLAddDocumentModal
+- VDRLLogActionModal (log expediting action against vendor)
+- VDRLAddCommentModal (Hold/Minor review comments)
+- VDRLNewTransmittalModal (select docs, recipient, cover note, reply-by date)
+- VDRLExportModal (format Excel/CSV/PDF, scope options, include revision history checkbox)
+- VDRLContactModal (add/edit vendor contact)
+- VDRLGenMDRModal (generate Manufacturing Data Record PDF)
+- VDRLAlertDetailModal (alert detail with suggested actions)
+
+### Modals (Supplier):
+- VDRLUploadDocumentsModal (drag-drop, map to required doc, rev + comment)
+- VDRLRespondQCOModal (respond to expediting notices with commitment date)
+
+---
+
+## MODULE 6: EXPEDITING
+
+**Route:** /project/:projectId/expediting
+
+**IMPORTANT:** Expediting only operates on POs that have been Approved & Locked by Procurement.
+**EXCEPTION:** pre_expediting_enabled flag on purchase_orders allows expeditor to prepare (set up ITP milestones, break out child line items) before PO approval. These POs show with amber indicator "Pre-expediting" instead of green.
+
+**ROS DATE WRITEBACK:** ROS is optional at PO creation. When ROS is entered or updated anywhere in Expediting (at PO level or line item level), it MUST write back to purchase_orders.ros_date so the PO Register always shows the latest value. Every ROS change requires mandatory reason + records to date_change_log.
+
+**COMMODITY/TAG LINKING IN EXPEDITING:** PO lines created without a commodity code or equipment tag are flagged "not linked" with a visible indicator. In the Expediting PO Detail Panel, each unlinked line shows a "Link commodity/tag" button. Clicking opens a search modal (searches Commodity Library + Equipment List for current project). Once linked: trace level, heat number requirement, ITP requirements, and cert requirements auto-populate for that line.
+
+### IMPORTANT FROM INTERNAL REVIEW:
+1. **Child line items ("pink box" / "door"):** PO line items can be broken into child items in expediting. A PO line item (contractual, from the signed PO) can have child items added for tracking sub-components. These children are NOT on the original PO — they are expediting tracking items only. Maximum ONE level of children (no grandchildren).
+2. **Forecast date history:** Every forecast date change on every item requires a mandatory reason. Full history must be viewable inline — "Changed 6 times" → click to see all changes with notes. This is the expeditor's bible.
+3. **Heat numbers:** For commodity type steel (and others requiring heat traceability), a heat number column appears in expediting. Expeditor collects heat numbers from supplier during the expediting process.
+4. **Milestone flexibility:** Each PO/package may have different milestones. System should allow defining which milestones apply per package. Pre-defined templates available but customisable.
+5. **Pre-expediting state:** If pre_expediting_enabled = true, expeditor can set up all structure (child items, ITP milestones) but cannot communicate with supplier or mark milestones complete. PO shows amber "Pre-expediting" indicator.
+6. **Critical path propagation:** Flagging a PO as critical path propagates the flag visibly through expediting, logistics, and material control.
+
+### 6.1 Expediting Register (ExpeditingScreen)
+
+**Header:** "Expediting Register · {project name} · {user group}" + ↓ Export
+
+**5 Summary stat cards (same clickable filter pattern as Procurement):**
+Total POs · Ongoing (blue) · Complete (green) · Breached (red) · At risk (amber)
+
+**View tabs:** All · Ongoing · Complete (live counts)
+
+**Toolbar:**
+- Search (ref/vendor/material/WBS/tag)
+- Group by: None / WBS / Vendor / Material
+- RAG filter: all / red / amber / green
+- ROS date range (from/to pickers — matching rows highlight blue)
+- Critical-only toggle
+
+**Row (RAG-coloured left border, sorted red→amber→green→blue→grey):**
+- ★ critical toggle
+- PO ref (mono blue; grey if complete)
+- Vendor + group
+- Material description
+- Owner
+- MilestoneTimeline (compact): PO Award → TPI → FAT → Ship-by → ROS (RAG-coloured nodes with dates)
+- ROS date (RAG-coloured; blue+bold if inside active ROS filter range)
+- RAG pill
+- View button
+- Completed POs: muted grey text, faint green background
+
+**Click row → ExpPODetailPanel (slide-in drawer)**
+
+### 6.2 Expediting PO Detail Panel (ExpPODetailPanel)
+
+**Right-side slide-in drawer (620px)** over dimmed scrim. Click scrim or ✕ to close. Scrollable.
+
+**Header (sticky):**
+- PO ref (mono grey), vendor name, "Owner: {owner} · Group: {group}"
+- RAG pill + ✕ close
+- Action buttons: + Create SCN (blue → CreateSCNWizard) · 📎 Documents (→ DocBundlePanel)
+
+**Milestones section:**
+- MilestoneTimeline (compact) for the PO
+- Each milestone: planned date · forecast date · actual date
+- Forecast date is editable — EVERY change requires mandatory reason + records to date_change_log
+- Inline history: "Changed N times" → expandable showing all previous values + reasons
+
+**Line items section (THE CORE OF EXPEDITING):**
+Each PO line renders as a card:
+- Line header: Line no (mono) · description · "{tag} · WBS {wbs} · ROS {ros}" · roll-up status pill
+- Quantity allocation summary: Total / Assigned / Available (mono; Assigned blue, Available green) + progress bar
+- Heat number field (shown for commodities with trace level = heat number/heat+cert)
+- + Assign to SCN button (shown when available > 0) → CreateSCNWizard
+- Per-allocation rows (one per SCN the line is split across):
+  - SCN ref (mono blue) · allocated qty · allocation status pill
+  - 📦 Packages toggle (expands package table) · 📎 Docs (→ DocBundlePanel)
+  - SCN detail grid: ETD · ETA · Forwarder · Destination · Delivery · Incoterm
+- No allocation: italic "No SCN assigned — create SCN"
+
+**Child line items ("pink box" / "door" concept):**
+- Below each PO line, expeditor can add child tracking items
+- Child items are NOT contractual — they are sub-components for expediting tracking only
+- Child item fields: Description · Qty · UOM · CDD · Forecast ready date · Status · Notes
+- Maximum ONE level (no grandchildren)
+- Child items identified with sub-number (e.g. PO line 001 → children 001.1, 001.2)
+- Child items can also be assigned to SCNs
+
+**ITP requirements section (below line items):**
+- Lists ITP items linked to this PO (from itp_items table)
+- Columns: ITP # · Description · Linked Line · Planned date · Forecast date · Status · Witness Req · Cert Req · Before/After delivery flag
+- Forecast date changes: same mandatory reason + history tracking as milestones
+- Cert Required items: cannot create SCN for that line until cert is uploaded (unless "post-delivery" flag)
+
+**Action notes / work log:**
+- Chronological notes thread
+- Add note textarea + post button
+- Visible to all authorised team members
+
+**Partial shipments supported:**
+- A single PO line can be split across multiple SCNs
+- lineAssigned/lineAvailable computed as aggregate
+- Available reflects qty not yet on any SCN
+
+---
+
+## MODULE 7: LOGISTICS (SCN Register)
+
+**Route:** /project/:projectId/logistics
+
+SCN = Shipment Control Note. Picks up POs once they ship.
+
+**Header:** "Logistics — SCN Register · {project name} · N shipment control notes" + ↓ Export
+
+**Pipeline status summary bar (clickable, each filters table):**
+Pending pickup · In transit · Customs review · Pending delivery · Delivered (with live counts, coloured)
+
+**Tabs:** All SCNs + one per status
+
+**Toolbar:** search (SCN ref/PO/vendor/forwarder/origin/destination) + Forecast controls (mode pickup/arrival, within N days)
+
+**Row:** ★ critical toggle + SCN ref · PO · vendor · forwarder · origin → destination · ETD/ETA · status pill · RAG
+
+**Click row → SCNDetailModal (tabs: overview / packages / docs / timeline)**
+
+### Create SCN Wizard (CreateSCNWizard, 4 steps):
+1. Select PO lines to ship (respects available qty, includes child line items)
+2. SCN header (forwarder, mode, incoterms, origin/dest, ETD/ETA)
+3. Packages (define packages, assign line qty, dims/weight, DG flags)
+4. Confirm → creates SCN in Logistics pipeline
+
+### IMPORTANT FROM INTERNAL REVIEW:
+- **Forecast ready date** = what expeditor says the goods will be ready for pickup (≠ CDD)
+- **ETD** = Estimated Time of Departure (set by freight forwarder, not expeditor)
+- **ETA** = Estimated Time of Arrival (set by freight forwarder)
+- Expeditor populates "forecast ready for pickup" date; freight forwarder populates ETD/ETA
+- SCN creation triggers notification to assigned freight forwarder
+- "Do you want to notify forwarder now or later?" prompt on SCN creation
+- Freight forwarder may be a system user (logistics access) or external (vendor portal)
+
+### Proof of Custody (ProofOfCustodyScreen):
+- Capture condition, quantity, photos, signature, confirm custody transfer at vendor pickup/handover
+
+---
+
+## MODULE 8: MATERIAL CONTROL
+
+Four sub-screens (collapsible nav group): Receipting · Stock Register · FMR Register · Transfers
+
+### IMPORTANT FROM INTERNAL REVIEW:
+- **Warehouse/Receipting = Inventory Management** (not "material control" in the traditional sense)
+- **Material Control = data analytics + intelligence layer** — sees the whole supply chain, reports on it, identifies shortages before they happen, tells expeditors what's urgent
+- Material Control continuously interrogates MTO vs PO vs stock quantities to surface shortages
+- Warehouse receives and manages stock; Material Control analyses and directs
+
+### 8.1 Receipting (MCReceiptingScreen)
+Register of pending receipts (inbound SCNs awaiting goods-in). Click row → Receipting Wizard (5 steps):
+1. Review expected (packages, qty, weight, ETD/ETA)
+2. Physical check (actual qty per package, ✓/✕ match, OS&D discrepancy flag)
+3. Assign location (grid location format WH-[code]·[row]-[bay]-[level])
+4. TCCC sign-off (Trace/Cert/Condition/Compliance checklist)
+5. Complete (stock created in register)
+
+**Traceability at receipt:** If project config has traceability_required = true for this commodity type:
+- Receipting wizard expands to show each individual item
+- Warehouse must record heat numbers against each piece
+- System matches heat numbers to certificates already uploaded in Traceability module
+
+### 8.2 Stock Register (MCWarehouseScreen)
+- Searchable, sortable stock across warehouses
+- Quarantine status for items pending cert verification or with physical issues
+- ReallocateStockModal (split/move across locations)
+- StockTakeModal (cycle count)
+- View by WBS, warehouse, commodity code
+
+### 8.3 FMR Register (MCFMRScreen)
+FMR = Field Material Request. Site material requests; raise/fulfil from stock.
+
+### 8.4 Transfers (MCTransferScreen)
+Inter-warehouse transfers. NewTransferModal (multi-step): from warehouse → to warehouse, select stock lines + qty, transport details, confirm.
+
+---
+
+## MODULE 9: TRACEABILITY
+
+**Route:** /project/:projectId/traceability
+
+**Header:** "Traceability · VDRL, cert approvals, trace chain & holds" + ↑ Upload cert
+
+**KPI strip:** VDRL items received (green) · VDRL pending (amber) · VDRL overdue (red) · Active trace holds (red)
+
+**Tabs:** VDRL · Cert approvals (amber count) · Trace chain · Holds (red count)
+
+**IMPORTANT FROM INTERNAL REVIEW (heat number traceability):**
+- For bulk materials (steel, pipe, cable), unique identifier = heat number
+- Heat numbers collected by expeditor from supplier during expediting
+- At receipt, warehouse matches physical items to heat numbers → associates certificates
+- Certificate must travel with goods through SCN to warehouse
+- Two approaches (project-configurable): (1) Expeditor gets heat number list from supplier, records in system; (2) Warehouse reads and records heat numbers at receipt
+- traceability_required flag on projects controls which commodities require this
+- If traceability_required = true for a commodity: receipting wizard expands to capture heat numbers per item
+
+**Trace chain tab:** Visual chain for a selected tag across 6 phases: PO § → Mfg ⚙ → Inspect ✓ → SCN ➜ → Receipt ⬇ → Cert 📎 (each phase RAG-coloured)
+
+---
+
+## MODULE 10: DOCUMENT INBOX
+
+**Route:** /project/:projectId/documents
+
+Central intake for any uploaded/received file before it's filed to a module.
+- Filters: search + module filter
+- DocClassifyModal: classify file (type, target module, link to PO/SCN/WBS/equipment, rev, notes) → routes to right register
+
+---
+
+## MODULE 11: AUDIT
+
+**Route:** /project/:projectId/audit
+
+Immutable audit log across all modules. Search interface. Returns: who · what action · which entity · timestamp · before/after values.
+
+---
+
+## MODULE 12: ADMIN
+
+**Route:** /admin
+
+**Tabs:** Users · Suppliers/AVL · Settings
+
+**Roles:** System Admin · Project Manager · Procurement Officer · Senior Expeditor · Junior Expeditor · Logistics Officer · Materials Controller · Quality Engineer · Engineer · Subcontractor
+
+**Suppliers/AVL (FoundAVLScreen):** Approved Vendor List — status (Approved/Conditional/Rejected/Pending), scope, qualification. + Add Supplier → AddSupplierModal (multi-step).
+
+---
+
+## GLOBAL STANDARDS (apply to EVERY file)
+
+- Clear comments on every section of every file
+- Sticky headers on all tables (overflow-x: auto + overflow-y: auto + maxHeight on wrapper; thead position:sticky top:0; NOT on thead tr)
+- Resizable columns with orange #E84E0F drag handles (3px, visible on hover; 2px solid extending full height when actively dragging)
+- Hover tooltips for truncated text
+- Dark/light mode toggle
+- Text size control (A- A A+) persisted in localStorage
+- ↺ Reset to defaults button in toolbar
+- QCO branding throughout
+- Pagination on ALL list endpoints (default 50/page)
+- Parameterised queries ONLY — no SQL injection ever
+- JWT auth on all protected routes
+- Full audit_log on ALL changes (who/what/when/before/after)
+- DeleteConfirmModal (reason dropdown + checkbox) for all deletes
+- SimpleConfirmModal for deactivations
+- Specific error messages — NEVER "Save failed"
+- Duplicate check before creating records
+- Never expose password hashes
+- MySQL connection pooling ONLY — never createConnection
+- Input validation on all endpoints
+- Priority order: Stability → Security → Scalability → Auditability
+
+---
+
+## ALWAYS DO AT START OF EVERY SESSION
+
+1. Print this CLAUDE_CONTEXT.md file
+2. Read public/QMAT-prototype.html before building any new screen
+3. Verify app is running in Chrome (localhost:5174)
+4. Check git log to confirm last commit
+5. Check this spec before building ANY screen — if something seems wrong, ask
+
+---
+
+## PENDING ITEMS (as of 30 May 2026)
+
+### Bugs to fix:
+1. **Fix 2 SQL bug:** Clicking Breached/At Risk summary cards returns "Invalid use of group function". The rag filter query uses aggregate functions where WHERE is needed. Fix: `rag=red` → WHERE cdd < CURDATE() AND status NOT IN ('complete','cancelled'); `rag=amber` → WHERE cdd BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL threshold DAY) AND status NOT IN ('complete','cancelled'). Pure WHERE conditions, no HAVING.
+2. **New PO Wizard Step 1 — ROS hint text wrong:** Change hint from "Can be added later — required before expediting begins" to "Optional — ROS can be entered later in Expediting". Remove any hard validation blocking PO creation without ROS.
+3. **New PO Wizard Step 2 — Missing commodity/tag column:** Add Commodity Code / Equipment Tag autocomplete column to line items table. Searches Commodity Library + Equipment List. Optional field — blank lines flagged "not linked" in Expediting.
+4. **PO Upload Template:** Needs complete redesign — must include both header section AND line items section with Commodity Code / Equipment Tag column.
+
+### Next builds in order:
+1. Fix the SQL bug above
+2. PO Detail Screen (Phase 3) — full tabbed screen at /project/:projectId/procurement/:poId
+3. Redesign PO Upload Template (must include line items section — see spec above)
+4. Add Foundational to left nav (currently missing)
+5. Build Foundational module (WBS → Commodity Library → Equipment List)
+

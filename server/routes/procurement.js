@@ -286,48 +286,47 @@ router.get('/:projectId/pos', async (req, res) => {
     } = req.query
 
     const { page, limit, offset } = paginate(req.query)
-    const params  = [pid]
-    const filters = ['po.project_id = ?']
+    const params        = [pid]
+    const havingParams  = []
+    const whereFilters  = ['po.project_id = ?']
+    const havingFilters = []
 
     // Vendor sees only their POs
     if (req.user.role === 'vendor' && req.user.supplier_id) {
-      filters.push('po.supplier_id = ?')
+      whereFilters.push('po.supplier_id = ?')
       params.push(req.user.supplier_id)
     }
 
     // ── Status tab filter ─────────────────────────────────────────────────────
     if (status === 'approved') {
-      filters.push('po.is_locked = 1')
+      whereFilters.push('po.is_locked = 1')
     } else if (status === 'pending') {
-      filters.push("po.status IN ('rfq','loa','pending_approval') AND po.is_locked = 0")
+      whereFilters.push("po.status IN ('rfq','loa','pending_approval') AND po.is_locked = 0")
     } else if (status === 'completed') {
-      filters.push("po.status IN ('closed','cancelled')")
+      whereFilters.push("po.status IN ('closed','cancelled')")
     } else if (status === 'all_active') {
-      // FIX 2: "Ongoing" card — not closed, not cancelled
-      filters.push("po.status NOT IN ('closed','cancelled')")
+      whereFilters.push("po.status NOT IN ('closed','cancelled')")
     }
 
-    // ── FIX 2: RAG filter from summary card click (breached=red, atRisk=amber) ──
-    // These filters operate on the computed CDD across po_lines.
+    // ── RAG filter from summary card click (breached=red, atRisk=amber) ──────
+    // Aggregate (MIN) conditions belong in HAVING, not WHERE.
     if (rag === 'red') {
-      // Breached: CDD is in the past and PO not complete
-      filters.push("po.status NOT IN ('closed','cancelled')")
-      filters.push('MIN(l.cdd) IS NOT NULL AND MIN(l.cdd) < CURDATE()')
+      whereFilters.push("po.status NOT IN ('closed','cancelled')")
+      havingFilters.push('MIN(l.cdd) IS NOT NULL AND MIN(l.cdd) < CURDATE()')
     } else if (rag === 'amber') {
-      // At Risk: CDD within project threshold, not complete
-      filters.push("po.status NOT IN ('closed','cancelled')")
-      filters.push(`MIN(l.cdd) IS NOT NULL AND MIN(l.cdd) >= CURDATE() AND DATEDIFF(MIN(l.cdd), CURDATE()) <= ${atRiskDays}`)
+      whereFilters.push("po.status NOT IN ('closed','cancelled')")
+      havingFilters.push(`MIN(l.cdd) IS NOT NULL AND MIN(l.cdd) >= CURDATE() AND DATEDIFF(MIN(l.cdd), CURDATE()) <= ${atRiskDays}`)
     }
 
-    if (supplier_id)        { filters.push('po.supplier_id = ?');    params.push(Number(supplier_id)) }
-    if (wbs_id)             { filters.push('w.id = ?');              params.push(Number(wbs_id)) }
-    if (is_critical_path === '1') { filters.push('po.is_critical_path = 1') }
-    if (expeditor_id)       { filters.push('po.expeditor_id = ?');   params.push(Number(expeditor_id)) }
-    if (cdd_from)           { filters.push('MIN(l.cdd) >= ?');       params.push(cdd_from) }
-    if (cdd_to)             { filters.push('MIN(l.cdd) <= ?');       params.push(cdd_to) }
+    if (supplier_id)        { whereFilters.push('po.supplier_id = ?');    params.push(Number(supplier_id)) }
+    if (wbs_id)             { whereFilters.push('w.id = ?');              params.push(Number(wbs_id)) }
+    if (is_critical_path === '1') { whereFilters.push('po.is_critical_path = 1') }
+    if (expeditor_id)       { whereFilters.push('po.expeditor_id = ?');   params.push(Number(expeditor_id)) }
+    if (cdd_from)           { havingFilters.push('MIN(l.cdd) >= ?');       havingParams.push(cdd_from) }
+    if (cdd_to)             { havingFilters.push('MIN(l.cdd) <= ?');       havingParams.push(cdd_to) }
 
     if (search) {
-      filters.push('(po.po_number LIKE ? OR po.description LIKE ? OR po.vendor_name LIKE ? OR s.name LIKE ?)')
+      whereFilters.push('(po.po_number LIKE ? OR po.description LIKE ? OR po.vendor_name LIKE ? OR s.name LIKE ?)')
       const q = `%${search}%`
       params.push(q, q, q, q)
     }
@@ -338,20 +337,27 @@ router.get('/:projectId/pos', async (req, res) => {
       cdd: 'MIN(l.cdd)', value: 'po.value', wbs: 'po.wbs_code',
       expeditor: 'exp.full_name', owner: 'own.full_name',
     }
-    const orderBy  = SAFE_SORT[sort_col] ?? 'po.created_at'
-    const orderDir = sort_dir?.toLowerCase() === 'asc' ? 'ASC' : 'DESC'
-    const where    = filters.join(' AND ')
+    const orderBy   = SAFE_SORT[sort_col] ?? 'po.created_at'
+    const orderDir  = sort_dir?.toLowerCase() === 'asc' ? 'ASC' : 'DESC'
+    const where     = whereFilters.join(' AND ')
+    const having    = havingFilters.length ? `HAVING ${havingFilters.join(' AND ')}` : ''
+    const allParams = [...params, ...havingParams]
 
+    // COUNT: wrap in subquery so HAVING applies before counting
     const [countRows] = await db.query(`
-      SELECT COUNT(DISTINCT po.id) AS total
-      FROM purchase_orders po
-      LEFT JOIN suppliers s   ON s.id   = po.supplier_id
-      LEFT JOIN users     own ON own.id = po.owner_id
-      LEFT JOIN users     exp ON exp.id = po.expeditor_id
-      LEFT JOIN wbs_nodes w   ON w.code = po.wbs_code AND w.project_id = po.project_id
-      LEFT JOIN po_lines  l   ON l.po_id = po.id
-      WHERE ${where}
-    `, params)
+      SELECT COUNT(*) AS total FROM (
+        SELECT po.id
+        FROM purchase_orders po
+        LEFT JOIN suppliers s   ON s.id   = po.supplier_id
+        LEFT JOIN users     own ON own.id = po.owner_id
+        LEFT JOIN users     exp ON exp.id = po.expeditor_id
+        LEFT JOIN wbs_nodes w   ON w.code = po.wbs_code AND w.project_id = po.project_id
+        LEFT JOIN po_lines  l   ON l.po_id = po.id
+        WHERE ${where}
+        GROUP BY po.id
+        ${having}
+      ) AS filtered
+    `, allParams)
 
     const [rows] = await db.query(`
       SELECT
@@ -385,9 +391,10 @@ router.get('/:projectId/pos', async (req, res) => {
         own.full_name, exp.full_name, s.name, w.id, w.description,
         po.milestone_po_date, po.milestone_fat_date, po.milestone_esd_date,
         po.milestone_eta_date, po.milestone_ros_date
+      ${having}
       ORDER BY ${orderBy} ${orderDir}
       LIMIT ? OFFSET ?
-    `, [...params, limit, offset])
+    `, [...allParams, limit, offset])
 
     // ── FIX 1: milestone_dots removed — milestones belong in Expediting ─────────
     // Milestone dates still included so the drawer can render the milestone section.
@@ -1152,9 +1159,9 @@ router.post('/:projectId/pos', async (req, res) => {
       const l = lines[i]
       if (!l.description?.trim()) continue
       await db.query(`
-        INSERT INTO po_lines (po_id,line_number,description,qty,uom,uom_id,unit_price,ros_date)
-        VALUES (?,?,?,?,?,?,?,?)
-      `, [poId, l.line_number||String(i+1), l.description.trim(), l.qty||null,
+        INSERT INTO po_lines (po_id,line_number,tag_number,description,qty,uom,uom_id,unit_price,ros_date)
+        VALUES (?,?,?,?,?,?,?,?,?)
+      `, [poId, l.line_number||String(i+1), l.tag_number||null, l.description.trim(), l.qty||null,
           l.uom||'EA', l.uom_id||null, l.unit_price||null, l.ros_date||null])
     }
 

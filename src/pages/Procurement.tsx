@@ -72,16 +72,17 @@ interface PO {
 }
 
 interface POLine {
-  id?:         number
-  line_number: string
-  description: string
-  qty:         number | null
-  uom:         string
-  uom_id?:     number | null
-  unit_price:  number | null
+  id?:          number
+  line_number:  string
+  tag_number?:  string | null   // commodity code or equipment tag; autocomplete when Foundational built
+  description:  string
+  qty:          number | null
+  uom:          string
+  uom_id?:      number | null
+  unit_price:   number | null
   total_price?: number | null
-  ros_date?:   string | null
-  cdd?:        string | null
+  ros_date?:    string | null
+  cdd?:         string | null
 }
 
 interface Stats {
@@ -773,7 +774,7 @@ const NewPOWizard = ({ dark, projectId, suppliers, uoms, users, wbsNodes, onClos
             <Field label="Required on Site (ROS)" half>
               <input value={rosDate} onChange={e => setRosDate(e.target.value)} type="date" style={inp(dark)} />
               <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
-                Can be added later — required before expediting begins.
+                Optional — ROS can be entered later in Expediting.
               </div>
             </Field>
           </div>
@@ -793,8 +794,8 @@ const NewPOWizard = ({ dark, projectId, suppliers, uoms, users, wbsNodes, onClos
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
                 <tr style={{ background: dark ? '#0f172a' : '#f4f7fb', borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}` }}>
-                  {['#','Description','Qty','UoM','Unit Price','Total',''].map(h => (
-                    <th key={h} style={{ padding: '6px 8px', fontWeight: 600, color: '#64748b', textAlign: h === 'Description' ? 'left' : 'right', whiteSpace: 'nowrap', ...(h === '#' ? { width: 30 } : {}) }}>{h}</th>
+                  {['#','Commodity / Tag','Description','Qty','UoM','Unit Price','Total',''].map(h => (
+                    <th key={h} style={{ padding: '6px 8px', fontWeight: 600, color: '#64748b', textAlign: (h === 'Description' || h === 'Commodity / Tag') ? 'left' : 'right', whiteSpace: 'nowrap', ...(h === '#' ? { width: 30 } : {}), ...(h === 'Commodity / Tag' ? { width: 130 } : {}) }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -802,6 +803,15 @@ const NewPOWizard = ({ dark, projectId, suppliers, uoms, users, wbsNodes, onClos
                 {lines.map((l, i) => (
                   <tr key={i} style={{ borderBottom: `1px solid ${dark ? '#334155' : '#e8ecf2'}` }}>
                     <td style={{ padding: '4px 8px', textAlign: 'center', color: '#94a3b8', fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{i+1}</td>
+                    <td style={{ padding: '4px 6px', width: 130 }}>
+                      <input
+                        value={l.tag_number ?? ''}
+                        onChange={e => updateLine(i, 'tag_number', e.target.value || null)}
+                        placeholder="Code or tag (optional)"
+                        title="Commodity code or equipment tag. Autocomplete will be available once Foundational module is built."
+                        style={{ ...inp(dark), height: 28, fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}
+                      />
+                    </td>
                     <td style={{ padding: '4px 6px' }}><input value={l.description} onChange={e => updateLine(i,'description',e.target.value)} placeholder="Item description" style={{ ...inp(dark), height: 28, fontSize: 12 }} /></td>
                     <td style={{ padding: '4px 6px', width: 70 }}><input value={l.qty ?? ''} onChange={e => updateLine(i,'qty',e.target.value ? Number(e.target.value) : null)} type="number" min="0" step="0.001" placeholder="0" style={{ ...inp(dark), height: 28, fontSize: 12, textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }} /></td>
                     <td style={{ padding: '4px 6px', width: 80 }}>
@@ -822,7 +832,7 @@ const NewPOWizard = ({ dark, projectId, suppliers, uoms, users, wbsNodes, onClos
               </tbody>
               <tfoot>
                 <tr>
-                  <td colSpan={5} style={{ padding: '8px 8px', textAlign: 'right', fontSize: 12, fontWeight: 700, color: dark ? '#f1f5f9' : '#0f172a' }}>Subtotal</td>
+                  <td colSpan={6} style={{ padding: '8px 8px', textAlign: 'right', fontSize: 12, fontWeight: 700, color: dark ? '#f1f5f9' : '#0f172a' }}>Subtotal</td>
                   <td style={{ padding: '8px 8px', textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: 13, fontWeight: 700, color: dark ? '#f1f5f9' : '#0f172a' }}>{fmtCurrency(lineSubtotal, currency)}</td>
                   <td />
                 </tr>
