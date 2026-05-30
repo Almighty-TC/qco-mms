@@ -185,8 +185,12 @@ const ApproveWizard = ({ po, dark, onClose, onApproved }: {
     try {
       await axios.patch(`${API}/procurement/pos/${po.id}/approve`, { chain_note: chainNote })
       addToast('success', `PO ${po.po_number} approved & locked`)
+      // FIX 2: setStep(2) BEFORE calling onApproved so React renders Step 2
+      // before any parent state change can unmount this wizard.
+      // onApproved() only reloads PO data — it no longer calls setShowApprove(false).
+      // The wizard is dismissed by the Close button in Step 2 via onClose().
       setStep(2)
-      onApproved()
+      onApproved()   // refreshes PO data in parent — does NOT close the wizard
     } catch (e: unknown) {
       const er = e as { response?: { data?: { error?: string } } }
       addToast('error', er.response?.data?.error ?? 'Approval failed')
@@ -1020,6 +1024,14 @@ const PODetailInner = ({ dark, poId, projectName, onBack }: PODetailInnerProps) 
     } finally { setLoading(false) }
   }, [poId, addToast])
 
+  // Silent reload — used after approval so the wizard stays mounted for Step 2
+  const silentReload = useCallback(async () => {
+    try {
+      const { data } = await axios.get(`${API}/procurement/pos/${poId}`)
+      setPO(data)
+    } catch { /* silent */ }
+  }, [poId])
+
   useEffect(() => { load() }, [load])
 
   if (loading || !po) {
@@ -1127,7 +1139,7 @@ const PODetailInner = ({ dark, poId, projectName, onBack }: PODetailInnerProps) 
         <ApproveWizard
           po={po} dark={dark}
           onClose={() => setApprove(false)}
-          onApproved={() => { setApprove(false); load() }}
+          onApproved={silentReload}  /* silent reload keeps wizard mounted so Step 2 can render */
         />
       )}
     </div>

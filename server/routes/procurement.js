@@ -602,8 +602,8 @@ router.patch('/pos/:id/approve', async (req, res) => {
         "UPDATE purchase_orders SET status='po-raised', is_locked=1 WHERE id=?", [id]
       )
       await db.query(
-        'INSERT INTO po_approvals (po_id, approver_id, approval_level, status, decision_at, decision_note, created_by, updated_by) VALUES (?,?,1,\'approved\',NOW(),?,?,?)',
-        [id, req.user.id, chain_note || 'Admin approval', req.user.id, req.user.id]
+        'INSERT INTO po_approvals (po_id, approver_id, approval_level, status, actioned_at, comments) VALUES (?,?,1,\'approved\',NOW(),?)',
+        [id, req.user.id, chain_note || 'Admin approval']
       )
       audit(req, 'po_approved', `purchase_orders/${id}`,
         { status: po.status }, { status: 'po-raised', approved_by: req.user.id })
@@ -623,8 +623,8 @@ router.patch('/pos/:id/approve', async (req, res) => {
         "UPDATE purchase_orders SET status='po-raised', is_locked=1 WHERE id=?", [id]
       )
       await db.query(
-        'INSERT INTO po_approvals (po_id, approver_id, approval_level, status, decision_at, decision_note, created_by, updated_by) VALUES (?,?,1,\'approved\',NOW(),?,?,?)',
-        [id, req.user.id, chain_note || null, req.user.id, req.user.id]
+        'INSERT INTO po_approvals (po_id, approver_id, approval_level, status, actioned_at, comments) VALUES (?,?,1,\'approved\',NOW(),?)',
+        [id, req.user.id, chain_note || null]
       )
       audit(req, 'po_approved', `purchase_orders/${id}`,
         { status: po.status }, { status: 'po-raised' })
@@ -638,8 +638,8 @@ router.patch('/pos/:id/approve', async (req, res) => {
         "UPDATE purchase_orders SET status='pending_approval' WHERE id=?", [id]
       )
       await db.query(
-        'INSERT INTO po_approvals (po_id, approver_id, approval_level, status, created_by, updated_by) VALUES (?,?,1,\'pending\',?,?)',
-        [id, req.user.id, req.user.id, req.user.id]
+        'INSERT INTO po_approvals (po_id, approver_id, approval_level, status) VALUES (?,?,1,\'pending\')',
+        [id, req.user.id]
       )
       // In-app notification to procurement managers
       const [managers] = await db.query(
@@ -661,8 +661,8 @@ router.patch('/pos/:id/approve', async (req, res) => {
           "UPDATE purchase_orders SET status='pending_director_approval' WHERE id=?", [id]
         )
         await db.query(
-          'INSERT INTO po_approvals (po_id, approver_id, approval_level, status, decision_at, decision_note, created_by, updated_by) VALUES (?,?,1,\'approved\',NOW(),?,?,?)',
-          [id, req.user.id, chain_note || null, req.user.id, req.user.id]
+          'INSERT INTO po_approvals (po_id, approver_id, approval_level, status, actioned_at, comments) VALUES (?,?,1,\'approved\',NOW(),?)',
+          [id, req.user.id, chain_note || null]
         )
         // Notify project directors
         const [directors] = await db.query(
@@ -678,8 +678,8 @@ router.patch('/pos/:id/approve', async (req, res) => {
       }
       await db.query("UPDATE purchase_orders SET status='po-raised', is_locked=1 WHERE id=?", [id])
       await db.query(
-        'INSERT INTO po_approvals (po_id, approver_id, approval_level, status, decision_at, decision_note, created_by, updated_by) VALUES (?,?,1,\'approved\',NOW(),?,?,?)',
-        [id, req.user.id, chain_note || null, req.user.id, req.user.id]
+        'INSERT INTO po_approvals (po_id, approver_id, approval_level, status, actioned_at, comments) VALUES (?,?,1,\'approved\',NOW(),?)',
+        [id, req.user.id, chain_note || null]
       )
       return res.json({ ok: true, newStatus: 'po-raised' })
     }
@@ -688,8 +688,8 @@ router.patch('/pos/:id/approve', async (req, res) => {
     if (po.status === 'pending_director_approval' && ['project_director','admin'].includes(role)) {
       await db.query("UPDATE purchase_orders SET status='po-raised', is_locked=1 WHERE id=?", [id])
       await db.query(
-        'INSERT INTO po_approvals (po_id, approver_id, approval_level, status, decision_at, decision_note, created_by, updated_by) VALUES (?,?,2,\'approved\',NOW(),?,?,?)',
-        [id, req.user.id, chain_note || null, req.user.id, req.user.id]
+        'INSERT INTO po_approvals (po_id, approver_id, approval_level, status, actioned_at, comments) VALUES (?,?,2,\'approved\',NOW(),?)',
+        [id, req.user.id, chain_note || null]
       )
       audit(req, 'po_approved_director', `purchase_orders/${id}`,
         { status: po.status }, { status: 'po-raised' })
@@ -718,8 +718,8 @@ router.patch('/pos/:id/reject', async (req, res) => {
 
     await db.query("UPDATE purchase_orders SET status='rfq', is_locked=0 WHERE id=?", [id])
     await db.query(
-      'INSERT INTO po_approvals (po_id, approver_id, approval_level, status, decision_at, decision_note, created_by, updated_by) VALUES (?,?,1,\'rejected\',NOW(),?,?,?)',
-      [id, req.user.id, reason, req.user.id, req.user.id]
+      'INSERT INTO po_approvals (po_id, approver_id, approval_level, status, actioned_at, comments) VALUES (?,?,1,\'rejected\',NOW(),?)',
+      [id, req.user.id, reason]
     )
     // Notify PO owner
     if (po.owner_id) {

@@ -18,7 +18,7 @@ import './App.css'
 // 'admin' enforces role === 'admin'; 'procurement' is project-scoped.
 // ─── ROUTING — state-based, no router library ─────────────────────────────────
 // 'po-detail' is Phase 3 PO Detail Screen — full dedicated screen.
-type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail'
+type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment'
 
 // ─── PROJECT TYPE ───────────────────────────────────────────
 // Mirrors the API response shape. Snake_case DB columns (total_pos, at_risk)
@@ -236,13 +236,16 @@ const READ_ONLY_ROLES = new Set(['ceo', 'director', 'project_director', 'viewer'
 // activePage and onNavigate enable state-based page routing without
 // a router library. Only items with a page key are clickable.
 const Nav = ({
-  userName, userInitial, userRole, activePage, onNavigate,
+  userName, userInitial, userRole, activePage, onNavigate, selectedProjectId,
 }: {
   userName: string; userInitial: string; userRole: string
   activePage: Page; onNavigate: (p: Page) => void
+  selectedProjectId: number | null   // FIX 3: Foundational only shown when a project is selected
 }) => {
   const isReadOnly = READ_ONLY_ROLES.has(userRole)
   const isAdmin    = userRole === 'admin'
+  // ─── FIX 3: Foundational collapsible group state ─────────────────────────
+  const [foundOpen, setFoundOpen] = useState(false)
 
   const navItem = (label: string, icon: string, page?: Page, badge?: number) => {
     const active = page != null && page === activePage
@@ -308,6 +311,62 @@ const Nav = ({
       {/* Module nav */}
       <div style={{ padding: '4px 8px', flex: 1, overflowY: 'auto' }}>
         {sectionLabel('Modules')}
+
+        {/* ─── FIX 3: Foundational — collapsible group ──────────────────────────
+            Only shown when a project is selected. Three sub-items:
+            WBS · Commodity Library · Equipment List.
+            Routes are not yet built — items shown as stubs with visual hierarchy. */}
+        {selectedProjectId && (
+          <div style={{ marginBottom: 1 }}>
+            {/* ── Parent toggle button ─────────────────────────────────────── */}
+            <div
+              onClick={() => setFoundOpen(o => !o)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 9, padding: '6px 8px',
+                borderRadius: 6, fontSize: 13, userSelect: 'none', cursor: 'pointer',
+                background: 'transparent', color: '#94a3b8', transition: 'all 150ms ease',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = '#e2e8f0' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#94a3b8' }}>
+              <span style={{ width: 15, textAlign: 'center', fontSize: 12, opacity: 0.65, flexShrink: 0 }}>🏗</span>
+              <span style={{ flex: 1 }}>Foundational</span>
+              <span style={{ fontSize: 10, opacity: 0.5, transition: 'transform 200ms', display: 'inline-block', transform: foundOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
+            </div>
+            {/* ── Child items (shown when expanded) ────────────────────────── */}
+            {foundOpen && (
+              <div style={{ paddingLeft: 22 }}>
+                {[
+                  { label: 'WBS',              icon: '🌲', page: 'foundational-wbs' as Page },
+                  { label: 'Commodity Library', icon: '📦', page: 'foundational-commodities' as Page },
+                  { label: 'Equipment List',   icon: '🔧', page: 'foundational-equipment' as Page },
+                ].map(item => {
+                  const active = activePage === item.page
+                  return (
+                  <div
+                    key={item.label}
+                    onClick={() => onNavigate(item.page)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 9, padding: '5px 8px',
+                      borderRadius: 6, fontSize: 12, marginBottom: 1, userSelect: 'none',
+                      cursor: 'pointer',
+                      color: active ? '#E84E0F' : '#64748b',
+                      background: active ? 'rgba(232,78,15,0.10)' : 'transparent',
+                      border: `1px solid ${active ? 'rgba(232,78,15,0.25)' : 'transparent'}`,
+                      borderLeft: active ? undefined : '1px solid rgba(255,255,255,0.08)', marginLeft: 4, paddingLeft: 12,
+                      transition: 'all 150ms',
+                    }}
+                    onMouseEnter={e => { if (!active) { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = '#e2e8f0' } }}
+                    onMouseLeave={e => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#64748b' } }}>
+                    <span style={{ fontSize: 11, flexShrink: 0 }}>{item.icon}</span>
+                    <span>{item.label}</span>
+                  </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         {navItem('MTO Register', '📋')}
         {/* ─── PROCUREMENT — project-scoped module ───────────── */}
         {navItem('Procurement', '🧾', 'procurement')}
@@ -677,7 +736,7 @@ function App() {
         transition: 'width 200ms ease',
         zIndex: 90,
       }}>
-        <Nav userName={userName} userInitial={userInitial} userRole={user?.role ?? ''} activePage={page} onNavigate={setPage} />
+        <Nav userName={userName} userInitial={userInitial} userRole={user?.role ?? ''} activePage={page} onNavigate={setPage} selectedProjectId={selectedProjectId} />
       </div>
 
       {/* ─── MAIN COLUMN placeholder (layout provided by fixed children below) ── */}
@@ -709,7 +768,13 @@ function App() {
               >←</button>
             )}
             <span style={{ fontSize: 12, color: '#94a3b8' }}>
-              {page === 'admin' ? 'Admin' : page === 'po-detail' ? `PO Detail · ${selectedProjectName}` : page === 'procurement' ? (selectedProjectName ? `Procurement · ${selectedProjectName}` : 'Procurement') : 'Dashboard'}
+              {page === 'admin' ? 'Admin'
+              : page === 'po-detail' ? `PO Detail · ${selectedProjectName}`
+              : page === 'procurement' ? (selectedProjectName ? `Procurement · ${selectedProjectName}` : 'Procurement')
+              : page === 'foundational-wbs' ? `Foundational · WBS · ${selectedProjectName}`
+              : page === 'foundational-commodities' ? `Foundational · Commodity Library · ${selectedProjectName}`
+              : page === 'foundational-equipment' ? `Foundational · Equipment List · ${selectedProjectName}`
+              : 'Dashboard'}
             </span>
           </div>
 
@@ -937,6 +1002,38 @@ function App() {
                 </div>
               )
           )}
+
+          {/* ─── FOUNDATIONAL PLACEHOLDER SCREENS ──────────────────
+              Stub screens for WBS, Commodity Library, Equipment List.
+              Full build follows in Foundational module phase. */}
+          {(page === 'foundational-wbs' || page === 'foundational-commodities' || page === 'foundational-equipment') && selectedProjectId && (() => {
+            const titles: Record<string, { title: string; icon: string; route: string }> = {
+              'foundational-wbs':          { title: 'WBS', icon: '🌲', route: `/project/${selectedProjectId}/foundational/wbs` },
+              'foundational-commodities':  { title: 'Commodity Library', icon: '📦', route: `/project/${selectedProjectId}/foundational/commodities` },
+              'foundational-equipment':    { title: 'Equipment List', icon: '🔧', route: `/project/${selectedProjectId}/foundational/equipment` },
+            }
+            const { title, icon } = titles[page]!
+            return (
+              <div style={{ paddingTop: 24 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <button onClick={() => setPage('dashboard')} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 12, cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>← Dashboard</button>
+                  <span style={{ color: '#c4cedf', fontSize: 12 }}>›</span>
+                  <span style={{ fontSize: 12, color: '#94a3b8' }}>{selectedProjectName}</span>
+                  <span style={{ color: '#c4cedf', fontSize: 12 }}>›</span>
+                  <span style={{ fontSize: 12, color: '#94a3b8' }}>Foundational</span>
+                  <span style={{ color: '#c4cedf', fontSize: 12 }}>›</span>
+                  <span style={{ fontSize: 12, color: dark ? '#f1f5f9' : '#0f172a', fontWeight: 600 }}>{title}</span>
+                </div>
+                <h2 style={{ fontSize: 22, fontWeight: 700, color: dark ? '#f1f5f9' : '#0f172a', marginBottom: 4, letterSpacing: '-0.02em' }}>{icon} {title}</h2>
+                <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 28 }}>{title} — {selectedProjectName}</div>
+                <div style={{ background: dark ? '#1e293b' : '#fff', border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, borderRadius: 10, padding: '48px 32px', textAlign: 'center', color: '#94a3b8' }}>
+                  <div style={{ fontSize: 40, marginBottom: 16 }}>🚧</div>
+                  <div style={{ fontSize: 16, fontWeight: 600, color: dark ? '#e2e8f0' : '#475569', marginBottom: 8 }}>Coming soon</div>
+                  <div style={{ fontSize: 13 }}>The {title} module is under construction. It will be available in the next build phase.</div>
+                </div>
+              </div>
+            )
+          })()}
         </div>
       </div>
     </div>
