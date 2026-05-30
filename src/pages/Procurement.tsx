@@ -1068,12 +1068,13 @@ interface PORowProps {
   dark:             boolean
   colWidths:        number[]
   onStar:           (po: PO) => void
-  onClick:          (po: PO) => void
+  onClick:          (po: PO) => void   // opens the side drawer
   onApprove:        (po: PO) => void
-  // FIX 2: inline expeditor assignment props
+  onNavigateToPO?:  (poId: number) => void  // FIX 1: navigate to full PO Detail Screen
+  // inline expeditor assignment props
   users:            UserItem[]
-  isAssigningExp:   boolean           // true when this row's dropdown is open
-  onOpenAssignExp:  (po: PO) => void  // open this row's dropdown
+  isAssigningExp:   boolean
+  onOpenAssignExp:  (po: PO) => void
   onCloseAssignExp: () => void
   expAssignVal:     string
   onExpAssignValChange: (v: string) => void
@@ -1082,7 +1083,7 @@ interface PORowProps {
 }
 
 const POTableRow = ({
-  po, dark, colWidths, onStar, onClick, onApprove,
+  po, dark, colWidths, onStar, onClick, onApprove, onNavigateToPO,
   users, isAssigningExp, onOpenAssignExp, onCloseAssignExp,
   expAssignVal, onExpAssignValChange, onExpAssignSave, expAssignSaving,
 }: PORowProps) => {
@@ -1116,9 +1117,17 @@ const POTableRow = ({
         </span>
       </td>
 
-      {/* ── PO Ref ─────────────────────────────────────────────────────────── */}
-      <td style={{ ...tdBase, width: colWidths[1] }}>
-        <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: '#2563eb', fontWeight: 600 }}>{po.po_number}</span>
+      {/* ── PO Ref — FIX 1: clicking the ref navigates to full PO Detail Screen ── */}
+      <td
+        onClick={e => { e.stopPropagation(); if (onNavigateToPO) { onNavigateToPO(po.id) } else { onClick(po) } }}
+        style={{ ...tdBase, width: colWidths[1], cursor: 'pointer' }}>
+        <span
+          style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: '#2563eb', fontWeight: 600,
+            textDecoration: onNavigateToPO ? 'underline' : 'none',
+            textDecorationColor: 'rgba(37,99,235,0.35)' }}
+          title={onNavigateToPO ? `Open full detail for ${po.po_number}` : po.po_number}>
+          {po.po_number}
+        </span>
         {po.isLocked && <span style={{ marginLeft: 5, fontSize: 9, fontWeight: 700, color: '#15803d', fontFamily: 'IBM Plex Sans, sans-serif', letterSpacing: '0.05em' }}>LOCKED</span>}
       </td>
 
@@ -1667,6 +1676,7 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
                 onStar={toggleStar}
                 onClick={p => { setRowAssignPoId(null); setDrawerPO(p) }}
                 onApprove={p => setApproveTarget(p)}
+                onNavigateToPO={onNavigateToPO}
                 users={users}
                 isAssigningExp={rowAssignPoId === po.id}
                 onOpenAssignExp={p => { setRowAssignPoId(p.id); setRowAssignVal(String(p.expeditor_id ?? '')) }}

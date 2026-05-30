@@ -32,6 +32,7 @@ app.use('/api/admin', authMiddleware, require('./routes/admin'))
 // ─── PROCUREMENT ROUTES ──────────────────────────────────────
 // Project-scoped PO management: list, create, approve, line items.
 app.use('/api/procurement', authMiddleware, require('./routes/procurement'))
+app.use('/api/foundational', require('./routes/foundational'))
 
 // ─── START SERVER ───────────────────────────────────────────
 const PORT = process.env.PORT || 3001

@@ -9,6 +9,9 @@ import { HelpLegend } from './components/HelpLegend'
 import { Admin } from './pages/Admin'
 import { Procurement } from './pages/Procurement'
 import { PODetailScreen } from './pages/PODetailScreen'
+import { FoundWBSScreen } from './pages/FoundWBSScreen'
+import { FoundCommodityScreen } from './pages/FoundCommodityScreen'
+import { FoundEquipmentScreen } from './pages/FoundEquipmentScreen'
 import { ForcePasswordChange } from './components/ForcePasswordChange'
 import { ChangePasswordModal } from './components/ChangePasswordModal'
 import './App.css'
@@ -1003,37 +1006,19 @@ function App() {
               )
           )}
 
-          {/* ─── FOUNDATIONAL PLACEHOLDER SCREENS ──────────────────
-              Stub screens for WBS, Commodity Library, Equipment List.
-              Full build follows in Foundational module phase. */}
-          {(page === 'foundational-wbs' || page === 'foundational-commodities' || page === 'foundational-equipment') && selectedProjectId && (() => {
-            const titles: Record<string, { title: string; icon: string; route: string }> = {
-              'foundational-wbs':          { title: 'WBS', icon: '🌲', route: `/project/${selectedProjectId}/foundational/wbs` },
-              'foundational-commodities':  { title: 'Commodity Library', icon: '📦', route: `/project/${selectedProjectId}/foundational/commodities` },
-              'foundational-equipment':    { title: 'Equipment List', icon: '🔧', route: `/project/${selectedProjectId}/foundational/equipment` },
-            }
-            const { title, icon } = titles[page]!
-            return (
-              <div style={{ paddingTop: 24 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                  <button onClick={() => setPage('dashboard')} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 12, cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>← Dashboard</button>
-                  <span style={{ color: '#c4cedf', fontSize: 12 }}>›</span>
-                  <span style={{ fontSize: 12, color: '#94a3b8' }}>{selectedProjectName}</span>
-                  <span style={{ color: '#c4cedf', fontSize: 12 }}>›</span>
-                  <span style={{ fontSize: 12, color: '#94a3b8' }}>Foundational</span>
-                  <span style={{ color: '#c4cedf', fontSize: 12 }}>›</span>
-                  <span style={{ fontSize: 12, color: dark ? '#f1f5f9' : '#0f172a', fontWeight: 600 }}>{title}</span>
-                </div>
-                <h2 style={{ fontSize: 22, fontWeight: 700, color: dark ? '#f1f5f9' : '#0f172a', marginBottom: 4, letterSpacing: '-0.02em' }}>{icon} {title}</h2>
-                <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 28 }}>{title} — {selectedProjectName}</div>
-                <div style={{ background: dark ? '#1e293b' : '#fff', border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, borderRadius: 10, padding: '48px 32px', textAlign: 'center', color: '#94a3b8' }}>
-                  <div style={{ fontSize: 40, marginBottom: 16 }}>🚧</div>
-                  <div style={{ fontSize: 16, fontWeight: 600, color: dark ? '#e2e8f0' : '#475569', marginBottom: 8 }}>Coming soon</div>
-                  <div style={{ fontSize: 13 }}>The {title} module is under construction. It will be available in the next build phase.</div>
-                </div>
-              </div>
-            )
-          })()}
+          {/* ─── FOUNDATIONAL MODULE SCREENS ────────────────────── */}
+          {page === 'foundational-wbs' && selectedProjectId && (
+            <FoundWBSScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
+              onBack={() => setPage('dashboard')} />
+          )}
+          {page === 'foundational-commodities' && selectedProjectId && (
+            <FoundCommodityScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
+              onBack={() => setPage('dashboard')} />
+          )}
+          {page === 'foundational-equipment' && selectedProjectId && (
+            <FoundEquipmentScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
+              onBack={() => setPage('dashboard')} />
+          )}
         </div>
       </div>
     </div>
