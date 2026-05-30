@@ -102,15 +102,22 @@ router.get('/projects', async (req, res) => {
 })
 
 router.post('/projects', async (req, res) => {
-  const { code, name, phase, status, rag, client, startDate, endDate } = req.body
+  // ─── Item 1 + 10: also accept threshold fields ────────────────────────────
+  const { code, name, phase, status, rag, client, startDate, endDate,
+          at_risk_days_threshold, approval_threshold_1, approval_threshold_2 } = req.body
   if (!code?.trim() || !name?.trim()) return res.status(400).json({ error: 'Code and name are required' })
   if (rag && !VALID_RAG.has(rag))       return res.status(400).json({ error: 'Invalid RAG value' })
   if (status && !VALID_STATUS.has(status)) return res.status(400).json({ error: 'Status must be active or inactive' })
   try {
     const [r] = await db.query(
-      `INSERT INTO projects (code, name, phase, status, rag, client, start_date, end_date)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [code.trim(), name.trim(), phase || null, status || 'active', rag || 'grey', client || null, startDate || null, endDate || null]
+      `INSERT INTO projects (code, name, phase, status, rag, client, start_date, end_date,
+         at_risk_days_threshold, approval_threshold_1, approval_threshold_2)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [code.trim(), name.trim(), phase || null, status || 'active', rag || 'grey', client || null,
+       startDate || null, endDate || null,
+       at_risk_days_threshold != null ? Number(at_risk_days_threshold) : 30,
+       approval_threshold_1 != null && approval_threshold_1 !== '' ? Number(approval_threshold_1) : null,
+       approval_threshold_2 != null && approval_threshold_2 !== '' ? Number(approval_threshold_2) : null]
     )
     audit(req, 'project.create', `id=${r.insertId}`)
     const [[row]] = await db.query('SELECT * FROM projects WHERE id = ?', [r.insertId])
@@ -123,13 +130,22 @@ router.post('/projects', async (req, res) => {
 
 router.put('/projects/:id', async (req, res) => {
   const id = parseInt(req.params.id)
-  const { code, name, phase, status, rag, client, startDate, endDate } = req.body
+  // ─── Item 1 + 10: also accept threshold fields ────────────────────────────
+  const { code, name, phase, status, rag, client, startDate, endDate,
+          at_risk_days_threshold, approval_threshold_1, approval_threshold_2 } = req.body
   if (!code?.trim() || !name?.trim()) return res.status(400).json({ error: 'Code and name are required' })
   if (rag && !VALID_RAG.has(rag))       return res.status(400).json({ error: 'Invalid RAG value' })
   try {
     const [r] = await db.query(
-      `UPDATE projects SET code=?,name=?,phase=?,status=?,rag=?,client=?,start_date=?,end_date=? WHERE id=?`,
-      [code.trim(), name.trim(), phase||null, status||'active', rag||'grey', client||null, startDate||null, endDate||null, id]
+      `UPDATE projects SET code=?,name=?,phase=?,status=?,rag=?,client=?,start_date=?,end_date=?,
+         at_risk_days_threshold=?,approval_threshold_1=?,approval_threshold_2=?
+       WHERE id=?`,
+      [code.trim(), name.trim(), phase||null, status||'active', rag||'grey', client||null,
+       startDate||null, endDate||null,
+       at_risk_days_threshold != null ? Number(at_risk_days_threshold) : 30,
+       approval_threshold_1 != null && approval_threshold_1 !== '' ? Number(approval_threshold_1) : null,
+       approval_threshold_2 != null && approval_threshold_2 !== '' ? Number(approval_threshold_2) : null,
+       id]
     )
     if (!r.affectedRows) return res.status(404).json({ error: 'Project not found' })
     audit(req, 'project.update', `id=${id}`)

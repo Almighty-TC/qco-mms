@@ -2256,8 +2256,20 @@ type AdminProject = {
   rag: string; client: string; startDate: string; endDate: string
   totalPOs: number; atRisk: number; breached: number
 }
-type ProjForm = { code: string; name: string; phase: string; status: string; rag: string; client: string; startDate: string; endDate: string }
-const EMPTY_PROJ: ProjForm = { code: '', name: '', phase: '', status: 'active', rag: 'grey', client: '', startDate: '', endDate: '' }
+// ─── PROJECT FORM TYPE ───────────────────────────────────────
+// Includes configurable thresholds added in Item 1 (RAG) and Item 10 (approval).
+type ProjForm = {
+  code: string; name: string; phase: string; status: string; rag: string
+  client: string; startDate: string; endDate: string
+  atRiskDaysThreshold: string   // Item 1: days before CDD to flag At Risk
+  approvalThreshold1: string    // Item 10: max value procurement_manager approves alone
+  approvalThreshold2: string    // Item 10: above this, project_director required
+}
+const EMPTY_PROJ: ProjForm = {
+  code: '', name: '', phase: '', status: 'active', rag: 'grey',
+  client: '', startDate: '', endDate: '',
+  atRiskDaysThreshold: '30', approvalThreshold1: '', approvalThreshold2: '',
+}
 const RAG_OPTS = ['green', 'amber', 'red', 'blue', 'grey']
 const RAG_DOT: Record<string, string> = { green: '#22c55e', amber: '#f59e0b', red: '#ef4444', blue: '#2563eb', grey: '#94a3b8' }
 
@@ -2318,8 +2330,15 @@ function ProjectsAdminTab({ dark }: { dark: boolean }) {
 
   const openAdd  = () => { setForm(EMPTY_PROJ); setEditId(null); setFormErr(''); setShowForm(true) }
   const openEdit = (p: AdminProject) => {
-    setForm({ code: p.code, name: p.name, phase: p.phase || '', status: p.status || 'active',
-              rag: p.rag || 'grey', client: p.client || '', startDate: p.startDate?.slice(0,10) || '', endDate: p.endDate?.slice(0,10) || '' })
+    setForm({
+      code: p.code, name: p.name, phase: p.phase || '', status: p.status || 'active',
+      rag: p.rag || 'grey', client: p.client || '',
+      startDate: p.startDate?.slice(0,10) || '', endDate: p.endDate?.slice(0,10) || '',
+      // Item 1 & 10: configurable thresholds
+      atRiskDaysThreshold: String((p as any).at_risk_days_threshold ?? 30),
+      approvalThreshold1:  (p as any).approval_threshold_1 != null ? String((p as any).approval_threshold_1) : '',
+      approvalThreshold2:  (p as any).approval_threshold_2 != null ? String((p as any).approval_threshold_2) : '',
+    })
     setEditId(p.id); setFormErr(''); setShowForm(true)
   }
   const save = async () => {
@@ -2327,7 +2346,14 @@ function ProjectsAdminTab({ dark }: { dark: boolean }) {
     if (!form.name.trim()) { setFormErr('Project name is required'); return }
     setSaving(true); setFormErr('')
     try {
-      editId != null ? await axios.put(`${API}/projects/${editId}`, form) : await axios.post(`${API}/projects`, form)
+      // Include configurable thresholds (Items 1 + 10) in save payload
+      const payload = {
+        ...form,
+        at_risk_days_threshold: form.atRiskDaysThreshold ? Number(form.atRiskDaysThreshold) : 30,
+        approval_threshold_1:   form.approvalThreshold1 ? Number(form.approvalThreshold1) : null,
+        approval_threshold_2:   form.approvalThreshold2 ? Number(form.approvalThreshold2) : null,
+      }
+      editId != null ? await axios.put(`${API}/projects/${editId}`, payload) : await axios.post(`${API}/projects`, payload)
       setShowForm(false); load()
       addToast('success', `Project ${form.code} saved successfully`)
     } catch (e: unknown) {
@@ -2450,6 +2476,46 @@ function ProjectsAdminTab({ dark }: { dark: boolean }) {
           </Field>
           <Field label="End Date">
             <input type="date" value={form.endDate} onChange={pf('endDate')} style={inp(dark)} />
+          </Field>
+
+          {/* ─── ITEM 1: RAG threshold ────────────────────── */}
+          <Field label='At Risk threshold (days before CDD)' wide>
+            <input
+              type="number" min="1" max="365"
+              value={form.atRiskDaysThreshold}
+              onChange={pf('atRiskDaysThreshold')}
+              placeholder="30"
+              style={{ ...inp(dark), fontFamily: 'JetBrains Mono, monospace' }}
+            />
+            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+              A PO is flagged At Risk (orange stripe) when CDD is within this many days.
+            </div>
+          </Field>
+
+          {/* ─── ITEM 10: Approval thresholds ────────────── */}
+          <Field label="Approval Threshold — Level 1 (AUD)" wide>
+            <input
+              type="number" min="0" step="1000"
+              value={form.approvalThreshold1}
+              onChange={pf('approvalThreshold1')}
+              placeholder="Leave blank = no limit (single-level approval)"
+              style={{ ...inp(dark), fontFamily: 'JetBrains Mono, monospace' }}
+            />
+            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+              Procurement Manager can approve POs up to this value alone. Blank = no limit.
+            </div>
+          </Field>
+          <Field label="Approval Threshold — Level 2 (AUD)" wide>
+            <input
+              type="number" min="0" step="1000"
+              value={form.approvalThreshold2}
+              onChange={pf('approvalThreshold2')}
+              placeholder="Leave blank = disabled (no director approval required)"
+              style={{ ...inp(dark), fontFamily: 'JetBrains Mono, monospace' }}
+            />
+            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+              Above this value, Project Director approval is also required. Blank = disabled.
+            </div>
           </Field>
         </Modal>
       )}

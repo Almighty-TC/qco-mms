@@ -7,15 +7,15 @@ import { useTableResize } from './hooks/useTableResize'
 import { HeaderCell } from './components/ResizableTable'
 import { HelpLegend } from './components/HelpLegend'
 import { Admin } from './pages/Admin'
+import { Procurement } from './pages/Procurement'
 import { ForcePasswordChange } from './components/ForcePasswordChange'
 import { ChangePasswordModal } from './components/ChangePasswordModal'
 import './App.css'
 
 // ─── PAGE ROUTING ───────────────────────────────────────────
 // Simple state-based routing — no router library needed.
-// Only 'admin' requires the admin role check; all other pages
-// are accessible to any authenticated user.
-type Page = 'dashboard' | 'admin'
+// 'admin' enforces role === 'admin'; 'procurement' is project-scoped.
+type Page = 'dashboard' | 'admin' | 'procurement'
 
 // ─── PROJECT TYPE ───────────────────────────────────────────
 // Mirrors the API response shape. Snake_case DB columns (total_pos, at_risk)
@@ -306,7 +306,8 @@ const Nav = ({
       <div style={{ padding: '4px 8px', flex: 1, overflowY: 'auto' }}>
         {sectionLabel('Modules')}
         {navItem('MTO Register', '📋')}
-        {navItem('Procurement', '🧾')}
+        {/* ─── PROCUREMENT — project-scoped module ───────────── */}
+        {navItem('Procurement', '🧾', 'procurement')}
         {navItem('VDRL', '📑')}
         {navItem('Expediting', '🚨', undefined, 8)}
         {navItem('Logistics', '🚚')}
@@ -545,9 +546,15 @@ function App() {
   const [projects,      setProjects]      = useState<Project[]>([])
   const [loading,       setLoading]       = useState(false)
   const [error,         setError]         = useState('')
-  const [sidebarOpen,   setSidebarOpen]   = useState(true)
-  const [dark,          setDark]          = useState(false)
-  const [page,          setPage]          = useState<Page>('dashboard')
+  const [sidebarOpen,      setSidebarOpen]      = useState(true)
+  const [dark,             setDark]             = useState(false)
+  const [page,             setPage]             = useState<Page>('dashboard')
+  // ─── PROCUREMENT PROJECT SELECTION ──────────────────────────
+  // Procurement is project-scoped. selectedProjectId tracks which
+  // project the user is viewing. Defaults to the first project in
+  // the list when Procurement is navigated to.
+  const [selectedProjectId,   setSelectedProjectId]   = useState<number | null>(null)
+  const [selectedProjectName, setSelectedProjectName] = useState<string>('')
   const [showChangePw,  setShowChangePw]  = useState(false)
   const [showProfile,   setShowProfile]   = useState(false)
 
@@ -684,10 +691,19 @@ function App() {
             {sidebarOpen ? '◂' : '▸'}
           </button>
 
-          {/* Breadcrumb */}
-          <div style={{ flex: 1, minWidth: 0 }}>
+          {/* ─── BREADCRUMB ─────────────────────────────────────
+              Shows the current module name. For Procurement, also
+              shows the selected project name and a ← back link. */}
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+            {page === 'procurement' && selectedProjectId && (
+              <button
+                onClick={() => { setSelectedProjectId(null); setSelectedProjectName('') }}
+                title="Back to project selection"
+                style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 12, cursor: 'pointer', padding: '0 4px 0 0', fontFamily: 'inherit' }}
+              >←</button>
+            )}
             <span style={{ fontSize: 12, color: '#94a3b8' }}>
-              {page === 'admin' ? 'Admin' : 'Dashboard'}
+              {page === 'admin' ? 'Admin' : page === 'procurement' ? (selectedProjectName ? `Procurement · ${selectedProjectName}` : 'Procurement') : 'Dashboard'}
             </span>
           </div>
 
@@ -855,6 +871,48 @@ function App() {
               : (
                 <div style={{ padding: '40px 20px', textAlign: 'center', fontSize: 14, color: '#94a3b8' }}>
                   You do not have permission to access Admin. Contact your administrator.
+                </div>
+              )
+          )}
+
+          {/* ─── PROCUREMENT PAGE ───────────────────────────────
+              Project-scoped. Shows a project selector when no
+              project is chosen, then renders the PO Register. */}
+          {page === 'procurement' && (
+            selectedProjectId
+              ? (
+                <Procurement
+                  dark={dark}
+                  projectId={selectedProjectId}
+                  projectName={selectedProjectName}
+                />
+              )
+              : (
+                <div style={{ paddingTop: 32 }}>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: dark ? '#f1f5f9' : '#0f172a', marginBottom: 6, letterSpacing: '-0.02em' }}>Procurement</div>
+                  <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 20 }}>Select a project to view its PO Register</div>
+                  {projects.length === 0 ? (
+                    <div style={{ color: '#94a3b8', fontSize: 13 }}>No projects available.</div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
+                      {projects.map(p => (
+                        <button key={p.id} onClick={() => { setSelectedProjectId(p.id); setSelectedProjectName(p.name) }}
+                          style={{
+                            padding: '14px 18px', borderRadius: 8, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`,
+                            background: dark ? '#1e293b' : '#fff', cursor: 'pointer', textAlign: 'left',
+                            fontFamily: 'IBM Plex Sans, sans-serif',
+                            boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                            transition: 'border-color 150ms, background 150ms',
+                          }}
+                          onMouseEnter={e => { e.currentTarget.style.borderColor = '#E84E0F'; e.currentTarget.style.background = dark ? '#1e2d4a' : '#f4f7fb' }}
+                          onMouseLeave={e => { e.currentTarget.style.borderColor = dark ? '#334155' : '#dde3ed'; e.currentTarget.style.background = dark ? '#1e293b' : '#fff' }}
+                        >
+                          <div style={{ fontWeight: 600, fontSize: 14, color: dark ? '#f1f5f9' : '#0f172a', marginBottom: 3 }}>{p.name}</div>
+                          <div style={{ fontSize: 12, fontFamily: 'JetBrains Mono, monospace', color: '#94a3b8' }}>{p.code}</div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )
           )}
