@@ -485,70 +485,147 @@ const ReallocateLineRow = ({ line, projectId, dark, excludeCode, value, onChange
 }
 
 // ─── WBS ROW (recursive) ─────────────────────────────────────
-const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, hideChildren }: {
+// Indent is applied to the TREE CELL (chevron + RAG dot + code) as paddingLeft
+// so the entire left content shifts right 20px per depth level. Keeping them in
+// separate <td> elements would only shift the chevron, not the code text.
+const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete }: {
   node: WBSNode; depth: number; dark: boolean
   expanded: Set<number>; onToggle: (id: number) => void
   onEdit: (n: WBSNode) => void; onDelete: (n: WBSNode) => void
-  hideChildren?: boolean
 }) => {
   const [hovered, setHovered] = useState(false)
   const hasChildren = node.children && node.children.length > 0
   const isExpanded = expanded.has(node.id)
   const col = dark ? '#f1f5f9' : '#0f172a'
-  const indent = depth * 20
-
   const ragColour = node.rag ? RAG_COLORS[node.rag] : '#c4cedf'
+
+  const rosColour = node.ros_date
+    ? (node.rag === 'red' ? '#ef4444' : node.rag === 'amber' ? '#f59e0b' : node.rag === 'blue' ? '#2563eb' : '#22c55e')
+    : '#94a3b8'
 
   return (
     <>
       <tr
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        style={{ background: hovered ? (dark ? '#1e2d4a' : '#f4f7fb') : (dark ? '#1e293b' : '#fff'), transition: 'background 120ms', cursor: hasChildren ? 'pointer' : 'default' }}
+        style={{
+          background: hovered ? (dark ? '#1e2d4a' : '#f4f7fb') : (dark ? '#1e293b' : '#fff'),
+          transition: 'background 120ms',
+          cursor: hasChildren ? 'pointer' : 'default',
+        }}
         onClick={() => hasChildren && onToggle(node.id)}
       >
-        {/* RAG stripe */}
+        {/* RAG left-edge stripe — fixed 4px, no content */}
         <td style={{ width: 4, padding: 0 }}>
-          <div style={{ width: 4, height: '100%', minHeight: 36, background: ragColour, borderRadius: '2px 0 0 2px' }} />
+          <div style={{ width: 4, height: '100%', minHeight: 38, background: ragColour, borderRadius: '2px 0 0 2px' }} />
         </td>
-        {/* Chevron */}
-        <td style={{ width: 28, textAlign: 'center', paddingLeft: indent, color: '#94a3b8', fontSize: 11, userSelect: 'none' }}>
-          {hasChildren ? (isExpanded ? '▾' : '▸') : '·'}
+
+        {/* TREE CELL: chevron + RAG dot + code — paddingLeft creates the depth indent */}
+        <td
+          style={{
+            paddingLeft: 8 + depth * 20,
+            paddingRight: 8,
+            paddingTop: 9,
+            paddingBottom: 9,
+            whiteSpace: 'nowrap',
+            userSelect: 'none',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {/* Chevron: ▸ collapsed, ▾ expanded, · leaf */}
+            <span style={{
+              display: 'inline-block', width: 14, textAlign: 'center',
+              fontSize: 11, color: hasChildren ? '#64748b' : '#c4cedf',
+              flexShrink: 0, lineHeight: 1,
+            }}>
+              {hasChildren ? (isExpanded ? '▾' : '▸') : '·'}
+            </span>
+            {/* RAG dot */}
+            <RAGDot rag={node.rag} />
+            {/* Code (monospace) */}
+            <span style={{
+              fontFamily: 'JetBrains Mono, monospace',
+              fontSize: 12,
+              fontWeight: depth === 0 ? 600 : 400,
+              color: col,
+            }}>
+              {node.code}
+            </span>
+          </div>
         </td>
-        {/* RAG dot */}
-        <td style={{ width: 24, textAlign: 'center' }}><RAGDot rag={node.rag} /></td>
-        {/* Code */}
-        <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: col, whiteSpace: 'nowrap' }}>{node.code}</td>
-        {/* Description */}
-        <td style={{ padding: '8px 10px', fontSize: 13, color: col, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.description}</td>
-        {/* ROS */}
-        <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, whiteSpace: 'nowrap', color: node.ros_date ? (node.rag === 'red' ? '#ef4444' : node.rag === 'amber' ? '#f59e0b' : '#22c55e') : '#94a3b8' }}>
+
+        {/* WBS NODE — description */}
+        <td style={{
+          padding: '9px 12px 9px 4px',
+          fontSize: 13,
+          fontWeight: depth === 0 ? 600 : 400,
+          color: col,
+          maxWidth: 300,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}>
+          {node.description}
+        </td>
+
+        {/* ROS — RAG-coloured date */}
+        <td style={{
+          padding: '9px 12px',
+          fontFamily: 'JetBrains Mono, monospace',
+          fontSize: 11,
+          color: rosColour,
+          whiteSpace: 'nowrap',
+        }}>
           {fmtDate(node.ros_date)}
         </td>
-        {/* Notes (clickable) */}
-        <td style={{ padding: '8px 10px', fontSize: 12, maxWidth: 200 }}>
+
+        {/* NOTES — clickable, opens NoteModal */}
+        <td style={{ padding: '9px 12px', maxWidth: 220 }}>
           <button
             onClick={e => { e.stopPropagation(); onEdit(node) }}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: node.notes ? '#2563eb' : '#94a3b8', fontSize: 12, fontFamily: 'inherit', textAlign: 'left', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block', padding: 0 }}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: node.notes ? '#2563eb' : '#94a3b8',
+              fontSize: 12, fontFamily: 'inherit', textAlign: 'left',
+              maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap', display: 'block', padding: 0,
+            }}
             title={node.notes ?? 'Click to add notes'}>
-            {node.notes ? `${node.notes.slice(0, 40)}${node.notes.length > 40 ? '…' : ''}` : '+ Add note'}
+            {node.notes
+              ? `${node.notes.slice(0, 45)}${node.notes.length > 45 ? '…' : ''}`
+              : '+ Add note'}
           </button>
         </td>
-        {/* Code hint */}
-        <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#64748b', whiteSpace: 'nowrap' }}>
+
+        {/* Code-suffix hint e.g. "01.xx" — muted, no header */}
+        <td style={{
+          padding: '9px 12px',
+          fontFamily: 'JetBrains Mono, monospace',
+          fontSize: 11,
+          color: '#64748b',
+          whiteSpace: 'nowrap',
+        }}>
           {node.code}.xx
         </td>
-        {/* Delete */}
-        <td style={{ padding: '8px 8px', textAlign: 'center' }}>
+
+        {/* Delete — revealed on hover only */}
+        <td style={{ padding: '9px 8px', textAlign: 'center', width: 36 }}>
           <button
             onClick={e => { e.stopPropagation(); onDelete(node) }}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: hovered ? '#ef4444' : 'transparent', fontSize: 14, transition: 'color 150ms', padding: '2px 6px' }}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: hovered ? '#ef4444' : 'transparent',
+              fontSize: 14, transition: 'color 150ms', padding: '2px 4px',
+              lineHeight: 1,
+            }}
             title="Delete node">
             🗑
           </button>
         </td>
       </tr>
-      {!hideChildren && isExpanded && node.children?.map(child => (
+
+      {/* Render children recursively when expanded */}
+      {isExpanded && node.children?.map(child => (
         <WBSRow key={child.id} node={child} depth={depth + 1} dark={dark}
           expanded={expanded} onToggle={onToggle} onEdit={onEdit} onDelete={onDelete} />
       ))}
@@ -640,22 +717,27 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: dark ? '#0f172a' : '#f4f7fb', borderBottom: bd, position: 'sticky', top: 0, zIndex: 2 }}>
+                {/* RAG stripe — no header */}
                 <th style={{ width: 4, padding: 0 }} />
-                <th style={{ width: 28 }} />
-                <th style={{ width: 24 }} />
-                <th style={{ padding: '8px 10px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap' }}>Code</th>
-                <th style={{ padding: '8px 10px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left' }}>Node label</th>
-                <th style={{ padding: '8px 10px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap' }}>ROS</th>
-                <th style={{ padding: '8px 10px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left' }}>Notes</th>
-                <th style={{ padding: '8px 10px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap' }}>Children</th>
-                <th style={{ width: 40 }} />
+                {/* CODE — spans chevron+dot+code unified tree cell */}
+                <th style={{ padding: '8px 8px 8px 22px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap' }}>Code</th>
+                {/* WBS NODE */}
+                <th style={{ padding: '8px 4px 8px 4px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left' }}>WBS Node</th>
+                {/* ROS */}
+                <th style={{ padding: '8px 12px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap' }}>ROS</th>
+                {/* NOTES */}
+                <th style={{ padding: '8px 12px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left' }}>Notes</th>
+                {/* Suffix hint — no header */}
+                <th style={{ width: 80 }} />
+                {/* Delete — no header */}
+                <th style={{ width: 36 }} />
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={9} style={{ padding: '32px 16px', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>Loading WBS…</td></tr>
+                <tr><td colSpan={7} style={{ padding: '32px 16px', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>Loading WBS…</td></tr>
               ) : tree.length === 0 ? (
-                <tr><td colSpan={9} style={{ padding: '32px 16px', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>No WBS nodes yet. Click + Add node to get started.</td></tr>
+                <tr><td colSpan={7} style={{ padding: '32px 16px', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>No WBS nodes yet. Click + Add node to get started.</td></tr>
               ) : tree.map(node => (
                 <WBSRow key={node.id} node={node} depth={0} dark={dark}
                   expanded={expanded} onToggle={toggleExpand}
