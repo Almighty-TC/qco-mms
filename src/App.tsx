@@ -8,6 +8,7 @@ import { HeaderCell } from './components/ResizableTable'
 import { HelpLegend } from './components/HelpLegend'
 import { Admin } from './pages/Admin'
 import { Procurement } from './pages/Procurement'
+import { PODetailScreen } from './pages/PODetailScreen'
 import { ForcePasswordChange } from './components/ForcePasswordChange'
 import { ChangePasswordModal } from './components/ChangePasswordModal'
 import './App.css'
@@ -15,7 +16,9 @@ import './App.css'
 // ─── PAGE ROUTING ───────────────────────────────────────────
 // Simple state-based routing — no router library needed.
 // 'admin' enforces role === 'admin'; 'procurement' is project-scoped.
-type Page = 'dashboard' | 'admin' | 'procurement'
+// ─── ROUTING — state-based, no router library ─────────────────────────────────
+// 'po-detail' is Phase 3 PO Detail Screen — full dedicated screen.
+type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail'
 
 // ─── PROJECT TYPE ───────────────────────────────────────────
 // Mirrors the API response shape. Snake_case DB columns (total_pos, at_risk)
@@ -555,6 +558,9 @@ function App() {
   // the list when Procurement is navigated to.
   const [selectedProjectId,   setSelectedProjectId]   = useState<number | null>(null)
   const [selectedProjectName, setSelectedProjectName] = useState<string>('')
+  // ─── PO Detail Screen (Phase 3) ─────────────────────────────────────────
+  // selectedPOId tracks which PO the user navigated to in Phase 3.
+  const [selectedPOId, setSelectedPOId] = useState<number | null>(null)
   const [showChangePw,  setShowChangePw]  = useState(false)
   const [showProfile,   setShowProfile]   = useState(false)
 
@@ -703,7 +709,7 @@ function App() {
               >←</button>
             )}
             <span style={{ fontSize: 12, color: '#94a3b8' }}>
-              {page === 'admin' ? 'Admin' : page === 'procurement' ? (selectedProjectName ? `Procurement · ${selectedProjectName}` : 'Procurement') : 'Dashboard'}
+              {page === 'admin' ? 'Admin' : page === 'po-detail' ? `PO Detail · ${selectedProjectName}` : page === 'procurement' ? (selectedProjectName ? `Procurement · ${selectedProjectName}` : 'Procurement') : 'Dashboard'}
             </span>
           </div>
 
@@ -878,6 +884,20 @@ function App() {
           {/* ─── PROCUREMENT PAGE ───────────────────────────────
               Project-scoped. Shows a project selector when no
               project is chosen, then renders the PO Register. */}
+          {/* ─── PHASE 3: PO DETAIL SCREEN ────────────────────────────────
+              Full dedicated screen — not a modal. Shown when a PO number
+              is clicked in the register or drawer. Navigates back to the
+              PO Register when the user clicks ← PO Register breadcrumb. */}
+          {page === 'po-detail' && selectedProjectId && selectedPOId && (
+            <PODetailScreen
+              dark={dark}
+              projectId={selectedProjectId}
+              projectName={selectedProjectName}
+              poId={selectedPOId}
+              onBack={() => setPage('procurement')}
+            />
+          )}
+
           {page === 'procurement' && (
             selectedProjectId
               ? (
@@ -885,6 +905,7 @@ function App() {
                   dark={dark}
                   projectId={selectedProjectId}
                   projectName={selectedProjectName}
+                  onNavigateToPO={(poId: number) => { setSelectedPOId(poId); setPage('po-detail') }}
                 />
               )
               : (

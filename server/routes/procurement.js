@@ -459,11 +459,11 @@ router.get('/pos/:id', async (req, res) => {
 
     // Fetch current signed PO document
     const [docs] = await db.query(`
-      SELECT id, file_name, file_size_bytes, mime_type, version_number, uploaded_at,
+      SELECT pd.id, pd.file_name, pd.file_size_bytes, pd.mime_type, pd.version, pd.uploaded_at,
              u.full_name AS uploaded_by_name
       FROM po_documents pd JOIN users u ON u.id = pd.uploaded_by
-      WHERE pd.po_id = ? AND pd.doc_type = 'signed_po' AND pd.is_current_version = 1 AND pd.is_deleted = 0
-      ORDER BY pd.version_number DESC LIMIT 1
+      WHERE pd.po_id = ? AND pd.doc_type = 'signed_po' AND pd.is_current = 1
+      ORDER BY pd.version DESC LIMIT 1
     `, [id])
 
     const minCdd = lines.reduce((m, l) => !m || (l.cdd && l.cdd < m) ? l.cdd : m, null)
@@ -756,14 +756,14 @@ router.post('/pos/:id/documents', uploadPoDoc.single('file'), async (req, res) =
 
     // Get current highest version number
     const [[vRow]] = await db.query(
-      'SELECT COALESCE(MAX(version_number), 0) AS maxv FROM po_documents WHERE po_id=? AND doc_type=\'signed_po\'',
+      'SELECT COALESCE(MAX(version), 0) AS maxv FROM po_documents WHERE po_id=? AND doc_type=\'signed_po\'',
       [id]
     )
     const newVersion = (vRow?.maxv ?? 0) + 1
 
     // Mark previous versions as not current
     await db.query(
-      "UPDATE po_documents SET is_current_version=0 WHERE po_id=? AND doc_type='signed_po'",
+      "UPDATE po_documents SET is_current=0 WHERE po_id=? AND doc_type='signed_po'",
       [id]
     )
 
@@ -775,7 +775,7 @@ router.post('/pos/:id/documents', uploadPoDoc.single('file'), async (req, res) =
     await db.query(`
       INSERT INTO po_documents
         (po_id, doc_type, file_name, file_path, file_size_bytes, mime_type,
-         version_number, is_current_version, uploaded_by, uploaded_at)
+         version, is_current, uploaded_by, uploaded_at)
       VALUES (?, 'signed_po', ?, ?, ?, ?, ?, 1, ?, NOW())
     `, [id, req.file.originalname, relativePath, req.file.size, req.file.mimetype, newVersion, req.user.id])
 
@@ -798,7 +798,7 @@ router.get('/pos/:id/documents/:docId/download', async (req, res) => {
     const docId = Number(req.params.docId)
 
     const [[doc]] = await db.query(
-      'SELECT * FROM po_documents WHERE id=? AND po_id=? AND is_deleted=0',
+      'SELECT * FROM po_documents WHERE id=? AND po_id=?',
       [docId, poId]
     )
     if (!doc) return res.status(404).json({ error: 'Document not found' })
@@ -810,7 +810,7 @@ router.get('/pos/:id/documents/:docId/download', async (req, res) => {
     }
 
     audit(req, 'signed_po_downloaded', `purchase_orders/${poId}/documents/${docId}`,
-      null, { file: doc.file_name, version: doc.version_number })
+      null, { file: doc.file_name, version: doc.version })
 
     res.setHeader('Content-Disposition', `attachment; filename="${doc.file_name}"`)
     res.setHeader('Content-Type', doc.mime_type)
@@ -1439,6 +1439,203 @@ router.delete('/pos/:id/lines/:lineId', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
+})
+
+// ─── ACTION NOTES ─────────────────────────────────────────────────────────────
+// GET /api/procurement/pos/:id/notes — chronological note thread for PO Detail tab
+router.get('/pos/:id/notes', async (req, res) => {
+  try {
+    const id = Number(req.params.id)
+    const [notes] = await db.query(`
+      SELECT n.*, u.full_name AS author_name, u.role AS author_role
+      FROM po_action_notes n
+      JOIN users u ON u.id = n.created_by
+      WHERE n.po_id = ?
+      ORDER BY n.created_at ASC
+    `, [id])
+    res.json(notes)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// POST /api/procurement/pos/:id/notes — add a note
+router.post('/pos/:id/notes', async (req, res) => {
+  try {
+    const id = Number(req.params.id)
+    const { note_text, note_type = 'general', is_internal = true } = req.body
+    if (!note_text?.trim()) return res.status(400).json({ error: 'Note text is required' })
+    const [r] = await db.query(
+      'INSERT INTO po_action_notes (po_id, note_text, is_internal, created_by) VALUES (?,?,?,?)',
+      [id, note_text.trim(), is_internal ? 1 : 0, req.user.id]
+    )
+    const [[note]] = await db.query(
+      'SELECT n.*, u.full_name AS author_name, u.role AS author_role FROM po_action_notes n JOIN users u ON u.id=n.created_by WHERE n.id=?',
+      [r.insertId]
+    )
+    audit(req, 'note_added', `purchase_orders/${id}`, null, { note_type })
+    res.status(201).json(note)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── VARIATIONS ───────────────────────────────────────────────────────────────
+// GET /api/procurement/pos/:id/variations
+router.get('/pos/:id/variations', async (req, res) => {
+  try {
+    const id = Number(req.params.id)
+    const [rows] = await db.query(`
+      SELECT v.*, u.full_name AS requested_by_name, a.full_name AS approved_by_name
+      FROM po_variations v
+      LEFT JOIN users u ON u.id = v.requested_by
+      LEFT JOIN users a ON a.id = v.approved_by
+      WHERE v.po_id = ?
+      ORDER BY v.created_at DESC
+    `, [id])
+    res.json(rows)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// POST /api/procurement/pos/:id/variations
+router.post('/pos/:id/variations', async (req, res) => {
+  try {
+    const id = Number(req.params.id)
+    const { variation_number, reason, value_impact, schedule_impact_days } = req.body
+    if (!reason?.trim()) return res.status(400).json({ error: 'Reason is required' })
+    // Auto-generate variation number if not provided
+    const [[{ maxv }]] = await db.query(
+      "SELECT COALESCE(MAX(CAST(SUBSTRING(variation_number,4) AS UNSIGNED)),0) AS maxv FROM po_variations WHERE po_id=?", [id]
+    )
+    const varNum = variation_number?.trim() || `VO-${String(maxv + 1).padStart(3, '0')}`
+    const [r] = await db.query(
+      'INSERT INTO po_variations (po_id, variation_number, reason, requested_by, value_impact, schedule_impact_days, status, created_by, updated_by) VALUES (?,?,?,?,?,?,\'draft\',?,?)',
+      [id, varNum, reason.trim(), req.user.id, value_impact || null, schedule_impact_days || null, req.user.id, req.user.id]
+    )
+    audit(req, 'variation_raised', `purchase_orders/${id}`, null, { variation_number: varNum, reason })
+    const [[variation]] = await db.query('SELECT * FROM po_variations WHERE id=?', [r.insertId])
+    res.status(201).json(variation)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── ITP (INSPECTION & TEST PLAN) ─────────────────────────────────────────────
+// GET /api/procurement/pos/:id/itp
+router.get('/pos/:id/itp', async (req, res) => {
+  try {
+    const id = Number(req.params.id)
+    const [reqs] = await db.query(
+      'SELECT i.*, u.full_name AS created_by_name FROM itp_requirements i LEFT JOIN users u ON u.id=i.created_by WHERE i.po_id=? ORDER BY i.id',
+      [id]
+    )
+    // Get items for each requirement
+    for (const req_ of reqs) {
+      const [items] = await db.query(
+        'SELECT it.*, u.full_name AS actioned_by_name FROM itp_items it LEFT JOIN users u ON u.id=it.actioned_by WHERE it.requirement_id=? ORDER BY it.id',
+        [req_.id]
+      )
+      req_.items = items
+    }
+    res.json(reqs)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// POST /api/procurement/pos/:id/itp
+router.post('/pos/:id/itp', async (req, res) => {
+  try {
+    const id = Number(req.params.id)
+    const { description, inspection_type = 'review', is_mandatory = true } = req.body
+    if (!description?.trim()) return res.status(400).json({ error: 'Description is required' })
+    const [r] = await db.query(
+      'INSERT INTO itp_requirements (po_id, description, inspection_type, is_mandatory, created_by) VALUES (?,?,?,?,?)',
+      [id, description.trim(), inspection_type, is_mandatory ? 1 : 0, req.user.id]
+    )
+    const [[row]] = await db.query('SELECT * FROM itp_requirements WHERE id=?', [r.insertId])
+    res.status(201).json({ ...row, items: [] })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── KEY DATES HISTORY ────────────────────────────────────────────────────────
+// GET /api/procurement/pos/:id/date-history — date_change_log for this PO
+router.get('/pos/:id/date-history', async (req, res) => {
+  try {
+    const id = Number(req.params.id)
+    const [rows] = await db.query(`
+      SELECT d.*, u.full_name AS changed_by_name
+      FROM date_change_log d
+      LEFT JOIN users u ON u.id = d.created_by
+      WHERE d.entity_type = 'purchase_order' AND d.entity_id = ?
+      ORDER BY d.created_at DESC
+    `, [id])
+    res.json(rows)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// PUT /api/procurement/pos/:id/dates — update a milestone/key date with mandatory reason
+router.put('/pos/:id/dates', async (req, res) => {
+  try {
+    const id = Number(req.params.id)
+    const { field, value, reason } = req.body
+    const ALLOWED_DATE_FIELDS = new Set([
+      'milestone_po_date', 'milestone_fat_date', 'milestone_esd_date',
+      'milestone_eta_date', 'milestone_ros_date', 'ros_date',
+      'contract_delivery_date', 'estimated_delivery_date',
+    ])
+    if (!ALLOWED_DATE_FIELDS.has(field)) return res.status(400).json({ error: 'Invalid date field' })
+    if (!reason?.trim()) return res.status(400).json({ error: 'A reason is required for date changes' })
+
+    // Get old value
+    const [[po]] = await db.query(`SELECT ${field} AS old_val FROM purchase_orders WHERE id=?`, [id])
+    const oldVal = po?.old_val ?? null
+
+    await db.query(`UPDATE purchase_orders SET ${field}=? WHERE id=?`, [value || null, id])
+
+    // Record in date_change_log
+    await db.query(
+      'INSERT INTO date_change_log (entity_type, entity_id, field_name, old_value, new_value, change_reason, created_by) VALUES (?,?,?,?,?,?,?)',
+      ['purchase_order', id, field, oldVal, value || null, reason.trim(), req.user.id]
+    )
+    audit(req, 'date_changed', `purchase_orders/${id}`,
+      { [field]: oldVal, reason: null },
+      { [field]: value || null, reason }
+    )
+    res.json({ ok: true, field, old: oldVal, new: value })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── DOCUMENTS LIST ───────────────────────────────────────────────────────────
+// GET /api/procurement/pos/:id/documents — all documents (not just current signed PO)
+router.get('/pos/:id/documents', async (req, res) => {
+  try {
+    const id = Number(req.params.id)
+    const [docs] = await db.query(`
+      SELECT pd.*, u.full_name AS uploaded_by_name
+      FROM po_documents pd
+      JOIN users u ON u.id = pd.uploaded_by
+      WHERE pd.po_id = ?
+      ORDER BY pd.doc_type, pd.version DESC
+    `, [id])
+    res.json(docs)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── AUDIT TRAIL FOR SINGLE PO ────────────────────────────────────────────────
+// GET /api/procurement/pos/:id/audit
+router.get('/pos/:id/audit', async (req, res) => {
+  try {
+    const id = Number(req.params.id)
+    const { page = 1, limit = 100 } = req.query
+    const off = (Number(page) - 1) * Number(limit)
+    const [rows] = await db.query(`
+      SELECT a.*, u.full_name AS user_name, u.role AS user_role
+      FROM audit_log a
+      LEFT JOIN users u ON u.id = a.user_id
+      WHERE (a.entity_type = 'purchase_order' AND a.entity_id = ?)
+         OR a.resource LIKE ?
+      ORDER BY a.created_at DESC
+      LIMIT ? OFFSET ?
+    `, [id, `%purchase_orders/${id}%`, Number(limit), off])
+    const [[{ total }]] = await db.query(
+      "SELECT COUNT(*) AS total FROM audit_log WHERE (entity_type='purchase_order' AND entity_id=?) OR resource LIKE ?",
+      [id, `%purchase_orders/${id}%`]
+    )
+    res.json({ rows, total: total })
+  } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
 module.exports = router

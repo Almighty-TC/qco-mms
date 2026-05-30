@@ -29,7 +29,7 @@ interface SignedDoc {
   id:              number
   file_name:       string
   file_size_bytes: number
-  version_number:  number
+  version:  number
   uploaded_at:     string
   uploaded_by_name: string
 }
@@ -314,15 +314,17 @@ const SimpleConfirm = ({ dark, title, message, confirmLabel, confirmStyle = 'pri
 // Slide-in panel on the right — shown when a row is clicked (not PO ref link).
 // PO ref in the drawer header is a clickable link → will navigate to full PO detail (Phase 3).
 
+// ─── DRAWER PROPS ─────────────────────────────────────────────────────────────
 interface DrawerProps {
-  po:       PO
-  dark:     boolean
-  users:    UserItem[]
-  onClose:  () => void
-  onUpdated: (updated: Partial<PO>) => void
+  po:              PO
+  dark:            boolean
+  users:           UserItem[]
+  onClose:         () => void
+  onUpdated:       (updated: Partial<PO>) => void
+  onNavigateToPO?: (poId: number) => void  // Phase 3: navigate to full PO Detail Screen
 }
 
-const PODrawer = ({ po, dark, users, onClose, onUpdated }: DrawerProps) => {
+const PODrawer = ({ po, dark, users, onClose, onUpdated, onNavigateToPO }: DrawerProps) => {
   const { addToast } = useToast()
   const [assigningExp, setAssigningExp] = useState(false)
   const [expId, setExpId]               = useState(String(po.expeditor_id ?? ''))
@@ -375,10 +377,11 @@ const PODrawer = ({ po, dark, users, onClose, onUpdated }: DrawerProps) => {
         <div style={{ padding: '16px 20px', borderBottom: `1px solid ${borderCol}`, flexShrink: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              {/* PO Ref = clickable link placeholder for Phase 3 */}
+              {/* PO Ref — navigates to full PO Detail Screen (Phase 3) */}
               <span
-                style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 15, fontWeight: 700, color: '#2563eb', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'rgba(37,99,235,0.3)' }}
-                title="Open full PO detail (Phase 3)"
+                onClick={() => { if (onNavigateToPO) { onClose(); onNavigateToPO(po.id) } }}
+                style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 15, fontWeight: 700, color: '#2563eb', cursor: onNavigateToPO ? 'pointer' : 'default', textDecoration: 'underline', textDecorationColor: 'rgba(37,99,235,0.3)' }}
+                title={onNavigateToPO ? 'Open full PO detail screen' : undefined}
               >
                 {po.po_number}
               </span>
@@ -557,7 +560,7 @@ const SignedPOSection = ({ poId, dark }: { poId: number; dark: boolean }) => {
             📄 {doc.file_name}
           </span>
           <span style={{ fontSize: 11, color: '#94a3b8', whiteSpace: 'nowrap' }}>
-            {formatBytes(doc.file_size_bytes)} · v{doc.version_number} · {doc.uploaded_by_name}
+            {formatBytes(doc.file_size_bytes)} · v{doc.version} · {doc.uploaded_by_name}
           </span>
           <button onClick={download} style={{ padding: '3px 8px', borderRadius: 5, border: `1px solid ${border}`, background: 'none', color: col, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
             ↓ View
@@ -1285,9 +1288,11 @@ const DragHandle = ({ onMouseDown, dark }: { onMouseDown: (e: React.MouseEvent) 
 
 interface ProcurementInnerProps {
   dark: boolean; projectId: number; projectName: string
+  // Phase 3: callback to navigate to full PO Detail Screen
+  onNavigateToPO?: (poId: number) => void
 }
 
-const ProcurementInner = ({ dark, projectId, projectName }: ProcurementInnerProps) => {
+const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: ProcurementInnerProps) => {
   const { addToast } = useToast()
 
   // ── Data state ─────────────────────────────────────────────────────────────
@@ -1722,6 +1727,7 @@ const ProcurementInner = ({ dark, projectId, projectName }: ProcurementInnerProp
         <PODrawer po={drawerPO} dark={dark} users={users}
           onClose={() => setDrawerPO(null)}
           onUpdated={handleExpeditorUpdate}
+          onNavigateToPO={onNavigateToPO}
         />
       )}
 
@@ -1983,10 +1989,11 @@ const BulkUploadModal = ({ dark, projectId, onClose, onImported }: BulkUploadMod
 
 export interface ProcurementProps {
   dark: boolean; projectId: number; projectName: string
+  onNavigateToPO?: (poId: number) => void
 }
 
-export const Procurement = ({ dark, projectId, projectName }: ProcurementProps) => (
+export const Procurement = ({ dark, projectId, projectName, onNavigateToPO }: ProcurementProps) => (
   <ToastProvider>
-    <ProcurementInner dark={dark} projectId={projectId} projectName={projectName} />
+    <ProcurementInner dark={dark} projectId={projectId} projectName={projectName} onNavigateToPO={onNavigateToPO} />
   </ToastProvider>
 )

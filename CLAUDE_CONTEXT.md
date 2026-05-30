@@ -815,7 +815,7 @@ Immutable audit log across all modules. Search interface. Returns: who · what a
 
 ## GLOBAL STANDARDS (apply to EVERY file)
 
-- Clear comments on every section of every file
+- **Back button + breadcrumb on EVERY screen (NON-NEGOTIABLE):** Every screen must have a ← Back button in the top-left that navigates to the previous screen, plus a breadcrumb trail showing the full path (e.g. Dashboard › Pilbara Gas Processing Plant › Procurement › PO-2024-001). Back button uses browser history. Breadcrumb reflects actual navigation path. This matches the wireframe and applies to every existing and future screen without exception.
 - Sticky headers on all tables (overflow-x: auto + overflow-y: auto + maxHeight on wrapper; thead position:sticky top:0; NOT on thead tr)
 - Resizable columns with orange #E84E0F drag handles (3px, visible on hover; 2px solid extending full height when actively dragging)
 - Hover tooltips for truncated text
