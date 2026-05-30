@@ -2,7 +2,7 @@
 // List view with stat cards, resizable columns, RAG row stripe, milestone dots,
 // slide-in drawer, expeditor assignment, critical-path toggle, pagination.
 // Phase 2 (New PO Wizard) and Phase 3 (PO Detail) are stubbed below.
-import { useState, useEffect, useLayoutEffect, useCallback, useRef, type RefObject } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import axios from 'axios'
 import { ToastProvider, useToast } from '../hooks/useToast'
@@ -934,15 +934,28 @@ const PO_COLS = [
 // ─── PO TABLE ROW ─────────────────────────────────────────────────────────────
 
 interface PORowProps {
-  po:         PO
-  dark:       boolean
-  colWidths:  number[]
-  onStar:     (po: PO) => void
-  onClick:    (po: PO) => void
-  onApprove:  (po: PO) => void
+  po:               PO
+  dark:             boolean
+  colWidths:        number[]
+  onStar:           (po: PO) => void
+  onClick:          (po: PO) => void
+  onApprove:        (po: PO) => void
+  // FIX 2: inline expeditor assignment props
+  users:            UserItem[]
+  isAssigningExp:   boolean           // true when this row's dropdown is open
+  onOpenAssignExp:  (po: PO) => void  // open this row's dropdown
+  onCloseAssignExp: () => void
+  expAssignVal:     string
+  onExpAssignValChange: (v: string) => void
+  onExpAssignSave:  (poId: number, valueOverride?: string) => void
+  expAssignSaving:  boolean
 }
 
-const POTableRow = ({ po, dark, colWidths, onStar, onClick, onApprove }: PORowProps) => {
+const POTableRow = ({
+  po, dark, colWidths, onStar, onClick, onApprove,
+  users, isAssigningExp, onOpenAssignExp, onCloseAssignExp,
+  expAssignVal, onExpAssignValChange, onExpAssignSave, expAssignSaving,
+}: PORowProps) => {
   const [hov, setHov] = useState(false)
   const col     = dark ? '#f1f5f9' : '#0f172a'
   const stripe  = po.rag ? RAG_BORDER[po.rag] : 'transparent'
@@ -995,13 +1008,74 @@ const POTableRow = ({ po, dark, colWidths, onStar, onClick, onApprove }: PORowPr
         <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#64748b' }}>{po.wbs_code ?? '—'}</span>
       </td>
 
-      {/* ── Owner / Expeditor ──────────────────────────────────────────────── */}
-      <td style={{ ...tdBase, width: colWidths[5] }}>
-        <div style={{ fontSize: 12, color: col, overflow: 'hidden', textOverflow: 'ellipsis' }}>{po.owner_name ?? '—'}</div>
-        {po.expeditor_name
-          ? <div style={{ fontSize: 10, color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis' }}>{po.expeditor_name}</div>
-          : <div style={{ fontSize: 10, color: '#2563eb' }}>— Assign</div>
-        }
+      {/* ── Owner / Expeditor — FIX 2: "— Assign" now opens inline dropdown ── */}
+      <td
+        onClick={e => e.stopPropagation()}   // prevent row drawer open when clicking assign
+        style={{ ...tdBase, width: colWidths[5], overflow: 'visible', position: 'relative' }}>
+        <div style={{ fontSize: 12, color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {po.owner_name ?? '—'}
+        </div>
+        {po.expeditor_name ? (
+          /* Already assigned — show name with click to reassign */
+          <div
+            onClick={() => { onOpenAssignExp(po); onExpAssignValChange(String(po.expeditor_id ?? '')) }}
+            style={{ fontSize: 10, color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
+            title="Click to reassign expeditor">
+            {po.expeditor_name}
+          </div>
+        ) : (
+          /* No expeditor — show clickable "— Assign" link */
+          <div
+            onClick={() => { onOpenAssignExp(po); onExpAssignValChange('') }}
+            style={{ fontSize: 10, color: '#2563eb', cursor: 'pointer', userSelect: 'none' }}>
+            — Assign
+          </div>
+        )}
+
+        {/* Inline dropdown — shown only for this row's active assign state */}
+        {isAssigningExp && (
+          <div
+            style={{
+              position: 'absolute', top: '100%', left: 0, zIndex: 100,
+              background: dark ? '#1e293b' : '#fff',
+              border: `1px solid ${dark ? '#334155' : '#dde3ed'}`,
+              borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
+              minWidth: 200, padding: '6px 0',
+            }}>
+            {/* Clear option — passes '' directly so API gets null */}
+            <div
+              onClick={() => { onExpAssignValChange(''); onExpAssignSave(po.id, '') }}
+              style={{ padding: '6px 12px', fontSize: 12, color: '#94a3b8', cursor: 'pointer' }}
+              onMouseEnter={e => { e.currentTarget.style.background = dark ? '#334155' : '#f4f7fb' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>
+              — Clear expeditor
+            </div>
+            {/* Expeditor users — pass id directly so API fires immediately */}
+            {users
+              .filter(u => ['expeditor','expediting_manager','admin','procurement_manager'].includes(u.role))
+              .map(u => (
+                <div
+                  key={u.id}
+                  onClick={() => { onExpAssignValChange(String(u.id)); onExpAssignSave(po.id, String(u.id)) }}
+                  style={{ padding: '6px 12px', fontSize: 12, color: dark ? '#f1f5f9' : '#0f172a', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                  onMouseEnter={e => { e.currentTarget.style.background = dark ? '#334155' : '#f4f7fb' }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>
+                  {u.full_name}
+                  <span style={{ fontSize: 10, color: '#94a3b8', marginLeft: 6 }}>{u.role.replace(/_/g, ' ')}</span>
+                </div>
+              ))}
+            {expAssignSaving && (
+              <div style={{ padding: '6px 12px', fontSize: 11, color: '#94a3b8' }}>Saving…</div>
+            )}
+            <div style={{ borderTop: `1px solid ${dark ? '#334155' : '#e8ecf2'}`, marginTop: 4, padding: '4px 12px' }}>
+              <button
+                onClick={onCloseAssignExp}
+                style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </td>
 
       {/* ── Milestones (dot progress) ──────────────────────────────────────── */}
@@ -1107,23 +1181,15 @@ const ProcurementInner = ({ dark, projectId, projectName }: ProcurementInnerProp
   const [cpSaving,      setCpSaving]      = useState(false)
   // Item 6: bulk upload modal
   const [showUpload,    setShowUpload]    = useState(false)
+  // FIX 2: inline expeditor assignment from the table row (separate from drawer)
+  const [rowAssignPoId,  setRowAssignPoId]  = useState<number | null>(null)
+  const [rowAssignVal,   setRowAssignVal]   = useState('')
+  const [rowAssignSaving,setRowAssignSaving]= useState(false)
 
-  // ── --thead-top CSS var for sticky header ───────────────────────────────────
+  // ── Toolbar ref (for sticky positioning) ────────────────────────────────────
+  // Note: thead sticky uses top:0 within the table wrapper (which is the scroll
+  // container). No CSS variable needed — the wrapper itself scrolls vertically.
   const toolbarRef = useRef<HTMLDivElement>(null)
-  useLayoutEffect(() => {
-    const update = () => {
-      const el = toolbarRef.current
-      if (!el) return
-      const zoom = el.getBoundingClientRect().height / (el.clientHeight || 1) || 1
-      const fixedEl = [...document.querySelectorAll<HTMLElement>('*')].find(e => getComputedStyle(e).position === 'fixed' && e.scrollHeight > e.clientHeight + 5)
-      if (!fixedEl) return
-      const top = Math.ceil((el.getBoundingClientRect().bottom - fixedEl.getBoundingClientRect().top) / zoom)
-      document.documentElement.style.setProperty('--procurement-thead-top', top + 'px')
-    }
-    update()
-    window.addEventListener('resize', update)
-    return () => window.removeEventListener('resize', update)
-  }, [activeTab])
 
   // ── Column resize ───────────────────────────────────────────────────────────
   const defaultWidths = PO_COLS.map(c => c.width)
@@ -1215,6 +1281,34 @@ const ProcurementInner = ({ dark, projectId, projectName }: ProcurementInnerProp
   const handleExpeditorUpdate = (updated: Partial<PO>) => {
     setPOs(prev => prev.map(p => p.id === drawerPO?.id ? { ...p, ...updated } : p))
     if (drawerPO) setDrawerPO(d => d ? { ...d, ...updated } : d)
+  }
+
+  // ── FIX 2: Row-level expeditor assignment (inline dropdown in the table) ──────
+  // Separate from the drawer assign — this handles the "— Assign" click directly
+  // on the table row without opening the full drawer.
+  // valueOverride: passed directly from the option click so we don't wait for
+  // state to update before calling the API (React batches state updates).
+  const saveRowExpeditor = async (poId: number, valueOverride?: string) => {
+    setRowAssignSaving(true)
+    try {
+      const raw   = valueOverride !== undefined ? valueOverride : rowAssignVal
+      const newId = raw ? Number(raw) : null
+      const { data } = await axios.put(`${API}/procurement/pos/${poId}/expeditor`, { expeditor_id: newId })
+      setPOs(prev => prev.map(p =>
+        p.id === poId
+          ? { ...p, expeditor_id: data.expeditor_id, expeditor_name: data.expeditor_name }
+          : p
+      ))
+      // Also update drawer if this PO is open
+      if (drawerPO?.id === poId) {
+        setDrawerPO(d => d ? { ...d, expeditor_id: data.expeditor_id, expeditor_name: data.expeditor_name } : d)
+      }
+      addToast('success', data.expeditor_name ? `Expeditor set to ${data.expeditor_name}` : 'Expeditor cleared')
+      setRowAssignPoId(null)
+    } catch (e: unknown) {
+      const er = e as { response?: { data?: { error?: string } } }
+      addToast('error', er.response?.data?.error ?? 'Could not assign expeditor')
+    } finally { setRowAssignSaving(false) }
   }
 
   // ── CSV export ───────────────────────────────────────────────────────────────
@@ -1333,10 +1427,23 @@ const ProcurementInner = ({ dark, projectId, projectName }: ProcurementInnerProp
       )}
 
       {/* ── PO Table ───────────────────────────────────────────────────────────── */}
-      {/* Item 3: overflowX:'auto' (not clip) so horizontal scroll works; overflowY:visible keeps sticky */}
-      <div style={{ background: dark ? '#1e293b' : '#fff', border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, borderRadius: 10, overflowX: 'auto', overflowY: 'visible', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+      {/* FIX 1 — Sticky header:
+          The wrapper has overflowX:auto + overflowY:auto which (per CSS spec) makes
+          IT the scroll container for both axes. thead { top:0 } then sticks at the
+          top of this container's visible area — reliable across all browsers.
+          maxHeight limits the table height so the container actually scrolls.
+          No CSS variable needed — top:0 is always correct for this pattern. */}
+      <div style={{
+        background: dark ? '#1e293b' : '#fff',
+        border: `1px solid ${dark ? '#334155' : '#dde3ed'}`,
+        borderRadius: 10,
+        overflowX: 'auto',
+        overflowY: 'auto',
+        maxHeight: 'calc(100vh - 380px)',
+        boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
+      }}>
         <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed' }}>
-          <thead style={{ position: 'sticky', top: 'var(--procurement-thead-top, 196px)', zIndex: 10, background: dark ? '#0f172a' : '#f4f7fb' }}>
+          <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: dark ? '#0f172a' : '#f4f7fb' }}>
             <tr>
               {PO_COLS.map((c, i) => {
                 const isLast   = i === PO_COLS.length - 1
@@ -1380,8 +1487,16 @@ const ProcurementInner = ({ dark, projectId, projectName }: ProcurementInnerProp
             {pos.map(po => (
               <POTableRow key={po.id} po={po} dark={dark} colWidths={widths}
                 onStar={toggleStar}
-                onClick={p => setDrawerPO(p)}
+                onClick={p => { setRowAssignPoId(null); setDrawerPO(p) }}
                 onApprove={p => setApproveTarget(p)}
+                users={users}
+                isAssigningExp={rowAssignPoId === po.id}
+                onOpenAssignExp={p => { setRowAssignPoId(p.id); setRowAssignVal(String(p.expeditor_id ?? '')) }}
+                onCloseAssignExp={() => setRowAssignPoId(null)}
+                expAssignVal={rowAssignVal}
+                onExpAssignValChange={setRowAssignVal}
+                onExpAssignSave={saveRowExpeditor}
+                expAssignSaving={rowAssignSaving}
               />
             ))}
           </tbody>
