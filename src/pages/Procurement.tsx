@@ -583,6 +583,105 @@ const SignedPOSection = ({ poId, dark }: { poId: number; dark: boolean }) => {
   )
 }
 
+// ─── COMMODITY / TAG TYPEAHEAD ────────────────────────────────────────────────
+// Searches commodities table + equipment_items table for the current project.
+// Returns empty while Foundational module tables aren't populated yet.
+// onSelect auto-fills description and uom on the parent line.
+function CommodityTagSearch({ value, projectId, dark, onChange, onSelect }: {
+  value:     string | null
+  projectId: number
+  dark:      boolean
+  onChange:  (code: string | null) => void
+  onSelect:  (item: { code: string; description: string; uom: string }) => void
+}) {
+  const [query,    setQuery]    = useState(value ?? '')
+  const [results,  setResults]  = useState<Array<{ type: string; code: string; name: string; uom: string }>>([])
+  const [open,     setOpen]     = useState(false)
+  const wrapRef    = useRef<HTMLDivElement>(null)
+  const timerRef   = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => { setQuery(value ?? '') }, [value])
+
+  useEffect(() => {
+    const close = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [])
+
+  const search = (q: string) => {
+    if (!q.trim()) { setResults([]); setOpen(false); return }
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(async () => {
+      try {
+        const { data } = await axios.get(`${API}/procurement/${projectId}/items/search`, { params: { q } })
+        setResults(data)
+        setOpen(true)
+      } catch { setResults([]) }
+    }, 280)
+  }
+
+  const borderCol = dark ? '#334155' : '#dde3ed'
+  const bg        = dark ? '#1e293b' : '#ffffff'
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative', width: '100%' }}>
+      <input
+        value={query}
+        onChange={e => { setQuery(e.target.value); onChange(e.target.value || null); search(e.target.value) }}
+        onFocus={() => results.length > 0 && setOpen(true)}
+        placeholder="Code or tag (optional)"
+        title="Type to search Commodity Library or Equipment List. Leave blank if unknown."
+        style={{
+          width: '100%', height: 28, boxSizing: 'border-box',
+          padding: '0 6px', border: `1px solid ${borderCol}`,
+          borderRadius: 4, background: bg,
+          color: dark ? '#f1f5f9' : '#0f172a',
+          fontSize: 11, fontFamily: 'JetBrains Mono, monospace',
+          outline: 'none',
+        }}
+      />
+      {open && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, zIndex: 200,
+          background: bg, border: `1px solid ${borderCol}`,
+          borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+          maxHeight: 200, overflowY: 'auto', minWidth: 260,
+        }}>
+          {results.length === 0 ? (
+            <div style={{ padding: '8px 12px', fontSize: 11, color: '#94a3b8' }}>
+              No results — add items in Foundational module
+            </div>
+          ) : results.map((r, i) => (
+            <div key={i}
+              onMouseDown={e => {
+                e.preventDefault()
+                setQuery(r.code); onChange(r.code)
+                onSelect({ code: r.code, description: r.name, uom: r.uom })
+                setOpen(false)
+              }}
+              style={{
+                padding: '5px 10px', cursor: 'pointer',
+                display: 'flex', gap: 8, alignItems: 'baseline',
+                borderBottom: `1px solid ${dark ? '#334155' : '#f1f5f9'}`,
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = dark ? '#1e2d4a' : '#f0f3f9')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+            >
+              <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#E84E0F', minWidth: 70 }}>{r.code}</span>
+              <span style={{ fontSize: 12, color: dark ? '#f1f5f9' : '#0f172a', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
+              <span style={{ fontSize: 9, color: '#94a3b8', background: dark ? '#334155' : '#f1f5f9', borderRadius: 3, padding: '1px 5px', flexShrink: 0 }}>
+                {r.type === 'commodity' ? 'COMMODITY' : 'EQUIP'}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── NEW PO WIZARD (Phase 2 — already built) ──────────────────────────────────
 // 3-step wizard: Header → Line Items → Milestones.
 
@@ -803,13 +902,20 @@ const NewPOWizard = ({ dark, projectId, suppliers, uoms, users, wbsNodes, onClos
                 {lines.map((l, i) => (
                   <tr key={i} style={{ borderBottom: `1px solid ${dark ? '#334155' : '#e8ecf2'}` }}>
                     <td style={{ padding: '4px 8px', textAlign: 'center', color: '#94a3b8', fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{i+1}</td>
-                    <td style={{ padding: '4px 6px', width: 130 }}>
-                      <input
-                        value={l.tag_number ?? ''}
-                        onChange={e => updateLine(i, 'tag_number', e.target.value || null)}
-                        placeholder="Code or tag (optional)"
-                        title="Commodity code or equipment tag. Autocomplete will be available once Foundational module is built."
-                        style={{ ...inp(dark), height: 28, fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}
+                    <td style={{ padding: '4px 6px', width: 150 }}>
+                      <CommodityTagSearch
+                        value={l.tag_number ?? null}
+                        projectId={projectId}
+                        dark={dark}
+                        onChange={code => updateLine(i, 'tag_number', code)}
+                        onSelect={item => setLines(prev => prev.map((ln, idx) =>
+                          idx !== i ? ln : {
+                            ...ln,
+                            tag_number:  item.code,
+                            description: ln.description || item.description,
+                            uom:         item.uom || ln.uom,
+                          }
+                        ))}
                       />
                     </td>
                     <td style={{ padding: '4px 6px' }}><input value={l.description} onChange={e => updateLine(i,'description',e.target.value)} placeholder="Item description" style={{ ...inp(dark), height: 28, fontSize: 12 }} /></td>

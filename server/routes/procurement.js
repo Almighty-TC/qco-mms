@@ -286,47 +286,47 @@ router.get('/:projectId/pos', async (req, res) => {
     } = req.query
 
     const { page, limit, offset } = paginate(req.query)
-    const params        = [pid]
-    const havingParams  = []
-    const whereFilters  = ['po.project_id = ?']
-    const havingFilters = []
+    const params  = [pid]
+    const filters = ['po.project_id = ?']
 
     // Vendor sees only their POs
     if (req.user.role === 'vendor' && req.user.supplier_id) {
-      whereFilters.push('po.supplier_id = ?')
+      filters.push('po.supplier_id = ?')
       params.push(req.user.supplier_id)
     }
 
     // ── Status tab filter ─────────────────────────────────────────────────────
     if (status === 'approved') {
-      whereFilters.push('po.is_locked = 1')
+      filters.push('po.is_locked = 1')
     } else if (status === 'pending') {
-      whereFilters.push("po.status IN ('rfq','loa','pending_approval') AND po.is_locked = 0")
+      filters.push("po.status IN ('rfq','loa','pending_approval') AND po.is_locked = 0")
     } else if (status === 'completed') {
-      whereFilters.push("po.status IN ('closed','cancelled')")
+      filters.push("po.status IN ('closed','cancelled')")
     } else if (status === 'all_active') {
-      whereFilters.push("po.status NOT IN ('closed','cancelled')")
+      filters.push("po.status NOT IN ('closed','cancelled')")
     }
 
-    // ── RAG filter from summary card click (breached=red, atRisk=amber) ──────
-    // Aggregate (MIN) conditions belong in HAVING, not WHERE.
+    // ── RAG filter — pure WHERE on l.cdd (no aggregates) ─────────────────────
+    // Joins po_lines already in the query; WHERE on l.cdd matches any line
+    // with cdd in range, which is correct: a PO is breached/at-risk when any
+    // of its lines is past/near its CDD.
     if (rag === 'red') {
-      whereFilters.push("po.status NOT IN ('closed','cancelled')")
-      havingFilters.push('MIN(l.cdd) IS NOT NULL AND MIN(l.cdd) < CURDATE()')
+      filters.push("po.status NOT IN ('closed','cancelled')")
+      filters.push('l.cdd IS NOT NULL AND l.cdd < CURDATE()')
     } else if (rag === 'amber') {
-      whereFilters.push("po.status NOT IN ('closed','cancelled')")
-      havingFilters.push(`MIN(l.cdd) IS NOT NULL AND MIN(l.cdd) >= CURDATE() AND DATEDIFF(MIN(l.cdd), CURDATE()) <= ${atRiskDays}`)
+      filters.push("po.status NOT IN ('closed','cancelled')")
+      filters.push(`l.cdd IS NOT NULL AND l.cdd >= CURDATE() AND DATEDIFF(l.cdd, CURDATE()) <= ${atRiskDays}`)
     }
 
-    if (supplier_id)        { whereFilters.push('po.supplier_id = ?');    params.push(Number(supplier_id)) }
-    if (wbs_id)             { whereFilters.push('w.id = ?');              params.push(Number(wbs_id)) }
-    if (is_critical_path === '1') { whereFilters.push('po.is_critical_path = 1') }
-    if (expeditor_id)       { whereFilters.push('po.expeditor_id = ?');   params.push(Number(expeditor_id)) }
-    if (cdd_from)           { havingFilters.push('MIN(l.cdd) >= ?');       havingParams.push(cdd_from) }
-    if (cdd_to)             { havingFilters.push('MIN(l.cdd) <= ?');       havingParams.push(cdd_to) }
+    if (supplier_id)        { filters.push('po.supplier_id = ?');    params.push(Number(supplier_id)) }
+    if (wbs_id)             { filters.push('w.id = ?');              params.push(Number(wbs_id)) }
+    if (is_critical_path === '1') { filters.push('po.is_critical_path = 1') }
+    if (expeditor_id)       { filters.push('po.expeditor_id = ?');   params.push(Number(expeditor_id)) }
+    if (cdd_from)           { filters.push('l.cdd >= ?');            params.push(cdd_from) }
+    if (cdd_to)             { filters.push('l.cdd <= ?');            params.push(cdd_to) }
 
     if (search) {
-      whereFilters.push('(po.po_number LIKE ? OR po.description LIKE ? OR po.vendor_name LIKE ? OR s.name LIKE ?)')
+      filters.push('(po.po_number LIKE ? OR po.description LIKE ? OR po.vendor_name LIKE ? OR s.name LIKE ?)')
       const q = `%${search}%`
       params.push(q, q, q, q)
     }
@@ -337,27 +337,21 @@ router.get('/:projectId/pos', async (req, res) => {
       cdd: 'MIN(l.cdd)', value: 'po.value', wbs: 'po.wbs_code',
       expeditor: 'exp.full_name', owner: 'own.full_name',
     }
-    const orderBy   = SAFE_SORT[sort_col] ?? 'po.created_at'
-    const orderDir  = sort_dir?.toLowerCase() === 'asc' ? 'ASC' : 'DESC'
-    const where     = whereFilters.join(' AND ')
-    const having    = havingFilters.length ? `HAVING ${havingFilters.join(' AND ')}` : ''
-    const allParams = [...params, ...havingParams]
+    const orderBy  = SAFE_SORT[sort_col] ?? 'po.created_at'
+    const orderDir = sort_dir?.toLowerCase() === 'asc' ? 'ASC' : 'DESC'
+    const where    = filters.join(' AND ')
 
-    // COUNT: wrap in subquery so HAVING applies before counting
+    // COUNT: DISTINCT because WHERE on l.cdd can produce multiple rows per PO
     const [countRows] = await db.query(`
-      SELECT COUNT(*) AS total FROM (
-        SELECT po.id
-        FROM purchase_orders po
-        LEFT JOIN suppliers s   ON s.id   = po.supplier_id
-        LEFT JOIN users     own ON own.id = po.owner_id
-        LEFT JOIN users     exp ON exp.id = po.expeditor_id
-        LEFT JOIN wbs_nodes w   ON w.code = po.wbs_code AND w.project_id = po.project_id
-        LEFT JOIN po_lines  l   ON l.po_id = po.id
-        WHERE ${where}
-        GROUP BY po.id
-        ${having}
-      ) AS filtered
-    `, allParams)
+      SELECT COUNT(DISTINCT po.id) AS total
+      FROM purchase_orders po
+      LEFT JOIN suppliers s   ON s.id   = po.supplier_id
+      LEFT JOIN users     own ON own.id = po.owner_id
+      LEFT JOIN users     exp ON exp.id = po.expeditor_id
+      LEFT JOIN wbs_nodes w   ON w.code = po.wbs_code AND w.project_id = po.project_id
+      LEFT JOIN po_lines  l   ON l.po_id = po.id
+      WHERE ${where}
+    `, params)
 
     const [rows] = await db.query(`
       SELECT
@@ -391,10 +385,9 @@ router.get('/:projectId/pos', async (req, res) => {
         own.full_name, exp.full_name, s.name, w.id, w.description,
         po.milestone_po_date, po.milestone_fat_date, po.milestone_esd_date,
         po.milestone_eta_date, po.milestone_ros_date
-      ${having}
       ORDER BY ${orderBy} ${orderDir}
       LIMIT ? OFFSET ?
-    `, [...allParams, limit, offset])
+    `, [...params, limit, offset])
 
     // ── FIX 1: milestone_dots removed — milestones belong in Expediting ─────────
     // Milestone dates still included so the drawer can render the milestone section.
@@ -1010,72 +1003,249 @@ router.post('/:projectId/pos/bulk-confirm', async (req, res) => {
   }
 })
 
+// ─── COMMODITY / EQUIPMENT ITEM SEARCH ───────────────────────────────────────
+// GET /api/procurement/:projectId/items/search?q=
+// Typeahead for the New PO Wizard line items: searches commodities table AND
+// equipment_items table for the project. Returns [] gracefully when Foundational
+// module tables haven't been created yet.
+router.get('/:projectId/items/search', async (req, res) => {
+  try {
+    const pid  = Number(req.params.projectId)
+    const q    = String(req.query.q ?? '').trim()
+    if (!q || !pid) return res.json([])
+    const like = `%${q}%`
+    const out  = []
+
+    // Search commodity library (table may not exist until Foundational is built)
+    try {
+      const [rows] = await db.query(`
+        SELECT 'commodity' AS type, code, name, uom
+        FROM   commodities
+        WHERE  project_id = ? AND is_active = 1
+          AND  (code LIKE ? OR name LIKE ?)
+        ORDER  BY code LIMIT 10
+      `, [pid, like, like])
+      out.push(...rows)
+    } catch { /* table not yet created */ }
+
+    // Search equipment list
+    try {
+      const [rows] = await db.query(`
+        SELECT 'equipment' AS type, tag_number AS code, description AS name, uom
+        FROM   equipment_items
+        WHERE  project_id = ? AND is_active = 1
+          AND  (tag_number LIKE ? OR description LIKE ?)
+        ORDER  BY tag_number LIMIT 10
+      `, [pid, like, like])
+      out.push(...rows)
+    } catch { /* table not yet created */ }
+
+    res.json(out)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // ─── XLSX TEMPLATE DOWNLOAD ───────────────────────────────────────────────────
-// Item 6: Download pre-formatted .xlsx template.
+// Two-section template:
+//   Section 1 — PO Header (label/value pairs, rows 1–19)
+//   Section 2 — Line Items (column table starting row 21)
+// Orange section headers, frozen panes at line-items column header row,
+// Instructions tab with field-by-field guidance.
 router.get('/template/po-upload', async (req, res) => {
   try {
     const ExcelJS = require('exceljs')
     const wb = new ExcelJS.Workbook()
-    wb.creator = 'QCO MMS'
-    wb.created = new Date()
+    wb.creator  = 'QCO MMS'
+    wb.created  = new Date()
 
-    // ── Sheet 1: Template ──────────────────────────────────────────────────────
+    const ORANGE   = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE84E0F' } }
+    const LIGHT_BG = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } }
+    const GREY_BG  = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } }
+    const WHITE    = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } }
+    const styleSectionHeader = cell => {
+      cell.font      = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11 }
+      cell.fill      = ORANGE
+      cell.alignment = { horizontal: 'left', vertical: 'middle' }
+    }
+    const styleColHeader = cell => {
+      cell.font      = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 }
+      cell.fill      = ORANGE
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
+      cell.border    = { right: { style: 'thin', color: { argb: 'FFCC3300' } } }
+    }
+    const styleLabel = cell => {
+      cell.font      = { bold: true, size: 10, color: { argb: 'FF334155' } }
+      cell.fill      = GREY_BG
+      cell.alignment = { horizontal: 'right', vertical: 'middle' }
+    }
+    const styleValue = cell => {
+      cell.fill      = WHITE
+      cell.alignment = { horizontal: 'left', vertical: 'middle' }
+      cell.border    = { bottom: { style: 'thin', color: { argb: 'FFDDDDDD' } } }
+    }
+
+    // ── Sheet 1: PO Upload Template ────────────────────────────────────────────
     const ws = wb.addWorksheet('PO Upload Template')
-    const headers = [
-      'PO Number', 'Description', 'Supplier', 'Group/Category',
-      'Currency', 'PO Value', 'Incoterms', 'WBS', 'ROS Date', 'Owner',
+    ws.getColumn(1).width = 30   // label
+    ws.getColumn(2).width = 42   // value
+    ws.properties.defaultRowHeight = 18
+
+    // ── SECTION 1: PO Header ──────────────────────────────────────────────────
+    // Row 1 — section title
+    ws.mergeCells('A1:B1')
+    const sec1Title = ws.getCell('A1')
+    sec1Title.value = '  SECTION 1 — PO HEADER'
+    styleSectionHeader(sec1Title)
+    ws.getRow(1).height = 22
+
+    // Header fields: [label, placeholder/example, required?]
+    const headerFields = [
+      ['PO Reference *',              'e.g. PO-2025-001',                          true ],
+      ['Vendor / Supplier Name *',    'e.g. Emerson Electric Co.',                 true ],
+      ['PO Name / Title *',           'e.g. Control Valve Package — Unit 3',       true ],
+      ['Group / Category',            'Mechanical / Electrical / Instrumentation / Civil / Piping / Structural', false],
+      ['Currency',                    'AUD (default) — AUD, USD, EUR, GBP, SGD',   false],
+      ['INCO Terms',                  'CIF — CIF, FOB, EXW, DAP, DDP, FCA, CPT, CIP', false],
+      ['INCO Location',               'e.g. Port of Singapore',                    false],
+      ['WBS Code',                    'e.g. 02.03.01',                             false],
+      ['Contract / Order Number',     'e.g. CTR-2025-044',                         false],
+      ['Award Date',                  'dd/mm/yyyy',                                false],
+      ['CDD — Contract Delivery Date','dd/mm/yyyy',                                false],
+      ['ROS — Required on Site Date', 'dd/mm/yyyy — optional, can enter in Expediting', false],
+      ['FAT Date',                    'dd/mm/yyyy — Factory Acceptance Test date', false],
+      ['ESD — Est. Ship Date',        'dd/mm/yyyy',                                false],
+      ['Notes',                       'Any additional PO notes',                   false],
     ]
-    const exampleRow = [
-      'PO-2024-099', 'Control Valve Package', 'Emerson Electric',
-      'Instrumentation & Control', 'AUD', 450000, 'CIF', '1.2.3',
-      '2025-09-30', 'Ben Smith',
+    headerFields.forEach(([label, hint, req], idx) => {
+      const rowNum = idx + 2   // rows 2–16
+      ws.mergeCells(`B${rowNum}:B${rowNum}`)
+      const labelCell = ws.getCell(`A${rowNum}`)
+      const valueCell = ws.getCell(`B${rowNum}`)
+      labelCell.value = req ? `${label}` : label
+      valueCell.value = hint
+      styleLabel(labelCell)
+      styleValue(valueCell)
+      valueCell.font = { italic: true, color: { argb: 'FFAAAAAA' }, size: 9 }
+      ws.getRow(rowNum).height = 18
+    })
+
+    // Row 17 — blank separator
+    ws.getRow(17).height = 10
+
+    // ── SECTION 2: Line Items ─────────────────────────────────────────────────
+    // Row 18 — section title
+    const lineColCount = 11
+    ws.mergeCells(`A18:K18`)
+    const sec2Title = ws.getCell('A18')
+    sec2Title.value = '  SECTION 2 — LINE ITEMS  (add one row per line item)'
+    styleSectionHeader(sec2Title)
+    ws.getRow(18).height = 22
+
+    // Row 19 — column headers
+    const lineHeaders = [
+      'Line #', 'Commodity Code / Tag', 'Item Description', 'Quantity',
+      'UOM', 'Unit Rate', 'Total Value', 'WBS Code', 'CDD', 'ROS Date',
+      'Heat No. Required (Y/N)',
     ]
-
-    // Style header row
-    ws.addRow(headers)
-    const headerRow = ws.getRow(1)
-    headerRow.eachCell(cell => {
-      cell.font      = { bold: true, color: { argb: 'FFFFFFFF' } }
-      cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE84E0F' } }
-      cell.alignment = { horizontal: 'center' }
-      cell.border    = { bottom: { style: 'thin', color: { argb: 'FFCCCCCC' } } }
+    const colWidths = [8, 22, 36, 10, 8, 14, 14, 14, 14, 14, 22]
+    lineHeaders.forEach((h, i) => {
+      const cell = ws.getCell(19, i + 1)
+      cell.value = h
+      styleColHeader(cell)
+      ws.getColumn(i + 1).width = colWidths[i]
     })
-    ws.addRow(exampleRow)
-    const exRow = ws.getRow(2)
-    exRow.eachCell(cell => {
-      cell.font = { italic: true, color: { argb: 'FF64748B' } }
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } }
+    ws.getRow(19).height = 28
+
+    // Rows 20–39 — 20 blank data rows
+    for (let r = 20; r <= 39; r++) {
+      for (let c = 1; c <= lineColCount; c++) {
+        const cell = ws.getCell(r, c)
+        cell.fill = r % 2 === 0 ? LIGHT_BG : WHITE
+        cell.border = {
+          bottom: { style: 'thin', color: { argb: 'FFEEEEEE' } },
+          right:  { style: 'thin', color: { argb: 'FFEEEEEE' } },
+        }
+      }
+      // Pre-fill line numbers
+      ws.getCell(r, 1).value   = r - 19
+      ws.getCell(r, 1).font    = { color: { argb: 'FF94A3B8' }, size: 9 }
+      ws.getCell(r, 1).alignment = { horizontal: 'center' }
+    }
+
+    // Row 40 — example data row (muted)
+    const exLine = [1, 'PIPE-CS-DN100', 'CS Seamless Pipe DN100 SCH40 6m lengths', 120, 'M', 85.00, '=D41*F41', '02.03.01', '2025-11-30', '2025-12-15', 'Y']
+    exLine.forEach((v, i) => {
+      const cell = ws.getCell(40, i + 1)
+      cell.value = v
+      cell.font  = { italic: true, color: { argb: 'FF94A3B8' }, size: 9 }
+      cell.fill  = LIGHT_BG
     })
+    ws.getCell('A40').value = '← Example — delete this row'
 
-    // Column widths
-    const widths = [15, 30, 25, 25, 10, 15, 12, 12, 14, 20]
-    headers.forEach((_, i) => { ws.getColumn(i + 1).width = widths[i] })
-
-    ws.getCell('A3').value = '← Example row — delete before uploading'
-    ws.getCell('A3').font  = { color: { argb: 'FF94A3B8' }, italic: true, size: 9 }
+    // Freeze panes: rows 1–19 stay visible while scrolling line items
+    ws.views = [{ state: 'frozen', ySplit: 19 }]
 
     // ── Sheet 2: Instructions ──────────────────────────────────────────────────
     const ws2 = wb.addWorksheet('Instructions')
-    ws2.getColumn(1).width = 22
-    ws2.getColumn(2).width = 20
-    ws2.getColumn(3).width = 50
+    ws2.getColumn(1).width = 28
+    ws2.getColumn(2).width = 14
+    ws2.getColumn(3).width = 55
 
-    ws2.addRow(['Column', 'Required?', 'Notes'])
-    ws2.getRow(1).eachCell(c => { c.font = { bold: true } })
+    const instTitle = ws2.getCell('A1')
+    instTitle.value = 'PO Upload Template — Instructions'
+    instTitle.font  = { bold: true, size: 13 }
+    ws2.getRow(1).height = 22
 
-    const instructions = [
-      ['PO Number',       'Required', 'Unique PO reference. Duplicate detection will flag if it already exists.'],
-      ['Description',     'Optional', 'Brief description of the scope.'],
-      ['Supplier',        'Required', 'Supplier or vendor name as it appears in the system.'],
-      ['Group/Category',  'Optional', 'e.g. Mechanical, Electrical, Instrumentation & Control, Piping, HVAC.'],
-      ['Currency',        'Optional', 'Default: AUD. Accepted: AUD, USD, EUR, GBP, SGD, JPY, CNY.'],
-      ['PO Value',        'Optional', 'Numeric value only (e.g. 450000). No $ or commas.'],
-      ['Incoterms',       'Optional', 'e.g. CIF, FOB, EXW, DAP, DDP.'],
-      ['WBS',             'Optional', 'WBS code as configured in the project (e.g. 1.2.3).'],
-      ['ROS Date',        'Optional', 'Required On Site date — format: YYYY-MM-DD.'],
-      ['Owner',           'Optional', 'Full name of the PO owner/expeditor.'],
+    ws2.addRow([])
+    const instHdr = ws2.addRow(['Field', 'Required?', 'Notes'])
+    instHdr.eachCell(c => { c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = ORANGE; c.alignment = { horizontal: 'center' } })
+    ws2.getRow(3).height = 20
+
+    const headerInst = [
+      ['PO Reference',              'Required',  'Unique PO reference number. Duplicates will be flagged before import is confirmed.'],
+      ['Vendor / Supplier Name',    'Required',  'Must match a supplier name in the system, or it will be flagged for manual review.'],
+      ['PO Name / Title',           'Required',  'Short title for the PO (e.g. "Control Valve Package — Unit 3").'],
+      ['Group / Category',          'Optional',  'Mechanical / Electrical / Instrumentation / Civil / Piping / Structural.'],
+      ['Currency',                  'Optional',  'Default: AUD. Accepted: AUD USD EUR GBP SGD JPY CNY.'],
+      ['INCO Terms',                'Optional',  'CIF / FOB / EXW / DAP / DDP / FCA / CPT / CIP.'],
+      ['INCO Location',             'Optional',  'Named place relevant to the INCO term (e.g. Port of Singapore for FOB).'],
+      ['WBS Code',                  'Optional',  'Must match an existing WBS code in the project (e.g. 02.03.01).'],
+      ['Contract / Order Number',   'Optional',  'Internal contract or order reference.'],
+      ['Award Date',                'Optional',  'Format: dd/mm/yyyy or YYYY-MM-DD.'],
+      ['CDD',                       'Optional',  'Contract Delivery Date — format: dd/mm/yyyy. Drives RAG status on PO Register.'],
+      ['ROS',                       'Optional',  'Required on Site Date — can be entered or updated later in Expediting.'],
+      ['FAT Date',                  'Optional',  'Factory Acceptance Test date — dd/mm/yyyy.'],
+      ['ESD',                       'Optional',  'Estimated Ship Date — dd/mm/yyyy.'],
+      ['Notes',                     'Optional',  'Any additional notes or comments for this PO.'],
     ]
-    instructions.forEach(r => ws2.addRow(r))
+    ws2.addRow([])
+    ws2.addRow(['SECTION 1 — PO HEADER FIELDS']).eachCell(c => { c.font = { bold: true, color: { argb: 'FFE84E0F' } } })
+    headerInst.forEach(r => {
+      const row = ws2.addRow(r)
+      row.getCell(1).font = { bold: true }
+    })
+
+    ws2.addRow([])
+    ws2.addRow(['SECTION 2 — LINE ITEM FIELDS']).eachCell(c => { c.font = { bold: true, color: { argb: 'FFE84E0F' } } })
+
+    const lineInst = [
+      ['Line #',                    'Auto',      'Pre-filled (1, 2, 3…). You may override.'],
+      ['Commodity Code / Tag',      'Optional',  'Commodity code from Commodity Library or Equipment Tag number. Leave blank if unknown — flag "not linked" in Expediting.'],
+      ['Item Description',          'Required',  'Description of the line item.'],
+      ['Quantity',                  'Optional',  'Numeric value (e.g. 120). No commas.'],
+      ['UOM',                       'Optional',  'EA / M / M² / M³ / KG / T / LT / SET / LOT.'],
+      ['Unit Rate',                 'Optional',  'Unit price numeric (e.g. 85.00). No $ or commas.'],
+      ['Total Value',               'Computed',  'Quantity × Unit Rate — calculated automatically. Do not edit.'],
+      ['WBS Code',                  'Optional',  'Line-level WBS (can differ from PO-level WBS).'],
+      ['CDD',                       'Optional',  'Contract Delivery Date for this line — dd/mm/yyyy.'],
+      ['ROS Date',                  'Optional',  'Required on Site Date for this line — dd/mm/yyyy.'],
+      ['Heat No. Required (Y/N)',   'Optional',  'Y if this line item requires heat number traceability. Default N.'],
+    ]
+    lineInst.forEach(r => {
+      const row = ws2.addRow(r)
+      row.getCell(1).font = { bold: true }
+    })
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     res.setHeader('Content-Disposition', 'attachment; filename="PO_Upload_Template.xlsx"')
