@@ -62,7 +62,7 @@ interface PO {
   line_count:     number
   cdd:            string | null
   rag:            RAG | null
-  milestone_dots: DotState[]
+  // milestone_dots removed from register — milestones shown in drawer only
   milestone_po_date:  string | null
   milestone_fat_date: string | null
   milestone_esd_date: string | null
@@ -210,16 +210,27 @@ const MilestoneDots = ({ dots, labels, dates }: MilestoneDotsProps) => {
 
 // ─── STAT CARD ────────────────────────────────────────────────────────────────
 
-const StatCard = ({ label, value, dark, accent }: {
+// ─── FIX 2: StatCard now accepts onClick + active (selected) state ────────────
+// Clicking a card filters the table; clicking the active card clears filters.
+const StatCard = ({ label, value, dark, accent, onClick, active }: {
   label: string; value: string | number; dark: boolean; accent?: string
+  onClick?: () => void; active?: boolean
 }) => (
-  <div style={{
-    flex: 1, minWidth: 0,
-    background: dark ? '#1e293b' : '#fff',
-    border: `1px solid ${dark ? '#334155' : '#dde3ed'}`,
-    borderRadius: 8, padding: '14px 18px',
-  }}>
-    <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 6 }}>
+  <div
+    onClick={onClick}
+    style={{
+      flex: 1, minWidth: 0,
+      background: dark ? '#1e293b' : '#fff',
+      border: active ? '2px solid #E84E0F' : `1px solid ${dark ? '#334155' : '#dde3ed'}`,
+      borderRadius: 8, padding: active ? '13px 17px' : '14px 18px',
+      cursor: onClick ? 'pointer' : 'default',
+      transition: 'border-color 150ms, box-shadow 150ms',
+      boxShadow: active ? '0 0 0 3px rgba(232,78,15,0.12)' : undefined,
+    }}
+    onMouseEnter={e => { if (onClick) e.currentTarget.style.borderColor = active ? '#E84E0F' : '#94a3b8' }}
+    onMouseLeave={e => { if (onClick) e.currentTarget.style.borderColor = active ? '#E84E0F' : (dark ? '#334155' : '#dde3ed') }}
+  >
+    <div style={{ fontSize: 11, fontWeight: 600, color: active ? '#E84E0F' : '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 6 }}>
       {label}
     </div>
     <div style={{
@@ -917,18 +928,18 @@ const HelpModal = ({ dark, onClose }: { dark: boolean; onClose: () => void }) =>
 // ─── COLUMN DEFINITIONS ───────────────────────────────────────────────────────
 // Matches spec exactly: PO Ref | Vendor/Group | Material Desc | WBS | Owner/Expeditor | Milestones | CDD | ROS | Status | Actions
 
+// ─── FIX 1: Milestones column removed — milestones belong in Expediting ──────
 const PO_COLS = [
-  { key: 'star',       label: '',             width: 32,  minWidth: 32,  noResize: true },
-  { key: 'po_number',  label: 'PO Ref',       width: 140, minWidth: 100 },
-  { key: 'vendor',     label: 'Vendor / Group', width: 180, minWidth: 120 },
-  { key: 'desc',       label: 'Material Description', width: 220, minWidth: 120, flex: true },
-  { key: 'wbs',        label: 'WBS',          width: 110, minWidth: 80  },
-  { key: 'owner',      label: 'Owner / Expeditor', width: 160, minWidth: 120 },
-  { key: 'milestones', label: 'Milestones',   width: 90,  minWidth: 80,  noResize: true },
-  { key: 'cdd',        label: 'CDD',          width: 110, minWidth: 90  },
-  { key: 'ros',        label: 'ROS Date',     width: 110, minWidth: 90  },
-  { key: 'status',     label: 'Status',       width: 130, minWidth: 110 },
-  { key: 'actions',    label: '',             width: 80,  minWidth: 80,  noResize: true },
+  { key: 'star',      label: '',                    width: 32,  minWidth: 32,  noResize: true },
+  { key: 'po_number', label: 'PO Ref',              width: 140, minWidth: 100 },
+  { key: 'vendor',    label: 'Vendor / Group',      width: 180, minWidth: 120 },
+  { key: 'desc',      label: 'Material Description', width: 220, minWidth: 120, flex: true },
+  { key: 'wbs',       label: 'WBS',                 width: 110, minWidth: 80  },
+  { key: 'owner',     label: 'Owner / Expeditor',   width: 160, minWidth: 120 },
+  { key: 'cdd',       label: 'CDD',                 width: 110, minWidth: 90  },
+  { key: 'ros',       label: 'ROS Date',            width: 110, minWidth: 90  },
+  { key: 'status',    label: 'Status',              width: 130, minWidth: 110 },
+  { key: 'actions',   label: '',                    width: 80,  minWidth: 80,  noResize: true },
 ]
 
 // ─── PO TABLE ROW ─────────────────────────────────────────────────────────────
@@ -1012,7 +1023,10 @@ const POTableRow = ({
       <td
         onClick={e => e.stopPropagation()}   // prevent row drawer open when clicking assign
         style={{ ...tdBase, width: colWidths[5], overflow: 'visible', position: 'relative' }}>
-        <div style={{ fontSize: 12, color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {/* FIX 5: owner name has "PO Owner" tooltip */}
+        <div
+          title="PO Owner"
+          style={{ fontSize: 12, color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {po.owner_name ?? '—'}
         </div>
         {po.expeditor_name ? (
@@ -1024,10 +1038,11 @@ const POTableRow = ({
             {po.expeditor_name}
           </div>
         ) : (
-          /* No expeditor — show clickable "— Assign" link */
+          /* FIX 5: "— Assign" link has tooltip explaining its purpose */
           <div
             onClick={() => { onOpenAssignExp(po); onExpAssignValChange('') }}
-            style={{ fontSize: 10, color: '#2563eb', cursor: 'pointer', userSelect: 'none' }}>
+            style={{ fontSize: 10, color: '#2563eb', cursor: 'pointer', userSelect: 'none' }}
+            title="Assign an expeditor to this PO">
             — Assign
           </div>
         )}
@@ -1078,38 +1093,28 @@ const POTableRow = ({
         )}
       </td>
 
-      {/* ── Milestones (dot progress) ──────────────────────────────────────── */}
-      <td style={{ ...tdBase, width: colWidths[6], textAlign: 'center' }}>
-        <MilestoneDots
-          dots={po.milestone_dots}
-          labels={['PO','FAT','ESD','ETA','ROS']}
-          dates={[po.milestone_po_date, po.milestone_fat_date, po.milestone_esd_date, po.milestone_eta_date, po.milestone_ros_date]}
-        />
-      </td>
-
-      {/* ── CDD ────────────────────────────────────────────────────────────── */}
-      <td style={{ ...tdBase, width: colWidths[7] }}>
+      {/* ── CDD (index 6 after removing milestones) ────────────────────────── */}
+      <td style={{ ...tdBase, width: colWidths[6] }}>
         <span style={{ fontSize: 12, color: po.rag === 'red' ? '#ef4444' : po.rag === 'amber' ? '#d97706' : (dark ? '#94a3b8' : '#475569'), fontFamily: 'JetBrains Mono, monospace' }}>
           {fmtDate(po.cdd)}
         </span>
       </td>
 
-      {/* ── ROS Date ───────────────────────────────────────────────────────── */}
-      <td style={{ ...tdBase, width: colWidths[8] }}>
-        {/* Item 5: show "— not set" in muted text when ROS is blank */}
+      {/* ── ROS Date (index 7) ─────────────────────────────────────────────── */}
+      <td style={{ ...tdBase, width: colWidths[7] }}>
         {po.ros_date
           ? <span style={{ fontSize: 12, color: dark ? '#94a3b8' : '#475569', fontFamily: 'JetBrains Mono, monospace' }}>{fmtDate(po.ros_date)}</span>
           : <span style={{ fontSize: 11, color: '#94a3b8', fontStyle: 'italic' }}>— not set</span>
         }
       </td>
 
-      {/* ── Status ─────────────────────────────────────────────────────────── */}
-      <td style={{ ...tdBase, width: colWidths[9] }}>
+      {/* ── Status (index 8) ───────────────────────────────────────────────── */}
+      <td style={{ ...tdBase, width: colWidths[8] }}>
         <StatusPill status={po.status} label={po.statusLabel} />
       </td>
 
-      {/* ── Actions ────────────────────────────────────────────────────────── */}
-      <td onClick={e => e.stopPropagation()} style={{ ...tdBase, width: colWidths[10], textAlign: 'center' }}>
+      {/* ── Actions (index 9) ──────────────────────────────────────────────── */}
+      <td onClick={e => e.stopPropagation()} style={{ ...tdBase, width: colWidths[9], textAlign: 'center' }}>
         {!po.isLocked && (
           <button
             onClick={() => onApprove(po)}
@@ -1126,13 +1131,35 @@ const POTableRow = ({
 // ─── DRAG HANDLE ──────────────────────────────────────────────────────────────
 // Orange on hover, same as AdminTable.
 
+// ─── FIX 4: Column resize handle — orange #E84E0F bar on hover ───────────────
+// Two layers: a subtle 1px grey divider (always visible) and an 8px hit target
+// that turns into a 3px solid orange bar when hovered. On active drag the body
+// cursor changes to col-resize (handled by useColumnResize hook).
 const DragHandle = ({ onMouseDown, dark }: { onMouseDown: (e: React.MouseEvent) => void; dark: boolean }) => {
   const [hov, setHov] = useState(false)
   return (
     <>
-      <div style={{ position: 'absolute', right: 0, top: 0, width: 1, height: '100%', background: dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)', pointerEvents: 'none' }} />
-      <div onMouseDown={onMouseDown} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
-        style={{ position: 'absolute', right: 0, top: 0, width: 8, height: '100%', cursor: 'col-resize', background: hov ? '#E84E0F' : 'transparent', opacity: hov ? 0.6 : 1, zIndex: 1 }} />
+      {/* 1px subtle column divider — always present, no pointer events */}
+      <div style={{
+        position: 'absolute', right: 0, top: 0,
+        width: hov ? 3 : 1, height: '100%',
+        background: hov ? '#E84E0F' : (dark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)'),
+        pointerEvents: 'none',
+        transition: 'width 100ms, background 100ms',
+        borderRadius: 1,
+      }} />
+      {/* 8px transparent hit target — widens and shows orange on hover */}
+      <div
+        onMouseDown={onMouseDown}
+        onMouseEnter={() => setHov(true)}
+        onMouseLeave={() => setHov(false)}
+        style={{
+          position: 'absolute', right: 0, top: 0,
+          width: 8, height: '100%',
+          cursor: 'col-resize',
+          zIndex: 2,
+        }}
+      />
     </>
   )
 }
@@ -1181,6 +1208,8 @@ const ProcurementInner = ({ dark, projectId, projectName }: ProcurementInnerProp
   const [cpSaving,      setCpSaving]      = useState(false)
   // Item 6: bulk upload modal
   const [showUpload,    setShowUpload]    = useState(false)
+  // FIX 2: clickable summary card filter ('total'|'ongoing'|'complete'|'breached'|'atRisk'|null)
+  const [cardFilter,    setCardFilter]    = useState<string | null>(null)
   // FIX 2: inline expeditor assignment from the table row (separate from drawer)
   const [rowAssignPoId,  setRowAssignPoId]  = useState<number | null>(null)
   const [rowAssignVal,   setRowAssignVal]   = useState('')
@@ -1216,6 +1245,11 @@ const ProcurementInner = ({ dark, projectId, projectName }: ProcurementInnerProp
       if (search.trim())        params.search = search.trim()
       if (rosFrom)              params.cdd_from = rosFrom
       if (rosTo)                params.cdd_to   = rosTo
+      // FIX 2: card filter maps to backend status/rag params
+      if (cardFilter === 'ongoing')  params.status = 'all_active'
+      if (cardFilter === 'complete') params.status = 'completed'
+      if (cardFilter === 'breached') params.rag    = 'red'
+      if (cardFilter === 'atRisk')   params.rag    = 'amber'
 
       const [statsRes, posRes] = await Promise.all([
         axios.get(`${API}/procurement/${projectId}/stats`),
@@ -1228,15 +1262,15 @@ const ProcurementInner = ({ dark, projectId, projectName }: ProcurementInnerProp
       const er = e as { response?: { data?: { error?: string } }; message?: string }
       setError(er.response?.data?.error ?? er.message ?? 'Failed to load POs')
     } finally { setLoading(false) }
-  }, [projectId, activeTab, criticalOnly, search, rosFrom, rosTo, page])
+  }, [projectId, activeTab, criticalOnly, search, rosFrom, rosTo, page, cardFilter])
 
-  useEffect(() => { setPage(1); load(1) }, [activeTab, criticalOnly, search, rosFrom, rosTo])
+  useEffect(() => { setPage(1); load(1) }, [activeTab, criticalOnly, search, rosFrom, rosTo, cardFilter])
   useEffect(() => { load() }, [load])
 
   // ── Reset all filters ────────────────────────────────────────────────────────
   const resetFilters = () => {
     setSearch(''); setCriticalOnly(false); setRosFrom(''); setRosTo(''); setPage(1)
-    setActiveTab('all')
+    setActiveTab('all'); setCardFilter(null)
   }
 
   // ── Critical path toggle (star click) ────────────────────────────────────────
@@ -1317,7 +1351,7 @@ const ProcurementInner = ({ dark, projectId, projectName }: ProcurementInnerProp
     const rows = pos.map(p => [
       p.po_number, p.supplier_name ?? p.vendor_name, p.group_category ?? '',
       p.description ?? '', p.wbs_code ?? '', p.owner_name ?? '', p.expeditor_name ?? '',
-      String(p.milestone_dots.filter(d => d === 'complete').length),
+      String(p.milestone_po_date || p.milestone_fat_date || p.milestone_ros_date ? 'set' : 'none'),
       p.cdd ?? '', p.ros_date ?? '', p.statusLabel,
       String(p.value ?? ''), p.currency,
     ])
@@ -1353,8 +1387,20 @@ const ProcurementInner = ({ dark, projectId, projectName }: ProcurementInnerProp
           <button onClick={exportCSV} style={{ padding: '6px 12px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: dark ? '#0f172a' : '#f4f7fb', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>↓ Export</button>
           {/* ─── Item 6: Template download ─────────────────────────────────── */}
           <button
-            onClick={() => window.open(`${API}/procurement/template/po-upload`, '_blank')}
-            title="Download PO upload template"
+            onClick={async () => {
+              // FIX 3: use authenticated axios fetch + blob URL so the file downloads
+              // rather than opening in a browser tab (window.open navigates to the URL).
+              try {
+                const res = await axios.get(`${API}/procurement/template/po-upload`, { responseType: 'blob' })
+                const url = URL.createObjectURL(new Blob([res.data], {
+                  type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                }))
+                const a = document.createElement('a')
+                a.href = url; a.download = 'PO_Upload_Template.xlsx'; a.click()
+                URL.revokeObjectURL(url)
+              } catch { addToast('error', 'Template download failed') }
+            }}
+            title="Download PO upload template (.xlsx)"
             style={{ padding: '6px 12px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: dark ? '#0f172a' : '#f4f7fb', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
             ↓ Template
           </button>
@@ -1369,11 +1415,22 @@ const ProcurementInner = ({ dark, projectId, projectName }: ProcurementInnerProp
 
       {/* ── Summary cards (5-col) ─────────────────────────────────────────────── */}
       <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-        <StatCard dark={dark} label="Total POs"   value={stats?.total    ?? '—'} />
-        <StatCard dark={dark} label="Ongoing"     value={stats?.ongoing  ?? '—'} />
-        <StatCard dark={dark} label="Complete"    value={stats?.complete ?? '—'} accent="#2E7D32" />
-        <StatCard dark={dark} label="Breached"    value={stats?.breached ?? '—'} accent={stats && stats.breached > 0 ? '#C62828' : undefined} />
-        <StatCard dark={dark} label="At Risk"     value={stats?.atRisk   ?? '—'} accent={stats && stats.atRisk   > 0 ? '#b45309' : undefined} />
+        {/* FIX 2: each card is clickable — sets cardFilter; clicking active card clears it */}
+        <StatCard dark={dark} label="Total POs" value={stats?.total ?? '—'}
+          active={cardFilter === 'total'}
+          onClick={() => { setCardFilter(cardFilter === 'total' ? null : 'total'); setActiveTab('all') }} />
+        <StatCard dark={dark} label="Ongoing" value={stats?.ongoing ?? '—'}
+          active={cardFilter === 'ongoing'}
+          onClick={() => { setCardFilter(cardFilter === 'ongoing' ? null : 'ongoing'); setActiveTab('all') }} />
+        <StatCard dark={dark} label="Complete" value={stats?.complete ?? '—'} accent={cardFilter === 'complete' ? undefined : '#2E7D32'}
+          active={cardFilter === 'complete'}
+          onClick={() => { setCardFilter(cardFilter === 'complete' ? null : 'complete'); setActiveTab('all') }} />
+        <StatCard dark={dark} label="Breached" value={stats?.breached ?? '—'} accent={stats && stats.breached > 0 && cardFilter !== 'breached' ? '#C62828' : undefined}
+          active={cardFilter === 'breached'}
+          onClick={() => { setCardFilter(cardFilter === 'breached' ? null : 'breached'); setActiveTab('all') }} />
+        <StatCard dark={dark} label="At Risk" value={stats?.atRisk ?? '—'} accent={stats && stats.atRisk > 0 && cardFilter !== 'atRisk' ? '#b45309' : undefined}
+          active={cardFilter === 'atRisk'}
+          onClick={() => { setCardFilter(cardFilter === 'atRisk' ? null : 'atRisk'); setActiveTab('all') }} />
       </div>
 
       {/* ── View tabs ──────────────────────────────────────────────────────────── */}

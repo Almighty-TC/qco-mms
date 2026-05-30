@@ -281,7 +281,7 @@ router.get('/:projectId/pos', async (req, res) => {
 
     const {
       status, supplier_id, wbs_id, is_critical_path, expeditor_id,
-      cdd_from, cdd_to, search,
+      cdd_from, cdd_to, search, rag,
       sort_col = 'po.created_at', sort_dir = 'desc',
     } = req.query
 
@@ -295,12 +295,28 @@ router.get('/:projectId/pos', async (req, res) => {
       params.push(req.user.supplier_id)
     }
 
+    // ── Status tab filter ─────────────────────────────────────────────────────
     if (status === 'approved') {
       filters.push('po.is_locked = 1')
     } else if (status === 'pending') {
       filters.push("po.status IN ('rfq','loa','pending_approval') AND po.is_locked = 0")
     } else if (status === 'completed') {
       filters.push("po.status IN ('closed','cancelled')")
+    } else if (status === 'all_active') {
+      // FIX 2: "Ongoing" card — not closed, not cancelled
+      filters.push("po.status NOT IN ('closed','cancelled')")
+    }
+
+    // ── FIX 2: RAG filter from summary card click (breached=red, atRisk=amber) ──
+    // These filters operate on the computed CDD across po_lines.
+    if (rag === 'red') {
+      // Breached: CDD is in the past and PO not complete
+      filters.push("po.status NOT IN ('closed','cancelled')")
+      filters.push('MIN(l.cdd) IS NOT NULL AND MIN(l.cdd) < CURDATE()')
+    } else if (rag === 'amber') {
+      // At Risk: CDD within project threshold, not complete
+      filters.push("po.status NOT IN ('closed','cancelled')")
+      filters.push(`MIN(l.cdd) IS NOT NULL AND MIN(l.cdd) >= CURDATE() AND DATEDIFF(MIN(l.cdd), CURDATE()) <= ${atRiskDays}`)
     }
 
     if (supplier_id)        { filters.push('po.supplier_id = ?');    params.push(Number(supplier_id)) }
@@ -373,10 +389,9 @@ router.get('/:projectId/pos', async (req, res) => {
       LIMIT ? OFFSET ?
     `, [...params, limit, offset])
 
-    const today = new Date(); today.setHours(0, 0, 0, 0)
+    // ── FIX 1: milestone_dots removed — milestones belong in Expediting ─────────
+    // Milestone dates still included so the drawer can render the milestone section.
     const data = rows.map(r => {
-      const milestones = [r.milestone_po_date, r.milestone_fat_date, r.milestone_esd_date, r.milestone_eta_date, r.milestone_ros_date]
-      const msDots     = milestones.map(d => !d ? 'empty' : new Date(d) <= today ? 'complete' : 'pending')
       return {
         id: r.id, po_number: r.po_number, po_name: r.po_name,
         description: r.description, vendor_name: r.vendor_name,
@@ -393,7 +408,6 @@ router.get('/:projectId/pos', async (req, res) => {
         line_count: r.line_count,
         cdd:  r.earliest_cdd,
         rag:  computeRag(r.earliest_cdd, r.status, atRiskDays),
-        milestone_dots: msDots,
         milestone_po_date: r.milestone_po_date, milestone_fat_date: r.milestone_fat_date,
         milestone_esd_date: r.milestone_esd_date, milestone_eta_date: r.milestone_eta_date,
         milestone_ros_date: r.milestone_ros_date,
