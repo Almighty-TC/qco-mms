@@ -439,3 +439,86 @@ export const COMING_SOON_HELP: HelpSection[] = [
     </>,
   },
 ]
+
+// ═══════════════════════════════════════════════════════════════
+// MTO REGISTER HELP
+// ═══════════════════════════════════════════════════════════════
+export const MTO_REGISTER_HELP: HelpSection[] = [
+  {
+    title: 'What is the MTO Register?',
+    content: <>
+      {P(<>The <strong>Material Take-Off (MTO) Register</strong> is the master list of all material and equipment requirements for the project. Each MTO document covers a discipline area (e.g. Mechanical & Piping, Structural Steel).</>)}
+      {P(<>MTOs progress through revisions as the design matures. Procurement uses the current MTO revision to raise RFQs and Purchase Orders.</>)}
+      {Tip('Superseded MTOs are shown at reduced opacity and cannot be viewed in detail. They remain for auditability.')}
+    </>,
+  },
+  {
+    title: 'Reading the line items table',
+    content: <>
+      {P(<>Each row represents a single material item. Key columns:</>)}
+      {Steps([
+        <><strong>LINE</strong> — unique identifier within this MTO (e.g. L-001). Displayed in JetBrains Mono.</>,
+        <><strong>WBS</strong> — the WBS code this item is charged to.</>,
+        <><strong>QTY / UOM</strong> — required quantity and unit of measure.</>,
+        <><strong>ROS</strong> — Required On Site date.</>,
+        <><strong>INSP</strong> — Inspection Class (I, II, or III).</>,
+        <><strong>VDRL</strong> — ticked when a Vendor Data Requirements List submission is required.</>,
+        <><strong>PO REF</strong> — filled once a Purchase Order is raised against this line.</>,
+      ])}
+    </>,
+  },
+  {
+    title: 'Line status and locking',
+    content: <>
+      {P(<>Each line has one of three statuses:</>)}
+      {Steps([
+        <><strong>Not started</strong> (grey) — no procurement action yet.</>,
+        <><strong>RFQ</strong> (blue) — a Request for Quotation has been issued.</>,
+        <><strong>PO Raised</strong> (green) — a Purchase Order exists. The line is locked.</>,
+      ])}
+      {Warning('Lines with status PO Raised are locked. Only the ROS date and VDRL flag can be edited. All other fields are read-only to protect the committed scope.')}
+    </>,
+  },
+  {
+    title: 'Revisions and version history',
+    content: <>
+      {P(<>Each MTO has a current revision (A, B, C…). The <strong>Version History</strong> tab shows all revisions with the upload date, uploader, line count and revision notes.</>)}
+      {P(<>When a new revision is uploaded, the previous revision is retained in the database. All line items for past revisions remain queryable via the Lines tab revision selector.</>)}
+    </>,
+  },
+  {
+    title: 'Comparing revisions (Rev Diff)',
+    content: <>
+      {P(<>The <strong>Rev Diff</strong> tab lets you compare any two revisions side-by-side.</>)}
+      {Steps([
+        <>Select the <strong>From</strong> revision (older).</>,
+        <>Select the <strong>To</strong> revision (newer).</>,
+        <>The table shows Added, Modified, and Deleted lines with before/after values highlighted.</>,
+      ])}
+      {Tip('Use Rev Diff to understand exactly what changed between revisions before issuing a Variation Request.')}
+    </>,
+  },
+  {
+    title: 'Creating a new MTO',
+    content: <>
+      {P(<>Click <strong>+ New MTO</strong> in the register list view.</>)}
+      {Steps([
+        <>Step 1: choose <strong>Create manually</strong> or <strong>Upload file</strong>.</>,
+        <>Step 2: enter the MTO name, reference (e.g. MTO-PIL-004), revision letter, owner and description.</>,
+        <>Step 3 (manual): add at least one line item. Each line needs a description.</>,
+        <>Click <strong>Create MTO</strong> to save.</>,
+      ])}
+    </>,
+  },
+  {
+    title: 'Uploading a new revision',
+    content: <>
+      {P(<>From the MTO detail screen, click <strong>Upload Rev {'{next}'}</strong> in the top-right corner.</>)}
+      {P(<>The file must be XLSX or CSV with columns: <strong>line_number, wbs_code, description, quantity, uom, ros_date, inspection_class, vdrl_required, po_ref, status</strong>.</>)}
+      {Warning('Uploading a new revision does not delete previous revisions. Lines from older revisions remain in the database and are accessible via the Version History tab.')}
+    </>,
+  },
+]
+
+// ─── MTO DETAIL HELP ─────────────────────────────────────────
+export const MTO_DETAIL_HELP: HelpSection[] = MTO_REGISTER_HELP

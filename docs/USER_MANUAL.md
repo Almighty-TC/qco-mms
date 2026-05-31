@@ -740,3 +740,89 @@ The meta grid (always visible above the tabs) shows:
 | **PO Placed** | PO award date |
 | **FAT Date** | Factory Acceptance Test date |
 | **Est. Arrival** | Estimated arrival date |
+
+---
+
+## 5. MTO Register
+
+The **MTO Register** captures the engineering Material Take-Off — the list of all materials required for the project, grouped into MTO packages by discipline. MTO lines feed into Procurement (Purchase Orders).
+
+### 5.1 MTO Register List
+
+**Navigation:** Left sidebar → MTO Register (after selecting a project)
+
+The register lists all MTO packages for the project. Each row shows:
+
+| Column | Description |
+|--------|-------------|
+| **MTO / Reference** | MTO name (bold) + reference code (mono) |
+| **Latest Rev** | Current revision letter (e.g. Rev C) |
+| **Lines** | Count of line items in the current revision |
+| **Last Updated** | Date of last change |
+| **Owner** | Responsible engineer |
+| **View** | Opens the MTO detail screen |
+
+**Superseded MTOs** appear at 50% opacity with a grey "Superseded" label instead of the View button.
+
+### 5.2 Creating a New MTO
+
+Click **+ New MTO** (top-right). Choose a method:
+
+**Option A — Upload MTO file (.xlsx, .xls, .csv):**
+1. Drag-and-drop or select a file
+2. Enter MTO name, reference, initial revision, owner
+3. Click **↑ Import MTO** — lines are auto-mapped from the file
+
+**Option B — Create manually:**
+1. Enter MTO name (required) · Reference (required) · Initial revision (A–F) · Owner · Description
+2. Click **Next — Add lines**
+3. Add line items: WBS code · Description · Qty · UOM · ROS date · Inspection class · VDRL required
+4. At least 1 line required before saving
+5. Click **✓ Create MTO**
+
+### 5.3 MTO Detail Screen
+
+Click **View →** on any active MTO to open the detail screen.
+
+**Header shows:** MTO name · Reference · Current revision · Line count · Last updated · Owner
+
+**Top-right buttons:**
+- **↓ Export** — downloads all lines as XLSX
+- **↑ Upload Rev D** — uploads a new revision (letter auto-increments)
+
+### 5.4 Tabs
+
+**Line Items** — The full list of material requirements for the current revision.
+
+Filter pills: **All · PO Raised · RFQ · Not started** — show live counts and filter the table.
+
+Table columns: LINE · WBS · DESCRIPTION · QTY · UOM · ROS · INSP (inspection class) · VDRL · PO REF · STATUS
+
+Status pills:
+- 🟢 **PO Raised** — a PO has been raised for this line
+- 🔵 **RFQ** — request for quote in progress
+- ⚪ **Not started** — not yet actioned
+
+🔒 icon appears when a line is locked (status = PO Raised). Locked lines can only have ROS date and VDRL updated — description, qty, WBS and UOM are protected.
+
+**Version History** — Lists all revisions with uploader, date, notes and line count. Expandable rows show a summary of changes vs the previous revision.
+
+**Rev Diff** — Compare any two revisions side-by-side.
+1. Select **From** and **To** revisions using the dropdowns
+2. Summary badges show: Added (green) · Modified (amber) · Deleted (red) · Unchanged
+3. Table shows only changed lines with the CHANGE column highlighting:
+   - Qty changes: old value strikethrough (red) → new value (green)
+   - Description changes: old strikethrough → new text
+   - ROS date changes: old date → new date
+   - New lines: green "New line" pill
+   - Removed lines: red "Removed" pill
+
+**Variation Flags** — Tracks variation flags raised against MTO lines. Coming soon when Variations module is built.
+
+### 5.5 Uploading a New Revision
+
+1. Click **↑ Upload Rev {letter}** in the MTO detail header
+2. Select a CSV or XLSX file containing the updated lines
+3. Enter revision notes (optional)
+4. Confirm — the new revision becomes the current revision
+5. The previous revision is retained for comparison in Rev Diff

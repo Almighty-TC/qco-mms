@@ -13,6 +13,8 @@ import { FoundWBSScreen } from './pages/FoundWBSScreen'
 import { FoundCommodityScreen } from './pages/FoundCommodityScreen'
 import { FoundEquipmentScreen } from './pages/FoundEquipmentScreen'
 import { ExpeditingScreen } from './pages/ExpeditingScreen'
+import { MTOListScreen } from './pages/MTOListScreen'
+import { MTODetailScreen } from './pages/MTODetailScreen'
 import { ForcePasswordChange } from './components/ForcePasswordChange'
 import { ChangePasswordModal } from './components/ChangePasswordModal'
 import './App.css'
@@ -22,7 +24,7 @@ import './App.css'
 // 'admin' enforces role === 'admin'; 'procurement' is project-scoped.
 // ─── ROUTING — state-based, no router library ─────────────────────────────────
 // 'po-detail' is Phase 3 PO Detail Screen — full dedicated screen.
-type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting'
+type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'mto-list' | 'mto-detail'
 
 // ─── PROJECT TYPE ───────────────────────────────────────────
 // Mirrors the API response shape. Snake_case DB columns (total_pos, at_risk)
@@ -383,7 +385,7 @@ const Nav = ({
           </div>
         )}
 
-        {navItem('MTO Register', '📋')}
+        {navItem('MTO Register', '📋', 'mto-list')}
         {/* ─── PROCUREMENT — project-scoped module ───────────── */}
         {navItem('Procurement', '🧾', 'procurement')}
         {/* ─── EXPEDITING — VDRL now lives inside Expediting ────
@@ -691,7 +693,8 @@ function App() {
   const [selectedProjectName, setSelectedProjectName] = useState<string>('')
   // ─── PO Detail Screen (Phase 3) ─────────────────────────────────────────
   // selectedPOId tracks which PO the user navigated to in Phase 3.
-  const [selectedPOId, setSelectedPOId] = useState<number | null>(null)
+  const [selectedPOId,  setSelectedPOId]  = useState<number | null>(null)
+  const [selectedMTOId, setSelectedMTOId] = useState<number | null>(null)
   const [showChangePw,  setShowChangePw]  = useState(false)
   const [showProfile,   setShowProfile]   = useState(false)
 
@@ -862,6 +865,8 @@ function App() {
               : page === 'foundational-commodities' ? `Foundational · Commodity Library · ${selectedProjectName}`
               : page === 'foundational-equipment' ? `Foundational · Equipment List · ${selectedProjectName}`
               : page === 'expediting' ? `Expediting · ${selectedProjectName}`
+              : page === 'mto-list'   ? `MTO Register · ${selectedProjectName}`
+              : page === 'mto-detail' ? `MTO Detail · ${selectedProjectName}`
               : 'Dashboard'}
             </span>
           </div>
@@ -1112,6 +1117,30 @@ function App() {
           {page === 'expediting' && selectedProjectId && (
             <ExpeditingScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
               onBack={() => setPage('dashboard')} />
+          )}
+
+          {/* ─── MTO REGISTER ────────────────────────────────────
+              List of all MTO documents for the selected project. */}
+          {page === 'mto-list' && selectedProjectId && (
+            <MTOListScreen
+              dark={dark}
+              projectId={selectedProjectId}
+              projectName={selectedProjectName}
+              onBack={() => setPage('dashboard')}
+              onViewMTO={id => { setSelectedMTOId(id); setPage('mto-detail') }}
+            />
+          )}
+
+          {/* ─── MTO DETAIL ──────────────────────────────────────
+              Detail view: line items, version history, rev diff. */}
+          {page === 'mto-detail' && selectedProjectId && selectedMTOId && (
+            <MTODetailScreen
+              dark={dark}
+              projectId={selectedProjectId}
+              projectName={selectedProjectName}
+              mtoId={selectedMTOId}
+              onBack={() => setPage('mto-list')}
+            />
           )}
         </div>
       </div>

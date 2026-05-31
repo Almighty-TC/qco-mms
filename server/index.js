@@ -39,6 +39,10 @@ app.use('/api/admin', authMiddleware, require('./routes/admin'))
 app.use('/api/procurement', authMiddleware, require('./routes/procurement'))
 app.use('/api/foundational', require('./routes/foundational'))
 
+// ─── MTO REGISTER ROUTES ─────────────────────────────────────
+// Material Take-Off register, line items, revisions and diff.
+app.use('/api/mto', require('./routes/mto'))
+
 // ─── START SERVER ───────────────────────────────────────────
 const PORT = process.env.PORT || 3001
 app.listen(PORT, () => {
