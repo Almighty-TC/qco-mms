@@ -290,6 +290,26 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
             ))}
           </div>
 
+          {/* FIX 2 — Supplier & Logistics strip */}
+          <div style={{
+            background: '#f0f4ff', borderRadius: 8, padding: '10px 16px',
+            display: 'flex', gap: 24, flexWrap: 'wrap', marginBottom: 16, fontSize: 12,
+          }}>
+            {[
+              { label: 'SUPPLIER',      value: po.vendor_name || po.vendor_display || '—' },
+              { label: 'CONTACT',       value: (po as any).supplier_contact || '—' },
+              { label: 'PICK UP FROM',  value: (po as any).handover_point || (po as any).supplier_address || '—' },
+              { label: 'DELIVER TO',    value: (po as any).handover_point || '—' },
+              { label: 'FORWARDER',     value: (po as any).forwarder_name || '— Not assigned' },
+              { label: 'INCOTERMS',     value: po.incoterms || '—' },
+            ].map(({ label, value }) => (
+              <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</span>
+                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: '#0f172a' }}>{value}</span>
+              </div>
+            ))}
+          </div>
+
           {/* Key dates strip */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginBottom: 16 }}>
             {[
@@ -306,9 +326,8 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
             ))}
           </div>
 
-          {/* Milestone timeline summary */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ fontSize: 11, color: sub }}>Milestone progress:</span>
+          {/* Milestone timeline summary — no "Milestone progress:" prefix (wastes space) */}
+          <div style={{ width: '100%' }}>
             <MilestoneTimeline milestones={po.milestones} size="lg" showDates={true} />
           </div>
         </div>
