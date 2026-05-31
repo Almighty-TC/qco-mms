@@ -734,10 +734,19 @@ router.delete('/:projectId/commodities/:id', async (req, res) => {
 router.get('/:projectId/equipment', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
+    // ─── BUG-9: override status with computed_status from po_lines.tag_number ─
     const [rows] = await db.query(
-      `SELECT e.*,
+      `SELECT e.id, e.project_id, e.tag, e.equipment_type, e.wbs_code, e.wbs_node_id,
+              e.description, e.area_location, e.criticality, e.spec, e.trace_class,
+              e.po_reference, e.vendor, e.weight_kg, e.size_lwh, e.notes,
+              e.created_by, e.created_at, e.updated_at,
               (SELECT COUNT(*) FROM foundational_certificates fc
-               WHERE fc.entity_type='equipment' AND fc.entity_id=e.id) AS cert_count
+               WHERE fc.entity_type='equipment' AND fc.entity_id=e.id) AS cert_count,
+              CASE WHEN EXISTS(
+                SELECT 1 FROM po_lines pl
+                JOIN purchase_orders po ON po.id = pl.po_id
+                WHERE po.project_id = e.project_id AND pl.tag_number = e.tag
+              ) THEN 'PO raised' ELSE e.status END AS status
        FROM equipment_list e
        WHERE e.project_id=?
        ORDER BY e.tag`,

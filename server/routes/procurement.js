@@ -1030,26 +1030,25 @@ router.get('/:projectId/items/search', async (req, res) => {
     const like = `%${q}%`
     const out  = []
 
-    // Search commodity library (table may not exist until Foundational is built)
+    // ─── BUG-6: search commodity_library and equipment_list (correct table names) ─
     try {
       const [rows] = await db.query(`
-        SELECT 'commodity' AS type, code, name, uom
-        FROM   commodities
-        WHERE  project_id = ? AND is_active = 1
+        SELECT 'commodity' AS type, code, name AS description, uom
+        FROM   commodity_library
+        WHERE  project_id = ? AND status = 'active'
           AND  (code LIKE ? OR name LIKE ?)
         ORDER  BY code LIMIT 10
       `, [pid, like, like])
       out.push(...rows)
     } catch { /* table not yet created */ }
 
-    // Search equipment list
     try {
       const [rows] = await db.query(`
-        SELECT 'equipment' AS type, tag_number AS code, description AS name, uom
-        FROM   equipment_items
-        WHERE  project_id = ? AND is_active = 1
-          AND  (tag_number LIKE ? OR description LIKE ?)
-        ORDER  BY tag_number LIMIT 10
+        SELECT 'equipment' AS type, tag AS code, description, NULL AS uom
+        FROM   equipment_list
+        WHERE  project_id = ?
+          AND  (tag LIKE ? OR description LIKE ?)
+        ORDER  BY tag LIMIT 10
       `, [pid, like, like])
       out.push(...rows)
     } catch { /* table not yet created */ }

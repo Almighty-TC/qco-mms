@@ -70,6 +70,16 @@ function fmtDate(s: string | null | undefined) {
   return new Date(s).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
+// ─── BUG-3: diff value display — format date fields instead of raw ISO ────────
+const isDateField = (f: string) => f.includes('date') || f.includes('_at')
+const displayVal = (field: string, val: unknown): string => {
+  if (isDateField(field) && val) {
+    try { return new Date(String(val)).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' }) }
+    catch { return String(val) }
+  }
+  return val == null ? '—' : String(val)
+}
+
 // ─── STATUS PILL ─────────────────────────────────────────────────────────────
 const LinePill = ({ s }: { s: MTOLine['status'] }) => {
   const map = {
@@ -710,11 +720,11 @@ const RevDiffTab = ({
                         <span key={field} style={{ fontSize: 11, fontFamily: 'IBM Plex Sans, sans-serif' }}>
                           <span style={{ color: sub }}>{fieldLabel[field] ?? field}: </span>
                           <span style={{ color: '#b91c1c', textDecoration: 'line-through', fontFamily: 'JetBrains Mono, monospace' }}>
-                            {fv == null ? '—' : String(fv)}
+                            {displayVal(field, fv)}
                           </span>
                           {' → '}
                           <span style={{ color: '#15803d', fontFamily: 'JetBrains Mono, monospace' }}>
-                            {tv == null ? '—' : String(tv)}
+                            {displayVal(field, tv)}
                           </span>
                         </span>
                       ))}

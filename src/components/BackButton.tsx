@@ -2,10 +2,10 @@
 // Shown left of breadcrumb on every project screen.
 // Uses window.history.back() — falls back to onFallback() if empty.
 export const BackButton = ({ onFallback, dark }: { onFallback: () => void; dark: boolean }) => {
-  const handleClick = () => {
-    if (window.history.length > 1) window.history.back()
-    else onFallback()
-  }
+  // ─── BUG-7: SPA uses state-based routing — always call onFallback() ─────────
+  // window.history.back() changes the URL but not React state, so the page
+  // never navigates in-app. onFallback() is the correct SPA navigation handler.
+  const handleClick = () => onFallback()
   return (
     <button
       onClick={handleClick}

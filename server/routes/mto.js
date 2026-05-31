@@ -367,16 +367,32 @@ router.delete('/:projectId/:mtoId/lines/:lineId', async (req, res) => {
 //   line_number, wbs_code, description, quantity, uom, ros_date,
 //   inspection_class, vdrl_required, po_ref, status
 router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+  // ─── BUG-1 & BUG-2: extract revision early for duplicate check + dry-run ─────
+  const revision = req.body.revision
+  const mtoId    = Number(req.params.mtoId)
   try {
     const [[mto]] = await db.query(
       `SELECT * FROM mto_registers WHERE id = ? AND project_id = ?`,
-      [req.params.mtoId, req.params.projectId]
+      [mtoId, req.params.projectId]
     )
     if (!mto) return res.status(404).json({ error: 'MTO not found' })
 
-    const newRev   = req.body.revision || nextRevision(mto.current_revision)
-    const notes    = req.body.notes    || `Rev ${newRev} upload`
+    const newRev = revision || nextRevision(mto.current_revision)
+    const notes  = req.body.notes || `Rev ${newRev} upload`
+    const dryRun = req.query.dryRun === 'true'
+
+    // ─── BUG-1: reject duplicate revision letter before any file parsing ──────
+    const [[existing]] = await db.query(
+      'SELECT id FROM mto_revisions WHERE mto_id = ? AND revision = ?',
+      [mtoId, newRev]
+    )
+    if (existing) {
+      return res.status(409).json({
+        error: `Revision ${newRev} already exists for this MTO. Upload a new revision letter.`
+      })
+    }
+
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
 
     // ─── Parse workbook ───────────────────────────────────────────
     const wb   = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true })
@@ -392,6 +408,48 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
       for (const [k, v] of Object.entries(row)) n[norm(k)] = v
       return n
     })
+
+    // ─── BUG-2: locked-line conflict detection ────────────────────
+    const [lockedLines] = await db.query(
+      'SELECT line_number, description, quantity, uom, wbs_code FROM mto_lines WHERE mto_id = ? AND revision = ? AND status = ? AND is_deleted = 0',
+      [mtoId, mto.current_revision, 'po-raised']
+    )
+    const uploadMap = new Map(lines.map(l => [String(l.line_number), l]))
+    const conflicts = []
+    for (const locked of lockedLines) {
+      const uploaded = uploadMap.get(String(locked.line_number))
+      if (!uploaded) continue
+      const changed = {}
+      if (String(uploaded.quantity ?? '') !== String(locked.quantity ?? '')) changed.quantity = { locked: locked.quantity, uploaded: uploaded.quantity }
+      if (String(uploaded.description ?? '') !== String(locked.description ?? '')) changed.description = { locked: locked.description, uploaded: uploaded.description }
+      if (String(uploaded.uom ?? '') !== String(locked.uom ?? '')) changed.uom = { locked: locked.uom, uploaded: uploaded.uom }
+      if (String(uploaded.wbs_code ?? '') !== String(locked.wbs_code ?? '')) changed.wbs_code = { locked: locked.wbs_code, uploaded: uploaded.wbs_code }
+      if (Object.keys(changed).length > 0) conflicts.push({ line_number: locked.line_number, changes: changed })
+    }
+
+    // Summary for dry-run or conflict reporting
+    const existingLineNums = new Set(lockedLines.map(l => String(l.line_number)))
+    const uploadedLineNums = new Set(lines.map(l => String(l.line_number)))
+    const summary = {
+      totalLines:    lines.length,
+      newLines:      lines.filter(l => !existingLineNums.has(String(l.line_number))).length,
+      modifiedLines: conflicts.length,
+      deletedLines:  0,
+      conflicts:     conflicts.length,
+    }
+
+    // ─── BUG-2: dry-run returns preview without inserting ─────────
+    if (dryRun) {
+      return res.json({ dryRun: true, summary, conflicts })
+    }
+
+    // ─── BUG-2: conflict guard — block upload if locked lines would change ─────
+    if (conflicts.length > 0) {
+      return res.status(422).json({
+        error: `${conflicts.length} locked (PO-raised) line(s) would be modified. Resolve conflicts first.`,
+        conflicts,
+      })
+    }
 
     // ─── Insert new revision record ───────────────────────────────
     await db.query(

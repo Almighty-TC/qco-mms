@@ -712,6 +712,9 @@ const NewPOWizard = ({ dark, projectId, suppliers, uoms, users, wbsNodes, onClos
   const [step, setStep]   = useState(1)
   const [saving, setSaving] = useState(false)
   const [err, setErr]     = useState('')
+  // ─── BUG-5: per-field validation errors for Step 1 ─────────────────────────
+  const [wbsErr,   setWbsErr]   = useState('')
+  const [incoErr,  setIncoErr]  = useState('')
 
   // ── Step 1 ──
   const [poNumber,    setPoNumber]    = useState('')
@@ -757,7 +760,14 @@ const NewPOWizard = ({ dark, projectId, suppliers, uoms, users, wbsNodes, onClos
   }
 
   const next = () => {
-    if (step === 1) { const e = validateStep1(); if (e) { setErr(e); return } }
+    if (step === 1) {
+      // ─── BUG-5: validate base fields then WBS + Incoterms ─────────────────
+      const e = validateStep1(); if (e) { setErr(e); return }
+      let ok = true
+      if (!wbsCode.trim()) { setWbsErr('WBS is required'); ok = false } else setWbsErr('')
+      if (!incoterms.trim()) { setIncoErr('Incoterms is required'); ok = false } else setIncoErr('')
+      if (!ok) return
+    }
     setErr(''); setStep(s => s + 1)
   }
 
@@ -871,19 +881,23 @@ const NewPOWizard = ({ dark, projectId, suppliers, uoms, users, wbsNodes, onClos
           </div>
           <div style={{ display: 'flex', gap: 12 }}>
             <Field label="PO Value" half><input value={value} onChange={e => setValue(e.target.value)} type="number" min="0" step="0.01" placeholder="0.00" style={{ ...inp(dark), fontFamily: 'JetBrains Mono, monospace' }} /></Field>
-            <Field label="Incoterms" half>
-              <select value={incoterms} onChange={e => setIncoterms(e.target.value)} style={inp(dark)}>
+            <Field label="Incoterms *" half>
+              <select value={incoterms} onChange={e => { setIncoterms(e.target.value); if (e.target.value) setIncoErr('') }}
+                style={{ ...inp(dark), border: incoErr ? '1px solid #ef4444' : undefined }}>
                 <option value="">— Select —</option>
                 {INCO_TERMS.map(t => <option key={t} value={t}>{t}</option>)}
               </select>
+              {incoErr && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 4 }}>{incoErr}</div>}
             </Field>
           </div>
           <div style={{ display: 'flex', gap: 12 }}>
-            <Field label="WBS" half>
-              <select value={wbsCode} onChange={e => setWbsCode(e.target.value)} style={inp(dark)}>
+            <Field label="WBS *" half>
+              <select value={wbsCode} onChange={e => { setWbsCode(e.target.value); if (e.target.value) setWbsErr('') }}
+                style={{ ...inp(dark), border: wbsErr ? '1px solid #ef4444' : undefined }}>
                 <option value="">— Select WBS —</option>
                 {wbsNodes.map(w => <option key={w.id} value={w.code}>{w.code} — {w.description}</option>)}
               </select>
+              {wbsErr && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 4 }}>{wbsErr}</div>}
             </Field>
             {/* Item 5: ROS date is now optional */}
             <Field label="Required on Site (ROS)" half>

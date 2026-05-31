@@ -826,3 +826,25 @@ Status pills:
 3. Enter revision notes (optional)
 4. Confirm — the new revision becomes the current revision
 5. The previous revision is retained for comparison in Rev Diff
+
+---
+
+### 5.6 MTO Upload — Conflict Detection
+
+When uploading a new MTO revision, the system automatically checks for conflicts before committing the data.
+
+**Dry-run preview:** When you select a file in the Upload modal, the system immediately runs a preview (without inserting any data) and shows:
+- Total lines in the uploaded file
+- New lines (not in the current revision)
+- Modified lines (changed description, quantity, UOM or WBS)
+- Deleted lines (in current revision but not in the uploaded file)
+
+**Locked line conflicts:** If any line has status "PO Raised" (a PO has been committed against it) and the uploaded file changes that line's quantity, description, UOM or WBS code — a conflict warning appears:
+
+> ⚠ "Line L-001: PO-2024-001 raised — Qty changing from 1 to 3. Raise a Variation Request instead."
+
+When conflicts exist, the Upload button is **disabled**. You must either:
+1. Fix the uploaded file to leave locked lines unchanged, OR
+2. Raise a Variation Request through Procurement for the locked line
+
+**Duplicate revision protection:** If you attempt to upload a revision letter that already exists (e.g. Rev C when Rev C already exists), the system returns an error: "Revision C already exists — upload a new revision letter." The Upload Rev button in the header always shows the next available letter.
