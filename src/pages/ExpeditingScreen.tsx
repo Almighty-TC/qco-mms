@@ -46,11 +46,14 @@ const RAG_COLORS: Record<string, string> = {
 const RAG_LABELS: Record<string, string> = {
   complete: 'Complete', red: 'Breached', amber: 'At Risk', blue: 'On Track', grey: 'Not Started'
 }
-const STATUS_PILLS: Record<string, { bg: string; color: string; label: string }> = {
-  'po-raised': { bg: 'rgba(37,99,235,0.1)',  color: '#1d4ed8', label: 'PO Raised' },
-  'active':    { bg: 'rgba(34,197,94,0.1)',   color: '#16a34a', label: 'Active' },
-  'closed':    { bg: 'rgba(148,163,184,0.1)', color: '#64748b', label: 'Closed' },
-  'on_hold':   { bg: 'rgba(245,158,11,0.1)',  color: '#d97706', label: 'On Hold' },
+// ─── RAG-BASED STATUS PILLS for Expediting (not procurement status) ──────────
+const RAG_STATUS_PILLS: Record<string, { bg: string; color: string; label: string }> = {
+  'red':      { bg: 'rgba(239,68,68,0.12)',   color: '#dc2626', label: 'Breached' },
+  'amber':    { bg: 'rgba(245,158,11,0.12)',  color: '#d97706', label: 'At Risk' },
+  'blue':     { bg: 'rgba(37,99,235,0.12)',   color: '#1d4ed8', label: 'On Track' },
+  'green':    { bg: 'rgba(34,197,94,0.12)',   color: '#16a34a', label: 'On Track' },
+  'complete': { bg: 'rgba(34,197,94,0.12)',   color: '#16a34a', label: 'Complete' },
+  'grey':     { bg: 'rgba(148,163,184,0.12)', color: '#64748b', label: 'Not Started' },
 }
 
 type ActiveTab = 'pos' | 'vdrl' | 'action-log'
@@ -233,7 +236,7 @@ export const ExpeditingScreen = ({ dark, projectId, projectName, onBack, onNavig
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
-                    {['', 'PO Ref', 'Vendor / Group', 'Material', 'Owner / Expeditor', 'Milestones', 'ROS', 'Status', ''].map((h, i) => (
+                    {['★', '', 'PO Ref', 'Vendor / Group', 'Material', 'Owner / Expeditor', 'Milestones', 'ROS', 'Status', ''].map((h, i) => (
                       <th key={i} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
                         {h}
                       </th>
@@ -242,12 +245,21 @@ export const ExpeditingScreen = ({ dark, projectId, projectName, onBack, onNavig
                 </thead>
                 <tbody>
                   {filtered.map(po => {
-                    const pill = STATUS_PILLS[po.status] || { bg: 'rgba(148,163,184,0.1)', color: sub, label: po.status }
+                    // BUG-2 FIX: use RAG-based status pill, not procurement status
+                    const ragPill = RAG_STATUS_PILLS[po.rag] || RAG_STATUS_PILLS['grey']
                     return (
                       <tr key={po.id}
                         style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, cursor: 'pointer', opacity: po.rag === 'complete' ? 0.65 : 1 }}
                         onClick={() => onNavigateToPODetail(po.id)}
                       >
+                        {/* BUG-3 FIX: ★ star column */}
+                        <td style={{ padding: '10px 6px', width: 28, textAlign: 'center' }}
+                            onClick={e => e.stopPropagation()}>
+                          <span title={po.is_critical_path ? 'Critical path' : 'Not critical path'}
+                            style={{ fontSize: 16, color: po.is_critical_path ? '#E84E0F' : '#c4cedf', cursor: 'pointer', userSelect: 'none' }}>
+                            {po.is_critical_path ? '★' : '☆'}
+                          </span>
+                        </td>
                         {/* RAG stripe */}
                         <td style={{ padding: '10px 0 10px 4px', width: 6 }}>
                           <div style={{ width: 3, height: 32, borderRadius: 2, background: RAG_COLORS[po.rag] || '#94a3b8' }} />
@@ -256,7 +268,6 @@ export const ExpeditingScreen = ({ dark, projectId, projectName, onBack, onNavig
                         <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
                           <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: '#E84E0F', fontWeight: 600 }}>
                             {po.po_number}
-                            {po.is_critical_path ? <span style={{ marginLeft: 4, color: '#f59e0b' }} title="Critical Path">★</span> : null}
                           </div>
                           {po.po_name && <div style={{ fontSize: 11, color: sub }}>{po.po_name}</div>}
                         </td>
@@ -269,21 +280,23 @@ export const ExpeditingScreen = ({ dark, projectId, projectName, onBack, onNavig
                         <td style={{ padding: '10px 12px', maxWidth: 200 }}>
                           <div style={{ color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{po.material_description || '—'}</div>
                         </td>
-                        {/* Owner / Expeditor */}
-                        <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', color: sub }}>
-                          <div>{po.owner_name || '—'}</div>
-                          {po.expeditor_name && <div style={{ fontSize: 10 }}>{po.expeditor_name}</div>}
+                        {/* Owner / Expeditor — BUG-4 FIX: show "— Unassigned" for missing expeditor */}
+                        <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                          <div style={{ color: col }}>{po.owner_name || '—'}</div>
+                          <div style={{ fontSize: 10, color: po.expeditor_name ? sub : '#c4cedf', fontStyle: po.expeditor_name ? 'normal' : 'italic' }}>
+                            {po.expeditor_name || '— Unassigned'}
+                          </div>
                         </td>
                         {/* Milestones */}
                         <td style={{ padding: '10px 12px' }}>
                           <MilestoneTimeline milestones={po.milestones} size="sm" />
                         </td>
                         {/* ROS */}
-                        <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', color: sub }}>{fmt(po.ros_date)}</td>
-                        {/* Status */}
+                        <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{fmt(po.ros_date)}</td>
+                        {/* Status — BUG-2 FIX: RAG-based not procurement status */}
                         <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
-                          <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 10, background: pill.bg, color: pill.color, fontWeight: 500 }}>
-                            {pill.label}
+                          <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 10, background: ragPill.bg, color: ragPill.color, fontWeight: 600 }}>
+                            {ragPill.label}
                           </span>
                         </td>
                         {/* Navigate */}

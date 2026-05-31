@@ -243,7 +243,7 @@ router.get('/:projectId/po/:poId', async (req, res) => {
       ...po,
       rag: computePORag(milestones),
       milestones: enrichedMilestones,
-      lines,
+      po_lines: lines,   // Frontend expects po_lines
       itp_items,
       action_notes: notes,
       forecast_history,

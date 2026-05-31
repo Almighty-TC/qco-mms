@@ -59,9 +59,9 @@ interface PODetail {
   milestone_esd_date?: string | null; milestone_eta_date?: string | null
   milestone_ros_date?: string | null; supplier_address?: string | null
   pre_expediting_enabled?: number
-  rag: string; milestones: Milestone[]; lines: POLine[]
-  action_notes: ActionNote[]; itp_items: ITPItem[]
-  forecast_history: ForecastHistory[]
+  rag: string; milestones: Milestone[]; po_lines: POLine[]
+  action_notes?: ActionNote[]; itp_items?: ITPItem[]
+  forecast_history?: ForecastHistory[]
   vdrl_package?: VDRLPackage | null
 }
 
@@ -220,7 +220,7 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
 
   // Forecast history grouped by milestone id
   const histByMs: Record<number, ForecastHistory[]> = {}
-  po.forecast_history.forEach(h => {
+  ;(po.forecast_history || []).forEach(h => {
     if (!histByMs[h.entity_id]) histByMs[h.entity_id] = []
     histByMs[h.entity_id].push(h)
   })
@@ -338,9 +338,9 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
           {/* ── TAB: Line Items & SCNs ── */}
           {activeTab === 'lines' && (
             <div style={{ padding: 20 }}>
-              {po.lines.length === 0 ? (
+              {(po.po_lines || []).length === 0 ? (
                 <div style={{ color: sub, fontSize: 13, textAlign: 'center', padding: 40 }}>No line items.</div>
-              ) : po.lines.map(line => {
+              ) : (po.po_lines || []).map(line => {
                 const isExpanded = expandedLines.has(line.id)
                 return (
                   <div key={line.id} style={{ border: bd, borderRadius: 8, marginBottom: 10, overflow: 'hidden' }}>
@@ -564,7 +564,7 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
           {/* ── TAB: ITP ── */}
           {activeTab === 'itp' && (
             <div style={{ padding: 20 }}>
-              {po.itp_items.length === 0 ? (
+              {(po.itp_items || []).length === 0 ? (
                 <div style={{ color: sub, fontSize: 13, textAlign: 'center', padding: 40 }}>No ITP requirements configured for this PO.</div>
               ) : (
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
@@ -576,7 +576,7 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
                     </tr>
                   </thead>
                   <tbody>
-                    {po.itp_items.map(i => (
+                    {(po.itp_items || []).map(i => (
                       <tr key={i.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
                         <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#E84E0F' }}>{i.item_number}</td>
                         <td style={{ padding: '8px 12px', color: col }}>{i.description}</td>
@@ -653,9 +653,9 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
                 </button>
               </div>
 
-              {po.action_notes.length === 0 ? (
+              {(po.action_notes || []).length === 0 ? (
                 <div style={{ color: sub, fontSize: 13, textAlign: 'center', padding: 20 }}>No action notes yet.</div>
-              ) : po.action_notes.map(n => (
+              ) : (po.action_notes || []).map(n => (
                 <div key={n.id} style={{ border: bd, borderRadius: 6, padding: 12, marginBottom: 8 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                     <span style={{ fontSize: 11, fontWeight: 600, color: col }}>{n.created_by_name || 'Unknown'}</span>
@@ -670,7 +670,7 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
           {/* ── TAB: Audit Trail ── */}
           {activeTab === 'audit' && (
             <div style={{ padding: 20 }}>
-              {po.forecast_history.length === 0 ? (
+              {(po.forecast_history || []).length === 0 ? (
                 <div style={{ color: sub, fontSize: 13, textAlign: 'center', padding: 40 }}>No forecast changes recorded.</div>
               ) : (
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
@@ -682,7 +682,7 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
                     </tr>
                   </thead>
                   <tbody>
-                    {po.forecast_history.map(h => (
+                    {(po.forecast_history || []).map(h => (
                       <tr key={h.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
                         <td style={{ padding: '8px 12px', color: sub, whiteSpace: 'nowrap' }}>{fmt(h.changed_at)}</td>
                         <td style={{ padding: '8px 12px', color: col }}>{h.changed_by_name || '—'}</td>
