@@ -51,7 +51,8 @@ const RAGDot = ({ rag }: { rag: string | null }) => (
     style={{ width: 10, height: 10, borderRadius: '50%', background: rag ? RAG_COLORS[rag] : '#c4cedf', display: 'inline-block', flexShrink: 0 }} />
 )
 
-// ─── NOTE EDITOR MODAL ───────────────────────────────────────
+// ─── NOTE EDITOR MODAL (Item 4) ──────────────────────────────
+// Validation: save disabled if note blank, char count, past ROS warning.
 const NoteModal = ({ node, dark, onClose, onSaved }: { node: WBSNode; dark: boolean; onClose: () => void; onSaved: (n: WBSNode) => void }) => {
   const [notes, setNotes]   = useState(node.notes ?? '')
   const [ros, setRos]       = useState(node.ros_date?.slice(0, 10) ?? '')
@@ -59,7 +60,12 @@ const NoteModal = ({ node, dark, onClose, onSaved }: { node: WBSNode; dark: bool
   const [saving, setSaving] = useState(false)
   const col = dark ? '#f1f5f9' : '#0f172a'
 
+  const MAX_CHARS  = 500
+  const rosPast    = ros && new Date(ros) < new Date(new Date().toDateString())
+  const canSave    = notes.trim().length > 0 && notes.length <= MAX_CHARS
+
   const save = async () => {
+    if (!canSave) return
     setSaving(true)
     try {
       const { data } = await axios.patch(`${API}/foundational/${node.project_id}/wbs/${node.id}`, { notes, ros_date: ros || null, rag: rag || null })
@@ -67,6 +73,9 @@ const NoteModal = ({ node, dark, onClose, onSaved }: { node: WBSNode; dark: bool
       onClose()
     } catch { setSaving(false) }
   }
+
+  const inp: React.CSSProperties = { height: 34, padding: '0 10px', borderRadius: 6, width: '100%', border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }
+  const lbl: React.CSSProperties = { display: 'block', fontSize: 11, fontWeight: 600, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 4, marginTop: 12 }
 
   return createPortal(
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -79,13 +88,13 @@ const NoteModal = ({ node, dark, onClose, onSaved }: { node: WBSNode; dark: bool
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer' }}>×</button>
         </div>
 
-        <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 4 }}>ROS Date</label>
-        <input type="date" value={ros} onChange={e => setRos(e.target.value)}
-          style={{ height: 34, padding: '0 10px', borderRadius: 6, width: '100%', border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', marginBottom: 14 }} />
+        <label style={lbl}>ROS Date</label>
+        <input type="date" value={ros} onChange={e => setRos(e.target.value)} style={inp} />
+        {rosPast && <div style={{ marginTop: 5, fontSize: 11, color: '#f59e0b', display: 'flex', alignItems: 'center', gap: 4 }}>⚠ ROS date is in the past</div>}
+        {!ros && <div style={{ marginTop: 5, fontSize: 11, color: '#94a3b8' }}>Optional — leave blank if not yet known</div>}
 
-        <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 4 }}>RAG Status</label>
-        <select value={rag} onChange={e => setRag(e.target.value)}
-          style={{ height: 34, padding: '0 10px', borderRadius: 6, width: '100%', border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none', marginBottom: 14 }}>
+        <label style={lbl}>RAG Status</label>
+        <select value={rag} onChange={e => setRag(e.target.value)} style={{ ...inp, height: 34 }}>
           <option value="">— Not set</option>
           <option value="green">On track</option>
           <option value="amber">At risk</option>
@@ -93,14 +102,24 @@ const NoteModal = ({ node, dark, onClose, onSaved }: { node: WBSNode; dark: bool
           <option value="blue">In progress</option>
         </select>
 
-        <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 4 }}>Notes / Scope</label>
-        <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={4}
+        <label style={lbl}>Notes / Scope *</label>
+        <textarea value={notes} onChange={e => setNotes(e.target.value.slice(0, MAX_CHARS))} rows={4}
           placeholder="Scope description, constraints, assumptions…"
-          style={{ padding: '8px 10px', borderRadius: 6, width: '100%', border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none', resize: 'vertical', boxSizing: 'border-box', marginBottom: 18 }} />
+          style={{ ...inp, height: 96, resize: 'vertical', padding: '8px 10px', lineHeight: 1.5,
+            border: `1px solid ${notes.length > MAX_CHARS ? '#ef4444' : (dark ? '#334155' : '#dde3ed')}` }} />
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+          <span style={{ fontSize: 11, color: notes.trim() === '' ? '#ef4444' : '#94a3b8' }}>
+            {notes.trim() === '' ? '✕ Note cannot be blank' : ''}
+          </span>
+          <span style={{ fontSize: 11, color: notes.length > MAX_CHARS * 0.9 ? '#f59e0b' : '#94a3b8' }}>
+            {notes.length} / {MAX_CHARS}
+          </span>
+        </div>
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
           <button onClick={onClose} style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
-          <button onClick={save} disabled={saving} style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', opacity: saving ? 0.6 : 1 }}>
+          <button onClick={save} disabled={!canSave || saving}
+            style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', fontSize: 12, fontWeight: 600, cursor: (!canSave || saving) ? 'not-allowed' : 'pointer', fontFamily: 'inherit', opacity: (!canSave || saving) ? 0.5 : 1 }}>
             {saving ? 'Saving…' : '✓ Save changes'}
           </button>
         </div>
@@ -488,10 +507,12 @@ const ReallocateLineRow = ({ line, projectId, dark, excludeCode, value, onChange
 // Indent is applied to the TREE CELL (chevron + RAG dot + code) as paddingLeft
 // so the entire left content shifts right 20px per depth level. Keeping them in
 // separate <td> elements would only shift the chevron, not the code text.
-const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete }: {
+const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRowEnter, onRowLeave }: {
   node: WBSNode; depth: number; dark: boolean
   expanded: Set<number>; onToggle: (id: number) => void
   onEdit: (n: WBSNode) => void; onDelete: (n: WBSNode) => void
+  onRowEnter?: (n: WBSNode, e: React.MouseEvent) => void
+  onRowLeave?: () => void
 }) => {
   const [hovered, setHovered] = useState(false)
   const hasChildren = node.children && node.children.length > 0
@@ -506,8 +527,8 @@ const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete }: {
   return (
     <>
       <tr
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
+        onMouseEnter={e => { setHovered(true); onRowEnter?.(node, e) }}
+        onMouseLeave={() => { setHovered(false); onRowLeave?.() }}
         style={{
           background: hovered ? (dark ? '#1e2d4a' : '#f4f7fb') : (dark ? '#1e293b' : '#fff'),
           transition: 'background 120ms',
@@ -627,9 +648,201 @@ const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete }: {
       {/* Render children recursively when expanded */}
       {isExpanded && node.children?.map(child => (
         <WBSRow key={child.id} node={child} depth={depth + 1} dark={dark}
-          expanded={expanded} onToggle={onToggle} onEdit={onEdit} onDelete={onDelete} />
+          expanded={expanded} onToggle={onToggle} onEdit={onEdit} onDelete={onDelete}
+          onRowEnter={onRowEnter} onRowLeave={onRowLeave} />
       ))}
     </>
+  )
+}
+
+// ─── UPLOAD VALIDATION MODAL (Item 3) ───────────────────────
+interface ValidationRow { row: number; code: string; description: string; parent: string; ros: string; status: 'ok'|'warning'|'error'; errors: string[]; warnings: string[] }
+interface ValidationResult { results: ValidationRow[]; summary: { total: number; ready: number; warnings: number; errors: number } }
+
+const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: number; dark: boolean; onClose: () => void; onImported: () => void }) => {
+  const [file,     setFile]     = useState<File | null>(null)
+  const [result,   setResult]   = useState<ValidationResult | null>(null)
+  const [loading,  setLoading]  = useState(false)
+  const [ackWarn,  setAckWarn]  = useState(false)
+  const [importing,setImporting]= useState(false)
+  const [err,      setErr]      = useState('')
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const validate = async (f: File) => {
+    setLoading(true); setErr(''); setResult(null)
+    const fd = new FormData(); fd.append('file', f)
+    try {
+      const { data } = await axios.post<ValidationResult>(`${API}/foundational/${projectId}/wbs/validate`, fd)
+      setResult(data)
+    } catch (e: unknown) {
+      const er = e as { response?: { data?: { error?: string } } }
+      setErr(er.response?.data?.error ?? 'Validation failed')
+    } finally { setLoading(false) }
+  }
+
+  const doImport = async () => {
+    if (!file) return
+    setImporting(true)
+    const fd = new FormData(); fd.append('file', file)
+    try {
+      const { data } = await axios.post(`${API}/foundational/${projectId}/wbs/import`, fd)
+      onImported()
+      onClose()
+      alert(`✓ Imported ${data.imported} nodes successfully`)
+    } catch (e: unknown) {
+      const er = e as { response?: { data?: { error?: string } } }
+      setErr(er.response?.data?.error ?? 'Import failed')
+    } finally { setImporting(false) }
+  }
+
+  const canImport = result && result.summary.errors === 0 && (result.summary.warnings === 0 || ackWarn)
+
+  const STATUS_ICON: Record<string, string> = { ok: '✅', warning: '⚠️', error: '❌' }
+  const STATUS_COLOR: Record<string, string> = { ok: '#22c55e', warning: '#f59e0b', error: '#ef4444' }
+
+  return createPortal(
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: dark ? '#1e293b' : '#fff', borderRadius: 10, padding: 24, width: 680, maxHeight: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '0 16px 48px rgba(0,0,0,0.4)', fontFamily: 'IBM Plex Sans, sans-serif', border: `1px solid ${dark ? '#334155' : '#dde3ed'}` }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: col }}>↑ Upload WBS File</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer' }}>×</button>
+        </div>
+
+        {/* File picker */}
+        <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+          <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv,.xer,.xml" onChange={e => {
+            const f = e.target.files?.[0] ?? null; setFile(f); setResult(null); if (f) validate(f)
+          }} style={{ flex: 1, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, borderRadius: 6, padding: '6px 10px', fontSize: 12, color: col, background: dark ? '#0f172a' : '#f8fafc', fontFamily: 'inherit' }} />
+        </div>
+
+        {loading && <div style={{ textAlign: 'center', color: '#94a3b8', padding: '24px 0' }}>Validating file…</div>}
+        {err && <div style={{ marginBottom: 12, fontSize: 12, color: '#ef4444', background: 'rgba(239,68,68,0.08)', borderRadius: 6, padding: '7px 10px' }}>{err}</div>}
+
+        {result && (
+          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            {/* Summary bar */}
+            <div style={{ display: 'flex', gap: 16, marginBottom: 12, padding: '10px 14px', background: dark ? '#0f172a' : '#f4f7fb', borderRadius: 8, fontSize: 12 }}>
+              <span style={{ color: '#64748b' }}>{result.summary.total} rows</span>
+              <span style={{ color: '#22c55e' }}>✅ {result.summary.ready} ready</span>
+              {result.summary.warnings > 0 && <span style={{ color: '#f59e0b' }}>⚠️ {result.summary.warnings} warnings</span>}
+              {result.summary.errors > 0 && <span style={{ color: '#ef4444' }}>❌ {result.summary.errors} errors</span>}
+            </div>
+
+            {/* Preview table */}
+            <div style={{ flex: 1, overflowY: 'auto', border: `1px solid ${dark ? '#334155' : '#e8ecf2'}`, borderRadius: 8 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                <thead>
+                  <tr style={{ background: dark ? '#0f172a' : '#f8fafc', position: 'sticky', top: 0 }}>
+                    {['Row','','Code','Description','Parent','ROS','Issues'].map(h => (
+                      <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, color: '#64748b', letterSpacing: '0.05em', textTransform: 'uppercase', fontSize: 10, borderBottom: `1px solid ${dark ? '#334155' : '#e8ecf2'}` }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.results.map(r => (
+                    <tr key={r.row} style={{ background: dark ? '#1e293b' : '#fff', borderBottom: `1px solid ${dark ? '#334155' : '#f0f3f9'}` }}>
+                      <td style={{ padding: '5px 10px', color: '#94a3b8', fontFamily: 'JetBrains Mono, monospace' }}>{r.row}</td>
+                      <td style={{ padding: '5px 6px', textAlign: 'center', fontSize: 14 }}>{STATUS_ICON[r.status]}</td>
+                      <td style={{ padding: '5px 10px', fontFamily: 'JetBrains Mono, monospace', color: col }}>{r.code}</td>
+                      <td style={{ padding: '5px 10px', color: col, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.description}</td>
+                      <td style={{ padding: '5px 10px', fontFamily: 'JetBrains Mono, monospace', color: '#94a3b8' }}>{r.parent || '—'}</td>
+                      <td style={{ padding: '5px 10px', fontFamily: 'JetBrains Mono, monospace', color: '#94a3b8' }}>{r.ros || '—'}</td>
+                      <td style={{ padding: '5px 10px', color: STATUS_COLOR[r.status] }}>
+                        {[...r.errors, ...r.warnings].join('; ') || '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Warning acknowledgement */}
+            {result.summary.warnings > 0 && result.summary.errors === 0 && (
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, cursor: 'pointer', fontSize: 12, color: '#f59e0b' }}>
+                <input type="checkbox" checked={ackWarn} onChange={e => setAckWarn(e.target.checked)} style={{ accentColor: '#f59e0b' }} />
+                I acknowledge the {result.summary.warnings} warning{result.summary.warnings !== 1 ? 's' : ''} and wish to import anyway
+              </label>
+            )}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16, flexShrink: 0 }}>
+          <button onClick={onClose} style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+          <button onClick={doImport} disabled={!canImport || importing}
+            style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: canImport ? '#2563eb' : '#94a3b8', color: '#fff', fontSize: 12, fontWeight: 600, cursor: canImport ? 'pointer' : 'not-allowed', fontFamily: 'inherit', opacity: importing ? 0.7 : 1 }}>
+            {importing ? 'Importing…' : `↑ Import ${result?.summary.ready ?? 0} rows`}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+// ─── HOVER TOOLTIP (Item 7) ──────────────────────────────────
+interface TooltipData { wbsCode: string; commodities: {code: string; name: string; uom: string}[]; equipment: {tag: string; description: string}[] }
+const WBSTooltip = ({ node, projectId, anchorRect }: { node: WBSNode; projectId: number; anchorRect: DOMRect }) => {
+  const [data, setData] = useState<TooltipData | null>(null)
+  useEffect(() => {
+    axios.get<TooltipData>(`${API}/foundational/${projectId}/wbs/${node.id}/materials`)
+      .then(r => setData(r.data)).catch(() => {})
+  }, [node.id, projectId])
+
+  // Flip if near right or bottom edge
+  const TOOLTIP_W = 300, TOOLTIP_H = 220
+  const vw = window.innerWidth, vh = window.innerHeight
+  const left = anchorRect.right + 12 + TOOLTIP_W > vw ? anchorRect.left - TOOLTIP_W - 8 : anchorRect.right + 12
+  const top  = anchorRect.top + TOOLTIP_H > vh ? Math.max(8, vh - TOOLTIP_H - 8) : anchorRect.top
+
+  return createPortal(
+    <div style={{
+      position: 'fixed', left, top, width: TOOLTIP_W, zIndex: 9998,
+      background: '#0f172a', border: '1px solid #334155', borderRadius: 8,
+      padding: '12px 14px', boxShadow: '0 8px 28px rgba(0,0,0,0.5)',
+      fontFamily: 'IBM Plex Sans, sans-serif', pointerEvents: 'none',
+    }}>
+      {/* Node identity */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', marginBottom: 8 }}>
+        <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, fontWeight: 700, color: '#60a5fa' }}>{node.code}</span>
+        <span style={{ fontSize: 12, color: '#f1f5f9', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.description}</span>
+      </div>
+      {node.ros_date && (
+        <div style={{ fontSize: 11, color: node.rag === 'red' ? '#ef4444' : node.rag === 'amber' ? '#f59e0b' : '#22c55e', marginBottom: 8 }}>
+          ROS {fmtDate(node.ros_date)} · {node.rag ? RAG_LABELS[node.rag] : 'Not set'}
+        </div>
+      )}
+
+      {!data ? (
+        <div style={{ fontSize: 11, color: '#64748b' }}>Loading…</div>
+      ) : (
+        <>
+          {/* Commodities */}
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>Commodities</div>
+          {data.commodities.length === 0
+            ? <div style={{ fontSize: 11, color: '#64748b', marginBottom: 8 }}>No commodities linked</div>
+            : data.commodities.map(c => (
+                <div key={c.code} style={{ fontSize: 11, color: '#cbd5e1', marginBottom: 2 }}>
+                  <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#93c5fd' }}>{c.code}</span>
+                  {' '}{c.name} <span style={{ color: '#64748b' }}>· {c.uom}</span>
+                </div>
+              ))
+          }
+          {/* Equipment */}
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4, marginTop: 8 }}>Equipment</div>
+          {data.equipment.length === 0
+            ? <div style={{ fontSize: 11, color: '#64748b' }}>No equipment linked</div>
+            : data.equipment.map(e => (
+                <div key={e.tag} style={{ fontSize: 11, color: '#cbd5e1', marginBottom: 2 }}>
+                  <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#86efac' }}>{e.tag}</span>
+                  {' '}{e.description}
+                </div>
+              ))
+          }
+        </>
+      )}
+    </div>,
+    document.body
   )
 }
 
@@ -644,6 +857,10 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
   const [editNode, setEditNode]   = useState<WBSNode | null>(null)
   const [deleteNode, setDeleteNode] = useState<WBSNode | null>(null)
   const [showAdd, setShowAdd]     = useState(false)
+  const [showUpload, setShowUpload] = useState(false)                  // Item 3
+  const [focusMode, setFocusMode] = useState(false)                   // Item 6
+  const [tooltip, setTooltip]     = useState<{ node: WBSNode; rect: DOMRect } | null>(null)  // Item 7
+  const tooltipTimer              = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [toast, setToast]         = useState('')
   const col = dark ? '#f1f5f9' : '#0f172a'
 
@@ -656,7 +873,6 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
       setNodes(data)
       const t = buildTree(data)
       setTree(t)
-      // Default expand first two top-level nodes
       setExpanded(prev => {
         const next = new Set(prev)
         t.slice(0, 2).forEach(n => next.add(n.id))
@@ -668,30 +884,69 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
 
   useEffect(() => { load() }, [load])
 
+  // ── Focus mode: inject a full-screen overlay via portal ──────
+  // Must escape the scrollable parent's stacking context, so we use
+  // a body-level portal rather than relying on z-index within the
+  // fixed+overflow:auto container in App.tsx.
+  useEffect(() => {
+    return () => { /* cleanup handled by portal unmount */ }
+  }, [focusMode])
+
   const toggleExpand = (id: number) => setExpanded(prev => {
-    const next = new Set(prev)
-    if (next.has(id)) next.delete(id); else next.add(id)
-    return next
+    const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next
   })
 
+  // ── Expand All / Collapse All (Item 5) ───────────────────────
+  const expandAll = () => {
+    const all = new Set(nodes.map(n => n.id)); setExpanded(all)
+  }
+  const collapseAll = () => { setExpanded(new Set()) }
+
+  // ── Template download (Item 2) ────────────────────────────────
+  const downloadTemplate = () => {
+    window.open(`${API}/foundational/${projectId}/wbs/template`, '_blank')
+  }
+
+  // ── Tooltip handlers (Item 7) ────────────────────────────────
+  const handleRowEnter = (node: WBSNode, e: React.MouseEvent) => {
+    if (tooltipTimer.current) clearTimeout(tooltipTimer.current)
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    tooltipTimer.current = setTimeout(() => setTooltip({ node, rect }), 300)
+  }
+  const handleRowLeave = () => {
+    if (tooltipTimer.current) clearTimeout(tooltipTimer.current)
+    setTooltip(null)
+  }
+
   const handleNodeSaved = (updated: WBSNode) => {
-    setNodes(prev => prev.map(n => n.id === updated.id ? updated : n))
-    setTree(buildTree(nodes.map(n => n.id === updated.id ? updated : n)))
+    const next = nodes.map(n => n.id === updated.id ? updated : n)
+    setNodes(next); setTree(buildTree(next))
     showToast(`✓ Node ${updated.code} updated`)
   }
 
   const handleNodeCreated = (created: WBSNode) => {
-    const next = [...nodes, created]
-    setNodes(next)
-    setTree(buildTree(next))
+    const next = [...nodes, created]; setNodes(next); setTree(buildTree(next))
     setExpanded(prev => new Set([...prev, created.parent_id ?? created.id]))
     showToast(`✓ WBS node ${created.code} added`)
   }
 
   const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const secBtn: React.CSSProperties = { padding: '6px 12px', borderRadius: 6, border: bd, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }
 
-  return (
-    <div style={{ paddingTop: 20, fontFamily: 'IBM Plex Sans, sans-serif' }}>
+  // The inner JSX is shared between normal and focus-mode renders.
+  // In focus mode we portal it to document.body to escape the
+  // fixed+overflow:auto stacking context in App.tsx.
+  const wbsContent = (inFocus: boolean) => (
+    <div style={{ paddingTop: 20, fontFamily: 'IBM Plex Sans, sans-serif',
+      ...(inFocus ? { position: 'fixed' as const, inset: 0, background: dark ? '#0f172a' : '#f1f4f8', zIndex: 9100, overflowY: 'auto' as const, padding: 20 } : {}) }}>
+
+      {/* ── Focus exit button (Item 6) ── */}
+      {inFocus && (
+        <button onClick={() => setFocusMode(false)} style={{ position: 'fixed', top: 16, right: 16, zIndex: 9101, padding: '6px 14px', borderRadius: 6, border: bd, background: dark ? '#1e293b' : '#fff', color: col, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}>
+          ✕ Exit focus
+        </button>
+      )}
+
       {/* ── Breadcrumb ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16, fontSize: 12, color: '#94a3b8', flexWrap: 'wrap' }}>
         <button onClick={onBack} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 12, cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>← Dashboard</button>
@@ -700,36 +955,39 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
       </div>
 
       {/* ── Header ── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: col, letterSpacing: '-0.02em' }}>🌲 WBS</h2>
           <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 3 }}>Work Breakdown Structure — {projectName}</div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button style={{ padding: '7px 14px', borderRadius: 6, border: bd, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>↑ Upload XER/Excel</button>
+        {/* Buttons: secondary actions left, primary right */}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {/* Item 5: Expand / Collapse All */}
+          <button onClick={expandAll}   style={secBtn} title="Expand all nodes">⊞ Expand all</button>
+          <button onClick={collapseAll} style={secBtn} title="Collapse to top level">⊟ Collapse all</button>
+          {/* Item 6: Focus mode */}
+          <button onClick={() => setFocusMode(f => !f)} style={{ ...secBtn, color: focusMode ? '#E84E0F' : '#64748b' }} title="Toggle focus mode">⛶ Focus</button>
+          {/* Item 2: Template download */}
+          <button onClick={downloadTemplate} style={secBtn} title="Download XLSX template">↓ Template</button>
+          {/* Item 3: Upload */}
+          <button onClick={() => setShowUpload(true)} style={secBtn}>↑ Upload XER/Excel</button>
+          {/* Add node */}
           <button onClick={() => setShowAdd(true)} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>+ Add node</button>
         </div>
       </div>
 
       {/* ── Table ── */}
       <div style={{ background: dark ? '#1e293b' : '#fff', border: bd, borderRadius: 10, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-        <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 260px)' }}>
+        <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: focusMode ? 'calc(100vh - 140px)' : 'calc(100vh - 260px)' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: dark ? '#0f172a' : '#f4f7fb', borderBottom: bd, position: 'sticky', top: 0, zIndex: 2 }}>
-                {/* RAG stripe — no header */}
                 <th style={{ width: 4, padding: 0 }} />
-                {/* CODE — spans chevron+dot+code unified tree cell */}
                 <th style={{ padding: '8px 8px 8px 22px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap' }}>Code</th>
-                {/* WBS NODE */}
                 <th style={{ padding: '8px 4px 8px 4px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left' }}>WBS Node</th>
-                {/* ROS */}
                 <th style={{ padding: '8px 12px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap' }}>ROS</th>
-                {/* NOTES */}
                 <th style={{ padding: '8px 12px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left' }}>Notes</th>
-                {/* Suffix hint — no header */}
                 <th style={{ width: 80 }} />
-                {/* Delete — no header */}
                 <th style={{ width: 36 }} />
               </tr>
             </thead>
@@ -741,7 +999,8 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
               ) : tree.map(node => (
                 <WBSRow key={node.id} node={node} depth={0} dark={dark}
                   expanded={expanded} onToggle={toggleExpand}
-                  onEdit={setEditNode} onDelete={setDeleteNode} />
+                  onEdit={setEditNode} onDelete={setDeleteNode}
+                  onRowEnter={handleRowEnter} onRowLeave={handleRowLeave} />
               ))}
             </tbody>
           </table>
@@ -758,6 +1017,12 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
       {deleteNode && (
         <DeleteWBSWizard node={deleteNode} projectId={projectId} dark={dark} onClose={() => setDeleteNode(null)} onDeleted={() => { load(); showToast('Node deleted') }} />
       )}
+      {showUpload && (
+        <UploadModal projectId={projectId} dark={dark} onClose={() => setShowUpload(false)} onImported={() => { load(); showToast('✓ WBS imported successfully') }} />
+      )}
+
+      {/* ── Tooltip (Item 7) ── */}
+      {tooltip && <WBSTooltip node={tooltip.node} projectId={projectId} anchorRect={tooltip.rect} />}
 
       {/* ── Toast ── */}
       {toast && (
@@ -767,4 +1032,8 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
       )}
     </div>
   )
+
+  return focusMode
+    ? createPortal(wbsContent(true), document.body)
+    : wbsContent(false)
 }

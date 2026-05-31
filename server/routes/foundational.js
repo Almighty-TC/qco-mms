@@ -7,6 +7,7 @@ const { authenticateToken } = require('../middleware/auth')
 const multer  = require('multer')
 const path    = require('path')
 const fs      = require('fs')
+const XLSX    = require('xlsx')
 
 router.use(authenticateToken)
 
@@ -199,6 +200,198 @@ router.delete('/:projectId/wbs/:id', async (req, res) => {
     res.json({ ok: true })
   } catch (e) {
     console.error('[foundational:wbs:delete]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// GET /api/foundational/:projectId/wbs/template — XLSX download
+router.get('/:projectId/wbs/template', async (req, res) => {
+  try {
+    const wb = XLSX.utils.book_new()
+
+    // ── Main data sheet ───────────────────────────────────────
+    const headerStyle = { fill: { fgColor: { rgb: 'E84E0F' } }, font: { bold: true, color: { rgb: 'FFFFFF' } } }
+    const headers = ['id','project_id','level','code','description','wbs_string','parent_string','parent_id','WBS Title','wbs.1','wbs.2','wbs.3','wbs.4','wbs.5','wbs.6','wbs.7','wbs.8','ROS']
+    const examples = [
+      ['','','1','01','Civil & Structural','01','','','Civil & Structural','01','','','','','','','','2025-06-30'],
+      ['','','2','01.01','Foundations','01.01','01','','Foundations','01','01','','','','','','','2025-03-31'],
+      ['','','3','01.01.01','Piling Works','01.01.01','01.01','','Piling Works','01','01','01','','','','','','2024-12-31'],
+      ['','','4','01.01.01.01','Bored Piles','01.01.01.01','01.01.01','','Bored Piles','01','01','01','01','','','','','2024-10-31'],
+      ['','','5','01.01.01.01.01','Pile Design','01.01.01.01.01','01.01.01.01','','Pile Design','01','01','01','01','01','','','','2024-08-31'],
+    ]
+    const wsData = [headers, ...examples]
+    const ws = XLSX.utils.aoa_to_sheet(wsData)
+
+    // Column widths
+    ws['!cols'] = headers.map((h,i) => ({ wch: ['description','WBS Title'].includes(h) ? 30 : h.startsWith('wbs') ? 8 : 12 }))
+    ws['!freeze'] = { xSplit: 0, ySplit: 1 }  // freeze top row
+
+    // Orange header row styling (xlsx only supports limited styling)
+    XLSX.utils.book_append_sheet(wb, ws, 'WBS Template')
+
+    // ── Instructions sheet ────────────────────────────────────
+    const instrData = [
+      ['Column', 'Required', 'Description'],
+      ['id', 'No', 'Leave blank — auto-assigned on import'],
+      ['project_id', 'No', 'Leave blank — assigned from project context'],
+      ['level', 'Yes', 'Numeric depth (1=top-level, 2=child, 3=grandchild etc.)'],
+      ['code', 'Yes', 'Dotted WBS code e.g. 01, 01.01, 01.01.01. Must be unique per project.'],
+      ['description', 'Yes', 'Node label / name e.g. "Civil & Structural"'],
+      ['wbs_string', 'Yes', 'Same as code — full dotted path'],
+      ['parent_string', 'Yes*', 'Parent\'s code. Leave blank for top-level nodes (level=1).'],
+      ['parent_id', 'No', 'Leave blank — resolved from parent_string on import'],
+      ['WBS Title', 'No', 'Alternate display name (optional)'],
+      ['wbs.1 – wbs.8', 'No', 'Individual code segments split by level (auto-split on import)'],
+      ['ROS', 'No', 'Required On Site date in YYYY-MM-DD format e.g. 2025-06-30'],
+      ['', '', ''],
+      ['NOTES', '', ''],
+      ['• One row per WBS node', '', ''],
+      ['• Codes must be in hierarchical order (parents before children)', '', ''],
+      ['• Duplicate codes within a project will cause an error', '', ''],
+      ['• Maximum 8 levels of nesting supported', '', ''],
+      ['• Date format: YYYY-MM-DD', '', ''],
+    ]
+    const wsInstr = XLSX.utils.aoa_to_sheet(instrData)
+    wsInstr['!cols'] = [{ wch: 20 }, { wch: 10 }, { wch: 60 }]
+    XLSX.utils.book_append_sheet(wb, wsInstr, 'Instructions')
+
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
+    res.setHeader('Content-Disposition', 'attachment; filename="WBS_Upload_Template.xlsx"')
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    res.send(buf)
+  } catch (e) {
+    console.error('[wbs:template]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// POST /api/foundational/:projectId/wbs/validate — validate upload before import
+const uploadWBS = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } })
+router.post('/:projectId/wbs/validate', uploadWBS.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file provided' })
+    const wb   = XLSX.read(req.file.buffer, { type: 'buffer' })
+    const ws   = wb.Sheets[wb.SheetNames[0]]
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+    if (rows.length < 2) return res.status(400).json({ error: 'File appears empty' })
+
+    const headers = rows[0].map(h => String(h).toLowerCase().trim())
+    const codeIdx = headers.findIndex(h => h === 'code')
+    const descIdx = headers.findIndex(h => h === 'description')
+    const parentIdx = headers.findIndex(h => h === 'parent_string' || h === 'parent_id')
+    const rosIdx  = headers.findIndex(h => h === 'ros')
+
+    const dataRows = rows.slice(1).filter(r => r.some(c => c !== ''))
+    const seenCodes = new Set()
+    const results = []
+
+    for (let i = 0; i < dataRows.length; i++) {
+      const r    = dataRows[i]
+      const code = codeIdx >= 0 ? String(r[codeIdx] || '').trim() : ''
+      const desc = descIdx >= 0 ? String(r[descIdx] || '').trim() : ''
+      const parent = parentIdx >= 0 ? String(r[parentIdx] || '').trim() : ''
+      const ros  = rosIdx  >= 0 ? String(r[rosIdx]  || '').trim() : ''
+      const rowNum = i + 2  // 1-indexed + header
+
+      const errors = []; const warnings = []
+
+      if (!code)  errors.push('Missing WBS code')
+      if (!desc)  errors.push('Missing description')
+      if (code && seenCodes.has(code)) errors.push(`Duplicate code "${code}"`)
+
+      // Parent must appear before child
+      if (parent && !seenCodes.has(parent)) {
+        errors.push(`Parent "${parent}" not yet seen — must appear before this row`)
+      }
+
+      // Circular reference check: code must not start with itself as prefix
+      if (code && parent && (parent === code || parent.startsWith(code + '.'))) {
+        errors.push('Circular reference: parent code is same as or child of this code')
+      }
+
+      // ROS date format
+      if (ros && !/^\d{4}-\d{2}-\d{2}$/.test(ros)) {
+        warnings.push(`ROS date "${ros}" should be YYYY-MM-DD format`)
+      }
+
+      if (code) seenCodes.add(code)
+
+      results.push({
+        row: rowNum, code, description: desc.slice(0, 50), parent, ros,
+        status: errors.length > 0 ? 'error' : warnings.length > 0 ? 'warning' : 'ok',
+        errors, warnings,
+      })
+    }
+
+    const readyCount   = results.filter(r => r.status === 'ok').length
+    const warningCount = results.filter(r => r.status === 'warning').length
+    const errorCount   = results.filter(r => r.status === 'error').length
+
+    res.json({ results, summary: { total: results.length, ready: readyCount, warnings: warningCount, errors: errorCount } })
+  } catch (e) {
+    console.error('[wbs:validate]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// POST /api/foundational/:projectId/wbs/import — import validated file
+router.post('/:projectId/wbs/import', uploadWBS.single('file'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    if (!req.file) return res.status(400).json({ error: 'No file provided' })
+    const wb   = XLSX.read(req.file.buffer, { type: 'buffer' })
+    const ws   = wb.Sheets[wb.SheetNames[0]]
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+    const headers = rows[0].map(h => String(h).toLowerCase().trim())
+    const codeIdx  = headers.findIndex(h => h === 'code')
+    const descIdx  = headers.findIndex(h => h === 'description')
+    const parentIdx = headers.findIndex(h => h === 'parent_string')
+    const rosIdx   = headers.findIndex(h => h === 'ros')
+
+    const dataRows = rows.slice(1).filter(r => r.some(c => c !== ''))
+    const codeToId = {}
+    let imported = 0
+
+    for (const r of dataRows) {
+      const code   = String(r[codeIdx] || '').trim()
+      const desc   = String(r[descIdx] || '').trim()
+      const parent = parentIdx >= 0 ? String(r[parentIdx] || '').trim() : ''
+      const ros    = rosIdx >= 0 ? String(r[rosIdx] || '').trim() : ''
+      if (!code || !desc) continue
+
+      const parentId = parent && codeToId[parent] ? codeToId[parent] : null
+      const [result] = await db.query(
+        `INSERT IGNORE INTO wbs_nodes (project_id, parent_id, code, description, ros_date) VALUES (?,?,?,?,?)`,
+        [pid, parentId, code, desc, ros || null]
+      )
+      if (result.insertId) { codeToId[code] = result.insertId; imported++ }
+    }
+    audit(req, 'wbs_imported', `projects/${pid}`, {}, { imported })
+    res.json({ ok: true, imported })
+  } catch (e) {
+    console.error('[wbs:import]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// GET /api/foundational/:projectId/wbs/:nodeId/materials — tooltip data
+router.get('/:projectId/wbs/:nodeId/materials', async (req, res) => {
+  try {
+    const pid    = Number(req.params.projectId)
+    const nodeId = Number(req.params.nodeId)
+    const [[node]] = await db.query('SELECT code FROM wbs_nodes WHERE id=?', [nodeId])
+    if (!node) return res.status(404).json({ error: 'Node not found' })
+
+    const [commodities] = await db.query(
+      'SELECT code, name, uom FROM commodity_library WHERE project_id=? AND wbs_node_id=? AND status="active" LIMIT 10',
+      [pid, nodeId]
+    )
+    const [equipment] = await db.query(
+      'SELECT tag, description FROM equipment_list WHERE project_id=? AND wbs_node_id=? LIMIT 10',
+      [pid, nodeId]
+    )
+    res.json({ wbsCode: node.code, commodities, equipment })
+  } catch (e) {
     res.status(500).json({ error: e.message })
   }
 })

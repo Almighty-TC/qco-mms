@@ -26,3 +26,9 @@ body {
 .pill-red   { background: rgba(220,38,38,0.10);   color: #ef4444; border: 1px solid rgba(239,68,68,0.35); }
 .pill-grey  { background: rgba(100,116,139,0.08); color: #8899aa; border: 1px solid rgba(100,116,139,0.35); }
 .pill-blue  { background: rgba(37,99,235,0.10);   color: #2563eb; border: 1px solid rgba(59,130,246,0.35); }
+
+/* ─── WBS FOCUS MODE ───────────────────────────────────────── */
+/* Hides the fixed sidebar and topbar so WBS tree fills screen. */
+body.wbs-focus-mode > div > div[style*='position: fixed'][style*='top: 0'] { display: none !important; }
+body.wbs-focus-mode > div > div[style*='position: fixed'][style*='top: 48'] { display: none !important; }
+
