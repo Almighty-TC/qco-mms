@@ -766,18 +766,17 @@ function App() {
       // ─── RESTORE LAST SELECTED PROJECT ──────────────────────
       // On first load, restore the last-selected project from localStorage
       // so the user lands directly in the right project context.
-      if (!selectedProjectId) {
-        try {
-          const stored = localStorage.getItem('qmat_last_project')
-          if (stored) {
-            const { id, name } = JSON.parse(stored)
-            if (id && normalised.some(p => p.id === id)) {
-              setSelectedProjectId(id)
-              setSelectedProjectName(name)
-            }
+      // Uses functional form to avoid stale-closure issue with selectedProjectId.
+      try {
+        const stored = localStorage.getItem('qmat_last_project')
+        if (stored) {
+          const { id, name } = JSON.parse(stored)
+          if (id && normalised.some(p => p.id === id)) {
+            setSelectedProjectId(curr => curr ?? id)
+            setSelectedProjectName(curr => curr || name)
           }
-        } catch { /* ignore malformed stored value */ }
-      }
+        }
+      } catch { /* ignore malformed stored value */ }
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: string } }; message?: string }
       setError(e.response?.data?.error ?? e.message ?? 'Unable to load projects')

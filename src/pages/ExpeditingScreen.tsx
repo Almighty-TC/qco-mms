@@ -1,7 +1,7 @@
 // ─── EXPEDITING SCREEN ────────────────────────────────────────
 // Expediting register: locked POs with milestone timeline and RAG.
 // Row click navigates to ExpPODetailScreen via onNavigateToPODetail prop.
-// Tabs: All POs | VDRL Register | Action Log
+// Tabs: All POs | VDRL Register (full cross-PO view) | Action Log
 import React, { useState, useEffect } from 'react'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
@@ -56,6 +56,212 @@ const RAG_STATUS_PILLS: Record<string, { bg: string; color: string; label: strin
   'grey':     { bg: 'rgba(148,163,184,0.12)', color: '#64748b', label: 'Not Started' },
 }
 
+// ─── VDRL DOC TYPE / STATUS MAPS ─────────────────────────────
+const DOC_TYPE_COLORS: Record<string,{bg:string;color:string}> = {
+  'Drawing':    {bg:'rgba(37,99,235,0.1)',   color:'#1d4ed8'},
+  'Datasheet':  {bg:'rgba(6,182,212,0.1)',   color:'#0e7490'},
+  'Procedure':  {bg:'rgba(139,92,246,0.1)',  color:'#7c3aed'},
+  'Certificate':{bg:'rgba(34,197,94,0.1)',   color:'#16a34a'},
+  'Manual':     {bg:'rgba(148,163,184,0.1)', color:'#64748b'},
+  'Report':     {bg:'rgba(249,115,22,0.1)',  color:'#ea580c'},
+}
+const VDRL_STATUS_MAP: Record<string,{bg:string;color:string;label:string}> = {
+  // DB enum values (Title Case)
+  'Approved':      {bg:'rgba(34,197,94,0.12)', color:'#16a34a',label:'Approved'},
+  'Under review':  {bg:'rgba(37,99,235,0.12)', color:'#1d4ed8',label:'Under review'},
+  'Overdue':       {bg:'rgba(239,68,68,0.12)', color:'#dc2626',label:'Overdue'},
+  'Not submitted': {bg:'rgba(148,163,184,0.12)',color:'#64748b',label:'Not submitted'},
+  'Resubmit':      {bg:'rgba(245,158,11,0.12)',color:'#d97706',label:'Resubmit'},
+}
+const fmtDateShort = (d:string|null|undefined) => d ? new Date(d).toLocaleDateString('en-AU',{day:'2-digit',month:'short'}) : '—'
+const isNewDoc = (d:string) => (Date.now()-new Date(d).getTime()) < 7*86400000
+
+// ─── VDRL DOC TABLE ───────────────────────────────────────────
+// Renders a table of VDRL documents with status pills and overdue indicators.
+const VDRLDocTable: React.FC<{docs:any[];dark:boolean;onRowClick:(d:any)=>void}> = ({docs,dark,onRowClick}) => {
+  const col = dark?'#f1f5f9':'#0f172a'
+  const bd = `1px solid ${dark?'#334155':'#dde3ed'}`
+  const sub = '#94a3b8'
+  if (!docs.length) return <div style={{textAlign:'center',padding:40,color:sub,fontStyle:'italic'}}>No documents in this package.</div>
+  return (
+    <div style={{overflowX:'auto'}}>
+      <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+        <thead>
+          <tr style={{background:dark?'#162032':'#f8fafc',borderBottom:bd}}>
+            {['DOC NO','TITLE','TYPE','REV','REQUIRED','PROMISED','SUBMITTED','STATUS','ABF'].map(h=>(
+              <th key={h} style={{padding:'7px 10px',textAlign:'left',fontSize:10,fontWeight:600,color:sub,textTransform:'uppercase',letterSpacing:'0.06em',whiteSpace:'nowrap'}}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {docs.map(d => {
+            const pill = VDRL_STATUS_MAP[d.status] || VDRL_STATUS_MAP['Not submitted']
+            const typePill = DOC_TYPE_COLORS[d.doc_type] || {bg:'rgba(148,163,184,0.1)',color:'#64748b'}
+            const isOverdue = d.status==='Overdue'
+            const isNew = d.created_at && isNewDoc(d.created_at)
+            return (
+              <tr key={d.id} onClick={()=>onRowClick(d)}
+                style={{borderBottom:bd,cursor:'pointer',borderLeft:isOverdue?'3px solid #f59e0b':isNew?'3px solid #2563eb':'3px solid transparent'}}
+                onMouseEnter={e=>{(e.currentTarget as HTMLTableRowElement).style.background=dark?'#162032':'#f8fafc'}}
+                onMouseLeave={e=>{(e.currentTarget as HTMLTableRowElement).style.background=''}}>
+                <td style={{padding:'9px 10px',fontFamily:'JetBrains Mono, monospace',fontSize:11,color:'#2563eb',whiteSpace:'nowrap'}}>
+                  {d.doc_number||'—'}
+                  {isNew && <span style={{marginLeft:4,fontSize:9,padding:'1px 5px',borderRadius:9999,background:'rgba(37,99,235,0.1)',color:'#1d4ed8'}}>NEW</span>}
+                  {isOverdue && <span style={{marginLeft:4,fontSize:9,padding:'1px 5px',borderRadius:9999,background:'rgba(245,158,11,0.1)',color:'#d97706'}}>ACTION</span>}
+                </td>
+                <td style={{padding:'9px 10px',maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',color:col}} title={d.title}>{d.title}</td>
+                <td style={{padding:'9px 10px',whiteSpace:'nowrap'}}>
+                  {d.doc_type && <span style={{fontSize:10,padding:'2px 7px',borderRadius:9999,background:typePill.bg,color:typePill.color,fontWeight:500}}>{d.doc_type}</span>}
+                </td>
+                <td style={{padding:'9px 10px',fontFamily:'JetBrains Mono, monospace',fontSize:11,color:sub}}>{d.revision||'—'}</td>
+                <td style={{padding:'9px 10px',fontFamily:'JetBrains Mono, monospace',fontSize:11,color:d.required_date&&new Date(d.required_date)<new Date()&&!d.submitted_date?'#ef4444':sub,whiteSpace:'nowrap'}}>{fmtDateShort(d.required_date)}</td>
+                <td style={{padding:'9px 10px',fontFamily:'JetBrains Mono, monospace',fontSize:11,color:sub,whiteSpace:'nowrap'}}>{fmtDateShort(d.promised_date)}</td>
+                <td style={{padding:'9px 10px',fontFamily:'JetBrains Mono, monospace',fontSize:11,color:d.submitted_date?'#22c55e':sub,whiteSpace:'nowrap'}}>{fmtDateShort(d.submitted_date)}</td>
+                <td style={{padding:'9px 10px',whiteSpace:'nowrap'}}>
+                  <span style={{fontSize:10,padding:'2px 7px',borderRadius:9999,background:pill.bg,color:pill.color,fontWeight:500}}>{pill.label}</span>
+                </td>
+                <td style={{padding:'9px 10px',textAlign:'right',whiteSpace:'nowrap'}}>
+                  {d.abf_required ? <span style={{fontSize:10,padding:'2px 7px',borderRadius:9999,background:d.abf_cleared?'rgba(34,197,94,0.1)':'rgba(245,158,11,0.1)',color:d.abf_cleared?'#16a34a':'#d97706',fontWeight:500}}>{d.abf_cleared?'AFC':'C1'}</span> : <span style={{color:sub,fontSize:10}}>—</span>}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// ─── VDRL NEW PACKAGE MODAL ───────────────────────────────────
+// Simple modal to create a new VDRL package for the project.
+const VDRLNewPackageModal: React.FC<{dark:boolean;projectId:number;onClose:()=>void;onCreated:(pkg:any)=>void}> = ({dark,projectId,onClose,onCreated}) => {
+  const [name, setName] = useState('')
+  const [saving, setSaving] = useState(false)
+  const col = dark?'#f1f5f9':'#0f172a'
+  const cardBg = dark?'#1e293b':'#fff'
+  const bd = `1px solid ${dark?'#334155':'#dde3ed'}`
+  const sub = '#94a3b8'
+  const save = async () => {
+    if (!name.trim()) return
+    setSaving(true)
+    try {
+      const { data } = await axios.post(`${API}/expediting/${projectId}/vdrl/packages`, { name })
+      onCreated(data)
+      onClose()
+    } catch(e) { console.error(e) }
+    setSaving(false)
+  }
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:9000,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'IBM Plex Sans, sans-serif'}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:cardBg,border:bd,borderRadius:10,padding:24,width:420,boxShadow:'0 16px 48px rgba(0,0,0,0.4)'}}>
+        <div style={{fontSize:15,fontWeight:700,color:col,marginBottom:16}}>New VDRL Package</div>
+        <input value={name} onChange={e=>setName(e.target.value)} placeholder="Package name…"
+          style={{width:'100%',height:36,padding:'0 10px',borderRadius:6,border:bd,background:dark?'#0f172a':'#f8fafc',color:col,fontSize:13,fontFamily:'inherit',boxSizing:'border-box',marginBottom:16}} />
+        <div style={{display:'flex',justifyContent:'flex-end',gap:8}}>
+          <button onClick={onClose} style={{padding:'7px 14px',borderRadius:6,border:bd,background:'none',color:sub,fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>Cancel</button>
+          <button onClick={save} disabled={saving||!name.trim()} style={{padding:'7px 16px',borderRadius:6,border:'none',background:'#2563eb',color:'#fff',fontSize:12,cursor:'pointer',opacity:saving||!name.trim()?0.5:1,fontFamily:'inherit'}}>
+            {saving?'Creating…':'Create'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── VDRL SWITCH PACKAGE MODAL ────────────────────────────────
+// Lets user pick a different active package from the list.
+const VDRLSwitchPackageModal: React.FC<{dark:boolean;packages:any[];activeId:number|null;onSelect:(id:number)=>void;onClose:()=>void}> = ({dark,packages,activeId,onSelect,onClose}) => {
+  const col = dark?'#f1f5f9':'#0f172a'
+  const cardBg = dark?'#1e293b':'#fff'
+  const bd = `1px solid ${dark?'#334155':'#dde3ed'}`
+  const sub = '#94a3b8'
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:9000,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'IBM Plex Sans, sans-serif'}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:cardBg,border:bd,borderRadius:10,padding:24,width:480,boxShadow:'0 16px 48px rgba(0,0,0,0.4)'}}>
+        <div style={{fontSize:15,fontWeight:700,color:col,marginBottom:16}}>Switch Package</div>
+        {packages.map(p=>(
+          <div key={p.id} onClick={()=>{onSelect(p.id);onClose()}}
+            style={{padding:'10px 14px',borderRadius:8,border:p.id===activeId?'1px solid #2563eb':bd,background:p.id===activeId?'rgba(37,99,235,0.06)':'none',cursor:'pointer',marginBottom:8}}>
+            <div style={{fontWeight:600,fontSize:13,color:col}}>{p.name}</div>
+            <div style={{fontSize:11,color:sub}}>{p.po_number||''} · {p.vendor_name||''} · {p.doc_count||0} docs</div>
+          </div>
+        ))}
+        <div style={{display:'flex',justifyContent:'flex-end',marginTop:8}}>
+          <button onClick={onClose} style={{padding:'7px 14px',borderRadius:6,border:bd,background:'none',color:sub,fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>Close</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── VDRL ADD DOC MODAL ───────────────────────────────────────
+// Simple form to add a new document to the active package.
+const VDRLAddDocModal: React.FC<{dark:boolean;projectId:number;packageId:number|null;onClose:()=>void;onAdded:()=>void}> = ({dark,projectId,packageId,onClose,onAdded}) => {
+  const [title, setTitle] = useState('')
+  const [docType, setDocType] = useState('Drawing')
+  const [revision, setRevision] = useState('R0')
+  const [docNumber, setDocNumber] = useState('')
+  const [requiredDate, setRequiredDate] = useState('')
+  const [saving, setSaving] = useState(false)
+  const col = dark?'#f1f5f9':'#0f172a'
+  const cardBg = dark?'#1e293b':'#fff'
+  const bd = `1px solid ${dark?'#334155':'#dde3ed'}`
+  const sub = '#94a3b8'
+  const inputSt = {height:32,padding:'0 9px',borderRadius:6,border:bd,background:dark?'#0f172a':'#f8fafc',color:col,fontSize:12,fontFamily:'inherit',width:'100%',boxSizing:'border-box' as const}
+  const save = async () => {
+    if (!title.trim()) return
+    setSaving(true)
+    try {
+      await axios.post(`${API}/expediting/${projectId}/vdrl/documents`, {
+        package_id: packageId, title, doc_type: docType, revision,
+        doc_number: docNumber || null, required_date: requiredDate || null,
+      })
+      onAdded()
+      onClose()
+    } catch(e) { console.error(e) }
+    setSaving(false)
+  }
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:9000,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'IBM Plex Sans, sans-serif'}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:cardBg,border:bd,borderRadius:10,padding:24,width:480,boxShadow:'0 16px 48px rgba(0,0,0,0.4)'}}>
+        <div style={{fontSize:15,fontWeight:700,color:col,marginBottom:16}}>Add Document</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
+          <div>
+            <div style={{fontSize:10,color:sub,marginBottom:4,textTransform:'uppercase'}}>Doc Number</div>
+            <input value={docNumber} onChange={e=>setDocNumber(e.target.value)} placeholder="e.g. DOC-001" style={inputSt} />
+          </div>
+          <div>
+            <div style={{fontSize:10,color:sub,marginBottom:4,textTransform:'uppercase'}}>Type</div>
+            <select value={docType} onChange={e=>setDocType(e.target.value)} style={{...inputSt}}>
+              {['Drawing','Datasheet','Procedure','Certificate','Manual','Report'].map(t=><option key={t}>{t}</option>)}
+            </select>
+          </div>
+        </div>
+        <div style={{marginBottom:10}}>
+          <div style={{fontSize:10,color:sub,marginBottom:4,textTransform:'uppercase'}}>Title *</div>
+          <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Document title…" style={inputSt} />
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:16}}>
+          <div>
+            <div style={{fontSize:10,color:sub,marginBottom:4,textTransform:'uppercase'}}>Revision</div>
+            <input value={revision} onChange={e=>setRevision(e.target.value)} placeholder="R0" style={inputSt} />
+          </div>
+          <div>
+            <div style={{fontSize:10,color:sub,marginBottom:4,textTransform:'uppercase'}}>Required By</div>
+            <input type="date" value={requiredDate} onChange={e=>setRequiredDate(e.target.value)} style={inputSt} />
+          </div>
+        </div>
+        <div style={{display:'flex',justifyContent:'flex-end',gap:8}}>
+          <button onClick={onClose} style={{padding:'7px 14px',borderRadius:6,border:bd,background:'none',color:sub,fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>Cancel</button>
+          <button onClick={save} disabled={saving||!title.trim()} style={{padding:'7px 16px',borderRadius:6,border:'none',background:'#22c55e',color:'#fff',fontSize:12,cursor:'pointer',opacity:saving||!title.trim()?0.5:1,fontFamily:'inherit'}}>
+            {saving?'Adding…':'Add Document'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 type ActiveTab = 'pos' | 'vdrl' | 'action-log'
 type RAGFilter = 'all' | 'red' | 'amber' | 'blue' | 'grey' | 'complete'
 type SubTab = 'all' | 'ongoing' | 'complete'
@@ -77,6 +283,22 @@ export const ExpeditingScreen = ({ dark, projectId, projectName, onBack, onNavig
   const [rosFrom, setRosFrom] = useState('')
   const [rosTo, setRosTo]     = useState('')
 
+  // ─── VDRL STATE ───────────────────────────────────────────
+  const [vdrlStats, setVdrlStats] = useState<any>(null)
+  const [vdrlPackages, setVdrlPackages] = useState<any[]>([])
+  const [vdrlDocs, setVdrlDocs] = useState<any[]>([])
+  const [activePackageId, setActivePackageId] = useState<number | null>(null)
+  const [vdrlSearch, setVdrlSearch] = useState('')
+  const [vdrlStatusFilter, setVdrlStatusFilter] = useState('all')
+  const [showNewPackage, setShowNewPackage] = useState(false)
+  const [showSwitchPackage, setShowSwitchPackage] = useState(false)
+  const [showAddDoc, setShowAddDoc] = useState(false)
+  const [selectedDoc, setSelectedDoc] = useState<any>(null)
+
+  // ─── ACTION LOG STATE ─────────────────────────────────────
+  const [actionLog, setActionLog] = useState<any[]>([])
+  const [logLoading, setLogLoading] = useState(false)
+
   const col     = dark ? '#f1f5f9' : '#0f172a'
   const bg      = dark ? '#0f172a' : '#f4f7fb'
   const cardBg  = dark ? '#1e293b' : '#fff'
@@ -96,6 +318,35 @@ export const ExpeditingScreen = ({ dark, projectId, projectName, onBack, onNavig
     }).catch(e => console.error(e))
       .finally(() => setLoading(false))
   }, [projectId])
+
+  // ─── VDRL DATA LOAD ───────────────────────────────────────
+  // Loads stats and packages when VDRL tab is activated.
+  useEffect(() => {
+    if (activeTab !== 'vdrl') return
+    axios.get(`${API}/expediting/${projectId}/vdrl/stats`).then(r => setVdrlStats(r.data)).catch(() => {})
+    axios.get(`${API}/expediting/${projectId}/vdrl/packages`).then(r => {
+      setVdrlPackages(r.data)
+      if (r.data.length > 0 && !activePackageId) setActivePackageId(r.data[0].id)
+    }).catch(() => {})
+  }, [activeTab, projectId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── VDRL DOCS LOAD ───────────────────────────────────────
+  // Reloads docs when package, search, or filter changes.
+  useEffect(() => {
+    if (!activePackageId || activeTab !== 'vdrl') return
+    const params: any = { package_id: activePackageId }
+    if (vdrlSearch) params.search = vdrlSearch
+    if (vdrlStatusFilter !== 'all') params.status = vdrlStatusFilter
+    axios.get(`${API}/expediting/${projectId}/vdrl/documents`, { params }).then(r => setVdrlDocs(r.data)).catch(() => {})
+  }, [activePackageId, vdrlSearch, vdrlStatusFilter, activeTab, projectId])
+
+  // ─── ACTION LOG LOAD ──────────────────────────────────────
+  // Loads cross-PO action notes when action log tab is active.
+  useEffect(() => {
+    if (activeTab !== 'action-log') return
+    setLogLoading(true)
+    axios.get(`${API}/expediting/${projectId}/action-log`).then(r => setActionLog(r.data)).catch(() => {}).finally(() => setLogLoading(false))
+  }, [activeTab, projectId])
 
   // ─── FILTER ───────────────────────────────────────────────
   // Applies sub-tab, search, RAG filter, critical-only, ROS range.
@@ -319,26 +570,144 @@ export const ExpeditingScreen = ({ dark, projectId, projectName, onBack, onNavig
 
       {/* ── TAB: VDRL Register ── */}
       {activeTab === 'vdrl' && (
-        <div style={{ background: cardBg, border: bd, borderTop: 'none', borderRadius: '0 0 10px 10px', padding: '48px 32px', textAlign: 'center', color: sub }}>
-          <div style={{ fontSize: 32, marginBottom: 12 }}>📑</div>
-          <div style={{ fontSize: 15, fontWeight: 600, color: col, marginBottom: 8 }}>VDRL Register</div>
-          <div style={{ fontSize: 13, maxWidth: 480, margin: '0 auto', lineHeight: 1.6 }}>
-            The VDRL Register shows all vendor document requirements across active POs.
-            Open a PO from the register to view and manage its VDRL documents.
+        <div style={{ background: cardBg, border: bd, borderTop: 'none', borderRadius: '0 0 10px 10px', padding: 20 }}>
+          {/* KPI strip */}
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:10, marginBottom:16 }}>
+            {[
+              { label:'TOTAL DOCS',  value: vdrlStats?.total_docs || 0,    color: col },
+              { label:'SUBMITTED',   value: `${vdrlStats?.submitted_count||0} (${vdrlStats?.submitted_pct||0}%)`, color:'#22c55e' },
+              { label:'OVERDUE',     value: vdrlStats?.overdue_count || 0, color:'#ef4444' },
+              { label:'ABF CLEARED', value: vdrlStats?.abf_cleared_count || 0, color:'#f59e0b' },
+              { label:'PROGRESS',    value: `${vdrlStats?.progress_pct||0}%`, color:'#2563eb' },
+            ].map(({label,value,color}) => (
+              <div key={label} style={{background:dark?'#162032':'#f8fafc',border:bd,borderRadius:8,padding:'12px 16px'}}>
+                <div style={{fontSize:22,fontWeight:700,fontFamily:'JetBrains Mono, monospace',color}}>{value}</div>
+                <div style={{fontSize:10,color:sub,textTransform:'uppercase',letterSpacing:'0.06em',marginTop:3}}>{label}</div>
+              </div>
+            ))}
           </div>
-          <div style={{ marginTop: 12, fontSize: 11, color: sub, fontStyle: 'italic' }}>
-            Full cross-PO view coming in a future sprint.
+
+          {/* Package context bar */}
+          {vdrlPackages.length === 0 ? (
+            <div style={{background:'rgba(245,158,11,0.08)',border:'1px solid rgba(245,158,11,0.3)',borderRadius:8,padding:'10px 16px',marginBottom:12,fontSize:13,color:'#b45309'}}>
+              No VDRL packages configured. Click <strong>+ New package</strong> to begin.
+              <button onClick={()=>setShowNewPackage(true)} style={{marginLeft:10,fontSize:11,padding:'4px 10px',borderRadius:5,border:'none',background:'#2563eb',color:'#fff',cursor:'pointer'}}>+ New package</button>
+            </div>
+          ) : (
+            <div style={{background:dark?'#162032':'#f8fafc',border:bd,borderRadius:8,padding:'10px 16px',marginBottom:12,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div>
+                <span style={{fontWeight:600,color:col}}>{vdrlPackages.find(p=>p.id===activePackageId)?.name || '—'}</span>
+                <span style={{fontSize:11,color:sub,marginLeft:8}}>
+                  {vdrlPackages.find(p=>p.id===activePackageId)?.po_number || ''} · {vdrlPackages.find(p=>p.id===activePackageId)?.vendor_name || ''}
+                </span>
+              </div>
+              <div style={{display:'flex',gap:8}}>
+                <button onClick={()=>setShowSwitchPackage(true)} style={{fontSize:11,padding:'4px 10px',borderRadius:5,border:bd,background:'none',color:col,cursor:'pointer'}}>⇄ Switch package</button>
+                <button onClick={()=>setShowNewPackage(true)} style={{fontSize:11,padding:'4px 10px',borderRadius:5,border:'none',background:'#2563eb',color:'#fff',cursor:'pointer'}}>+ New package</button>
+              </div>
+            </div>
+          )}
+
+          {/* Toolbar + table */}
+          <div style={{display:'flex',gap:8,marginBottom:12,flexWrap:'wrap'}}>
+            <input value={vdrlSearch} onChange={e=>setVdrlSearch(e.target.value)} placeholder="Search doc no, title..."
+              style={{height:32,padding:'0 10px',borderRadius:6,border:bd,background:dark?'#0f172a':'#f8fafc',color:col,fontSize:12,fontFamily:'inherit',flex:'1 1 200px'}} />
+            <select value={vdrlStatusFilter} onChange={e=>setVdrlStatusFilter(e.target.value)}
+              style={{height:32,padding:'0 8px',borderRadius:6,border:bd,background:dark?'#0f172a':'#f8fafc',color:col,fontSize:12}}>
+              <option value="all">All statuses</option>
+              <option value="Approved">Approved</option>
+              <option value="Under review">Under review</option>
+              <option value="Overdue">Overdue</option>
+              <option value="Not submitted">Not submitted</option>
+              <option value="Resubmit">Resubmit</option>
+            </select>
+            <button onClick={()=>setShowAddDoc(true)} disabled={!activePackageId}
+              style={{padding:'4px 12px',borderRadius:5,border:'none',background:'#22c55e',color:'#fff',fontSize:12,cursor:'pointer',opacity:activePackageId?1:0.5}}>
+              + Add document
+            </button>
           </div>
+
+          <VDRLDocTable docs={vdrlDocs} dark={dark} onRowClick={setSelectedDoc} />
+
+          {/* Modals */}
+          {showNewPackage && (
+            <VDRLNewPackageModal dark={dark} projectId={projectId} onClose={()=>setShowNewPackage(false)}
+              onCreated={pkg=>{setVdrlPackages(ps=>[pkg,...ps]);setActivePackageId(pkg.id)}} />
+          )}
+          {showSwitchPackage && (
+            <VDRLSwitchPackageModal dark={dark} packages={vdrlPackages} activeId={activePackageId}
+              onSelect={setActivePackageId} onClose={()=>setShowSwitchPackage(false)} />
+          )}
+          {showAddDoc && activePackageId && (
+            <VDRLAddDocModal dark={dark} projectId={projectId} packageId={activePackageId}
+              onClose={()=>setShowAddDoc(false)}
+              onAdded={()=>{
+                const params: any = { package_id: activePackageId }
+                if (vdrlSearch) params.search = vdrlSearch
+                if (vdrlStatusFilter !== 'all') params.status = vdrlStatusFilter
+                axios.get(`${API}/expediting/${projectId}/vdrl/documents`, { params }).then(r=>setVdrlDocs(r.data)).catch(()=>{})
+                axios.get(`${API}/expediting/${projectId}/vdrl/stats`).then(r=>setVdrlStats(r.data)).catch(()=>{})
+              }} />
+          )}
+          {/* Doc detail panel — simple inline display */}
+          {selectedDoc && (
+            <div onClick={()=>setSelectedDoc(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',zIndex:9000,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'IBM Plex Sans, sans-serif'}}>
+              <div onClick={e=>e.stopPropagation()} style={{background:cardBg,border:bd,borderRadius:10,padding:24,width:500,boxShadow:'0 16px 48px rgba(0,0,0,0.4)'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+                  <span style={{fontWeight:700,fontSize:14,color:col}}>{selectedDoc.title}</span>
+                  <button onClick={()=>setSelectedDoc(null)} style={{background:'none',border:'none',fontSize:18,color:sub,cursor:'pointer'}}>×</button>
+                </div>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,fontSize:12}}>
+                  {[
+                    ['Doc Number', selectedDoc.doc_number||'—'],
+                    ['Type', selectedDoc.doc_type||'—'],
+                    ['Revision', selectedDoc.revision||'—'],
+                    ['Status', selectedDoc.status||'—'],
+                    ['Required By', fmtDateShort(selectedDoc.required_date)],
+                    ['Promised By', fmtDateShort(selectedDoc.promised_date)],
+                    ['Submitted', fmtDateShort(selectedDoc.submitted_date)],
+                    ['Package', selectedDoc.package_name||'—'],
+                  ].map(([l,v])=>(
+                    <div key={l}>
+                      <div style={{fontSize:9,color:sub,textTransform:'uppercase',marginBottom:2}}>{l}</div>
+                      <div style={{color:col,fontWeight:500}}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {/* ── TAB: Action Log ── */}
       {activeTab === 'action-log' && (
-        <div style={{ background: cardBg, border: bd, borderTop: 'none', borderRadius: '0 0 10px 10px', padding: '24px' }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: col, marginBottom: 12 }}>Action Notes — All POs</div>
-          <div style={{ fontSize: 12, color: sub }}>
-            Open a PO from the register to view and add action notes. Cross-PO action log coming in a future sprint.
-          </div>
+        <div style={{ background: cardBg, border: bd, borderTop: 'none', borderRadius: '0 0 10px 10px', padding: 24 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: col, marginBottom: 16 }}>Action Notes — All POs</div>
+          {logLoading ? (
+            <div style={{textAlign:'center',padding:40,color:sub}}>Loading…</div>
+          ) : actionLog.length === 0 ? (
+            <div style={{textAlign:'center',padding:40,color:sub,fontStyle:'italic'}}>No action notes logged yet.</div>
+          ) : actionLog.map(n => (
+            <div key={n.id} style={{display:'flex',gap:12,padding:'12px 0',borderBottom:`1px solid ${dark?'#1e293b':'#f1f5f9'}`}}>
+              <div style={{width:32,height:32,borderRadius:'50%',background:'#e2e8f0',display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,flexShrink:0,color:'#475569'}}>
+                {(n.created_by_name||'?')[0].toUpperCase()}
+              </div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:4,flexWrap:'wrap'}}>
+                  <span style={{fontWeight:600,fontSize:13,color:col}}>{n.created_by_name||'Unknown'}</span>
+                  <span style={{fontSize:11,color:sub}}>{n.created_by_role||''}</span>
+                  <span style={{fontSize:11,color:sub}}>on</span>
+                  <button onClick={()=>onNavigateToPODetail(n.po_id)}
+                    style={{background:'none',border:'none',color:'#2563eb',fontSize:11,cursor:'pointer',fontFamily:'JetBrains Mono, monospace',padding:0}}>
+                    {n.po_number}
+                  </button>
+                  <span style={{fontSize:11,color:sub,marginLeft:'auto'}}>{new Date(n.created_at).toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'numeric'})}</span>
+                </div>
+                <div style={{fontSize:13,color:col}}>{n.note_text}</div>
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>

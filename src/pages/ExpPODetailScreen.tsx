@@ -119,6 +119,15 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
   // Action notes
   const [noteText, setNoteText] = useState('')
   const [postingNote, setPostingNote] = useState(false)
+  const [noteError, setNoteError] = useState('')
+
+  // VDRL documents (from dedicated endpoint)
+  const [vdrlDocs, setVdrlDocs] = useState<any[]>([])
+  const [vdrlDocsLoading, setVdrlDocsLoading] = useState(false)
+
+  // Audit log
+  const [auditLog, setAuditLog] = useState<any[]>([])
+  const [auditFilter, setAuditFilter] = useState<'all'|'milestone_forecast'|'note_added'>('all')
 
   const col    = dark ? '#f1f5f9' : '#0f172a'
   const bg     = dark ? '#0f172a' : '#f4f7fb'
@@ -139,6 +148,26 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
       .finally(() => setLoading(false))
   }
   useEffect(() => { fetchPO() }, [poId])
+
+  // ─── VDRL DOCS LOAD ───────────────────────────────────────
+  // Fetches documents for this PO's VDRL package when tab is active.
+  useEffect(() => {
+    if (activeTab !== 'vdrl' || !po?.vdrl_package) return
+    setVdrlDocsLoading(true)
+    axios.get(`${API}/expediting/${projectId}/vdrl/documents`, { params: { package_id: po.vdrl_package.id } })
+      .then(r => setVdrlDocs(r.data))
+      .catch(() => {})
+      .finally(() => setVdrlDocsLoading(false))
+  }, [activeTab, po?.vdrl_package?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── AUDIT LOG LOAD ───────────────────────────────────────
+  // Fetches combined forecast history + notes for this PO.
+  useEffect(() => {
+    if (activeTab !== 'audit') return
+    axios.get(`${API}/expediting/${projectId}/po/${poId}/audit`)
+      .then(r => setAuditLog(r.data))
+      .catch(() => {})
+  }, [activeTab, poId, projectId])
 
   // ─── MILESTONE SAVE — FORECAST ────────────────────────────
   const saveForecast = async () => {
@@ -193,8 +222,10 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
   }
 
   // ─── POST NOTE ────────────────────────────────────────────
+  // Requires at least 3 characters; shows inline error otherwise.
   const postNote = async () => {
-    if (!noteText.trim()) return
+    if (noteText.trim().length < 3) { setNoteError('Note must be at least 3 characters.'); return }
+    setNoteError('')
     setPostingNote(true)
     try {
       await axios.post(`${API}/expediting/${projectId}/po/${poId}/action-notes`, { note_text: noteText })
@@ -618,37 +649,61 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
                 <div style={{ color: sub, fontSize: 13, textAlign: 'center', padding: 40 }}>No VDRL package configured for this PO.</div>
               ) : (
                 <>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+                  {/* Package header */}
+                  <div style={{ background: dark?'#162032':'#f8fafc', border: bd, borderRadius: 8, padding: '10px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
                     <span style={{ fontSize: 14, fontWeight: 600, color: col }}>{po.vdrl_package.name}</span>
                     <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, background: 'rgba(34,197,94,0.1)', color: '#16a34a' }}>{po.vdrl_package.status}</span>
-                    <span style={{ fontSize: 11, color: sub }}>{po.vdrl_package.documents.length} document{po.vdrl_package.documents.length !== 1 ? 's' : ''}</span>
+                    <span style={{ fontSize: 11, color: sub }}>{vdrlDocs.length || po.vdrl_package.documents.length} doc{(vdrlDocs.length || po.vdrl_package.documents.length) !== 1 ? 's' : ''}</span>
+                    <span style={{ fontSize: 11, color: '#ef4444', marginLeft: 8 }}>
+                      {(vdrlDocs.length ? vdrlDocs : po.vdrl_package.documents).filter((d:any) => d.status === 'Overdue').length > 0
+                        ? `${(vdrlDocs.length ? vdrlDocs : po.vdrl_package.documents).filter((d:any)=>d.status==='Overdue').length} overdue` : ''}
+                    </span>
                   </div>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                    <thead>
-                      <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
-                        {['#', 'Title', 'Type', 'Rev', 'Status', 'Required By'].map(h => (
-                          <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {po.vdrl_package.documents.map(d => {
-                        const st = VDRL_STATUS_COLORS[d.status] || { bg: 'rgba(148,163,184,0.1)', color: sub }
-                        return (
-                          <tr key={d.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
-                            <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{d.doc_number}</td>
-                            <td style={{ padding: '8px 12px', color: col }}>{d.title}</td>
-                            <td style={{ padding: '8px 12px', color: sub }}>{d.doc_type}</td>
-                            <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col }}>{d.revision}</td>
-                            <td style={{ padding: '8px 12px' }}>
-                              <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, background: st.bg, color: st.color }}>{d.status}</span>
-                            </td>
-                            <td style={{ padding: '8px 12px', color: sub }}>{fmt(d.required_date)}</td>
+                  {vdrlDocsLoading ? (
+                    <div style={{ textAlign: 'center', padding: 40, color: sub }}>Loading documents…</div>
+                  ) : (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                        <thead>
+                          <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
+                            {['DOC NO','TITLE','TYPE','REV','REQUIRED','PROMISED','SUBMITTED','STATUS','ABF'].map(h => (
+                              <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
+                            ))}
                           </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
+                        </thead>
+                        <tbody>
+                          {(vdrlDocs.length ? vdrlDocs : po.vdrl_package.documents).map((d: any) => {
+                            const statusMap: Record<string,{bg:string;color:string;label:string}> = {
+                              'Approved':      {bg:'rgba(34,197,94,0.12)', color:'#16a34a',label:'Approved'},
+                              'Under review':  {bg:'rgba(37,99,235,0.12)', color:'#1d4ed8',label:'Under review'},
+                              'Overdue':       {bg:'rgba(239,68,68,0.12)', color:'#dc2626',label:'Overdue'},
+                              'Not submitted': {bg:'rgba(148,163,184,0.12)',color:'#64748b',label:'Not submitted'},
+                              'Resubmit':      {bg:'rgba(245,158,11,0.12)',color:'#d97706',label:'Resubmit'},
+                            }
+                            const pill = statusMap[d.status] || statusMap['Not submitted']
+                            const fmtS = (dt: string|null|undefined) => dt ? new Date(dt).toLocaleDateString('en-AU',{day:'2-digit',month:'short'}) : '—'
+                            return (
+                              <tr key={d.id} style={{ borderBottom: `1px solid ${dark?'#1e293b':'#f1f5f9'}`, borderLeft: d.status==='Overdue'?'3px solid #f59e0b':'3px solid transparent' }}>
+                                <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', whiteSpace: 'nowrap' }}>{d.doc_number || '—'}</td>
+                                <td style={{ padding: '8px 10px', color: col, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.title}>{d.title}</td>
+                                <td style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{d.doc_type || '—'}</td>
+                                <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{d.revision || '—'}</td>
+                                <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: d.required_date&&new Date(d.required_date)<new Date()&&!d.submitted_date?'#ef4444':sub, whiteSpace:'nowrap' }}>{fmtS(d.required_date)}</td>
+                                <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, whiteSpace:'nowrap' }}>{fmtS(d.promised_date)}</td>
+                                <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: d.submitted_date?'#22c55e':sub, whiteSpace:'nowrap' }}>{fmtS(d.submitted_date)}</td>
+                                <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                                  <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 9999, background: pill.bg, color: pill.color, fontWeight: 500 }}>{pill.label}</span>
+                                </td>
+                                <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                                  {d.abf_required ? <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 9999, background: d.abf_cleared?'rgba(34,197,94,0.1)':'rgba(245,158,11,0.1)', color: d.abf_cleared?'#16a34a':'#d97706' }}>{d.abf_cleared?'AFC':'C1'}</span> : <span style={{ color: sub, fontSize: 10 }}>—</span>}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -657,17 +712,19 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
           {/* ── TAB: Action Notes ── */}
           {activeTab === 'notes' && (
             <div style={{ padding: 20 }}>
-              {/* Add note */}
+              {/* Add note — minimum 3 chars */}
               <div style={{ marginBottom: 20 }}>
                 <textarea
-                  value={noteText} onChange={e => setNoteText(e.target.value)}
+                  value={noteText}
+                  onChange={e => { setNoteText(e.target.value); if (noteError) setNoteError('') }}
                   placeholder="Add an action note…"
                   rows={3}
-                  style={{ ...inputSt, resize: 'vertical', marginBottom: 8 }}
+                  style={{ ...inputSt, resize: 'vertical', marginBottom: 6, border: noteError ? '1px solid #ef4444' : bd }}
                 />
+                {noteError && <div style={{ fontSize: 11, color: '#ef4444', marginBottom: 6 }}>{noteError}</div>}
                 <button
-                  onClick={postNote} disabled={postingNote || !noteText.trim()}
-                  style={{ fontSize: 12, padding: '7px 16px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', cursor: 'pointer', opacity: postingNote || !noteText.trim() ? 0.5 : 1 }}>
+                  onClick={postNote} disabled={postingNote}
+                  style={{ fontSize: 12, padding: '7px 16px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', cursor: 'pointer', opacity: postingNote ? 0.5 : 1 }}>
                   {postingNote ? 'Posting…' : 'Post Note'}
                 </button>
               </div>
@@ -689,26 +746,38 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
           {/* ── TAB: Audit Trail ── */}
           {activeTab === 'audit' && (
             <div style={{ padding: 20 }}>
-              {(po.forecast_history || []).length === 0 ? (
-                <div style={{ color: sub, fontSize: 13, textAlign: 'center', padding: 40 }}>No forecast changes recorded.</div>
+              {/* Filter pills */}
+              <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+                {(['all','milestone_forecast','note_added'] as const).map(f => (
+                  <button key={f} onClick={() => setAuditFilter(f)}
+                    style={{ padding: '4px 12px', borderRadius: 20, border: `1px solid ${auditFilter===f?'#2563eb':bd}`, background: auditFilter===f?'#2563eb':'none', color: auditFilter===f?'#fff':sub, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>
+                    {f==='all'?'All':f==='milestone_forecast'?'Milestone changes':'Notes'}
+                  </button>
+                ))}
+              </div>
+              {auditLog.filter(e => auditFilter==='all' || e.type===auditFilter).length === 0 ? (
+                <div style={{ color: sub, fontSize: 13, textAlign: 'center', padding: 40, fontStyle: 'italic' }}>No audit entries yet.</div>
               ) : (
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                   <thead>
-                    <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
-                      {['Date', 'Changed By', 'Field', 'Old Value', 'New Value', 'Reason'].map(h => (
-                        <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
+                    <tr style={{ background: dark?'#0f172a':'#f8fafc', borderBottom: bd }}>
+                      {['Timestamp','User','Action','Old Value','New Value'].map(h => (
+                        <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {(po.forecast_history || []).map(h => (
-                      <tr key={h.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
-                        <td style={{ padding: '8px 12px', color: sub, whiteSpace: 'nowrap' }}>{fmt(h.changed_at)}</td>
-                        <td style={{ padding: '8px 12px', color: col }}>{h.changed_by_name || '—'}</td>
-                        <td style={{ padding: '8px 12px', color: sub }}>forecast_date</td>
-                        <td style={{ padding: '8px 12px', color: '#ef4444' }}>{fmt(h.old_value)}</td>
-                        <td style={{ padding: '8px 12px', color: '#22c55e' }}>{fmt(h.new_value)}</td>
-                        <td style={{ padding: '8px 12px', color: col }}>{h.reason}</td>
+                    {auditLog.filter(e => auditFilter==='all' || e.type===auditFilter).map(e => (
+                      <tr key={e.id} style={{ borderBottom: bd }}>
+                        <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, whiteSpace: 'nowrap' }}>
+                          {new Date(e.timestamp).toLocaleDateString('en-AU',{day:'2-digit',month:'short'})}
+                        </td>
+                        <td style={{ padding: '8px 10px', fontWeight: 500, color: col }}>{e.user_name || '—'}</td>
+                        <td style={{ padding: '8px 10px', color: col }}>{e.action}</td>
+                        <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#ef4444' }}>{e.old_value || '—'}</td>
+                        <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#22c55e' }}>
+                          {typeof e.new_value==='string'&&e.new_value.length>40 ? e.new_value.slice(0,40)+'…' : e.new_value || '—'}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

@@ -429,6 +429,212 @@ router.put('/:projectId/po/:poId/lines/:lineId/link', async (req, res) => {
   }
 })
 
+// ─── VDRL STATS ───────────────────────────────────────────────
+// Summary counts for VDRL KPI strip on ExpeditingScreen.
+router.get('/:projectId/vdrl/stats', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const [[stats]] = await db.query(`
+      SELECT
+        COUNT(d.id) AS total_docs,
+        SUM(CASE WHEN d.submitted_date IS NOT NULL THEN 1 ELSE 0 END) AS submitted_count,
+        SUM(CASE WHEN d.status='Overdue' THEN 1 ELSE 0 END) AS overdue_count,
+        SUM(CASE WHEN d.abf_required=1 AND d.abf_cleared=1 THEN 1 ELSE 0 END) AS abf_cleared_count
+      FROM vdrl_documents d
+      JOIN vdrl_packages p ON p.id = d.package_id
+      WHERE p.project_id = ?
+    `, [pid])
+    const total = stats.total_docs || 0
+    const submitted = stats.submitted_count || 0
+    res.json({
+      total_docs: total,
+      submitted_count: submitted,
+      submitted_pct: total ? Math.round(submitted / total * 100) : 0,
+      overdue_count: stats.overdue_count || 0,
+      abf_cleared_count: stats.abf_cleared_count || 0,
+      progress_pct: total ? Math.round(submitted / total * 100) : 0,
+    })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── VDRL PACKAGES LIST ───────────────────────────────────────
+// All packages for a project with doc counts and PO info.
+router.get('/:projectId/vdrl/packages', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const [pkgs] = await db.query(`
+      SELECT p.*, po.po_number, po.vendor_name,
+        COUNT(d.id) AS doc_count,
+        SUM(CASE WHEN d.submitted_date IS NOT NULL THEN 1 ELSE 0 END) AS submitted_count,
+        SUM(CASE WHEN d.status='overdue' THEN 1 ELSE 0 END) AS overdue_count
+      FROM vdrl_packages p
+      LEFT JOIN purchase_orders po ON po.id = p.po_id
+      LEFT JOIN vdrl_documents d ON d.package_id = p.id
+      WHERE p.project_id = ?
+      GROUP BY p.id
+      ORDER BY p.created_at DESC
+    `, [pid])
+    res.json(pkgs)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── VDRL PACKAGE CREATE ──────────────────────────────────────
+// Creates a new VDRL package for the given project.
+router.post('/:projectId/vdrl/packages', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const { name, po_id } = req.body
+    if (!name?.trim()) return res.status(400).json({ error: 'Package name is required' })
+    // Generate a simple package_ref from name
+    const pkgRef = name.trim().replace(/[^a-zA-Z0-9]/g, '-').toUpperCase().slice(0, 20) + '-' + Date.now().toString().slice(-5)
+    const [r] = await db.query(
+      'INSERT INTO vdrl_packages (project_id, po_id, package_ref, name, status, created_by) VALUES (?,?,?,?,?,?)',
+      [pid, po_id || null, pkgRef, name.trim(), 'active', req.user.id]
+    )
+    const [[pkg]] = await db.query('SELECT * FROM vdrl_packages WHERE id=?', [r.insertId])
+    res.status(201).json(pkg)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── VDRL DOCUMENTS LIST ──────────────────────────────────────
+// Filterable list of VDRL documents for a project.
+router.get('/:projectId/vdrl/documents', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const { package_id, status, doc_type, discipline, search } = req.query
+
+    let where = 'p.project_id = ?'
+    const params = [pid]
+    if (package_id) { where += ' AND d.package_id = ?'; params.push(package_id) }
+    if (status)     { where += ' AND d.status = ?';     params.push(status) }
+    if (doc_type)   { where += ' AND d.doc_type = ?';   params.push(doc_type) }
+    if (discipline) { where += ' AND d.discipline = ?'; params.push(discipline) }
+    if (search) {
+      where += ' AND (d.doc_number LIKE ? OR d.title LIKE ?)';
+      params.push(`%${search}%`, `%${search}%`)
+    }
+
+    const [docs] = await db.query(`
+      SELECT d.*,
+        p.name AS package_name,
+        po.po_number, po.vendor_name,
+        DATEDIFF(CURDATE(), d.required_date) AS days_overdue
+      FROM vdrl_documents d
+      JOIN vdrl_packages p ON p.id = d.package_id
+      LEFT JOIN purchase_orders po ON po.id = p.po_id
+      WHERE ${where}
+      ORDER BY d.doc_number
+    `, params)
+    res.json(docs)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── VDRL DOCUMENT CREATE ─────────────────────────────────────
+// Adds a new document to a VDRL package.
+router.post('/:projectId/vdrl/documents', async (req, res) => {
+  try {
+    const { package_id, doc_number, title, doc_type, discipline, revision,
+            required_date, promised_date, notes, status } = req.body
+    if (!title?.trim()) return res.status(400).json({ error: 'Title is required' })
+    if (!package_id)    return res.status(400).json({ error: 'Package is required' })
+    const [r] = await db.query(
+      `INSERT INTO vdrl_documents (package_id, doc_number, title, doc_type, discipline,
+        revision, required_date, promised_date, status, notes, created_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [package_id, doc_number || null, title.trim(), doc_type || null,
+       discipline || null, revision || 'R0', required_date || null, promised_date || null,
+       status || 'not_submitted', notes || null, req.user.id]
+    )
+    const [[doc]] = await db.query('SELECT * FROM vdrl_documents WHERE id=?', [r.insertId])
+    res.status(201).json(doc)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── VDRL DOCUMENT UPDATE ─────────────────────────────────────
+// Partial update of a VDRL document's fields.
+router.put('/:projectId/vdrl/documents/:docId', async (req, res) => {
+  try {
+    const docId = Number(req.params.docId)
+    const fields = ['title','doc_type','discipline','revision','required_date','promised_date','submitted_date','status','abf_required','abf_cleared','notes','owner']
+    const sets = [], vals = []
+    for (const f of fields) {
+      if (req.body[f] !== undefined) { sets.push(`${f}=?`); vals.push(req.body[f]) }
+    }
+    if (!sets.length) return res.status(400).json({ error: 'No fields to update' })
+    vals.push(docId)
+    await db.query(`UPDATE vdrl_documents SET ${sets.join(',')}, updated_at=NOW() WHERE id=?`, vals)
+    const [[doc]] = await db.query('SELECT * FROM vdrl_documents WHERE id=?', [docId])
+    res.json(doc)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── ACTION LOG ───────────────────────────────────────────────
+// Cross-PO action notes for all locked POs in a project.
+router.get('/:projectId/action-log', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const [notes] = await db.query(`
+      SELECT n.id, n.po_id, n.note_text, n.created_at,
+        po.po_number, po.vendor_name,
+        u.full_name AS created_by_name, u.role AS created_by_role
+      FROM po_action_notes n
+      JOIN purchase_orders po ON po.id = n.po_id
+      LEFT JOIN users u ON u.id = n.created_by
+      WHERE po.project_id = ? AND po.is_locked = 1
+      ORDER BY n.created_at DESC
+      LIMIT 100
+    `, [pid])
+    res.json(notes)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── PO AUDIT TRAIL ───────────────────────────────────────────
+// Combined milestone forecast history + action notes for a PO.
+router.get('/:projectId/po/:poId/audit', async (req, res) => {
+  try {
+    const poId = Number(req.params.poId)
+    const [histRows] = await db.query(`
+      SELECT h.id, h.entity_type, h.entity_id, h.field_name,
+        h.old_value, h.new_value, h.reason, h.changed_at,
+        u.full_name AS user_name,
+        m.label AS milestone_label
+      FROM expediting_forecast_history h
+      LEFT JOIN users u ON u.id = h.changed_by
+      LEFT JOIN po_milestones m ON m.id = h.entity_id AND h.entity_type = 'milestone'
+      WHERE h.entity_id IN (
+        SELECT id FROM po_milestones WHERE po_id = ?
+      ) AND h.entity_type = 'milestone'
+      ORDER BY h.changed_at DESC
+    `, [poId])
+
+    const [noteRows] = await db.query(`
+      SELECT n.id, n.note_text, n.created_at,
+        u.full_name AS user_name, u.role AS user_role
+      FROM po_action_notes n
+      LEFT JOIN users u ON u.id = n.created_by
+      WHERE n.po_id = ?
+      ORDER BY n.created_at DESC
+    `, [poId])
+
+    const combined = [
+      ...histRows.map(h => ({
+        id: `ms-${h.id}`, type: 'milestone_forecast',
+        action: `Forecast updated: ${h.milestone_label}`,
+        field: h.field_name, old_value: h.old_value, new_value: h.new_value,
+        reason: h.reason, user_name: h.user_name, timestamp: h.changed_at,
+      })),
+      ...noteRows.map(n => ({
+        id: `note-${n.id}`, type: 'note_added',
+        action: 'Note added', field: null,
+        old_value: null, new_value: n.note_text,
+        reason: null, user_name: n.user_name, timestamp: n.created_at,
+      })),
+    ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+
+    res.json(combined)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // ─── HEAT NUMBER ──────────────────────────────────────────────
 // Updates the heat number on a PO line.
 router.put('/:projectId/po/:poId/lines/:lineId/heat-number', async (req, res) => {
