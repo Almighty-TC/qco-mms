@@ -2,7 +2,7 @@
 // List view with stat cards, resizable columns, RAG row stripe, milestone dots,
 // slide-in drawer, expeditor assignment, critical-path toggle, pagination.
 // Phase 2 (New PO Wizard) and Phase 3 (PO Detail) are stubbed below.
-import { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import axios from 'axios'
 import { ToastProvider, useToast } from '../hooks/useToast'
@@ -91,6 +91,7 @@ interface POLine {
 interface Stats {
   total: number; ongoing: number; complete: number; breached: number; atRisk: number
   atRiskDays: number   // Item 1: configurable threshold from project settings
+  totalValue?: number; approvedValue?: number; pendingCount?: number
 }
 interface Supplier { id: number; code: string; name: string }
 interface UOMItem  { id: number; code: string; description?: string }
@@ -1050,18 +1051,22 @@ const HelpModal = ({ dark, onClose }: { dark: boolean; onClose: () => void }) =>
 // ─── COLUMN DEFINITIONS ───────────────────────────────────────────────────────
 // Matches spec exactly: PO Ref | Vendor/Group | Material Desc | WBS | Owner/Expeditor | Milestones | CDD | ROS | Status | Actions
 
-// ─── FIX 1: Milestones column removed — milestones belong in Expediting ──────
+// ─── COLUMN DEFINITIONS — order matches wireframe: ★|PO Ref|PO Name|Desc|CCY|Value|Incoterms|WBS|ROS|Vendor|Owner|CDD|Status|Actions
 const PO_COLS = [
-  { key: 'star',      label: '',                    width: 32,  minWidth: 32,  noResize: true },
-  { key: 'po_number', label: 'PO Ref',              width: 140, minWidth: 100 },
-  { key: 'vendor',    label: 'Vendor / Group',      width: 180, minWidth: 120 },
-  { key: 'desc',      label: 'Material Description', width: 220, minWidth: 120, flex: true },
-  { key: 'wbs',       label: 'WBS',                 width: 110, minWidth: 80  },
-  { key: 'owner',     label: 'Owner / Expeditor',   width: 160, minWidth: 120 },
-  { key: 'cdd',       label: 'CDD',                 width: 110, minWidth: 90  },
-  { key: 'ros',       label: 'ROS Date',            width: 110, minWidth: 90  },
-  { key: 'status',    label: 'Status',              width: 130, minWidth: 110 },
-  { key: 'actions',   label: '',                    width: 80,  minWidth: 80,  noResize: true },
+  { key: 'star',      label: '',            width: 32,  minWidth: 32,  noResize: true },
+  { key: 'po_number', label: 'PO Ref',      width: 120, minWidth: 90  },
+  { key: 'po_name',   label: 'PO Name',     width: 160, minWidth: 100 },
+  { key: 'desc',      label: 'Description', width: 180, minWidth: 100, flex: true },
+  { key: 'ccy',       label: 'CCY',         width: 55,  minWidth: 50  },
+  { key: 'value',     label: 'Value',       width: 110, minWidth: 90  },
+  { key: 'incoterms', label: 'Incoterms',   width: 90,  minWidth: 70  },
+  { key: 'wbs',       label: 'WBS',         width: 100, minWidth: 80  },
+  { key: 'ros',       label: 'ROS',         width: 100, minWidth: 80  },
+  { key: 'vendor',    label: 'Vendor',      width: 150, minWidth: 100 },
+  { key: 'owner',     label: 'Owner',       width: 130, minWidth: 100 },
+  { key: 'cdd',       label: 'CDD',         width: 100, minWidth: 80  },
+  { key: 'status',    label: 'Status',      width: 120, minWidth: 100 },
+  { key: 'actions',   label: '',            width: 70,  minWidth: 70,  noResize: true },
 ]
 
 // ─── PO TABLE ROW ─────────────────────────────────────────────────────────────
@@ -1120,7 +1125,7 @@ const POTableRow = ({
         </span>
       </td>
 
-      {/* ── PO Ref — FIX 1: clicking the ref navigates to full PO Detail Screen ── */}
+      {/* ── PO Ref (index 1) — clicking navigates to full PO Detail Screen ─── */}
       <td
         onClick={e => { e.stopPropagation(); if (onNavigateToPO) { onNavigateToPO(po.id) } else { onClick(po) } }}
         style={{ ...tdBase, width: colWidths[1], cursor: 'pointer' }}>
@@ -1134,26 +1139,56 @@ const POTableRow = ({
         {po.isLocked && <span style={{ marginLeft: 5, fontSize: 9, fontWeight: 700, color: '#15803d', fontFamily: 'IBM Plex Sans, sans-serif', letterSpacing: '0.05em' }}>LOCKED</span>}
       </td>
 
-      {/* ── Vendor / Group ─────────────────────────────────────────────────── */}
-      <td style={{ ...tdBase, width: colWidths[2] }} title={`${po.supplier_name ?? po.vendor_name}${po.group_category ? ' · ' + po.group_category : ''}`}>
+      {/* ── PO Name (index 2) ─────────────────────────────────────────────── */}
+      <td style={{ ...tdBase, width: colWidths[2] }} title={po.po_name ?? ''}>
+        <span style={{ fontSize: 12, color: col, overflow: 'hidden', textOverflow: 'ellipsis' }}>{po.po_name ?? '—'}</span>
+      </td>
+
+      {/* ── Description (index 3) ─────────────────────────────────────────── */}
+      <td style={{ ...tdBase }} title={po.description ?? ''}>
+        <span style={{ fontSize: 13, color: dark ? '#94a3b8' : '#475569' }}>{po.description ?? '—'}</span>
+      </td>
+
+      {/* ── CCY (index 4) ─────────────────────────────────────────────────── */}
+      <td style={{ ...tdBase, width: colWidths[4], textAlign: 'center' }}>
+        <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#64748b' }}>{po.currency}</span>
+      </td>
+
+      {/* ── Value (index 5) ───────────────────────────────────────────────── */}
+      <td style={{ ...tdBase, width: colWidths[5], textAlign: 'right' }}>
+        <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, fontWeight: 600, color: col }}>
+          {po.value != null ? po.value.toLocaleString('en-AU', { maximumFractionDigits: 0 }) : '—'}
+        </span>
+      </td>
+
+      {/* ── Incoterms (index 6) ───────────────────────────────────────────── */}
+      <td style={{ ...tdBase, width: colWidths[6] }}>
+        <span style={{ fontSize: 11, color: '#64748b', fontFamily: 'JetBrains Mono, monospace' }}>{po.incoterms ?? '—'}</span>
+      </td>
+
+      {/* ── WBS (index 7) ─────────────────────────────────────────────────── */}
+      <td style={{ ...tdBase, width: colWidths[7] }} title={po.wbs_name ?? po.wbs_code ?? ''}>
+        <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#64748b' }}>{po.wbs_code ?? '—'}</span>
+      </td>
+
+      {/* ── ROS Date (index 8) ────────────────────────────────────────────── */}
+      <td style={{ ...tdBase, width: colWidths[8] }}>
+        {po.ros_date
+          ? <span style={{ fontSize: 12, color: dark ? '#94a3b8' : '#475569', fontFamily: 'JetBrains Mono, monospace' }}>{fmtDate(po.ros_date)}</span>
+          : <span style={{ fontSize: 11, color: '#94a3b8', fontStyle: 'italic' }}>— not set</span>
+        }
+      </td>
+
+      {/* ── Vendor (index 9) ──────────────────────────────────────────────── */}
+      <td style={{ ...tdBase, width: colWidths[9] }} title={`${po.supplier_name ?? po.vendor_name}${po.group_category ? ' · ' + po.group_category : ''}`}>
         <div style={{ fontSize: 13, fontWeight: 500, color: col, overflow: 'hidden', textOverflow: 'ellipsis' }}>{po.supplier_name ?? po.vendor_name}</div>
         {po.group_category && <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'capitalize' }}>{po.group_category}</div>}
       </td>
 
-      {/* ── Material Description ───────────────────────────────────────────── */}
-      <td style={{ ...tdBase }} title={po.description ?? po.po_name ?? ''}>
-        <span style={{ fontSize: 13, color: dark ? '#94a3b8' : '#475569' }}>{po.description ?? po.po_name ?? '—'}</span>
-      </td>
-
-      {/* ── WBS ────────────────────────────────────────────────────────────── */}
-      <td style={{ ...tdBase, width: colWidths[4] }} title={po.wbs_name ?? po.wbs_code ?? ''}>
-        <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#64748b' }}>{po.wbs_code ?? '—'}</span>
-      </td>
-
-      {/* ── Owner / Expeditor — FIX 2: "— Assign" now opens inline dropdown ── */}
+      {/* ── Owner / Expeditor (index 10) — "— Assign" opens inline dropdown ── */}
       <td
         onClick={e => e.stopPropagation()}   // prevent row drawer open when clicking assign
-        style={{ ...tdBase, width: colWidths[5], overflow: 'visible', position: 'relative' }}>
+        style={{ ...tdBase, width: colWidths[10], overflow: 'visible', position: 'relative' }}>
         {/* FIX 5: owner name has "PO Owner" tooltip */}
         <div
           title="PO Owner"
@@ -1224,28 +1259,20 @@ const POTableRow = ({
         )}
       </td>
 
-      {/* ── CDD (index 6 after removing milestones) ────────────────────────── */}
-      <td style={{ ...tdBase, width: colWidths[6] }}>
+      {/* ── CDD (index 11) ────────────────────────────────────────────────── */}
+      <td style={{ ...tdBase, width: colWidths[11] }}>
         <span style={{ fontSize: 12, color: po.rag === 'red' ? '#ef4444' : po.rag === 'amber' ? '#d97706' : (dark ? '#94a3b8' : '#475569'), fontFamily: 'JetBrains Mono, monospace' }}>
           {fmtDate(po.cdd)}
         </span>
       </td>
 
-      {/* ── ROS Date (index 7) ─────────────────────────────────────────────── */}
-      <td style={{ ...tdBase, width: colWidths[7] }}>
-        {po.ros_date
-          ? <span style={{ fontSize: 12, color: dark ? '#94a3b8' : '#475569', fontFamily: 'JetBrains Mono, monospace' }}>{fmtDate(po.ros_date)}</span>
-          : <span style={{ fontSize: 11, color: '#94a3b8', fontStyle: 'italic' }}>— not set</span>
-        }
-      </td>
-
-      {/* ── Status (index 8) ───────────────────────────────────────────────── */}
-      <td style={{ ...tdBase, width: colWidths[8] }}>
+      {/* ── Status (index 12) ─────────────────────────────────────────────── */}
+      <td style={{ ...tdBase, width: colWidths[12] }}>
         <StatusPill status={po.status} label={po.statusLabel} />
       </td>
 
-      {/* ── Actions (index 9) ──────────────────────────────────────────────── */}
-      <td onClick={e => e.stopPropagation()} style={{ ...tdBase, width: colWidths[9], textAlign: 'center' }}>
+      {/* ── Actions (index 13) ────────────────────────────────────────────── */}
+      <td onClick={e => e.stopPropagation()} style={{ ...tdBase, width: colWidths[13], textAlign: 'center' }}>
         {!po.isLocked && (
           <button
             onClick={() => onApprove(po)}
@@ -1343,6 +1370,8 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
   const [showUpload,    setShowUpload]    = useState(false)
   // FIX 2: clickable summary card filter ('total'|'ongoing'|'complete'|'breached'|'atRisk'|null)
   const [cardFilter,    setCardFilter]    = useState<string | null>(null)
+  // FIX 3: group by control
+  const [groupBy,       setGroupBy]       = useState<'none' | 'vendor' | 'wbs'>('none')
   // FIX 2: inline expeditor assignment from the table row (separate from drawer)
   const [rowAssignPoId,  setRowAssignPoId]  = useState<number | null>(null)
   const [rowAssignVal,   setRowAssignVal]   = useState('')
@@ -1383,6 +1412,10 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
       if (cardFilter === 'complete') params.status = 'completed'
       if (cardFilter === 'breached') params.rag    = 'red'
       if (cardFilter === 'atRisk')   params.rag    = 'amber'
+      // New value-based card filters use the tab state set at click time
+      // 'committed' → all non-cancelled (no extra param, tab already set to 'all')
+      // 'approvedValue' → approved tab handled via setActiveTab('approved')
+      // 'pendingApproval' → pending tab handled via setActiveTab('pending')
 
       const [statsRes, posRes] = await Promise.all([
         axios.get(`${API}/procurement/${projectId}/stats`),
@@ -1552,12 +1585,25 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
         </div>
       </div>
 
-      {/* ── Summary cards (5-col) ─────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
+      {/* ── Summary cards ─────────────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
         {/* FIX 2: each card is clickable — sets cardFilter; clicking active card clears it */}
         <StatCard dark={dark} label="Total POs" value={stats?.total ?? '—'}
           active={cardFilter === 'total'}
           onClick={() => { setCardFilter(cardFilter === 'total' ? null : 'total'); setActiveTab('all') }} />
+        {/* ─── NEW VALUE STAT CARDS ────────────────────────────────────────── */}
+        <StatCard dark={dark} label="Committed Value"
+          value={stats ? fmtCurrency(stats.totalValue ?? 0, 'AUD') : '—'}
+          active={cardFilter === 'committed'}
+          onClick={() => { setCardFilter(cardFilter === 'committed' ? null : 'committed'); setActiveTab('all') }} />
+        <StatCard dark={dark} label="Approved & Locked"
+          value={stats ? fmtCurrency(stats.approvedValue ?? 0, 'AUD') : '—'}
+          active={cardFilter === 'approvedValue'}
+          onClick={() => { setCardFilter(cardFilter === 'approvedValue' ? null : 'approvedValue'); setActiveTab('approved') }} />
+        <StatCard dark={dark} label="Pending Approval"
+          value={stats?.pendingCount ?? '—'}
+          active={cardFilter === 'pendingApproval'}
+          onClick={() => { setCardFilter(cardFilter === 'pendingApproval' ? null : 'pendingApproval'); setActiveTab('pending') }} />
         <StatCard dark={dark} label="Ongoing" value={stats?.ongoing ?? '—'}
           active={cardFilter === 'ongoing'}
           onClick={() => { setCardFilter(cardFilter === 'ongoing' ? null : 'ongoing'); setActiveTab('all') }} />
@@ -1598,6 +1644,16 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#64748b', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
           <input type="checkbox" checked={criticalOnly} onChange={e => setCriticalOnly(e.target.checked)} style={{ cursor: 'pointer', accentColor: '#E84E0F' }} />
           ★ Critical path only
+        </label>
+        {/* ─── FIX 3: Group by select ──────────────────────────────────────── */}
+        <label style={{ fontSize: 12, color: '#64748b', display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+          Group by:
+          <select value={groupBy} onChange={e => setGroupBy(e.target.value as 'none' | 'vendor' | 'wbs')}
+            style={{ height: 32, padding: '0 8px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: dark ? '#1e293b' : '#fff', color: col, fontSize: 12, fontFamily: 'inherit', outline: 'none' }}>
+            <option value="none">None</option>
+            <option value="vendor">Vendor</option>
+            <option value="wbs">WBS</option>
+          </select>
         </label>
         {/* Count display */}
         <div style={{ marginLeft: 'auto', fontSize: 12, color: '#94a3b8', whiteSpace: 'nowrap' }}>
@@ -1680,22 +1736,44 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
             {!loading && pos.length === 0 && (
               <tr><td colSpan={PO_COLS.length} style={{ padding: '48px 0', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>No purchase orders found</td></tr>
             )}
-            {pos.map(po => (
-              <POTableRow key={po.id} po={po} dark={dark} colWidths={widths}
-                onStar={toggleStar}
-                onClick={p => { setRowAssignPoId(null); setDrawerPO(p) }}
-                onApprove={p => setApproveTarget(p)}
-                onNavigateToPO={onNavigateToPO}
-                users={users}
-                isAssigningExp={rowAssignPoId === po.id}
-                onOpenAssignExp={p => { setRowAssignPoId(p.id); setRowAssignVal(String(p.expeditor_id ?? '')) }}
-                onCloseAssignExp={() => setRowAssignPoId(null)}
-                expAssignVal={rowAssignVal}
-                onExpAssignValChange={setRowAssignVal}
-                onExpAssignSave={saveRowExpeditor}
-                expAssignSaving={rowAssignSaving}
-              />
-            ))}
+            {/* ─── FIX 3: grouped or flat render ─────────────────────────── */}
+            {!loading && pos.length > 0 && (() => {
+              const renderRow = (po: PO) => (
+                <POTableRow key={po.id} po={po} dark={dark} colWidths={widths}
+                  onStar={toggleStar}
+                  onClick={p => { setRowAssignPoId(null); setDrawerPO(p) }}
+                  onApprove={p => setApproveTarget(p)}
+                  onNavigateToPO={onNavigateToPO}
+                  users={users}
+                  isAssigningExp={rowAssignPoId === po.id}
+                  onOpenAssignExp={p => { setRowAssignPoId(p.id); setRowAssignVal(String(p.expeditor_id ?? '')) }}
+                  onCloseAssignExp={() => setRowAssignPoId(null)}
+                  expAssignVal={rowAssignVal}
+                  onExpAssignValChange={setRowAssignVal}
+                  onExpAssignSave={saveRowExpeditor}
+                  expAssignSaving={rowAssignSaving}
+                />
+              )
+              if (groupBy === 'none') return pos.map(renderRow)
+              const grouped: Record<string, PO[]> = {}
+              for (const p of pos) {
+                const key = groupBy === 'vendor'
+                  ? (p.supplier_name ?? p.vendor_name ?? 'Unassigned')
+                  : (p.wbs_code ?? 'No WBS')
+                if (!grouped[key]) grouped[key] = []
+                grouped[key].push(p)
+              }
+              return Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b)).map(([grp, grpPos]) => (
+                <React.Fragment key={grp}>
+                  <tr style={{ background: dark ? '#0f172a' : '#f8fafc' }}>
+                    <td colSpan={PO_COLS.length} style={{ padding: '6px 14px', fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.07em', textTransform: 'uppercase', borderBottom: `1px solid ${dark ? '#334155' : '#e8ecf2'}` }}>
+                      {grp} <span style={{ fontWeight: 400, color: '#94a3b8', marginLeft: 6 }}>{grpPos.length}</span>
+                    </td>
+                  </tr>
+                  {grpPos.map(renderRow)}
+                </React.Fragment>
+              ))
+            })()}
           </tbody>
         </table>
       </div>

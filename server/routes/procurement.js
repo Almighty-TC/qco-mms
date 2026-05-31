@@ -164,13 +164,27 @@ router.get('/:projectId/stats', async (req, res) => {
       ) AS sub
     `, [atRiskDays, pid])
 
+    // ─── ADDITIONAL VALUE STATS ───────────────────────────────────────────────
+    // totalValue: sum of all non-cancelled POs; approvedValue: locked only; pendingCount: unlocked non-terminal
+    const [[valRow]] = await db.query(`
+      SELECT
+        SUM(CASE WHEN status NOT IN ('cancelled') THEN COALESCE(value, 0) ELSE 0 END)            AS total_value,
+        SUM(CASE WHEN is_locked = 1 AND status NOT IN ('cancelled') THEN COALESCE(value, 0) ELSE 0 END) AS approved_value,
+        SUM(CASE WHEN is_locked = 0 AND status NOT IN ('cancelled','closed') THEN 1 ELSE 0 END)  AS pending_count
+      FROM purchase_orders
+      WHERE project_id = ?
+    `, [pid])
+
     res.json({
-      total:        row.total    ?? 0,
-      ongoing:      row.ongoing  ?? 0,
-      complete:     row.complete ?? 0,
-      breached:     row.breached ?? 0,
-      atRisk:       row.at_risk  ?? 0,
-      atRiskDays,   // expose so frontend can show "within X days" in legend
+      total:         row.total    ?? 0,
+      ongoing:       row.ongoing  ?? 0,
+      complete:      row.complete ?? 0,
+      breached:      row.breached ?? 0,
+      atRisk:        row.at_risk  ?? 0,
+      atRiskDays,    // expose so frontend can show "within X days" in legend
+      totalValue:    valRow.total_value    ?? 0,
+      approvedValue: valRow.approved_value ?? 0,
+      pendingCount:  valRow.pending_count  ?? 0,
     })
   } catch (e) {
     console.error('[procurement:stats]', e.message)
