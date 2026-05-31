@@ -10,6 +10,7 @@ import { ToastProvider, useToast } from '../hooks/useToast'
 import { ToastContainer } from '../components/Toast'
 import { HelpButton } from '../components/HelpDrawer'
 import { PO_DETAIL_HELP } from '../helpContent'
+import { BackButton } from '../components/BackButton'
 
 const API = 'http://localhost:3001/api'
 
@@ -1061,6 +1062,7 @@ const PODetailInner = ({ dark, poId, projectName, onBack }: PODetailInnerProps) 
 
       {/* ── Breadcrumb ───────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 16, marginBottom: 8 }}>
+        <BackButton onFallback={onBack} dark={dark} />
         <button onClick={onBack} style={{ background: 'none', border: 'none', color: '#2563eb', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', padding: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
           ← PO Register
         </button>

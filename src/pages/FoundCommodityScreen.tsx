@@ -5,6 +5,7 @@ import axios from 'axios'
 import { CertificatesModal } from '../components/CertificatesModal'
 import { HelpButton } from '../components/HelpDrawer'
 import { COMMODITY_HELP } from '../helpContent'
+import { BackButton } from '../components/BackButton'
 
 const API = 'http://localhost:3001/api'
 
@@ -302,6 +303,7 @@ export const FoundCommodityScreen = ({ dark, projectId, projectName, onBack }: {
     <div style={{ paddingTop: 20, fontFamily: 'IBM Plex Sans, sans-serif' }}>
       {/* Breadcrumb */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16, fontSize: 12, color: '#94a3b8', flexWrap: 'wrap' }}>
+        <BackButton onFallback={onBack} dark={dark} />
         <button onClick={onBack} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 12, cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>← Dashboard</button>
         <span>›</span><span>{projectName}</span><span>›</span><span>Foundational</span><span>›</span>
         <span style={{ color: col, fontWeight: 600 }}>Commodity Library</span>

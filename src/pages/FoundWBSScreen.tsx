@@ -7,6 +7,7 @@ import axios from 'axios'
 import { HelpButton } from '../components/HelpDrawer'
 import { WBS_HELP } from '../helpContent'
 import { WBSGanttView } from '../components/WBSGanttView'
+import { BackButton } from '../components/BackButton'
 
 const API = 'http://localhost:3001/api'
 
@@ -438,7 +439,7 @@ const ReallocateLineRow = ({ line, projectId, dark, excludeCode, value, onChange
 
 // ─── WBS ROW (recursive) ─────────────────────────────────────
 // Checkbox visibility controlled by CSS hover on parent tr.
-const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRowEnter, onRowLeave, focusMode, onFocusClick, selected, onSelect, searchMatch, filterVisible }: {
+const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRowEnter, onRowLeave, focusMode, onFocusClick, selected, onSelect, searchMatch, filterVisible, onOpenReadiness }: {
   node: WBSNode; depth: number; dark: boolean
   expanded: Set<number>; onToggle: (id: number) => void
   onEdit: (n: WBSNode) => void; onDelete: (n: WBSNode) => void
@@ -450,6 +451,7 @@ const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRow
   onSelect: (id: number, checked: boolean) => void
   searchMatch: boolean
   filterVisible: boolean
+  onOpenReadiness?: (n: WBSNode) => void
 }) => {
   const [hovered, setHovered] = useState(false)
   const hasChildren = node.children && node.children.length > 0
@@ -509,17 +511,19 @@ const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRow
           {node.description}
         </td>
 
-        {/* ROS */}
-        <td style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: rosColour, whiteSpace: 'nowrap' }}>
+        {/* ROS — click opens readiness modal */}
+        <td style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: rosColour, whiteSpace: 'nowrap', cursor: onOpenReadiness ? 'pointer' : undefined }}
+          onClick={onOpenReadiness ? e => { e.stopPropagation(); onOpenReadiness(node) } : undefined}
+          title={onOpenReadiness ? 'View readiness' : undefined}>
           {fmtDate(node.ros_date)}
         </td>
 
         {/* NOTES */}
         {!focusMode && (
           <td style={{ padding: '9px 12px', maxWidth: 180 }}>
-            <button onClick={e => { e.stopPropagation(); onEdit(node) }}
+            <button onClick={e => { e.stopPropagation(); onOpenReadiness ? onOpenReadiness(node) : onEdit(node) }}
               style={{ background: 'none', border: 'none', cursor: 'pointer', color: node.notes ? '#2563eb' : '#94a3b8', fontSize: 12, fontFamily: 'inherit', textAlign: 'left', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block', padding: 0 }}
-              title={node.notes ?? 'Click to add notes'}>
+              title={node.notes ?? 'Click to view readiness'}>
               {node.notes ? `${node.notes.slice(0, 40)}${node.notes.length > 40 ? '…' : ''}` : '+ Add note'}
             </button>
           </td>
@@ -554,7 +558,8 @@ const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRow
           onRowEnter={onRowEnter} onRowLeave={onRowLeave}
           focusMode={focusMode} onFocusClick={onFocusClick}
           selected={selected} onSelect={onSelect}
-          searchMatch={false} filterVisible={filterVisible} />
+          searchMatch={false} filterVisible={filterVisible}
+          onOpenReadiness={onOpenReadiness} />
       ))}
     </>
   )
@@ -921,6 +926,454 @@ const FocusPanel = ({ node, projectId, dark, onClose, onEditNode }: {
   )
 }
 
+// ─── BULK DELETE CONFIRM MODAL ───────────────────────────────
+// Shown when ALL selected nodes are safe to delete (no deps).
+interface BulkImpactNode { id: number; code: string; description: string; rag: string | null; childCount: number; poCount: number; commCount: number; equipCount: number }
+
+const BulkDeleteConfirmModal = ({ nodes, projectId, dark, onClose, onDeleted }: {
+  nodes: BulkImpactNode[]; projectId: number; dark: boolean; onClose: () => void
+  onDeleted: (deleted: number[]) => void
+}) => {
+  const [reason, setReason] = useState('')
+  const [confirmed, setConfirmed] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [err, setErr] = useState('')
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const canDelete = reason.trim().length > 0 && confirmed && !deleting
+
+  const doDelete = async () => {
+    setDeleting(true); setErr('')
+    try {
+      const { data } = await axios.post(`${API}/foundational/${projectId}/wbs/bulk-delete`, {
+        nodeIds: nodes.map(n => n.id), reason
+      })
+      onDeleted(data.deleted)
+      onClose()
+    } catch (e: unknown) {
+      const er = e as { response?: { data?: { error?: string } } }
+      setErr(er.response?.data?.error ?? 'Delete failed')
+      setDeleting(false)
+    }
+  }
+
+  return createPortal(
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 9100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: dark ? '#1e293b' : '#fff', borderRadius: 10, padding: 24, width: 560, maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 16px 48px rgba(0,0,0,0.5)', fontFamily: 'IBM Plex Sans, sans-serif', border: '1.5px solid rgba(239,68,68,0.3)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#ef4444' }}>Delete {nodes.length} WBS node{nodes.length !== 1 ? 's' : ''}</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer' }}>×</button>
+        </div>
+        <div style={{ border: bd, borderRadius: 8, overflow: 'hidden', marginBottom: 16 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: dark ? '#0f172a' : '#f4f7fb' }}>
+                <th style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Code</th>
+                <th style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Name</th>
+                <th style={{ padding: '7px 12px', textAlign: 'center', fontWeight: 600, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>RAG</th>
+              </tr>
+            </thead>
+            <tbody>
+              {nodes.map(n => (
+                <tr key={n.id} style={{ borderTop: bd }}>
+                  <td style={{ padding: '7px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb' }}>{n.code}</td>
+                  <td style={{ padding: '7px 12px', color: col }}>{n.description}</td>
+                  <td style={{ padding: '7px 12px', textAlign: 'center' }}><RAGDot rag={n.rag} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 4 }}>Reason for deletion *</label>
+        <textarea value={reason} onChange={e => setReason(e.target.value)} rows={3}
+          placeholder="State the reason for deleting these nodes…"
+          style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 12, fontFamily: 'inherit', outline: 'none', resize: 'vertical', boxSizing: 'border-box', marginBottom: 12 }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: 16, fontSize: 12, color: col }}>
+          <input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} style={{ accentColor: '#ef4444' }} />
+          I confirm permanent deletion of these {nodes.length} node{nodes.length !== 1 ? 's' : ''}
+        </label>
+        {err && <div style={{ marginBottom: 12, fontSize: 12, color: '#ef4444' }}>{err}</div>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button onClick={onClose} style={{ padding: '7px 14px', borderRadius: 6, border: bd, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+          <button onClick={doDelete} disabled={!canDelete}
+            style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: canDelete ? '#ef4444' : '#94a3b8', color: '#fff', fontSize: 12, fontWeight: 600, cursor: canDelete ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>
+            {deleting ? 'Deleting…' : `🗑 Delete ${nodes.length} node${nodes.length !== 1 ? 's' : ''}`}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+// ─── BULK DELETE SAFE-CONFIRM MODAL ──────────────────────────
+// Second confirmation modal for "Delete safe nodes only" action.
+const BulkDeleteSafeConfirmModal = ({ safeNodes, totalSelected, blockedCount, dark, onClose, onConfirm }: {
+  safeNodes: BulkImpactNode[]; totalSelected: number; blockedCount: number
+  dark: boolean; onClose: () => void; onConfirm: (reason: string) => void
+}) => {
+  const [reason, setReason] = useState('')
+  const [confirmed, setConfirmed] = useState(false)
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const canConfirm = reason.trim().length > 0 && confirmed
+
+  return createPortal(
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 9200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: dark ? '#1e293b' : '#fff', borderRadius: 10, padding: 24, width: 500, maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 16px 48px rgba(0,0,0,0.5)', fontFamily: 'IBM Plex Sans, sans-serif', border: '1.5px solid rgba(245,158,11,0.4)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#f59e0b' }}>Confirm partial deletion</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer' }}>×</button>
+        </div>
+        <div style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 12, color: dark ? '#fcd34d' : '#92400e' }}>
+          ⚠ {totalSelected} selected — {blockedCount} blocked, {safeNodes.length} safe to delete
+        </div>
+        <div style={{ border: bd, borderRadius: 8, overflow: 'hidden', marginBottom: 16 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: dark ? '#0f172a' : '#f4f7fb' }}>
+                <th style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Code</th>
+                <th style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Name</th>
+              </tr>
+            </thead>
+            <tbody>
+              {safeNodes.map(n => (
+                <tr key={n.id} style={{ borderTop: bd }}>
+                  <td style={{ padding: '7px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#22c55e' }}>{n.code}</td>
+                  <td style={{ padding: '7px 12px', color: col }}>{n.description}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 4 }}>Reason *</label>
+        <textarea value={reason} onChange={e => setReason(e.target.value)} rows={3}
+          placeholder="State the reason…"
+          style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 12, fontFamily: 'inherit', outline: 'none', resize: 'vertical', boxSizing: 'border-box', marginBottom: 12 }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: 16, fontSize: 12, color: col }}>
+          <input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} style={{ accentColor: '#ef4444' }} />
+          I confirm permanent deletion of {safeNodes.length} safe node{safeNodes.length !== 1 ? 's' : ''}
+        </label>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button onClick={onClose} style={{ padding: '7px 14px', borderRadius: 6, border: bd, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+          <button onClick={() => canConfirm && onConfirm(reason)} disabled={!canConfirm}
+            style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: canConfirm ? '#ef4444' : '#94a3b8', color: '#fff', fontSize: 12, fontWeight: 600, cursor: canConfirm ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>
+            🗑 Delete {safeNodes.length} node{safeNodes.length !== 1 ? 's' : ''}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+// ─── BULK DELETE BLOCKED MODAL ───────────────────────────────
+// Shown when ANY selected node has dependencies.
+const BulkDeleteBlockedModal = ({ allNodes, blockedNodes, safeNodes, dark, projectId, onClose, onDeletedSafe }: {
+  allNodes: BulkImpactNode[]; blockedNodes: BulkImpactNode[]; safeNodes: BulkImpactNode[]
+  dark: boolean; projectId: number; onClose: () => void; onDeletedSafe: (deleted: number[]) => void
+}) => {
+  const [showSafeConfirm, setShowSafeConfirm] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [err, setErr] = useState('')
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+
+  const blockerReason = (n: BulkImpactNode) => {
+    const parts = []
+    if (n.childCount > 0) parts.push(`${n.childCount} child node${n.childCount !== 1 ? 's' : ''}`)
+    if (n.poCount > 0) parts.push(`${n.poCount} PO ref${n.poCount !== 1 ? 's' : ''}`)
+    if (n.commCount > 0) parts.push(`${n.commCount} commodity link${n.commCount !== 1 ? 's' : ''}`)
+    if (n.equipCount > 0) parts.push(`${n.equipCount} equipment link${n.equipCount !== 1 ? 's' : ''}`)
+    return parts.join(', ')
+  }
+
+  const doDeleteSafe = async (reason: string) => {
+    setDeleting(true); setErr('')
+    try {
+      const { data } = await axios.post(`${API}/foundational/${projectId}/wbs/bulk-delete`, {
+        nodeIds: safeNodes.map(n => n.id), reason
+      })
+      onDeletedSafe(data.deleted)
+      onClose()
+    } catch (e: unknown) {
+      const er = e as { response?: { data?: { error?: string } } }
+      setErr(er.response?.data?.error ?? 'Delete failed')
+      setDeleting(false)
+    }
+  }
+
+  return createPortal(
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 9100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: dark ? '#1e293b' : '#fff', borderRadius: 10, padding: 24, width: 620, maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 16px 48px rgba(0,0,0,0.5)', fontFamily: 'IBM Plex Sans, sans-serif', border: bd }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: col }}>Cannot delete — dependencies found</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer' }}>×</button>
+        </div>
+
+        {/* Blocked nodes */}
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 6 }}>
+          Blocked ({blockedNodes.length})
+        </div>
+        <div style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 8, overflow: 'hidden', marginBottom: 16 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: 'rgba(239,68,68,0.1)' }}>
+                <th style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#ef4444', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Code</th>
+                <th style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#ef4444', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Name</th>
+                <th style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#ef4444', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Blocker</th>
+              </tr>
+            </thead>
+            <tbody>
+              {blockedNodes.map(n => (
+                <tr key={n.id} style={{ borderTop: '1px solid rgba(239,68,68,0.1)' }}>
+                  <td style={{ padding: '7px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#ef4444' }}>{n.code}</td>
+                  <td style={{ padding: '7px 12px', color: col }}>{n.description}</td>
+                  <td style={{ padding: '7px 12px', color: '#94a3b8', fontSize: 11 }}>{blockerReason(n)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Safe nodes */}
+        {safeNodes.length > 0 && (
+          <>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 6 }}>
+              Safe to delete ({safeNodes.length})
+            </div>
+            <div style={{ background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: 8, overflow: 'hidden', marginBottom: 16 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: 'rgba(34,197,94,0.1)' }}>
+                    <th style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#22c55e', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Code</th>
+                    <th style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#22c55e', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Name</th>
+                    <th style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#22c55e', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {safeNodes.map(n => (
+                    <tr key={n.id} style={{ borderTop: '1px solid rgba(34,197,94,0.1)' }}>
+                      <td style={{ padding: '7px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#22c55e' }}>{n.code}</td>
+                      <td style={{ padding: '7px 12px', color: col }}>{n.description}</td>
+                      <td style={{ padding: '7px 12px', color: '#22c55e', fontSize: 11 }}>Safe to delete</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+
+        {err && <div style={{ marginBottom: 12, fontSize: 12, color: '#ef4444' }}>{err}</div>}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button onClick={onClose} style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+          {safeNodes.length > 0 && (
+            <button onClick={() => setShowSafeConfirm(true)} disabled={deleting}
+              style={{ padding: '7px 14px', borderRadius: 6, border: bd, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+              Delete safe nodes only ({safeNodes.length})
+            </button>
+          )}
+        </div>
+
+        {showSafeConfirm && (
+          <BulkDeleteSafeConfirmModal
+            safeNodes={safeNodes}
+            totalSelected={allNodes.length}
+            blockedCount={blockedNodes.length}
+            dark={dark}
+            onClose={() => setShowSafeConfirm(false)}
+            onConfirm={doDeleteSafe}
+          />
+        )}
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+// ─── WBS READINESS MODAL ─────────────────────────────────────
+// Detailed readiness view for a WBS node: materials, POs, notes, actions.
+interface ReadinessData {
+  node: WBSNode & { owner_name: string | null }
+  materials: { committed: number; received: number; required: number; outstanding: number }
+  pos: { po_number: string; supplier_name: string; status: string; cdd: string | null; ros_date: string | null; rag: string }[]
+  actions: unknown[]
+}
+
+const WBSReadinessModal = ({ node, projectId, dark, onClose, onNoteSaved }: {
+  node: WBSNode; projectId: number; dark: boolean; onClose: () => void
+  onNoteSaved: (updated: WBSNode) => void
+}) => {
+  const [data, setData] = useState<ReadinessData | null>(null)
+  const [notes, setNotes] = useState(node.notes ?? '')
+  const [notesDirty, setNotesDirty] = useState(false)
+  const [savingNotes, setSavingNotes] = useState(false)
+  const [editROS, setEditROS] = useState(false)
+  const [rosValue, setRosValue] = useState(node.ros_date?.slice(0, 10) ?? '')
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const MAX_NOTES = 500
+
+  useEffect(() => {
+    axios.get<ReadinessData>(`${API}/foundational/${projectId}/wbs/${node.id}/readiness`)
+      .then(r => setData(r.data)).catch(() => {})
+  }, [node.id, projectId])
+
+  const saveNotes = async () => {
+    setSavingNotes(true)
+    try {
+      const { data: updated } = await axios.patch(`${API}/foundational/${projectId}/wbs/${node.id}`, {
+        notes, ros_date: rosValue || null
+      })
+      onNoteSaved(updated)
+      setNotesDirty(false)
+    } catch { /* ignore */ }
+    finally { setSavingNotes(false) }
+  }
+
+  const ragColour = node.rag ? RAG_COLORS[node.rag] : '#94a3b8'
+  const rosColour = node.ros_date ? (node.rag === 'red' ? '#ef4444' : node.rag === 'amber' ? '#f59e0b' : node.rag === 'blue' ? '#2563eb' : '#22c55e') : '#94a3b8'
+
+  const RAG_PILL: Record<string, string> = { green: '#22c55e', amber: '#f59e0b', red: '#ef4444', blue: '#2563eb' }
+
+  return createPortal(
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 9300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: dark ? '#1e293b' : '#fff', borderRadius: 12, width: 680, maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(0,0,0,0.5)', fontFamily: 'IBM Plex Sans, sans-serif', border: bd, overflow: 'hidden' }}>
+
+        {/* STICKY HEADER */}
+        <div style={{ padding: '16px 24px', borderBottom: bd, background: dark ? '#0f172a' : '#f8fafc', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 20, fontWeight: 700, color: '#60a5fa', flexShrink: 0 }}>{node.code}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 16, fontWeight: 600, color: col, lineHeight: 1.3 }}>{node.description}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                {node.rag && (
+                  <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 10px', borderRadius: 9999, background: `${ragColour}20`, color: ragColour }}>
+                    {RAG_LABELS[node.rag]}
+                  </span>
+                )}
+                <span style={{ fontSize: 12, color: rosColour, fontFamily: 'JetBrains Mono, monospace' }}>
+                  ROS {fmtDate(node.ros_date)}
+                </span>
+                {!editROS ? (
+                  <button onClick={() => setEditROS(true)} style={{ fontSize: 11, background: 'none', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: 4, color: '#64748b', cursor: 'pointer', padding: '1px 7px', fontFamily: 'inherit' }}>Edit ROS</button>
+                ) : (
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <input type="date" value={rosValue} onChange={e => setRosValue(e.target.value)}
+                      style={{ height: 26, padding: '0 8px', borderRadius: 4, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 11, fontFamily: 'inherit', outline: 'none' }} />
+                    <button onClick={() => { setEditROS(false); setNotesDirty(true) }} style={{ fontSize: 11, background: '#2563eb', border: 'none', borderRadius: 4, color: '#fff', cursor: 'pointer', padding: '2px 8px', fontFamily: 'inherit' }}>✓</button>
+                    <button onClick={() => { setEditROS(false); setRosValue(node.ros_date?.slice(0,10) ?? '') }} style={{ fontSize: 11, background: 'none', border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, borderRadius: 4, color: '#64748b', cursor: 'pointer', padding: '2px 6px', fontFamily: 'inherit' }}>✕</button>
+                  </div>
+                )}
+              </div>
+            </div>
+            <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, color: '#94a3b8', cursor: 'pointer', lineHeight: 1, flexShrink: 0 }}>✕</button>
+          </div>
+        </div>
+
+        {/* SCROLLABLE BODY */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}>
+
+          {/* SECTION 1 — Materials */}
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 }}>Materials</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
+              {[
+                { label: 'Required', value: data?.materials.required ?? '—' },
+                { label: 'Committed', value: data?.materials.committed ?? '…' },
+                { label: 'Received', value: data?.materials.received ?? '—' },
+                { label: 'Outstanding', value: data?.materials.outstanding ?? '—' },
+              ].map(card => (
+                <div key={card.label} style={{ background: dark ? '#0f172a' : '#f4f7fb', borderRadius: 8, padding: '12px 14px', textAlign: 'center', border: bd }}>
+                  <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: col }}>{card.value}</div>
+                  <div style={{ fontSize: 10, color: '#64748b', marginTop: 3 }}>{card.label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* SECTION 2 — Purchase Orders */}
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 }}>Purchase Orders</div>
+            {!data ? (
+              <div style={{ fontSize: 12, color: '#64748b' }}>Loading…</div>
+            ) : data.pos.length === 0 ? (
+              <div style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>No POs linked to this node</div>
+            ) : (
+              <div style={{ border: bd, borderRadius: 8, overflow: 'hidden' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: dark ? '#0f172a' : '#f4f7fb' }}>
+                      {['PO Ref', 'Vendor', 'Status', 'CDD', 'Delivery RAG'].map(h => (
+                        <th key={h} style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.pos.map(po => (
+                      <tr key={po.po_number} style={{ borderTop: bd, background: (po.cdd && node.ros_date && po.cdd > node.ros_date) ? 'rgba(239,68,68,0.06)' : undefined }}>
+                        <td style={{ padding: '7px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb' }}>{po.po_number}</td>
+                        <td style={{ padding: '7px 12px', color: col }}>{po.supplier_name}</td>
+                        <td style={{ padding: '7px 12px', color: '#64748b', fontSize: 11 }}>{po.status}</td>
+                        <td style={{ padding: '7px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col }}>{fmtDate(po.cdd)}</td>
+                        <td style={{ padding: '7px 12px' }}>
+                          <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 9999, background: `${RAG_PILL[po.rag] ?? '#94a3b8'}20`, color: RAG_PILL[po.rag] ?? '#94a3b8', fontWeight: 600 }}>
+                            {po.rag}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* SECTION 3 — Notes */}
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 }}>Notes</div>
+            {node.ros_date && new Date(node.ros_date) < new Date() && (
+              <div style={{ marginBottom: 8, padding: '7px 10px', borderRadius: 6, background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)', fontSize: 12, color: '#ef4444' }}>
+                ⚠ ROS date is in the past
+              </div>
+            )}
+            <textarea
+              value={notes}
+              onChange={e => { setNotes(e.target.value.slice(0, MAX_NOTES)); setNotesDirty(true) }}
+              rows={4}
+              placeholder="Add notes about this node's scope, constraints, assumptions…"
+              style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 12, fontFamily: 'inherit', outline: 'none', resize: 'vertical', boxSizing: 'border-box' }}
+            />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>{notes.length} / {MAX_NOTES}</span>
+              <button onClick={saveNotes} disabled={!notesDirty || savingNotes}
+                style={{ padding: '5px 14px', borderRadius: 6, border: 'none', background: (notesDirty && !savingNotes) ? '#2563eb' : '#94a3b8', color: '#fff', fontSize: 11, fontWeight: 600, cursor: (notesDirty && !savingNotes) ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>
+                {savingNotes ? 'Saving…' : 'Save notes'}
+              </button>
+            </div>
+          </div>
+
+          {/* SECTION 4 — Open Actions */}
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 }}>Open Actions</div>
+            {!data || data.actions.length === 0 ? (
+              <div style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>No open actions</div>
+            ) : null}
+          </div>
+        </div>
+
+        {/* FOOTER */}
+        <div style={{ padding: '12px 24px', borderTop: bd, flexShrink: 0 }}>
+          <button onClick={onClose} style={{ padding: '7px 20px', borderRadius: 6, border: bd, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Close</button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
 // ─── MAIN SCREEN ─────────────────────────────────────────────
 export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
   dark: boolean; projectId: number; projectName: string; onBack: () => void
@@ -949,6 +1402,11 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
   // ── Bulk selection state ─────────────────────────────────────
   const [selectedNodes, setSelectedNodes] = useState<Set<number>>(new Set())
   const [bulkRag, setBulkRag]         = useState('')
+  // ── Bulk delete modal state ──────────────────────────────────
+  const [bulkImpact, setBulkImpact]         = useState<BulkImpactNode[] | null>(null)
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false)
+  // ── Readiness modal state ────────────────────────────────────
+  const [readinessNode, setReadinessNode] = useState<WBSNode | null>(null)
 
   const col = dark ? '#f1f5f9' : '#0f172a'
   const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
@@ -1039,13 +1497,15 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
   }
 
   const deleteSelected = async () => {
-    if (!confirm(`Delete ${selectedNodes.size} selected node(s)? Only safe nodes (no children, no PO refs) will be removed.`)) return
+    // Fetch impact for selected nodes, then show modal
     try {
-      const { data } = await axios.post(`${API}/foundational/${projectId}/wbs/bulk-delete`, { ids: [...selectedNodes] })
-      await load()
-      showToast(`✓ Deleted ${data.deleted} node(s), skipped ${data.skipped}`)
-      setSelectedNodes(new Set())
-    } catch { showToast('Failed to delete nodes') }
+      const ids = [...selectedNodes].join(',')
+      const { data } = await axios.get<BulkImpactNode[]>(`${API}/foundational/${projectId}/wbs/bulk-impact?ids=${ids}`)
+      setBulkImpact(data)
+      setShowBulkDeleteModal(true)
+    } catch {
+      showToast('Failed to load impact data')
+    }
   }
 
   // ── Filter logic ─────────────────────────────────────────────
@@ -1090,6 +1550,7 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
 
       {/* Breadcrumb */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16, fontSize: 12, color: '#94a3b8', flexWrap: 'wrap', flexShrink: 0 }}>
+        <BackButton onFallback={onBack} dark={dark} />
         <button onClick={onBack} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 12, cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>← Dashboard</button>
         <span>›</span><span>{projectName}</span><span>›</span><span>Foundational</span><span>›</span>
         <span style={{ color: col, fontWeight: 600 }}>WBS</span>
@@ -1220,6 +1681,7 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
                     onSelect={handleSelectNode}
                     searchMatch={searchMatchIds ? searchMatchIds.has(node.id) : false}
                     filterVisible={visibleIds ? visibleIds.has(node.id) : true}
+                    onOpenReadiness={setReadinessNode}
                   />
                 ))}
               </tbody>
@@ -1247,6 +1709,46 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
       )}
       {showUpload && (
         <UploadModal projectId={projectId} dark={dark} onClose={() => setShowUpload(false)} onImported={() => { load(); showToast('✓ WBS imported successfully') }} />
+      )}
+
+      {/* ── Bulk delete modals ── */}
+      {showBulkDeleteModal && bulkImpact && (() => {
+        const safe = bulkImpact.filter(n => n.childCount === 0 && n.poCount === 0 && n.commCount === 0 && n.equipCount === 0)
+        const blocked = bulkImpact.filter(n => n.childCount > 0 || n.poCount > 0 || n.commCount > 0 || n.equipCount > 0)
+        if (blocked.length === 0) {
+          return (
+            <BulkDeleteConfirmModal
+              nodes={safe}
+              projectId={projectId}
+              dark={dark}
+              onClose={() => { setShowBulkDeleteModal(false); setBulkImpact(null) }}
+              onDeleted={deleted => { load(); showToast(`✓ Deleted ${deleted.length} node(s)`); setSelectedNodes(new Set()); setShowBulkDeleteModal(false); setBulkImpact(null) }}
+            />
+          )
+        } else {
+          return (
+            <BulkDeleteBlockedModal
+              allNodes={bulkImpact}
+              blockedNodes={blocked}
+              safeNodes={safe}
+              dark={dark}
+              projectId={projectId}
+              onClose={() => { setShowBulkDeleteModal(false); setBulkImpact(null) }}
+              onDeletedSafe={deleted => { load(); showToast(`✓ Deleted ${deleted.length} safe node(s)`); setSelectedNodes(new Set()); setShowBulkDeleteModal(false); setBulkImpact(null) }}
+            />
+          )
+        }
+      })()}
+
+      {/* ── Readiness modal ── */}
+      {readinessNode && (
+        <WBSReadinessModal
+          node={readinessNode}
+          projectId={projectId}
+          dark={dark}
+          onClose={() => setReadinessNode(null)}
+          onNoteSaved={updated => { handleNodeSaved(updated); setReadinessNode(prev => prev?.id === updated.id ? updated : prev) }}
+        />
       )}
 
       {/* Tooltip (normal mode only) */}

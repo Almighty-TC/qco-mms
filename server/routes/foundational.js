@@ -482,26 +482,125 @@ router.post('/:projectId/wbs/bulk-rag', async (req, res) => {
   }
 })
 
-// POST /api/foundational/:projectId/wbs/bulk-delete — delete safe nodes (no children, no PO refs)
+// GET /api/foundational/:projectId/wbs/bulk-impact — check impact for multiple nodes
+// Accepts ?ids=1,2,3
+router.get('/:projectId/wbs/bulk-impact', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const ids = String(req.query.ids || '').split(',').map(Number).filter(Boolean)
+    if (!ids.length) return res.status(400).json({ error: 'No IDs provided' })
+
+    const results = []
+    for (const id of ids) {
+      const [[node]] = await db.query('SELECT id, code, description, rag FROM wbs_nodes WHERE id=? AND project_id=?', [id, pid])
+      if (!node) continue
+      const [[{ child_count }]] = await db.query('SELECT COUNT(*) AS child_count FROM wbs_nodes WHERE parent_id=?', [id])
+      const [[{ po_count }]]    = await db.query('SELECT COUNT(*) AS po_count FROM purchase_orders WHERE project_id=? AND wbs_code=?', [pid, node.code])
+      const [[{ comm_count }]]  = await db.query('SELECT COUNT(*) AS comm_count FROM commodity_library WHERE wbs_node_id=?', [id])
+      const [[{ equip_count }]] = await db.query('SELECT COUNT(*) AS equip_count FROM equipment_list WHERE wbs_node_id=?', [id])
+      results.push({ id: node.id, code: node.code, description: node.description, rag: node.rag, childCount: child_count, poCount: po_count, commCount: comm_count, equipCount: equip_count })
+    }
+    res.json(results)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// POST /api/foundational/:projectId/wbs/bulk-delete — delete nodes with reason; checks deps first
 router.post('/:projectId/wbs/bulk-delete', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
-    const { ids } = req.body
-    if (!ids?.length) return res.status(400).json({ error: 'No IDs provided' })
+    const { nodeIds, reason, ids } = req.body
+    // Support both new nodeIds param and legacy ids param
+    const targetIds = nodeIds || ids
+    if (!targetIds?.length) return res.status(400).json({ error: 'No IDs provided' })
 
-    const deleted = []; const skipped = []
-    for (const id of ids) {
-      const [[childCheck]] = await db.query('SELECT COUNT(*) AS cnt FROM wbs_nodes WHERE parent_id=? AND project_id=?', [id, pid])
-      if (childCheck.cnt > 0) { skipped.push(id); continue }
-      const [[node]] = await db.query('SELECT code FROM wbs_nodes WHERE id=? AND project_id=?', [id, pid])
+    // Check for blocked nodes
+    const blocked = []
+    for (const id of targetIds) {
+      const [[node]] = await db.query('SELECT id, code, description FROM wbs_nodes WHERE id=? AND project_id=?', [id, pid])
+      if (!node) continue
+      const [[{ child_count }]] = await db.query('SELECT COUNT(*) AS child_count FROM wbs_nodes WHERE parent_id=?', [id])
+      const [[{ po_count }]]    = await db.query('SELECT COUNT(*) AS po_count FROM purchase_orders WHERE project_id=? AND wbs_code=?', [pid, node.code])
+      const [[{ comm_count }]]  = await db.query('SELECT COUNT(*) AS comm_count FROM commodity_library WHERE wbs_node_id=?', [id])
+      const [[{ equip_count }]] = await db.query('SELECT COUNT(*) AS equip_count FROM equipment_list WHERE wbs_node_id=?', [id])
+      const reasons = []
+      if (child_count > 0) reasons.push(`${child_count} child node${child_count !== 1 ? 's' : ''}`)
+      if (po_count > 0) reasons.push(`${po_count} PO reference${po_count !== 1 ? 's' : ''}`)
+      if (comm_count > 0) reasons.push(`${comm_count} commodity link${comm_count !== 1 ? 's' : ''}`)
+      if (equip_count > 0) reasons.push(`${equip_count} equipment link${equip_count !== 1 ? 's' : ''}`)
+      if (reasons.length > 0) blocked.push({ id, code: node.code, reason: reasons.join(', ') })
+    }
+
+    // If using new nodeIds param and any blocked, return 400
+    if (nodeIds && blocked.length > 0) {
+      return res.status(400).json({ error: 'Dependencies exist', blocked })
+    }
+
+    // Sort by code length DESC to delete children before parents
+    const sortedIds = [...targetIds].sort((a, b) => {
+      // We'll just delete in reverse order based on what we know
+      return b - a
+    })
+
+    const deleted = []
+    const skipped = []
+    for (const id of sortedIds) {
+      const [[node]] = await db.query('SELECT code, description FROM wbs_nodes WHERE id=? AND project_id=?', [id, pid])
       if (!node) { skipped.push(id); continue }
-      const [[poCheck]] = await db.query('SELECT COUNT(*) AS cnt FROM purchase_orders WHERE project_id=? AND wbs_code=?', [pid, node.code])
-      if (poCheck.cnt > 0) { skipped.push(id); continue }
+      const [[{ child_count }]] = await db.query('SELECT COUNT(*) AS child_count FROM wbs_nodes WHERE parent_id=?', [id])
+      const [[{ po_count }]]    = await db.query('SELECT COUNT(*) AS po_count FROM purchase_orders WHERE project_id=? AND wbs_code=?', [pid, node.code])
+      const [[{ comm_count }]]  = await db.query('SELECT COUNT(*) AS comm_count FROM commodity_library WHERE wbs_node_id=?', [id])
+      const [[{ equip_count }]] = await db.query('SELECT COUNT(*) AS equip_count FROM equipment_list WHERE wbs_node_id=?', [id])
+      if (child_count > 0 || po_count > 0 || comm_count > 0 || equip_count > 0) { skipped.push(id); continue }
       await db.query('DELETE FROM wbs_nodes WHERE id=?', [id])
+      audit(req, 'wbs_bulk_deleted', `wbs_nodes/${id}`, { code: node.code, description: node.description }, { reason: reason || 'bulk delete' })
       deleted.push(id)
     }
-    res.json({ ok: true, deleted: deleted.length, skipped: skipped.length })
+    res.json({ ok: true, deleted, skipped: skipped.length })
   } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// GET /api/foundational/:projectId/wbs/:nodeId/readiness — node readiness summary
+router.get('/:projectId/wbs/:nodeId/readiness', async (req, res) => {
+  try {
+    const pid    = Number(req.params.projectId)
+    const nodeId = Number(req.params.nodeId)
+    const [[node]] = await db.query(
+      `SELECT w.*, u.full_name AS owner_name FROM wbs_nodes w LEFT JOIN users u ON u.id = w.owner_id WHERE w.id=? AND w.project_id=?`,
+      [nodeId, pid]
+    )
+    if (!node) return res.status(404).json({ error: 'Node not found' })
+
+    // Committed materials (sum po_lines.qty where wbs_code_snapshot = node.code)
+    const [[matRow]] = await db.query(
+      `SELECT COALESCE(SUM(l.qty), 0) AS committed
+       FROM po_lines l JOIN purchase_orders p ON p.id = l.po_id
+       WHERE p.project_id=? AND l.wbs_code_snapshot=?`,
+      [pid, node.code]
+    )
+
+    // POs linked to this WBS node
+    const today = node.ros_date ? node.ros_date : new Date().toISOString().slice(0, 10)
+    const [posRows] = await db.query(
+      `SELECT po_number, supplier_name, status, cdd, ros_date,
+        CASE WHEN cdd IS NOT NULL AND cdd < ? THEN 'red'
+             WHEN cdd IS NOT NULL AND cdd < DATE_ADD(?, INTERVAL 30 DAY) THEN 'amber'
+             ELSE 'green' END AS rag
+       FROM purchase_orders WHERE project_id=? AND wbs_code=?`,
+      [today, today, pid, node.code]
+    )
+
+    res.json({
+      node,
+      materials: { committed: matRow.committed, received: 0, required: 0, outstanding: 0 },
+      pos: posRows,
+      actions: [],
+    })
+  } catch (e) {
+    console.error('[foundational:wbs:readiness]', e.message)
     res.status(500).json({ error: e.message })
   }
 })

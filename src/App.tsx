@@ -138,11 +138,13 @@ const DASHBOARD_GRID =
 // variables on the ancestor container (set by useTableResize),
 // not by a React prop — so all rows resize simultaneously with
 // the header in the same browser reflow.
+// onSelect navigates to Procurement when a row is clicked.
 const ProjectRow = ({
-  project, dark,
+  project, dark, onSelect,
 }: {
   project: Project
   dark: boolean
+  onSelect: (p: Project) => void
 }) => {
   const [hovered, setHovered] = useState(false)
   const total    = project.totalPOs ?? 0
@@ -153,13 +155,14 @@ const ProjectRow = ({
     <div
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      onClick={() => onSelect(project)}
       style={{
         display: 'grid',
         gridTemplateColumns: DASHBOARD_GRID,
         alignItems: 'center',
         background: hovered ? (dark ? '#1e2d4a' : '#f4f7fb') : (dark ? '#1e293b' : '#ffffff'),
         borderBottom: `1px solid ${dark ? '#334155' : '#e8ecf2'}`,
-        cursor: 'default',
+        cursor: 'pointer',
         transition: 'background 120ms ease',
       }}>
 
@@ -439,8 +442,9 @@ const Nav = ({
 // The main project-list view. containerRef and startResize are lifted
 // to App so the global "Reset to defaults" action can call resetWidths()
 // directly on the same ref without needing to drill through callbacks.
+// onSelectProject navigates to Procurement for the chosen project.
 const DashboardHome = ({
-  projects, loading, error, dark, containerRef, startResize,
+  projects, loading, error, dark, containerRef, startResize, onSelectProject,
 }: {
   projects: Project[]
   loading: boolean
@@ -448,6 +452,7 @@ const DashboardHome = ({
   dark: boolean
   containerRef: React.RefObject<HTMLDivElement>
   startResize: (col: string, startX: number) => void
+  onSelectProject: (p: Project) => void
 }) => {
   const criticalCount = projects.filter(p => p.rag === 'red').length
   const atRiskCount   = projects.filter(p => p.rag === 'amber').length
@@ -523,7 +528,7 @@ const DashboardHome = ({
         )}
 
         {projects.map(p => (
-          <ProjectRow key={p.id} project={p} dark={dark} />
+          <ProjectRow key={p.id} project={p} dark={dark} onSelect={onSelectProject} />
         ))}
       </div>
     </div>
@@ -974,6 +979,7 @@ function App() {
             <DashboardHome
               projects={projects} loading={loading} error={error} dark={dark}
               containerRef={containerRef} startResize={startResize}
+              onSelectProject={p => { setSelectedProjectId(p.id); setSelectedProjectName(p.name); setPage('procurement') }}
             />
           )}
           {page === 'admin' && (

@@ -10,6 +10,7 @@ import { ToastContainer } from '../components/Toast'
 import { useColumnResize } from '../hooks/useColumnResize'
 import { HelpButton } from '../components/HelpDrawer'
 import { PO_REGISTER_HELP } from '../helpContent'
+import { BackButton } from '../components/BackButton'
 
 const API = 'http://localhost:3001/api'
 
@@ -1508,8 +1509,14 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
     <div style={{ fontFamily: 'IBM Plex Sans, sans-serif', paddingBottom: 32 }}>
       <ToastContainer />
 
+      {/* ── Breadcrumb row ────────────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', alignItems: 'center', paddingTop: 16, marginBottom: 0 }}>
+        <BackButton onFallback={() => {}} dark={dark} />
+        <span style={{ fontSize: 12, color: '#94a3b8' }}>Procurement · {projectName}</span>
+      </div>
+
       {/* ── Page header ──────────────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 16, paddingTop: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 16, paddingTop: 8 }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 700, color: col, letterSpacing: '-0.02em' }}>PO Register</div>
           <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>{projectName}</div>
