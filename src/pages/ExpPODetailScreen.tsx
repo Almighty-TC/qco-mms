@@ -8,6 +8,7 @@ import { HelpButton } from '../components/HelpDrawer'
 import { MilestoneTimeline } from '../components/MilestoneTimeline'
 import { EXPEDITING_HELP } from '../helpContent'
 import { CreateSCNWizard } from '../components/CreateSCNWizard'
+import { ToastProvider, useToast } from '../hooks/useToast'
 
 const API = 'http://localhost:3001/api'
 
@@ -99,8 +100,10 @@ const fmtShort = (d?: string | null) =>
 const fmtMoney = (v?: number | null, cur = 'AUD') =>
   v != null ? `${cur} ${v.toLocaleString('en-AU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '—'
 
-// ─── COMPONENT ────────────────────────────────────────────────
-export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }: Props) => {
+// ─── INNER COMPONENT ──────────────────────────────────────────
+// Must be wrapped in ToastProvider; use the exported ExpPODetailScreen below.
+const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack }: Props) => {
+  const { addToast } = useToast()
   const [po, setPO]           = useState<PODetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [activeTab, setTab]   = useState<ActiveTab>('lines')
@@ -467,14 +470,14 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
                         {/* Child items */}
                         <div style={{ marginBottom: 8 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                            <span style={{ fontSize: 11, fontWeight: 600, color: col }}>Child Items ({line.child_items.length})</span>
+                            <span style={{ fontSize: 11, fontWeight: 600, color: col }}>Child Items ({(line.child_items||[]).length})</span>
                             <button
                               onClick={() => setAddChildLine(addChildLine === line.id ? null : line.id)}
                               style={{ fontSize: 10, padding: '3px 8px', borderRadius: 4, border: bd, background: 'transparent', color: col, cursor: 'pointer' }}>
                               + Add
                             </button>
                           </div>
-                          {line.child_items.length === 0 ? (
+                          {(line.child_items||[]).length === 0 ? (
                             <div style={{ fontSize: 11, color: sub, fontStyle: 'italic' }}>No child items.</div>
                           ) : (
                             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
@@ -486,7 +489,7 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
                                 </tr>
                               </thead>
                               <tbody>
-                                {line.child_items.map(ci => (
+                                {(line.child_items||[]).map(ci => (
                                   <tr key={ci.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
                                     <td style={{ padding: '4px 8px', color: sub }}>{ci.sub_number}</td>
                                     <td style={{ padding: '4px 8px', color: col }}>{ci.description}</td>
@@ -669,10 +672,10 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
                   <div style={{ background: dark?'#162032':'#f8fafc', border: bd, borderRadius: 8, padding: '10px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
                     <span style={{ fontSize: 14, fontWeight: 600, color: col }}>{po.vdrl_package.name}</span>
                     <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, background: 'rgba(34,197,94,0.1)', color: '#16a34a' }}>{po.vdrl_package.status}</span>
-                    <span style={{ fontSize: 11, color: sub }}>{vdrlDocs.length || po.vdrl_package.documents.length} doc{(vdrlDocs.length || po.vdrl_package.documents.length) !== 1 ? 's' : ''}</span>
+                    <span style={{ fontSize: 11, color: sub }}>{vdrlDocs.length || (po.vdrl_package.documents||[]).length} doc{(vdrlDocs.length || (po.vdrl_package.documents||[]).length) !== 1 ? 's' : ''}</span>
                     <span style={{ fontSize: 11, color: '#ef4444', marginLeft: 8 }}>
-                      {(vdrlDocs.length ? vdrlDocs : po.vdrl_package.documents).filter((d:any) => d.status === 'Overdue').length > 0
-                        ? `${(vdrlDocs.length ? vdrlDocs : po.vdrl_package.documents).filter((d:any)=>d.status==='Overdue').length} overdue` : ''}
+                      {(vdrlDocs.length ? vdrlDocs : (po.vdrl_package.documents||[])).filter((d:any) => d.status === 'Overdue').length > 0
+                        ? `${(vdrlDocs.length ? vdrlDocs : (po.vdrl_package.documents||[])).filter((d:any)=>d.status==='Overdue').length} overdue` : ''}
                     </span>
                   </div>
                   {vdrlDocsLoading ? (
@@ -688,7 +691,7 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
                           </tr>
                         </thead>
                         <tbody>
-                          {(vdrlDocs.length ? vdrlDocs : po.vdrl_package.documents).map((d: any) => {
+                          {(vdrlDocs.length ? vdrlDocs : (po.vdrl_package.documents||[])).map((d: any) => {
                             const statusMap: Record<string,{bg:string;color:string;label:string}> = {
                               'Approved':      {bg:'rgba(34,197,94,0.12)', color:'#16a34a',label:'Approved'},
                               'Under review':  {bg:'rgba(37,99,235,0.12)', color:'#1d4ed8',label:'Under review'},
@@ -813,8 +816,17 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
           preSelectedLineId={scnPreLineId}
           onClose={() => setShowSCNWizard(false)}
           onCreated={() => { setShowSCNWizard(false); fetchPO() }}
+          onToast={(msg, type) => addToast(type, msg)}
         />
       )}
     </div>
   )
 }
+
+// ─── EXPORTED COMPONENT (wraps with ToastProvider) ───────────────────────────
+// ToastProvider must be an ancestor of any component calling useToast().
+export const ExpPODetailScreen = (props: Props) => (
+  <ToastProvider>
+    <ExpPODetailScreenInner {...props} />
+  </ToastProvider>
+)

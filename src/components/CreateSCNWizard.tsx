@@ -4,7 +4,8 @@
 import React, { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import axios from 'axios'
-import { useToast } from '../hooks/useToast'
+// useToast is NOT used here — wizard renders in a portal outside ToastProvider.
+// Success/error feedback is handled by the parent via onCreated/onError props.
 
 const API = 'http://localhost:3001/api'
 
@@ -15,6 +16,7 @@ interface Props {
   preSelectedLineId?: number
   onClose: () => void
   onCreated: (scn: any) => void
+  onToast?: (message: string, type: 'success' | 'error') => void
 }
 
 type Step = 1 | 2 | 3 | 4 | 5
@@ -67,9 +69,8 @@ const inputStyle: React.CSSProperties = {
 
 // ─── COMPONENT ────────────────────────────────────────────────
 export const CreateSCNWizard: React.FC<Props> = ({
-  poId, projectId, preSelectedLineId, onClose, onCreated,
+  poId, projectId, preSelectedLineId, onClose, onCreated, onToast,
 }) => {
-  const { addToast } = useToast()
 
   // ─── WIZARD STEP ──────────────────────────────────────────
   const [step, setStep] = useState<Step>(1)
@@ -195,10 +196,10 @@ export const CreateSCNWizard: React.FC<Props> = ({
         notify_forwarder: notifyForwarder,
       }
       const { data } = await axios.post(`${API}/expediting/${projectId}/scn`, body)
-      addToast('success', `${data.scn_ref} created successfully`)
+      onToast?.(`${data.scn_ref} created successfully`, 'success')
       onCreated(data)
     } catch (e: any) {
-      addToast('error', e.response?.data?.error || 'Failed to create SCN')
+      onToast?.(e.response?.data?.error || 'Failed to create SCN', 'error')
     } finally {
       setCreating(false)
     }

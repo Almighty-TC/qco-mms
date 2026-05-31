@@ -685,13 +685,49 @@ function App() {
     })
   }
   const [dark,             setDark]             = useState(false)
-  const [page,             setPage]             = useState<Page>('dashboard')
+  const [page,             setPage]             = useState<Page>(() => {
+    // ─── URL-BASED PAGE RESTORE ──────────────────────────────────────────────
+    // Parse the pathname on first load so direct navigation (e.g. /project/1/expediting)
+    // renders the correct screen immediately rather than showing the Dashboard.
+    const path = window.location.pathname
+    const m = path.match(/^\/project\/\d+\/(.+)$/)
+    if (m) {
+      const seg = m[1]
+      const map: Record<string, Page> = {
+        expediting: 'expediting',
+        procurement: 'procurement',
+        'po-detail': 'po-detail',
+        'expediting-po-detail': 'expediting-po-detail',
+        'mto-list': 'mto-list',
+        'mto-detail': 'mto-detail',
+        admin: 'admin',
+      }
+      if (map[seg]) return map[seg]
+    }
+    return 'dashboard'
+  })
   // ─── PROCUREMENT PROJECT SELECTION ──────────────────────────
   // Procurement is project-scoped. selectedProjectId tracks which
   // project the user is viewing. Defaults to the first project in
   // the list when Procurement is navigated to.
-  const [selectedProjectId,   setSelectedProjectId]   = useState<number | null>(null)
-  const [selectedProjectName, setSelectedProjectName] = useState<string>('')
+  // ─── EAGER PROJECT RESTORE ───────────────────────────────────────────────────
+  // Initialize from localStorage synchronously so screens that need selectedProjectId
+  // render correctly on the first frame — no waiting for fetchProjects to complete.
+  // This fixes direct URL navigation (e.g. /project/1/expediting) and page refresh.
+  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(() => {
+    try {
+      const stored = localStorage.getItem('qmat_last_project')
+      if (stored) { const { id } = JSON.parse(stored); return id ?? null }
+    } catch {}
+    return null
+  })
+  const [selectedProjectName, setSelectedProjectName] = useState<string>(() => {
+    try {
+      const stored = localStorage.getItem('qmat_last_project')
+      if (stored) { const { name } = JSON.parse(stored); return name ?? '' }
+    } catch {}
+    return ''
+  })
   // ─── PO Detail Screen (Phase 3) ─────────────────────────────────────────
   // selectedPOId tracks which PO the user navigated to in Phase 3.
   const [selectedPOId,    setSelectedPOId]    = useState<number | null>(null)
