@@ -693,3 +693,50 @@ Example types: Crate (timber), Pallet, Drum, Bundle, Skid.
 **Deactivating:** Click **Deactivate** to hide from SCN dropdowns while keeping historical data.
 
 **Deleting:** Click **Delete** — blocked if the type is referenced on any existing SCN item.
+
+---
+
+### 4.5 PO Register — Stat Cards
+
+The 8 summary cards at the top of the PO Register are all clickable filters:
+
+| Card | Meaning | Click action |
+|------|---------|--------------|
+| **Total POs** | All POs in the project | Shows all POs |
+| **Committed Value** | Total value of all non-cancelled POs (AUD) | Shows all |
+| **Approved & Locked** | Total value of approved, locked POs (AUD) | Filters to Approved tab |
+| **Pending Approval** | Count of unapproved POs | Filters to Pending tab |
+| **Ongoing** | Active POs not yet complete | Filters to ongoing |
+| **Complete** | Closed POs | Filters to complete |
+| **Breached** | POs where CDD is past today | Filters to red (breached) |
+| **At Risk** | POs where CDD is within the at-risk threshold | Filters to amber (at risk) |
+
+Values show as **AUD 3,470,000** format — currency code prefix, no decimal places.
+
+An active filter card gets an orange border. Click the active card again to clear the filter.
+
+### 4.6 PO Register — Table Columns
+
+Columns (left to right): ★ Critical path · PO Ref · PO Name · Description · CCY · Value · Incoterms · WBS · ROS · Vendor · Owner · CDD · Status
+
+All columns are resizable by dragging the orange handle on the column border.
+
+### 4.7 PO Detail — Meta Grid
+
+The meta grid (always visible above the tabs) shows:
+
+| Field | Description |
+|-------|-------------|
+| **Currency** | PO currency code (e.g. AUD, USD) |
+| **Total Value** | Total PO value in the PO currency |
+| **Incoterms** | Trade term (e.g. EXW, CIF, FOB) |
+| **Handover Point** | Location where goods are handed over per the Incoterms (e.g. "BlueScope Steel, Port Kembla") |
+| **WBS** | WBS code this PO is linked to |
+| **Vendor** | Supplier name |
+| **Owner** | Commercial PO owner |
+| **Expeditor** | Assigned expeditor |
+| **Group** | Category (Mechanical, Electrical, etc.) |
+| **ROS Date** | Required On Site date |
+| **PO Placed** | PO award date |
+| **FAT Date** | Factory Acceptance Test date |
+| **Est. Arrival** | Estimated arrival date |

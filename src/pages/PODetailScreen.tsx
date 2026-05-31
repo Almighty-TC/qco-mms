@@ -19,7 +19,7 @@ const API = 'http://localhost:3001/api'
 interface PO {
   id: number; po_number: string; po_name: string | null; description: string | null
   vendor_name: string; supplier_name: string | null; currency: string; value: number | null
-  incoterms: string | null; wbs_code: string | null; wbs_name: string | null
+  incoterms: string | null; handover_point: string | null; wbs_code: string | null; wbs_name: string | null
   ros_date: string | null; status: string; statusLabel: string
   isCriticalPath: boolean; isLocked: boolean; group_category: string | null
   owner_id: number | null; owner_name: string | null
@@ -1107,10 +1107,11 @@ const PODetailInner = ({ dark, poId, projectName, onBack }: PODetailInnerProps) 
 
       {/* ── Meta grid ────────────────────────────────────────────────────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 24 }}>
-        <MetaItem dark={dark} label="Currency"     value={po.currency} />
-        <MetaItem dark={dark} label="Total Value"  value={fmtCurrency(po.value ?? totalValue, po.currency)} />
-        <MetaItem dark={dark} label="Incoterms"    value={po.incoterms} />
-        <MetaItem dark={dark} label="WBS"          value={po.wbs_code} mono />
+        <MetaItem dark={dark} label="Currency"       value={po.currency} />
+        <MetaItem dark={dark} label="Total Value"   value={fmtCurrency(po.value ?? totalValue, po.currency)} />
+        <MetaItem dark={dark} label="Incoterms"     value={po.incoterms} />
+        <MetaItem dark={dark} label="Handover Point" value={po.handover_point} />
+        <MetaItem dark={dark} label="WBS"           value={po.wbs_code} mono />
         <MetaItem dark={dark} label="Vendor"       value={po.supplier_name ?? po.vendor_name} />
         <MetaItem dark={dark} label="Owner"        value={po.owner_name} />
         <MetaItem dark={dark} label="Expeditor"    value={po.expeditor_name} />

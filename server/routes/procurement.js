@@ -371,7 +371,7 @@ router.get('/:projectId/pos', async (req, res) => {
       SELECT
         po.id, po.po_number, po.po_name, po.description,
         po.vendor_name, po.supplier_id, po.currency, po.value,
-        po.incoterms, po.wbs_code, po.status,
+        po.incoterms, po.handover_point, po.wbs_code, po.status,
         po.is_critical_path, po.is_locked, po.group_category,
         po.owner_id, po.expeditor_id, po.ros_date, po.created_at,
         own.full_name   AS owner_name,
@@ -393,7 +393,7 @@ router.get('/:projectId/pos', async (req, res) => {
       WHERE ${where}
       GROUP BY
         po.id, po.po_number, po.po_name, po.description, po.vendor_name,
-        po.supplier_id, po.currency, po.value, po.incoterms, po.wbs_code,
+        po.supplier_id, po.currency, po.value, po.incoterms, po.handover_point, po.wbs_code,
         po.status, po.is_critical_path, po.is_locked, po.group_category,
         po.owner_id, po.expeditor_id, po.ros_date, po.created_at,
         own.full_name, exp.full_name, s.name, w.id, w.description,
@@ -410,7 +410,7 @@ router.get('/:projectId/pos', async (req, res) => {
         id: r.id, po_number: r.po_number, po_name: r.po_name,
         description: r.description, vendor_name: r.vendor_name,
         supplier_id: r.supplier_id, supplier_name: r.supplier_name,
-        currency: r.currency, value: r.value, incoterms: r.incoterms,
+        currency: r.currency, value: r.value, incoterms: r.incoterms, handover_point: r.handover_point,
         wbs_code: r.wbs_code, wbs_node_id: r.wbs_node_id, wbs_name: r.wbs_name,
         ros_date: r.ros_date, status: r.status,
         statusLabel:    STATUS_LABELS[r.status] ?? r.status,

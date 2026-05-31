@@ -49,6 +49,7 @@ interface PO {
   currency:       string
   value:          number | null
   incoterms:      string | null
+  handover_point: string | null
   wbs_code:       string | null
   wbs_node_id:    number | null
   wbs_name:       string | null
@@ -157,6 +158,14 @@ function fmtCurrency(val: number | null, ccy = 'AUD') {
   return new Intl.NumberFormat('en-AU', {
     style: 'currency', currency: ccy, maximumFractionDigits: 0,
   }).format(val)
+}
+
+// ─── FIX 2: fmtValueCode renders "AUD 1,420,000" — currency CODE prefix not symbol
+// Used in VALUE column and stat cards to show multi-currency correctly.
+function fmtValueCode(val: number | null, ccy = 'AUD') {
+  if (val == null) return '—'
+  const n = Math.round(val).toLocaleString('en-AU')
+  return `${ccy} ${n}`
 }
 
 function fmtDate(d: string | null) {
@@ -1154,10 +1163,10 @@ const POTableRow = ({
         <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#64748b' }}>{po.currency}</span>
       </td>
 
-      {/* ── Value (index 5) ───────────────────────────────────────────────── */}
+      {/* ── Value (index 5) — FIX 2: "AUD 1,420,000" format ────────── */}
       <td style={{ ...tdBase, width: colWidths[5], textAlign: 'right' }}>
         <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, fontWeight: 600, color: col }}>
-          {po.value != null ? po.value.toLocaleString('en-AU', { maximumFractionDigits: 0 }) : '—'}
+          {fmtValueCode(po.value, po.currency)}
         </span>
       </td>
 
@@ -1593,11 +1602,11 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
           onClick={() => { setCardFilter(cardFilter === 'total' ? null : 'total'); setActiveTab('all') }} />
         {/* ─── NEW VALUE STAT CARDS ────────────────────────────────────────── */}
         <StatCard dark={dark} label="Committed Value"
-          value={stats ? fmtCurrency(stats.totalValue ?? 0, 'AUD') : '—'}
+          value={stats ? fmtValueCode(stats.totalValue ?? 0, 'AUD') : '—'}
           active={cardFilter === 'committed'}
           onClick={() => { setCardFilter(cardFilter === 'committed' ? null : 'committed'); setActiveTab('all') }} />
         <StatCard dark={dark} label="Approved & Locked"
-          value={stats ? fmtCurrency(stats.approvedValue ?? 0, 'AUD') : '—'}
+          value={stats ? fmtValueCode(stats.approvedValue ?? 0, 'AUD') : '—'}
           active={cardFilter === 'approvedValue'}
           onClick={() => { setCardFilter(cardFilter === 'approvedValue' ? null : 'approvedValue'); setActiveTab('approved') }} />
         <StatCard dark={dark} label="Pending Approval"
