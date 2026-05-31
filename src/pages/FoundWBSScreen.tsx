@@ -669,7 +669,9 @@ const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: numb
 
 // ─── WBS TOOLTIP (fixed positioning, rich content) ───────────
 interface TooltipData { wbsCode: string; commodities: {code: string; name: string; uom: string}[]; equipment: {tag: string; description: string; status?: string}[] }
-const WBSTooltip = ({ node, projectId, anchorRect }: { node: WBSNode; projectId: number; anchorRect: DOMRect }) => {
+// Tooltip uses cursor position (not row rect) — row spans full width so
+// anchorRect.right ≈ viewport width and the flip would place tooltip off-screen.
+const WBSTooltip = ({ node, projectId, cursorX, cursorY }: { node: WBSNode; projectId: number; cursorX: number; cursorY: number }) => {
   const [data, setData] = useState<TooltipData | null>(null)
   useEffect(() => {
     axios.get<TooltipData>(`${API}/foundational/${projectId}/wbs/${node.id}/materials`)
@@ -678,8 +680,8 @@ const WBSTooltip = ({ node, projectId, anchorRect }: { node: WBSNode; projectId:
 
   const TOOLTIP_W = 380, TOOLTIP_H = 400
   const vw = window.innerWidth, vh = window.innerHeight
-  const left = anchorRect.right + 12 + TOOLTIP_W > vw ? anchorRect.left - TOOLTIP_W - 8 : anchorRect.right + 12
-  const top  = anchorRect.top + TOOLTIP_H > vh ? Math.max(8, vh - TOOLTIP_H - 8) : anchorRect.top
+  const left = cursorX + 16 + TOOLTIP_W > vw ? Math.max(8, cursorX - TOOLTIP_W - 8) : cursorX + 16
+  const top  = cursorY + TOOLTIP_H > vh ? Math.max(8, vh - TOOLTIP_H - 8) : cursorY
 
   const STATUS_PILL: Record<string, {bg:string;col:string}> = {
     'PO raised':   { bg: 'rgba(34,197,94,0.15)',  col: '#15803d' },
@@ -932,7 +934,7 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
   const [showUpload, setShowUpload]   = useState(false)
   const [focusMode, setFocusMode]     = useState(false)
   const [focusNode, setFocusNode]     = useState<WBSNode | null>(null)
-  const [tooltip, setTooltip]         = useState<{ node: WBSNode; rect: DOMRect } | null>(null)
+  const [tooltip, setTooltip]         = useState<{ node: WBSNode; x: number; y: number } | null>(null)
   const tooltipTimer                  = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [toast, setToast]             = useState('')
   // ── Search & filter state ────────────────────────────────────
@@ -978,8 +980,8 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
   // ── Tooltip handlers ─────────────────────────────────────────
   const handleRowEnter = (node: WBSNode, e: React.MouseEvent) => {
     if (tooltipTimer.current) clearTimeout(tooltipTimer.current)
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    tooltipTimer.current = setTimeout(() => setTooltip({ node, rect }), 300)
+    const x = e.clientX, y = e.clientY
+    tooltipTimer.current = setTimeout(() => setTooltip({ node, x, y }), 300)
   }
   const handleRowLeave = () => {
     if (tooltipTimer.current) clearTimeout(tooltipTimer.current)
@@ -1204,7 +1206,7 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
       )}
 
       {/* Tooltip (normal mode only) */}
-      {!focusMode && tooltip && <WBSTooltip node={tooltip.node} projectId={projectId} anchorRect={tooltip.rect} />}
+      {!focusMode && tooltip && <WBSTooltip node={tooltip.node} projectId={projectId} cursorX={tooltip.x} cursorY={tooltip.y} />}
 
       {/* ── Bulk operations floating bar ── */}
       {selectedNodes.size > 0 && (
