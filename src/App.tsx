@@ -58,6 +58,7 @@ const FS_STORAGE_KEY = 'qmat_font_size'
 const ALL_PREF_KEYS = [
   'qmat_font_size',
   'qmat_help_seen',
+  'qmat_sidebar_collapsed',
 ] as const
 
 // ─── DASHBOARD COLUMN DEFINITIONS ───────────────────────────
@@ -239,15 +240,16 @@ const READ_ONLY_ROLES = new Set(['ceo', 'director', 'project_director', 'viewer'
 // activePage and onNavigate enable state-based page routing without
 // a router library. Only items with a page key are clickable.
 const Nav = ({
-  userName, userInitial, userRole, activePage, onNavigate, selectedProjectId,
+  userName, userInitial, userRole, activePage, onNavigate, selectedProjectId, collapsed, onToggleCollapse,
 }: {
   userName: string; userInitial: string; userRole: string
   activePage: Page; onNavigate: (p: Page) => void
-  selectedProjectId: number | null   // FIX 3: Foundational only shown when a project is selected
+  selectedProjectId: number | null
+  collapsed: boolean
+  onToggleCollapse: () => void
 }) => {
   const isReadOnly = READ_ONLY_ROLES.has(userRole)
   const isAdmin    = userRole === 'admin'
-  // ─── FIX 3: Foundational collapsible group state ─────────────────────────
   const [foundOpen, setFoundOpen] = useState(false)
 
   const navItem = (label: string, icon: string, page?: Page, badge?: number) => {
@@ -256,8 +258,11 @@ const Nav = ({
       <div
         key={label}
         onClick={() => page && onNavigate(page)}
+        title={collapsed ? label : undefined}
         style={{
-          display: 'flex', alignItems: 'center', gap: 9, padding: '6px 8px',
+          display: 'flex', alignItems: 'center', gap: collapsed ? 0 : 9,
+          padding: collapsed ? '6px 0' : '6px 8px',
+          justifyContent: collapsed ? 'center' : 'flex-start',
           borderRadius: 6, fontSize: 13, marginBottom: 1, userSelect: 'none',
           cursor: page ? 'pointer' : 'default',
           transition: 'all 150ms ease',
@@ -277,15 +282,12 @@ const Nav = ({
             e.currentTarget.style.color = '#94a3b8'
           }
         }}>
-        <span style={{ width: 15, textAlign: 'center', fontSize: 12, opacity: active ? 1 : 0.65, flexShrink: 0 }}>{icon}</span>
-        <span style={{ flex: 1 }}>{label}</span>
-        {badge != null && badge > 0 && (
+        <span style={{ width: collapsed ? 20 : 15, textAlign: 'center', fontSize: collapsed ? 16 : 12, opacity: active ? 1 : 0.65, flexShrink: 0 }}>{icon}</span>
+        {!collapsed && <span style={{ flex: 1 }}>{label}</span>}
+        {!collapsed && badge != null && badge > 0 && (
           <span style={{ background: '#ef4444', color: '#fff', fontSize: 10, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', padding: '1px 5px', borderRadius: 9999, minWidth: 18, textAlign: 'center' }}>{badge}</span>
         )}
-        {/* ─── READ-ONLY BADGE ───────────────────────────────────
-            Shown on every module item for roles with no write access,
-            so users immediately understand they cannot make changes. */}
-        {isReadOnly && (
+        {!collapsed && isReadOnly && (
           <span style={{ fontSize: 9, fontWeight: 600, color: '#475569', letterSpacing: '0.05em', textTransform: 'uppercase' }}>view</span>
         )}
       </div>
@@ -293,17 +295,17 @@ const Nav = ({
   }
 
   const sectionLabel = (label: string) => (
-    <div key={label} style={{ fontSize: 10, fontWeight: 600, color: '#475569', letterSpacing: '0.1em', textTransform: 'uppercase', padding: '0 8px', marginBottom: 3, marginTop: 6 }}>{label}</div>
+    collapsed ? null : <div key={label} style={{ fontSize: 10, fontWeight: 600, color: '#475569', letterSpacing: '0.1em', textTransform: 'uppercase', padding: '0 8px', marginBottom: 3, marginTop: 6 }}>{label}</div>
   )
 
   return (
-    <nav style={{ width: 224, background: 'linear-gradient(180deg,#1e293b 0%,#0f172a 100%)', borderRight: '1px solid #1e2d4a', display: 'flex', flexDirection: 'column', flexShrink: 0, height: '100%', overflow: 'hidden' }}>
+    <nav style={{ width: collapsed ? 56 : 224, background: 'linear-gradient(180deg,#1e293b 0%,#0f172a 100%)', borderRight: '1px solid #1e2d4a', display: 'flex', flexDirection: 'column', flexShrink: 0, height: '100%', overflow: 'hidden', transition: 'width 200ms ease' }}>
 
-      {/* ─── SIDEBAR LOGO ──────────────────────────────────────
-          The file sits in /public so Vite serves it at the root
-          path with no import needed. */}
-      <div style={{ padding: '12px 16px', borderBottom: '1px solid #1e2d4a', flexShrink: 0 }}>
-        <img src="/qco_logo_primary_RGB_transparent.png" alt="QCO logo" style={{ width: 100, display: 'block' }} />
+      {/* ─── SIDEBAR LOGO ──────────────────────────────────────*/}
+      <div style={{ padding: collapsed ? '12px 0' : '12px 16px', borderBottom: '1px solid #1e2d4a', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start' }}>
+        {collapsed
+          ? <span style={{ fontSize: 18 }}>🏗</span>
+          : <img src="/qco_logo_primary_RGB_transparent.png" alt="QCO logo" style={{ width: 100, display: 'block' }} />}
       </div>
 
       {/* Top nav */}
@@ -323,21 +325,24 @@ const Nav = ({
           <div style={{ marginBottom: 1 }}>
             {/* ── Parent toggle button ─────────────────────────────────────── */}
             <div
-              onClick={() => setFoundOpen(o => !o)}
+              onClick={() => collapsed ? null : setFoundOpen(o => !o)}
+              title={collapsed ? 'Foundational' : undefined}
               style={{
-                display: 'flex', alignItems: 'center', gap: 9, padding: '6px 8px',
+                display: 'flex', alignItems: 'center', gap: collapsed ? 0 : 9,
+                padding: collapsed ? '6px 0' : '6px 8px',
+                justifyContent: collapsed ? 'center' : 'flex-start',
                 borderRadius: 6, fontSize: 13, userSelect: 'none', cursor: 'pointer',
                 background: 'transparent', color: '#94a3b8', transition: 'all 150ms ease',
               }}
               onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = '#e2e8f0' }}
               onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#94a3b8' }}>
-              <span style={{ width: 15, textAlign: 'center', fontSize: 12, opacity: 0.65, flexShrink: 0 }}>🏗</span>
-              <span style={{ flex: 1 }}>Foundational</span>
-              <span style={{ fontSize: 10, opacity: 0.5, transition: 'transform 200ms', display: 'inline-block', transform: foundOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
+              <span style={{ width: collapsed ? 20 : 15, textAlign: 'center', fontSize: collapsed ? 16 : 12, opacity: 0.65, flexShrink: 0 }}>🏗</span>
+              {!collapsed && <span style={{ flex: 1 }}>Foundational</span>}
+              {!collapsed && <span style={{ fontSize: 10, opacity: 0.5, transition: 'transform 200ms', display: 'inline-block', transform: foundOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>}
             </div>
-            {/* ── Child items (shown when expanded) ────────────────────────── */}
-            {foundOpen && (
-              <div style={{ paddingLeft: 22 }}>
+            {/* ── Child items ────────────────────────────────────────────────── */}
+            {(foundOpen || collapsed) && (
+              <div style={{ paddingLeft: collapsed ? 0 : 22 }}>
                 {[
                   { label: 'WBS',              icon: '🌲', page: 'foundational-wbs' as Page },
                   { label: 'Commodity Library', icon: '📦', page: 'foundational-commodities' as Page },
@@ -348,20 +353,24 @@ const Nav = ({
                   <div
                     key={item.label}
                     onClick={() => onNavigate(item.page)}
+                    title={collapsed ? item.label : undefined}
                     style={{
-                      display: 'flex', alignItems: 'center', gap: 9, padding: '5px 8px',
+                      display: 'flex', alignItems: 'center',
+                      gap: collapsed ? 0 : 9,
+                      padding: collapsed ? '5px 0' : '5px 8px',
+                      justifyContent: collapsed ? 'center' : 'flex-start',
                       borderRadius: 6, fontSize: 12, marginBottom: 1, userSelect: 'none',
                       cursor: 'pointer',
                       color: active ? '#E84E0F' : '#64748b',
                       background: active ? 'rgba(232,78,15,0.10)' : 'transparent',
                       border: `1px solid ${active ? 'rgba(232,78,15,0.25)' : 'transparent'}`,
-                      borderLeft: active ? undefined : '1px solid rgba(255,255,255,0.08)', marginLeft: 4, paddingLeft: 12,
+                      ...(!collapsed ? { borderLeft: active ? undefined : '1px solid rgba(255,255,255,0.08)', marginLeft: 4, paddingLeft: 12 } : {}),
                       transition: 'all 150ms',
                     }}
                     onMouseEnter={e => { if (!active) { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = '#e2e8f0' } }}
                     onMouseLeave={e => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#64748b' } }}>
-                    <span style={{ fontSize: 11, flexShrink: 0 }}>{item.icon}</span>
-                    <span>{item.label}</span>
+                    <span style={{ fontSize: collapsed ? 16 : 11, flexShrink: 0 }}>{item.icon}</span>
+                    {!collapsed && <span>{item.label}</span>}
                   </div>
                   )
                 })}
@@ -392,19 +401,34 @@ const Nav = ({
         </div>
       )}
 
+      {/* ── Collapse toggle button ───────────────────────────── */}
+      <div style={{ padding: '4px 8px', flexShrink: 0 }}>
+        <button onClick={onToggleCollapse}
+          title={collapsed ? 'Expand sidebar' : 'Collapse to icons'}
+          style={{ width: '100%', padding: '6px 0', borderRadius: 6, border: '1px solid rgba(255,255,255,0.08)', background: 'transparent', color: '#475569', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, transition: 'all 150ms' }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = '#94a3b8' }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#475569' }}>
+          {collapsed ? '›' : '‹'}
+          {!collapsed && <span style={{ fontSize: 11 }}>Collapse</span>}
+        </button>
+      </div>
+
       {/* User chip */}
       <div style={{ padding: 8, borderTop: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
         <div
-          style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6 }}
+          title={collapsed ? `${userName} (${userRole})` : undefined}
+          style={{ display: 'flex', alignItems: 'center', gap: collapsed ? 0 : 8, padding: '6px 8px', borderRadius: 6, justifyContent: collapsed ? 'center' : 'flex-start' }}
           onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
           onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
           <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: '#fff', flexShrink: 0 }}>
             {userInitial}
           </div>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 12, fontWeight: 500, color: '#e2e8f0', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{userName}</div>
-            <div style={{ fontSize: 10, color: '#475569', marginTop: 1, textTransform: 'capitalize' }}>{userRole.replace(/_/g, ' ')}</div>
-          </div>
+          {!collapsed && (
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 12, fontWeight: 500, color: '#e2e8f0', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{userName}</div>
+              <div style={{ fontSize: 10, color: '#475569', marginTop: 1, textTransform: 'capitalize' }}>{userRole.replace(/_/g, ' ')}</div>
+            </div>
+          )}
         </div>
       </div>
     </nav>
@@ -612,6 +636,19 @@ function App() {
   const [loading,       setLoading]       = useState(false)
   const [error,         setError]         = useState('')
   const [sidebarOpen,      setSidebarOpen]      = useState(true)
+  // ─── SIDEBAR COLLAPSED STATE ────────────────────────────────
+  // Collapsed = icons only (56px); expanded = full labels (224px).
+  // Persisted to localStorage so it survives page reloads.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(
+    () => localStorage.getItem('qmat_sidebar_collapsed') === 'true'
+  )
+  const toggleSidebarCollapse = () => {
+    setSidebarCollapsed(c => {
+      const next = !c
+      localStorage.setItem('qmat_sidebar_collapsed', String(next))
+      return next
+    })
+  }
   const [dark,             setDark]             = useState(false)
   const [page,             setPage]             = useState<Page>('dashboard')
   // ─── PROCUREMENT PROJECT SELECTION ──────────────────────────
@@ -734,12 +771,12 @@ function App() {
       {/* ─── SIDEBAR — fixed, slides in/out below topbar ──────────── */}
       <div style={{
         position: 'fixed', top: 48, left: 0, bottom: 0,
-        width: sidebarOpen ? 224 : 0,
+        width: sidebarOpen ? (sidebarCollapsed ? 56 : 224) : 0,
         overflow: 'hidden',
         transition: 'width 200ms ease',
         zIndex: 90,
       }}>
-        <Nav userName={userName} userInitial={userInitial} userRole={user?.role ?? ''} activePage={page} onNavigate={setPage} selectedProjectId={selectedProjectId} />
+        <Nav userName={userName} userInitial={userInitial} userRole={user?.role ?? ''} activePage={page} onNavigate={setPage} selectedProjectId={selectedProjectId} collapsed={sidebarCollapsed} onToggleCollapse={toggleSidebarCollapse} />
       </div>
 
       {/* ─── MAIN COLUMN placeholder (layout provided by fixed children below) ── */}
@@ -749,14 +786,14 @@ function App() {
             Sidebar toggle · breadcrumb · date · dark-mode · user chip */}
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, height: 48, zIndex: 100, background: dark ? '#1e293b' : '#fff', borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}`, display: 'flex', alignItems: 'center', padding: '0 12px 0 16px', gap: 10 }}>
 
-          {/* Sidebar toggle */}
+          {/* Sidebar toggle — toggles icon-only collapse mode */}
           <button
-            onClick={() => setSidebarOpen(o => !o)}
-            title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+            onClick={toggleSidebarCollapse}
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse to icons'}
             style={{ width: 28, height: 28, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, borderRadius: 6, background: dark ? '#0f172a' : '#f4f7fb', color: '#64748b', fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all 150ms', fontFamily: 'inherit' }}
             onMouseEnter={(e) => { e.currentTarget.style.background = dark ? '#1e293b' : '#e8ecf2' }}
             onMouseLeave={(e) => { e.currentTarget.style.background = dark ? '#0f172a' : '#f4f7fb' }}>
-            {sidebarOpen ? '◂' : '▸'}
+            {sidebarCollapsed ? '›' : '‹'}
           </button>
 
           {/* ─── BREADCRUMB ─────────────────────────────────────
@@ -908,7 +945,7 @@ function App() {
         {/* ─── MAIN CONTENT — the one-and-only scroll container ──
             Fixed below topbar, beside sidebar. overflow: auto so
             position:sticky children work relative to this element. */}
-        <div style={{ position: 'fixed', top: 48, left: sidebarOpen ? 224 : 0, right: 0, bottom: 0, overflowY: 'auto', overflowX: 'hidden', zIndex: 1, transition: 'left 200ms ease', background: dark ? '#0f172a' : '#f1f4f8', color: dark ? '#f1f5f9' : '#0f172a', padding: '0 20px 20px' }}>
+        <div style={{ position: 'fixed', top: 48, left: sidebarOpen ? (sidebarCollapsed ? 56 : 224) : 0, right: 0, bottom: 0, overflowY: 'auto', overflowX: 'hidden', zIndex: 1, transition: 'left 200ms ease', background: dark ? '#0f172a' : '#f1f4f8', color: dark ? '#f1f5f9' : '#0f172a', padding: '0 20px 20px' }}>
 
           {/* ─── PASSWORD EXPIRY BANNER ────────────────────────
               Scrolls with page content; visible at top of scroll area. */}

@@ -349,6 +349,8 @@ export const FoundEquipmentScreen = ({ dark, projectId, projectName, onBack }: {
           <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 3 }}>{items.length} of {items.length} items · Tag numbers unique per project</div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={() => window.open(`${API}/foundational/${projectId}/equipment/template`, '_blank')}
+            style={{ padding: '7px 14px', borderRadius: 6, border: bd, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>↓ Template</button>
           <button style={{ padding: '7px 14px', borderRadius: 6, border: bd, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>↑ Upload</button>
           <HelpButton screenName="Equipment List" sections={EQUIPMENT_HELP} dark={dark} />
           <button onClick={() => setAddModal(true)} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>+ Add equipment</button>

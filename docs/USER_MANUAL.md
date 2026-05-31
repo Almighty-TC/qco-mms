@@ -506,4 +506,103 @@ The Admin module is accessible to **System Admins** only. It covers user managem
 
 ---
 
+---
+
+## 10. WBS Enhancements (v1.1)
+
+### 10.1 Collapsible Sidebar
+
+The sidebar can be switched between **full** (224 px, labels visible) and **icon-only** (56 px) mode.
+
+- Click the **‹** button in the topbar, or the **‹ Collapse** button at the bottom of the sidebar, to collapse.
+- Click **›** to expand.
+- The preference is saved to `localStorage` and remembered between sessions.
+- When collapsed, each nav item shows a tooltip on hover with its full label.
+
+---
+
+### 10.2 WBS Search and Filter Bar
+
+Above the WBS tree table a filter bar provides three controls:
+
+| Control | Description |
+|---------|-------------|
+| **Search input** | Live filter by WBS code or node description. Matching rows are highlighted in blue; parent nodes of matched rows stay visible. |
+| **RAG filter pills** | `All` · `🟢` · `🟡` · `🔴` · `🔵` · `⚪` — click to show only nodes with that RAG status (plus their parents). |
+| **Depth filter** | Dropdown: All levels / Level 1 only / Level 1-2 / Level 1-3 |
+| **✕ Clear filters** | Appears only when any filter is active. Resets all three controls at once. |
+
+---
+
+### 10.3 WBS Bulk Operations
+
+When you hover over a WBS row, a **checkbox** becomes visible on the left. Select one or more nodes to activate the **floating bulk-action bar** at the bottom of the screen.
+
+| Action | Description |
+|--------|-------------|
+| **Change RAG** | Select a new RAG status from the dropdown, then click **Apply RAG** to update all selected nodes at once. |
+| **↓ Export selected** | Downloads an XLSX file containing the selected nodes with all date and notes fields. |
+| **🗑 Delete safe** | Deletes only nodes that have no children and no PO references. Nodes that have dependants are silently skipped. A toast shows how many were deleted vs. skipped. |
+| **✕** | Clears the selection without making any changes. |
+
+The **header checkbox** selects or deselects all nodes currently loaded.
+
+---
+
+### 10.4 WBS Node Dates (Planned / Forecast / Actual)
+
+Each WBS node now supports three pairs of dates in the **Add WBS Node** modal:
+
+| Group | Fields |
+|-------|--------|
+| **Planned** | Planned Start · Planned End |
+| **Forecast** | Forecast Start · Forecast End |
+| **Actual** | Actual Start · Actual End |
+
+All date fields are optional. Dates are also visible in the Focus Mode info panel (§ 10.5).
+
+The **ROS Date** (Required On Site) remains a single date as before.
+
+---
+
+### 10.5 Focus Mode Info Panel
+
+When **Focus Mode** is active (click ⛶ Focus in the WBS header), clicking any row opens a **420 px info panel** on the right side of the tree instead of expanding/collapsing the row.
+
+The panel contains:
+
+1. **Header** — WBS code (blue mono), description, RAG pill, ✕ close button.
+2. **Key Dates** — Planned Start/End, Forecast Start/End, Actual Start/End, ROS — displayed in a 2-column grid.
+3. **Notes** — full notes text.
+4. **Commodities** — scrollable list of `code · name · UOM` for all commodities linked to this node.
+5. **Equipment** — scrollable list of `tag · description · status pill` for all equipment linked to this node.
+6. **Purchase Orders** — list of PO number · vendor · status for POs whose WBS code matches this node.
+7. **Footer** — **✎ Edit node** button opens the edit modal for this node.
+
+Click **✕** in the panel header, or click a different row, to close the panel and open a new one.
+
+---
+
+### 10.6 Materials Status Column
+
+A **PO Qty** column is now visible in the WBS tree (normal mode only). It shows the sum of `qty` from all PO line items whose `wbs_code_snapshot` matches this node's code. If no PO lines reference the node, `—` is shown.
+
+This gives a quick at-a-glance view of how much procurement volume has been raised against each work package.
+
+---
+
+### 10.7 Template Downloads
+
+Template XLSX files are available for all three Foundational modules:
+
+| Module | Button | Columns |
+|--------|--------|---------|
+| WBS | ↓ Template | code, description, parent, ROS, etc. |
+| Commodity Library | ↓ Template | Commodity Code, WBS Code, Name, UOM, Qty, Trace Level, Preservation, Vendor, Notes |
+| Equipment List | ↓ Template | Equipment Tag, Type, WBS Code, Description, Area, Criticality, PO Reference, Vendor, Weight, Size, Notes |
+
+Each template includes an **Instructions** sheet and 3 example rows.
+
+---
+
 *QCO MMS User Manual — © QCO Group 2026. For support contact your system administrator.*

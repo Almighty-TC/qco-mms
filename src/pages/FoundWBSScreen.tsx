@@ -1,5 +1,6 @@
 // ─── FOUNDATIONAL WBS SCREEN ────────────────────────────────
-// Tree table of WBS nodes. Expand/collapse, add, edit notes, delete.
+// Tree table of WBS nodes. Expand/collapse, add, edit, delete.
+// Tooltip, focus mode with info panel, bulk ops, search/filter.
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import axios from 'axios'
@@ -22,6 +23,11 @@ interface WBSNode {
   owner_name: string | null
   planned_start: string | null
   planned_end: string | null
+  forecast_start: string | null
+  forecast_end: string | null
+  actual_start: string | null
+  actual_end: string | null
+  po_qty: number
   children?: WBSNode[]
 }
 
@@ -47,14 +53,35 @@ function buildTree(flat: WBSNode[]): WBSNode[] {
   return roots
 }
 
+// Recursively collect all IDs visible by filter
+function collectVisible(nodes: WBSNode[], filter: (n: WBSNode) => boolean): Set<number> {
+  const visible = new Set<number>()
+  function walk(list: WBSNode[], parentVisible: boolean) {
+    for (const n of list) {
+      const match = filter(n)
+      const childrenHaveMatch = hasDescendantMatch(n, filter)
+      if (match || childrenHaveMatch || parentVisible) {
+        visible.add(n.id)
+      }
+      walk(n.children ?? [], match || parentVisible)
+    }
+  }
+  walk(nodes, false)
+  return visible
+}
+
+function hasDescendantMatch(n: WBSNode, filter: (n: WBSNode) => boolean): boolean {
+  if (!n.children?.length) return false
+  return n.children.some(c => filter(c) || hasDescendantMatch(c, filter))
+}
+
 // ─── RAG DOT ────────────────────────────────────────────────
 const RAGDot = ({ rag }: { rag: string | null }) => (
   <span title={rag ? RAG_LABELS[rag] : 'Not set'}
     style={{ width: 10, height: 10, borderRadius: '50%', background: rag ? RAG_COLORS[rag] : '#c4cedf', display: 'inline-block', flexShrink: 0 }} />
 )
 
-// ─── NOTE EDITOR MODAL (Item 4) ──────────────────────────────
-// Validation: save disabled if note blank, char count, past ROS warning.
+// ─── NOTE EDITOR MODAL ──────────────────────────────────────
 const NoteModal = ({ node, dark, onClose, onSaved }: { node: WBSNode; dark: boolean; onClose: () => void; onSaved: (n: WBSNode) => void }) => {
   const [notes, setNotes]   = useState(node.notes ?? '')
   const [ros, setRos]       = useState(node.ros_date?.slice(0, 10) ?? '')
@@ -89,12 +116,9 @@ const NoteModal = ({ node, dark, onClose, onSaved }: { node: WBSNode; dark: bool
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer' }}>×</button>
         </div>
-
         <label style={lbl}>ROS Date</label>
         <input type="date" value={ros} onChange={e => setRos(e.target.value)} style={inp} />
-        {rosPast && <div style={{ marginTop: 5, fontSize: 11, color: '#f59e0b', display: 'flex', alignItems: 'center', gap: 4 }}>⚠ ROS date is in the past</div>}
-        {!ros && <div style={{ marginTop: 5, fontSize: 11, color: '#94a3b8' }}>Optional — leave blank if not yet known</div>}
-
+        {rosPast && <div style={{ marginTop: 5, fontSize: 11, color: '#f59e0b' }}>⚠ ROS date is in the past</div>}
         <label style={lbl}>RAG Status</label>
         <select value={rag} onChange={e => setRag(e.target.value)} style={{ ...inp, height: 34 }}>
           <option value="">— Not set</option>
@@ -103,21 +127,16 @@ const NoteModal = ({ node, dark, onClose, onSaved }: { node: WBSNode; dark: bool
           <option value="red">Breached</option>
           <option value="blue">In progress</option>
         </select>
-
         <label style={lbl}>Notes / Scope *</label>
         <textarea value={notes} onChange={e => setNotes(e.target.value.slice(0, MAX_CHARS))} rows={4}
           placeholder="Scope description, constraints, assumptions…"
-          style={{ ...inp, height: 96, resize: 'vertical', padding: '8px 10px', lineHeight: 1.5,
-            border: `1px solid ${notes.length > MAX_CHARS ? '#ef4444' : (dark ? '#334155' : '#dde3ed')}` }} />
+          style={{ ...inp, height: 96, resize: 'vertical', padding: '8px 10px', lineHeight: 1.5 }} />
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
           <span style={{ fontSize: 11, color: notes.trim() === '' ? '#ef4444' : '#94a3b8' }}>
             {notes.trim() === '' ? '✕ Note cannot be blank' : ''}
           </span>
-          <span style={{ fontSize: 11, color: notes.length > MAX_CHARS * 0.9 ? '#f59e0b' : '#94a3b8' }}>
-            {notes.length} / {MAX_CHARS}
-          </span>
+          <span style={{ fontSize: 11, color: '#94a3b8' }}>{notes.length} / {MAX_CHARS}</span>
         </div>
-
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
           <button onClick={onClose} style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
           <button onClick={save} disabled={!canSave || saving}
@@ -131,31 +150,33 @@ const NoteModal = ({ node, dark, onClose, onSaved }: { node: WBSNode; dark: bool
   )
 }
 
-// ─── ADD WBS NODE MODAL ──────────────────────────────────────
-const AddNodeModal = ({ projectId, nodes, dark, onClose, onCreated }: {
+// ─── ADD WBS NODE MODAL — with forecast + actual dates ───────
+const AddNodeModal = ({ projectId, nodes, dark, onClose, onCreated, prefill }: {
   projectId: number; nodes: WBSNode[]; dark: boolean; onClose: () => void; onCreated: (n: WBSNode) => void
+  prefill?: Partial<WBSNode>
 }) => {
-  const [parentId, setParentId]     = useState('')
-  const [suffix, setSuffix]         = useState('')
-  const [description, setDesc]      = useState('')
-  const [rag, setRag]               = useState('')
-  const [rosDate, setRosDate]       = useState('')
-  const [plannedStart, setStart]    = useState('')
-  const [plannedEnd, setEnd]        = useState('')
-  const [notes, setNotes]           = useState('')
-  const [saving, setSaving]         = useState(false)
-  const [err, setErr]               = useState('')
+  const [parentId, setParentId]       = useState(prefill?.parent_id ? String(prefill.parent_id) : '')
+  const [suffix, setSuffix]           = useState('')
+  const [description, setDesc]        = useState(prefill?.description ?? '')
+  const [rag, setRag]                 = useState(prefill?.rag ?? '')
+  const [rosDate, setRosDate]         = useState(prefill?.ros_date?.slice(0,10) ?? '')
+  const [plannedStart, setPlStart]    = useState(prefill?.planned_start?.slice(0,10) ?? '')
+  const [plannedEnd, setPlEnd]        = useState(prefill?.planned_end?.slice(0,10) ?? '')
+  const [forecastStart, setFcStart]   = useState(prefill?.forecast_start?.slice(0,10) ?? '')
+  const [forecastEnd, setFcEnd]       = useState(prefill?.forecast_end?.slice(0,10) ?? '')
+  const [actualStart, setAcStart]     = useState(prefill?.actual_start?.slice(0,10) ?? '')
+  const [actualEnd, setAcEnd]         = useState(prefill?.actual_end?.slice(0,10) ?? '')
+  const [notes, setNotes]             = useState(prefill?.notes ?? '')
+  const [saving, setSaving]           = useState(false)
+  const [err, setErr]                 = useState('')
   const col = dark ? '#f1f5f9' : '#0f172a'
 
-  // Flat list for dropdown (sorted by code)
   const flatNodes = [...nodes].sort((a, b) => a.code.localeCompare(b.code))
-
   const parentNode = flatNodes.find(n => String(n.id) === parentId)
   const fullCode = parentNode ? `${parentNode.code}.${suffix}` : suffix
-
   const valid = suffix.trim() && description.trim()
 
-  const inp = { height: 34, padding: '0 10px', borderRadius: 6, width: '100%', border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' as const, marginBottom: 0 }
+  const inp: React.CSSProperties = { height: 34, padding: '0 10px', borderRadius: 6, width: '100%', border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }
 
   const save = async () => {
     setSaving(true); setErr('')
@@ -165,6 +186,8 @@ const AddNodeModal = ({ projectId, nodes, dark, onClose, onCreated }: {
         parent_id: parentId ? Number(parentId) : null,
         rag: rag || null, ros_date: rosDate || null,
         planned_start: plannedStart || null, planned_end: plannedEnd || null,
+        forecast_start: forecastStart || null, forecast_end: forecastEnd || null,
+        actual_start: actualStart || null, actual_end: actualEnd || null,
         notes: notes || null,
       })
       onCreated(data)
@@ -179,10 +202,19 @@ const AddNodeModal = ({ projectId, nodes, dark, onClose, onCreated }: {
   const label = (txt: string) => (
     <div style={{ fontSize: 11, fontWeight: 600, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase' as const, marginBottom: 4, marginTop: 12 }}>{txt}</div>
   )
+  const dateGroup = (lbl: string, v1: string, s1: (v:string)=>void, v2: string, s2: (v:string)=>void) => (
+    <div>
+      {label(lbl)}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <input type="date" value={v1} onChange={e => s1(e.target.value)} style={inp} placeholder="Start" />
+        <input type="date" value={v2} onChange={e => s2(e.target.value)} style={inp} placeholder="End" />
+      </div>
+    </div>
+  )
 
   return createPortal(
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: dark ? '#1e293b' : '#fff', borderRadius: 10, padding: 28, width: 560, maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 16px 48px rgba(0,0,0,0.4)', fontFamily: 'IBM Plex Sans, sans-serif', border: `1px solid ${dark ? '#334155' : '#dde3ed'}` }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: dark ? '#1e293b' : '#fff', borderRadius: 10, padding: 28, width: 580, maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 16px 48px rgba(0,0,0,0.4)', fontFamily: 'IBM Plex Sans, sans-serif', border: `1px solid ${dark ? '#334155' : '#dde3ed'}` }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: col }}>Add WBS Node</div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer' }}>×</button>
@@ -210,8 +242,7 @@ const AddNodeModal = ({ projectId, nodes, dark, onClose, onCreated }: {
         )}
 
         {label('Node name / description *')}
-        <input value={description} onChange={e => setDesc(e.target.value)} placeholder="e.g. Process Vessels & Columns"
-          style={{ ...inp, gridColumn: '1 / -1' }} />
+        <input value={description} onChange={e => setDesc(e.target.value)} placeholder="e.g. Process Vessels & Columns" style={inp} />
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
           <div>
@@ -228,15 +259,11 @@ const AddNodeModal = ({ projectId, nodes, dark, onClose, onCreated }: {
             {label('ROS Date')}
             <input type="date" value={rosDate} onChange={e => setRosDate(e.target.value)} style={inp} />
           </div>
-          <div>
-            {label('Planned start')}
-            <input type="date" value={plannedStart} onChange={e => setStart(e.target.value)} style={inp} />
-          </div>
-          <div>
-            {label('Planned end')}
-            <input type="date" value={plannedEnd} onChange={e => setEnd(e.target.value)} style={inp} />
-          </div>
         </div>
+
+        {dateGroup('Planned Dates', plannedStart, setPlStart, plannedEnd, setPlEnd)}
+        {dateGroup('Forecast Dates', forecastStart, setFcStart, forecastEnd, setFcEnd)}
+        {dateGroup('Actual Dates', actualStart, setAcStart, actualEnd, setAcEnd)}
 
         {label('Notes / scope description')}
         <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3}
@@ -278,7 +305,6 @@ const DeleteWBSWizard = ({ node, projectId, dark, onClose, onDeleted }: {
   const [confirmed, setConfirmed] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [err, setErr] = useState('')
-
   const col = dark ? '#f1f5f9' : '#0f172a'
 
   useEffect(() => {
@@ -293,7 +319,6 @@ const DeleteWBSWizard = ({ node, projectId, dark, onClose, onDeleted }: {
   const doDelete = async () => {
     setDeleting(true); setErr('')
     try {
-      // Apply reallocations first
       if (impact?.affectedLines?.length) {
         const reallocations = Object.entries(allocations).map(([lineId, val]) => ({
           lineId: Number(lineId), newWbsNodeId: Number(val.nodeId), newWbsCode: val.code,
@@ -320,10 +345,7 @@ const DeleteWBSWizard = ({ node, projectId, dark, onClose, onDeleted }: {
             <div style={{ fontSize: 16, fontWeight: 700, color: '#ef4444' }}>Delete WBS Node</div>
             <div style={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', color: '#94a3b8', marginTop: 2 }}>{node.code} — {node.description}</div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ fontSize: 11, color: '#94a3b8' }}>Step {step} of {impact?.affectedLines?.length ? 3 : (step === 1 ? '2 (skip reallocate)' : 3)}</span>
-            <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer' }}>×</button>
-          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer' }}>×</button>
         </div>
 
         {step === 1 && (
@@ -335,70 +357,21 @@ const DeleteWBSWizard = ({ node, projectId, dark, onClose, onDeleted }: {
               ) : (
                 <>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 12 }}>
-                    {[
-                      ['Child nodes', impact.childCount],
-                      ['Affected POs', impact.affectedPOs.length],
-                      ['Line items', impact.affectedLines.length],
-                      ['Code prefix', impact.codesCovered],
-                    ].map(([l, v]) => (
+                    {[['Child nodes', impact.childCount], ['Affected POs', impact.affectedPOs.length], ['Line items', impact.affectedLines.length], ['Code prefix', impact.codesCovered]].map(([l, v]) => (
                       <div key={String(l)} style={{ background: dark ? '#0f172a' : '#fff5f5', borderRadius: 6, padding: '10px 12px', textAlign: 'center' }}>
                         <div style={{ fontSize: 20, fontWeight: 700, color: '#ef4444', fontFamily: 'JetBrains Mono, monospace' }}>{v}</div>
                         <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 3 }}>{l}</div>
                       </div>
                     ))}
                   </div>
-                  {safeToDelete && (
-                    <div style={{ fontSize: 12, color: '#22c55e', fontWeight: 600 }}>✓ Safe to delete — no child nodes or POs reference this node.</div>
-                  )}
-                  {impact.affectedPOs.length > 0 && (
-                    <div style={{ marginTop: 12 }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Related purchase orders</div>
-                      {impact.affectedPOs.map(po => (
-                        <div key={po.id} style={{ display: 'flex', gap: 10, padding: '5px 0', borderBottom: '1px solid rgba(239,68,68,0.1)', fontSize: 12 }}>
-                          <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#2563eb' }}>{po.po_number}</span>
-                          <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#64748b' }}>{po.wbs_code}</span>
-                          <span style={{ color: '#94a3b8' }}>{po.status}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  {safeToDelete && <div style={{ fontSize: 12, color: '#22c55e', fontWeight: 600 }}>✓ Safe to delete — no child nodes or POs reference this node.</div>}
                 </>
               )}
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button onClick={onClose} style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
-              <button onClick={() => impact?.affectedLines?.length ? setStep(2) : setStep(3)}
-                disabled={!impact}
+              <button onClick={() => impact?.affectedLines?.length ? setStep(2) : setStep(3)} disabled={!impact}
                 style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: impact ? '#ef4444' : '#94a3b8', color: '#fff', fontSize: 12, fontWeight: 600, cursor: impact ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>
-                Continue →
-              </button>
-            </div>
-          </>
-        )}
-
-        {step === 2 && impact && (
-          <>
-            <div style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 8, padding: '12px 14px', marginBottom: 16, fontSize: 12, color: '#ef4444' }}>
-              ⚠ Before deleting, re-assign all {impact.affectedLines.length} affected PO line item{impact.affectedLines.length !== 1 ? 's' : ''} to a different WBS node.
-            </div>
-            <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
-              {Object.keys(allocations).length} of {impact.affectedLines.length} lines re-allocated
-            </div>
-            {impact.affectedLines.map(line => (
-              <ReallocateLineRow
-                key={line.id}
-                line={line}
-                projectId={projectId}
-                dark={dark}
-                excludeCode={node.code}
-                value={allocations[line.id]}
-                onChange={(nodeId, code) => setAllocations(prev => ({ ...prev, [line.id]: { nodeId, code } }))}
-              />
-            ))}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
-              <button onClick={() => setStep(1)} style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>← Back</button>
-              <button onClick={() => setStep(3)} disabled={!allReallocated}
-                style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: allReallocated ? '#ef4444' : '#94a3b8', color: '#fff', fontSize: 12, fontWeight: 600, cursor: allReallocated ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>
                 Continue →
               </button>
             </div>
@@ -409,31 +382,16 @@ const DeleteWBSWizard = ({ node, projectId, dark, onClose, onDeleted }: {
           <>
             <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '14px 16px', marginBottom: 16 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: '#ef4444', marginBottom: 8 }}>🗑 Confirm permanent deletion</div>
-              <div style={{ fontSize: 12, color: dark ? '#f1f5f9' : '#0f172a', marginBottom: 4 }}>
-                You are about to permanently delete WBS node <strong style={{ fontFamily: 'JetBrains Mono, monospace' }}>{node.code}</strong> — {node.description}.
-              </div>
-              <div style={{ fontSize: 12, color: '#94a3b8' }}>This action cannot be undone. Any child nodes will also be removed.</div>
-              {impact.affectedLines.length > 0 && (
-                <div style={{ marginTop: 10, fontSize: 12 }}>
-                  <div style={{ fontWeight: 600, color: '#64748b', marginBottom: 4 }}>Re-allocation summary:</div>
-                  {impact.affectedLines.map(l => (
-                    <div key={l.id} style={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', color: '#94a3b8', marginBottom: 2 }}>
-                      {l.po_number} Line {l.line_number}: {l.wbs_code_snapshot} → {allocations[l.id]?.code ?? '—'}
-                    </div>
-                  ))}
-                </div>
-              )}
+              <div style={{ fontSize: 12, color: col }}>Delete WBS node <strong style={{ fontFamily: 'JetBrains Mono, monospace' }}>{node.code}</strong> — {node.description}?</div>
+              <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>This action cannot be undone. Any child nodes will also be removed.</div>
             </div>
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: 16 }}>
               <input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} style={{ accentColor: '#ef4444' }} />
               <span style={{ fontSize: 12, color: col }}>I understand this deletion is permanent and cannot be undone.</span>
             </label>
-            {err && <div style={{ marginBottom: 12, fontSize: 12, color: '#ef4444', background: 'rgba(239,68,68,0.08)', borderRadius: 6, padding: '6px 10px' }}>{err}</div>}
+            {err && <div style={{ marginBottom: 12, fontSize: 12, color: '#ef4444' }}>{err}</div>}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button onClick={onClose} style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
-              {impact.affectedLines.length > 0 && (
-                <button onClick={() => setStep(2)} style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>← Back</button>
-              )}
               <button onClick={doDelete} disabled={!confirmed || deleting}
                 style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: (confirmed && !deleting) ? '#ef4444' : '#94a3b8', color: '#fff', fontSize: 12, fontWeight: 600, cursor: (confirmed && !deleting) ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>
                 {deleting ? 'Deleting…' : '🗑 Delete permanently'}
@@ -455,221 +413,164 @@ const ReallocateLineRow = ({ line, projectId, dark, excludeCode, value, onChange
   onChange: (nodeId: string, code: string) => void
 }) => {
   const [nodes, setNodes] = useState<{ id: number; code: string; description: string }[]>([])
-  const [allocInfo, setAllocInfo] = useState<{ allocatedQty: number } | null>(null)
-
+  const col = dark ? '#f1f5f9' : '#0f172a'
   useEffect(() => {
     axios.get(`${API}/foundational/${projectId}/wbs`).then(r => {
       setNodes(r.data.filter((n: WBSNode) => !n.code.startsWith(excludeCode)))
     }).catch(() => {})
   }, [projectId, excludeCode])
-
-  useEffect(() => {
-    if (!value?.nodeId) { setAllocInfo(null); return }
-    axios.get(`${API}/foundational/${projectId}/wbs/allocation-check/${value.nodeId}`)
-      .then(r => setAllocInfo(r.data)).catch(() => {})
-  }, [value?.nodeId, projectId])
-
-  const col = dark ? '#f1f5f9' : '#0f172a'
-
   return (
     <div style={{ background: dark ? '#0f172a' : '#fff5f5', borderRadius: 8, padding: '10px 14px', marginBottom: 8, border: '1px solid rgba(239,68,68,0.12)' }}>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 6 }}>
-        <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb' }}>{line.po_number}</span>
-        <span style={{ fontSize: 11, color: '#64748b' }}>Line {line.line_number}</span>
-        <span style={{ fontSize: 12, color: col, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{line.description}</span>
-        <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#94a3b8' }}>{line.qty} {line.uom}</span>
-      </div>
+      <div style={{ fontSize: 12, color: col, marginBottom: 6 }}>{line.po_number} · Line {line.line_number} · {line.description}</div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <span style={{ fontSize: 11, color: '#ef4444', fontFamily: 'JetBrains Mono, monospace', textDecoration: 'line-through' }}>{line.wbs_code_snapshot}</span>
-        <span style={{ color: '#94a3b8', fontSize: 12 }}>→</span>
-        <select
-          value={value?.nodeId ?? ''}
-          onChange={e => {
-            const n = nodes.find(x => String(x.id) === e.target.value)
-            if (n) onChange(e.target.value, n.code)
-            else onChange('', '')
-          }}
+        <span style={{ color: '#94a3b8' }}>→</span>
+        <select value={value?.nodeId ?? ''} onChange={e => { const n = nodes.find(x => String(x.id) === e.target.value); if (n) onChange(e.target.value, n.code); else onChange('', '') }}
           style={{ flex: 1, height: 30, padding: '0 8px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: dark ? '#1e293b' : '#fff', color: col, fontSize: 12, fontFamily: 'JetBrains Mono, monospace', outline: 'none' }}>
           <option value="">— Select new WBS</option>
           {nodes.map(n => <option key={n.id} value={n.id}>{n.code} — {n.description}</option>)}
         </select>
       </div>
-      {allocInfo !== null && value?.nodeId && (
-        <div style={{ marginTop: 4, fontSize: 11, color: allocInfo.allocatedQty > 0 ? '#f59e0b' : '#22c55e' }}>
-          {allocInfo.allocatedQty > 0
-            ? `⚠ ${allocInfo.allocatedQty} units already allocated to ${value.code}`
-            : `✓ No existing allocations at ${value.code}`}
-        </div>
-      )}
     </div>
   )
 }
 
 // ─── WBS ROW (recursive) ─────────────────────────────────────
-// Indent is applied to the TREE CELL (chevron + RAG dot + code) as paddingLeft
-// so the entire left content shifts right 20px per depth level. Keeping them in
-// separate <td> elements would only shift the chevron, not the code text.
-const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRowEnter, onRowLeave }: {
+// Checkbox visibility controlled by CSS hover on parent tr.
+const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRowEnter, onRowLeave, focusMode, onFocusClick, selected, onSelect, searchMatch, filterVisible }: {
   node: WBSNode; depth: number; dark: boolean
   expanded: Set<number>; onToggle: (id: number) => void
   onEdit: (n: WBSNode) => void; onDelete: (n: WBSNode) => void
   onRowEnter?: (n: WBSNode, e: React.MouseEvent) => void
   onRowLeave?: () => void
+  focusMode: boolean
+  onFocusClick?: (n: WBSNode) => void
+  selected: boolean
+  onSelect: (id: number, checked: boolean) => void
+  searchMatch: boolean
+  filterVisible: boolean
 }) => {
   const [hovered, setHovered] = useState(false)
   const hasChildren = node.children && node.children.length > 0
   const isExpanded = expanded.has(node.id)
   const col = dark ? '#f1f5f9' : '#0f172a'
   const ragColour = node.rag ? RAG_COLORS[node.rag] : '#c4cedf'
+  const rosColour = node.ros_date ? (node.rag === 'red' ? '#ef4444' : node.rag === 'amber' ? '#f59e0b' : node.rag === 'blue' ? '#2563eb' : '#22c55e') : '#94a3b8'
 
-  const rosColour = node.ros_date
-    ? (node.rag === 'red' ? '#ef4444' : node.rag === 'amber' ? '#f59e0b' : node.rag === 'blue' ? '#2563eb' : '#22c55e')
-    : '#94a3b8'
+  if (!filterVisible) return null
+
+  const rowBg = selected
+    ? (dark ? '#1e3a5f' : '#dbeafe')
+    : hovered
+    ? (dark ? '#1e2d4a' : '#f4f7fb')
+    : (dark ? '#1e293b' : '#fff')
+
+  const highlightBg = searchMatch && !selected
+    ? (dark ? '#1e3a5f40' : '#eff6ff')
+    : rowBg
 
   return (
     <>
       <tr
-        onMouseEnter={e => { setHovered(true); onRowEnter?.(node, e) }}
-        onMouseLeave={() => { setHovered(false); onRowLeave?.() }}
-        style={{
-          background: hovered ? (dark ? '#1e2d4a' : '#f4f7fb') : (dark ? '#1e293b' : '#fff'),
-          transition: 'background 120ms',
-          cursor: hasChildren ? 'pointer' : 'default',
-        }}
-        onClick={() => hasChildren && onToggle(node.id)}
-      >
-        {/* RAG left-edge stripe — fixed 4px, no content */}
+        onMouseEnter={e => { setHovered(true); if (!focusMode) onRowEnter?.(node, e) }}
+        onMouseLeave={() => { setHovered(false); if (!focusMode) onRowLeave?.() }}
+        style={{ background: highlightBg, transition: 'background 120ms', cursor: focusMode ? 'pointer' : (hasChildren ? 'pointer' : 'default'), opacity: filterVisible ? 1 : 0.3 }}
+        onClick={() => focusMode ? onFocusClick?.(node) : (hasChildren && onToggle(node.id))}>
+
+        {/* RAG stripe */}
         <td style={{ width: 4, padding: 0 }}>
           <div style={{ width: 4, height: '100%', minHeight: 38, background: ragColour, borderRadius: '2px 0 0 2px' }} />
         </td>
 
-        {/* TREE CELL: chevron + RAG dot + code — paddingLeft creates the depth indent */}
-        <td
-          style={{
-            paddingLeft: 8 + depth * 20,
-            paddingRight: 8,
-            paddingTop: 9,
-            paddingBottom: 9,
-            whiteSpace: 'nowrap',
-            userSelect: 'none',
-          }}
-        >
+        {/* Checkbox — visible on hover */}
+        <td style={{ width: 28, padding: '0 4px', textAlign: 'center' }}>
+          <input type="checkbox" checked={selected}
+            onChange={e => { e.stopPropagation(); onSelect(node.id, e.target.checked) }}
+            onClick={e => e.stopPropagation()}
+            style={{ opacity: (hovered || selected) ? 1 : 0, transition: 'opacity 120ms', cursor: 'pointer', accentColor: '#2563eb' }} />
+        </td>
+
+        {/* TREE CELL: chevron + RAG dot + code */}
+        <td style={{ paddingLeft: 8 + depth * 20, paddingRight: 8, paddingTop: 9, paddingBottom: 9, whiteSpace: 'nowrap', userSelect: 'none' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            {/* Chevron: ▸ collapsed, ▾ expanded, · leaf */}
-            <span style={{
-              display: 'inline-block', width: 14, textAlign: 'center',
-              fontSize: 11, color: hasChildren ? '#64748b' : '#c4cedf',
-              flexShrink: 0, lineHeight: 1,
-            }}>
+            <span style={{ display: 'inline-block', width: 14, textAlign: 'center', fontSize: 11, color: hasChildren ? '#64748b' : '#c4cedf', flexShrink: 0, lineHeight: 1 }}>
               {hasChildren ? (isExpanded ? '▾' : '▸') : '·'}
             </span>
-            {/* RAG dot */}
             <RAGDot rag={node.rag} />
-            {/* Code (monospace) */}
-            <span style={{
-              fontFamily: 'JetBrains Mono, monospace',
-              fontSize: 12,
-              fontWeight: depth === 0 ? 600 : 400,
-              color: col,
-            }}>
+            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, fontWeight: depth === 0 ? 600 : 400, color: searchMatch ? '#60a5fa' : col }}>
               {node.code}
             </span>
           </div>
         </td>
 
-        {/* WBS NODE — description */}
-        <td style={{
-          padding: '9px 12px 9px 4px',
-          fontSize: 13,
-          fontWeight: depth === 0 ? 600 : 400,
-          color: col,
-          maxWidth: 300,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}>
+        {/* WBS NODE description */}
+        <td style={{ padding: '9px 12px 9px 4px', fontSize: 13, fontWeight: depth === 0 ? 600 : 400, color: col, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {node.description}
         </td>
 
-        {/* ROS — RAG-coloured date */}
-        <td style={{
-          padding: '9px 12px',
-          fontFamily: 'JetBrains Mono, monospace',
-          fontSize: 11,
-          color: rosColour,
-          whiteSpace: 'nowrap',
-        }}>
+        {/* ROS */}
+        <td style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: rosColour, whiteSpace: 'nowrap' }}>
           {fmtDate(node.ros_date)}
         </td>
 
-        {/* NOTES — clickable, opens NoteModal */}
-        <td style={{ padding: '9px 12px', maxWidth: 220 }}>
-          <button
-            onClick={e => { e.stopPropagation(); onEdit(node) }}
-            style={{
-              background: 'none', border: 'none', cursor: 'pointer',
-              color: node.notes ? '#2563eb' : '#94a3b8',
-              fontSize: 12, fontFamily: 'inherit', textAlign: 'left',
-              maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap', display: 'block', padding: 0,
-            }}
-            title={node.notes ?? 'Click to add notes'}>
-            {node.notes
-              ? `${node.notes.slice(0, 45)}${node.notes.length > 45 ? '…' : ''}`
-              : '+ Add note'}
-          </button>
-        </td>
+        {/* NOTES */}
+        {!focusMode && (
+          <td style={{ padding: '9px 12px', maxWidth: 180 }}>
+            <button onClick={e => { e.stopPropagation(); onEdit(node) }}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: node.notes ? '#2563eb' : '#94a3b8', fontSize: 12, fontFamily: 'inherit', textAlign: 'left', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block', padding: 0 }}
+              title={node.notes ?? 'Click to add notes'}>
+              {node.notes ? `${node.notes.slice(0, 40)}${node.notes.length > 40 ? '…' : ''}` : '+ Add note'}
+            </button>
+          </td>
+        )}
 
-        {/* Code-suffix hint e.g. "01.xx" — muted, no header */}
-        <td style={{
-          padding: '9px 12px',
-          fontFamily: 'JetBrains Mono, monospace',
-          fontSize: 11,
-          color: '#64748b',
-          whiteSpace: 'nowrap',
-        }}>
-          {node.code}.xx
-        </td>
+        {/* PO Qty — materials status */}
+        {!focusMode && (
+          <td style={{ padding: '9px 8px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: node.po_qty > 0 ? '#22c55e' : '#475569', textAlign: 'right', whiteSpace: 'nowrap' }}>
+            {node.po_qty > 0 ? node.po_qty.toLocaleString() : '—'}
+          </td>
+        )}
 
-        {/* Delete — revealed on hover only */}
+        {/* Code suffix */}
+        {!focusMode && (
+          <td style={{ padding: '9px 8px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#64748b', whiteSpace: 'nowrap' }}>
+            {node.code}.xx
+          </td>
+        )}
+
+        {/* Delete */}
         <td style={{ padding: '9px 8px', textAlign: 'center', width: 36 }}>
-          <button
-            onClick={e => { e.stopPropagation(); onDelete(node) }}
-            style={{
-              background: 'none', border: 'none', cursor: 'pointer',
-              color: hovered ? '#ef4444' : 'transparent',
-              fontSize: 14, transition: 'color 150ms', padding: '2px 4px',
-              lineHeight: 1,
-            }}
-            title="Delete node">
-            🗑
-          </button>
+          <button onClick={e => { e.stopPropagation(); onDelete(node) }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: hovered ? '#ef4444' : 'transparent', fontSize: 14, transition: 'color 150ms', padding: '2px 4px', lineHeight: 1 }}
+            title="Delete node">🗑</button>
         </td>
       </tr>
 
-      {/* Render children recursively when expanded */}
+      {/* Children when expanded */}
       {isExpanded && node.children?.map(child => (
         <WBSRow key={child.id} node={child} depth={depth + 1} dark={dark}
           expanded={expanded} onToggle={onToggle} onEdit={onEdit} onDelete={onDelete}
-          onRowEnter={onRowEnter} onRowLeave={onRowLeave} />
+          onRowEnter={onRowEnter} onRowLeave={onRowLeave}
+          focusMode={focusMode} onFocusClick={onFocusClick}
+          selected={selected} onSelect={onSelect}
+          searchMatch={false} filterVisible={filterVisible} />
       ))}
     </>
   )
 }
 
-// ─── UPLOAD VALIDATION MODAL (Item 3) ───────────────────────
+// ─── UPLOAD VALIDATION MODAL ─────────────────────────────────
 interface ValidationRow { row: number; code: string; description: string; parent: string; ros: string; status: 'ok'|'warning'|'error'; errors: string[]; warnings: string[] }
 interface ValidationResult { results: ValidationRow[]; summary: { total: number; ready: number; warnings: number; errors: number } }
 
 const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: number; dark: boolean; onClose: () => void; onImported: () => void }) => {
-  const [file,     setFile]     = useState<File | null>(null)
-  const [result,   setResult]   = useState<ValidationResult | null>(null)
-  const [loading,  setLoading]  = useState(false)
-  const [ackWarn,  setAckWarn]  = useState(false)
-  const [importing,setImporting]= useState(false)
-  const [err,      setErr]      = useState('')
+  const [file, setFile] = useState<File | null>(null)
+  const [result, setResult] = useState<ValidationResult | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [ackWarn, setAckWarn] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [err, setErr] = useState('')
   const col = dark ? '#f1f5f9' : '#0f172a'
-  const fileRef = useRef<HTMLInputElement>(null)
 
   const validate = async (f: File) => {
     setLoading(true); setErr(''); setResult(null)
@@ -699,7 +600,6 @@ const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: numb
   }
 
   const canImport = result && result.summary.errors === 0 && (result.summary.warnings === 0 || ackWarn)
-
   const STATUS_ICON: Record<string, string> = { ok: '✅', warning: '⚠️', error: '❌' }
   const STATUS_COLOR: Record<string, string> = { ok: '#22c55e', warning: '#f59e0b', error: '#ef4444' }
 
@@ -710,28 +610,18 @@ const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: numb
           <div style={{ fontSize: 16, fontWeight: 700, color: col }}>↑ Upload WBS File</div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer' }}>×</button>
         </div>
-
-        {/* File picker */}
-        <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-          <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv,.xer,.xml" onChange={e => {
-            const f = e.target.files?.[0] ?? null; setFile(f); setResult(null); if (f) validate(f)
-          }} style={{ flex: 1, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, borderRadius: 6, padding: '6px 10px', fontSize: 12, color: col, background: dark ? '#0f172a' : '#f8fafc', fontFamily: 'inherit' }} />
-        </div>
-
+        <input type="file" accept=".xlsx,.xls,.csv,.xer,.xml" onChange={e => { const f = e.target.files?.[0] ?? null; setFile(f); setResult(null); if (f) validate(f) }}
+          style={{ border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, borderRadius: 6, padding: '6px 10px', fontSize: 12, color: col, background: dark ? '#0f172a' : '#f8fafc', fontFamily: 'inherit', marginBottom: 16 }} />
         {loading && <div style={{ textAlign: 'center', color: '#94a3b8', padding: '24px 0' }}>Validating file…</div>}
-        {err && <div style={{ marginBottom: 12, fontSize: 12, color: '#ef4444', background: 'rgba(239,68,68,0.08)', borderRadius: 6, padding: '7px 10px' }}>{err}</div>}
-
+        {err && <div style={{ marginBottom: 12, fontSize: 12, color: '#ef4444' }}>{err}</div>}
         {result && (
           <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            {/* Summary bar */}
             <div style={{ display: 'flex', gap: 16, marginBottom: 12, padding: '10px 14px', background: dark ? '#0f172a' : '#f4f7fb', borderRadius: 8, fontSize: 12 }}>
               <span style={{ color: '#64748b' }}>{result.summary.total} rows</span>
               <span style={{ color: '#22c55e' }}>✅ {result.summary.ready} ready</span>
               {result.summary.warnings > 0 && <span style={{ color: '#f59e0b' }}>⚠️ {result.summary.warnings} warnings</span>}
               {result.summary.errors > 0 && <span style={{ color: '#ef4444' }}>❌ {result.summary.errors} errors</span>}
             </div>
-
-            {/* Preview table */}
             <div style={{ flex: 1, overflowY: 'auto', border: `1px solid ${dark ? '#334155' : '#e8ecf2'}`, borderRadius: 8 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
                 <thead>
@@ -750,16 +640,12 @@ const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: numb
                       <td style={{ padding: '5px 10px', color: col, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.description}</td>
                       <td style={{ padding: '5px 10px', fontFamily: 'JetBrains Mono, monospace', color: '#94a3b8' }}>{r.parent || '—'}</td>
                       <td style={{ padding: '5px 10px', fontFamily: 'JetBrains Mono, monospace', color: '#94a3b8' }}>{r.ros || '—'}</td>
-                      <td style={{ padding: '5px 10px', color: STATUS_COLOR[r.status] }}>
-                        {[...r.errors, ...r.warnings].join('; ') || '—'}
-                      </td>
+                      <td style={{ padding: '5px 10px', color: STATUS_COLOR[r.status] }}>{[...r.errors, ...r.warnings].join('; ') || '—'}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-
-            {/* Warning acknowledgement */}
             {result.summary.warnings > 0 && result.summary.errors === 0 && (
               <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, cursor: 'pointer', fontSize: 12, color: '#f59e0b' }}>
                 <input type="checkbox" checked={ackWarn} onChange={e => setAckWarn(e.target.checked)} style={{ accentColor: '#f59e0b' }} />
@@ -768,7 +654,6 @@ const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: numb
             )}
           </div>
         )}
-
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16, flexShrink: 0 }}>
           <button onClick={onClose} style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
           <button onClick={doImport} disabled={!canImport || importing}
@@ -782,8 +667,8 @@ const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: numb
   )
 }
 
-// ─── HOVER TOOLTIP (Item 7) ──────────────────────────────────
-interface TooltipData { wbsCode: string; commodities: {code: string; name: string; uom: string}[]; equipment: {tag: string; description: string}[] }
+// ─── WBS TOOLTIP (fixed positioning, rich content) ───────────
+interface TooltipData { wbsCode: string; commodities: {code: string; name: string; uom: string}[]; equipment: {tag: string; description: string; status?: string}[] }
 const WBSTooltip = ({ node, projectId, anchorRect }: { node: WBSNode; projectId: number; anchorRect: DOMRect }) => {
   const [data, setData] = useState<TooltipData | null>(null)
   useEffect(() => {
@@ -791,56 +676,82 @@ const WBSTooltip = ({ node, projectId, anchorRect }: { node: WBSNode; projectId:
       .then(r => setData(r.data)).catch(() => {})
   }, [node.id, projectId])
 
-  // Flip if near right or bottom edge
-  const TOOLTIP_W = 300, TOOLTIP_H = 220
+  const TOOLTIP_W = 380, TOOLTIP_H = 400
   const vw = window.innerWidth, vh = window.innerHeight
   const left = anchorRect.right + 12 + TOOLTIP_W > vw ? anchorRect.left - TOOLTIP_W - 8 : anchorRect.right + 12
   const top  = anchorRect.top + TOOLTIP_H > vh ? Math.max(8, vh - TOOLTIP_H - 8) : anchorRect.top
 
+  const STATUS_PILL: Record<string, {bg:string;col:string}> = {
+    'PO raised':   { bg: 'rgba(34,197,94,0.15)',  col: '#15803d' },
+    'RFQ':         { bg: 'rgba(37,99,235,0.15)',  col: '#1d4ed8' },
+    'Not started': { bg: 'rgba(148,163,184,0.15)', col: '#64748b' },
+    'On site':     { bg: 'rgba(34,197,94,0.15)',  col: '#15803d' },
+    'In transit':  { bg: 'rgba(245,158,11,0.15)', col: '#b45309' },
+  }
+
   return createPortal(
     <div style={{
-      position: 'fixed', left, top, width: TOOLTIP_W, zIndex: 9998,
-      background: '#0f172a', border: '1px solid #334155', borderRadius: 8,
-      padding: '12px 14px', boxShadow: '0 8px 28px rgba(0,0,0,0.5)',
-      fontFamily: 'IBM Plex Sans, sans-serif', pointerEvents: 'none',
+      position: 'fixed', left, top, width: TOOLTIP_W, zIndex: 9998, maxHeight: TOOLTIP_H,
+      background: '#111827', border: '1px solid #374151', borderRadius: 10,
+      padding: '14px 16px', boxShadow: '0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.08)',
+      fontFamily: 'IBM Plex Sans, sans-serif', pointerEvents: 'none', overflow: 'hidden',
     }}>
       {/* Node identity */}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', marginBottom: 8 }}>
-        <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, fontWeight: 700, color: '#60a5fa' }}>{node.code}</span>
-        <span style={{ fontSize: 12, color: '#f1f5f9', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.description}</span>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', marginBottom: 6 }}>
+        <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 13, fontWeight: 700, color: '#60a5fa', flexShrink: 0 }}>{node.code}</span>
+        <span style={{ fontSize: 13, color: '#f1f5f9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.description}</span>
+        {node.rag && <span style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 9999, background: `${RAG_COLORS[node.rag]}20`, color: RAG_COLORS[node.rag], flexShrink: 0 }}>{RAG_LABELS[node.rag]}</span>}
       </div>
       {node.ros_date && (
-        <div style={{ fontSize: 11, color: node.rag === 'red' ? '#ef4444' : node.rag === 'amber' ? '#f59e0b' : '#22c55e', marginBottom: 8 }}>
-          ROS {fmtDate(node.ros_date)} · {node.rag ? RAG_LABELS[node.rag] : 'Not set'}
+        <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 10, borderBottom: '1px solid #1f2937', paddingBottom: 8 }}>
+          ROS {fmtDate(node.ros_date)}
         </div>
       )}
 
       {!data ? (
         <div style={{ fontSize: 11, color: '#64748b' }}>Loading…</div>
+      ) : (data.commodities.length === 0 && data.equipment.length === 0) ? (
+        <div style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic', textAlign: 'center', padding: '16px 0' }}>No materials linked to this node</div>
       ) : (
         <>
-          {/* Commodities */}
-          <div style={{ fontSize: 10, fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>Commodities</div>
-          {data.commodities.length === 0
-            ? <div style={{ fontSize: 11, color: '#64748b', marginBottom: 8 }}>No commodities linked</div>
-            : data.commodities.map(c => (
-                <div key={c.code} style={{ fontSize: 11, color: '#cbd5e1', marginBottom: 2 }}>
-                  <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#93c5fd' }}>{c.code}</span>
-                  {' '}{c.name} <span style={{ color: '#64748b' }}>· {c.uom}</span>
+          {/* Commodities section */}
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6 }}>
+              Commodities ({data.commodities.length})
+            </div>
+            <div style={{ maxHeight: 150, overflowY: 'auto' }}>
+              {data.commodities.map(c => (
+                <div key={c.code} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#93c5fd', flexShrink: 0 }}>{c.code}</span>
+                  <span style={{ fontSize: 11, color: '#cbd5e1', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
+                  <span style={{ fontSize: 10, color: '#64748b', background: '#1f2937', borderRadius: 4, padding: '1px 6px', flexShrink: 0 }}>{c.uom}</span>
                 </div>
-              ))
-          }
-          {/* Equipment */}
-          <div style={{ fontSize: 10, fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4, marginTop: 8 }}>Equipment</div>
-          {data.equipment.length === 0
-            ? <div style={{ fontSize: 11, color: '#64748b' }}>No equipment linked</div>
-            : data.equipment.map(e => (
-                <div key={e.tag} style={{ fontSize: 11, color: '#cbd5e1', marginBottom: 2 }}>
-                  <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#86efac' }}>{e.tag}</span>
-                  {' '}{e.description}
+              ))}
+            </div>
+          </div>
+          {/* Divider */}
+          <div style={{ borderTop: '1px solid #1f2937', margin: '8px 0' }} />
+          {/* Equipment section */}
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6 }}>
+              Equipment ({data.equipment.length})
+            </div>
+            <div style={{ maxHeight: 150, overflowY: 'auto' }}>
+              {data.equipment.map(e => (
+                <div key={e.tag} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#86efac', flexShrink: 0 }}>{e.tag}</span>
+                  <span style={{ fontSize: 11, color: '#cbd5e1', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.description}</span>
+                  {e.status && (
+                    <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, flexShrink: 0,
+                      background: STATUS_PILL[e.status]?.bg ?? 'rgba(148,163,184,0.15)',
+                      color: STATUS_PILL[e.status]?.col ?? '#64748b' }}>
+                      {e.status}
+                    </span>
+                  )}
                 </div>
-              ))
-          }
+              ))}
+            </div>
+          </div>
         </>
       )}
     </div>,
@@ -848,23 +759,192 @@ const WBSTooltip = ({ node, projectId, anchorRect }: { node: WBSNode; projectId:
   )
 }
 
+// ─── FOCUS MODE PANEL ────────────────────────────────────────
+// Right-side panel shown when focusMode is active and a row is clicked.
+const FocusPanel = ({ node, projectId, dark, onClose, onEditNode }: {
+  node: WBSNode; projectId: number; dark: boolean; onClose: () => void
+  onEditNode: (n: WBSNode) => void
+}) => {
+  const [materials, setMaterials] = useState<TooltipData | null>(null)
+  const [pos, setPos] = useState<{id:number; po_number:string; vendor:string; status:string; total_value:number; currency:string}[]>([])
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const bd = `1px solid ${dark ? '#334155' : '#e8ecf2'}`
+  const subLabel: React.CSSProperties = { fontSize: 10, fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6, marginTop: 14 }
+
+  const STATUS_PILL: Record<string, {bg:string;col:string}> = {
+    'PO raised':   { bg: 'rgba(34,197,94,0.12)',  col: '#15803d' },
+    'RFQ':         { bg: 'rgba(37,99,235,0.12)',  col: '#1d4ed8' },
+    'Not started': { bg: 'rgba(148,163,184,0.12)', col: '#64748b' },
+    'On site':     { bg: 'rgba(34,197,94,0.12)',  col: '#15803d' },
+    'In transit':  { bg: 'rgba(245,158,11,0.12)', col: '#b45309' },
+  }
+
+  useEffect(() => {
+    axios.get<TooltipData>(`${API}/foundational/${projectId}/wbs/${node.id}/materials`).then(r => setMaterials(r.data)).catch(() => {})
+    axios.get(`${API}/foundational/${projectId}/wbs/${node.id}/pos`).then(r => setPos(r.data)).catch(() => {})
+  }, [node.id, projectId])
+
+  const ragColor = node.rag ? RAG_COLORS[node.rag] : '#94a3b8'
+
+  return (
+    <div style={{
+      width: 420, flexShrink: 0,
+      background: dark ? '#1e293b' : '#fff',
+      borderLeft: bd,
+      display: 'flex', flexDirection: 'column',
+      overflowY: 'auto',
+      fontFamily: 'IBM Plex Sans, sans-serif',
+      transition: 'width 200ms ease',
+    }}>
+      {/* HEADER */}
+      <div style={{ padding: '16px 20px', borderBottom: bd, background: dark ? '#0f172a' : '#f8fafc', flexShrink: 0 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 18, fontWeight: 700, color: '#60a5fa', marginBottom: 4 }}>{node.code}</div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: col, lineHeight: 1.3 }}>{node.description}</div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 8 }}>
+            {node.rag && (
+              <span style={{ fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 9999, background: `${ragColor}20`, color: ragColor }}>
+                {RAG_LABELS[node.rag]}
+              </span>
+            )}
+            <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer', lineHeight: 1 }}>✕</button>
+          </div>
+        </div>
+      </div>
+
+      {/* CONTENT */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
+
+        {/* KEY DATES */}
+        <div style={subLabel as React.CSSProperties}>Key Dates</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          {[
+            ['Planned Start', node.planned_start],
+            ['Planned End', node.planned_end],
+            ['Forecast Start', node.forecast_start],
+            ['Forecast End', node.forecast_end],
+            ['Actual Start', node.actual_start],
+            ['Actual End', node.actual_end],
+            ['ROS', node.ros_date],
+          ].map(([lbl, val]) => (
+            <div key={lbl as string} style={{ background: dark ? '#0f172a' : '#f4f7fb', borderRadius: 6, padding: '8px 10px' }}>
+              <div style={{ fontSize: 10, color: '#64748b', fontWeight: 600, marginBottom: 2 }}>{lbl as string}</div>
+              <div style={{ fontSize: 12, fontFamily: 'JetBrains Mono, monospace', color: val ? col : '#475569' }}>{fmtDate(val as string | null)}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* NOTES */}
+        {node.notes && (
+          <>
+            <div style={subLabel as React.CSSProperties}>Notes</div>
+            <div style={{ fontSize: 12, color: col, lineHeight: 1.6, background: dark ? '#0f172a' : '#f8fafc', borderRadius: 6, padding: '10px 12px', border: bd }}>
+              {node.notes}
+            </div>
+          </>
+        )}
+
+        {/* COMMODITIES */}
+        <div style={subLabel as React.CSSProperties}>Commodities ({materials?.commodities.length ?? '…'})</div>
+        {!materials ? (
+          <div style={{ fontSize: 12, color: '#64748b' }}>Loading…</div>
+        ) : materials.commodities.length === 0 ? (
+          <div style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>No commodities linked</div>
+        ) : (
+          <div style={{ border: bd, borderRadius: 6, overflow: 'hidden', maxHeight: 160, overflowY: 'auto' }}>
+            {materials.commodities.map(c => (
+              <div key={c.code} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderBottom: bd, fontSize: 12 }}>
+                <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#2563eb', fontSize: 11, flexShrink: 0 }}>{c.code}</span>
+                <span style={{ flex: 1, color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
+                <span style={{ fontSize: 10, color: '#64748b', background: dark ? '#334155' : '#f1f5f9', borderRadius: 4, padding: '1px 6px', flexShrink: 0 }}>{c.uom}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* EQUIPMENT */}
+        <div style={subLabel as React.CSSProperties}>Equipment ({materials?.equipment.length ?? '…'})</div>
+        {!materials ? null : materials.equipment.length === 0 ? (
+          <div style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>No equipment linked</div>
+        ) : (
+          <div style={{ border: bd, borderRadius: 6, overflow: 'hidden', maxHeight: 160, overflowY: 'auto' }}>
+            {materials.equipment.map(e => (
+              <div key={e.tag} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderBottom: bd, fontSize: 12 }}>
+                <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#22c55e', fontSize: 11, flexShrink: 0 }}>{e.tag}</span>
+                <span style={{ flex: 1, color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.description}</span>
+                {e.status && (
+                  <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, flexShrink: 0,
+                    background: STATUS_PILL[e.status]?.bg ?? 'rgba(148,163,184,0.12)',
+                    color: STATUS_PILL[e.status]?.col ?? '#64748b' }}>
+                    {e.status}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* PURCHASE ORDERS */}
+        <div style={subLabel as React.CSSProperties}>Purchase Orders ({pos.length})</div>
+        {pos.length === 0 ? (
+          <div style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>No POs reference this WBS code</div>
+        ) : (
+          <div style={{ border: bd, borderRadius: 6, overflow: 'hidden' }}>
+            {pos.map(po => (
+              <div key={po.id} style={{ display: 'flex', gap: 8, padding: '6px 10px', borderBottom: bd, fontSize: 12, alignItems: 'center' }}>
+                <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#2563eb', fontSize: 11, flexShrink: 0 }}>{po.po_number}</span>
+                <span style={{ flex: 1, color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{po.vendor}</span>
+                <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, flexShrink: 0,
+                  background: STATUS_PILL[po.status]?.bg ?? 'rgba(148,163,184,0.12)',
+                  color: STATUS_PILL[po.status]?.col ?? '#64748b' }}>
+                  {po.status}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* FOOTER */}
+      <div style={{ padding: '12px 20px', borderTop: bd, flexShrink: 0, display: 'flex', gap: 8 }}>
+        <button onClick={() => onEditNode(node)}
+          style={{ flex: 1, padding: '7px 12px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+          ✎ Edit node
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ─── MAIN SCREEN ─────────────────────────────────────────────
 export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
   dark: boolean; projectId: number; projectName: string; onBack: () => void
 }) => {
-  const [nodes, setNodes]         = useState<WBSNode[]>([])
-  const [tree, setTree]           = useState<WBSNode[]>([])
-  const [expanded, setExpanded]   = useState<Set<number>>(new Set())
-  const [loading, setLoading]     = useState(true)
-  const [editNode, setEditNode]   = useState<WBSNode | null>(null)
-  const [deleteNode, setDeleteNode] = useState<WBSNode | null>(null)
-  const [showAdd, setShowAdd]     = useState(false)
-  const [showUpload, setShowUpload] = useState(false)                  // Item 3
-  const [focusMode, setFocusMode] = useState(false)                   // Item 6
-  const [tooltip, setTooltip]     = useState<{ node: WBSNode; rect: DOMRect } | null>(null)  // Item 7
-  const tooltipTimer              = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [toast, setToast]         = useState('')
+  const [nodes, setNodes]             = useState<WBSNode[]>([])
+  const [tree, setTree]               = useState<WBSNode[]>([])
+  const [expanded, setExpanded]       = useState<Set<number>>(new Set())
+  const [loading, setLoading]         = useState(true)
+  const [editNode, setEditNode]       = useState<WBSNode | null>(null)
+  const [deleteNode, setDeleteNode]   = useState<WBSNode | null>(null)
+  const [showAdd, setShowAdd]         = useState(false)
+  const [showUpload, setShowUpload]   = useState(false)
+  const [focusMode, setFocusMode]     = useState(false)
+  const [focusNode, setFocusNode]     = useState<WBSNode | null>(null)
+  const [tooltip, setTooltip]         = useState<{ node: WBSNode; rect: DOMRect } | null>(null)
+  const tooltipTimer                  = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [toast, setToast]             = useState('')
+  // ── Search & filter state ────────────────────────────────────
+  const [searchQ, setSearchQ]         = useState('')
+  const [ragFilter, setRagFilter]     = useState<string>('all')
+  const [depthFilter, setDepthFilter] = useState<string>('all')
+  // ── Bulk selection state ─────────────────────────────────────
+  const [selectedNodes, setSelectedNodes] = useState<Set<number>>(new Set())
+  const [bulkRag, setBulkRag]         = useState('')
+
   const col = dark ? '#f1f5f9' : '#0f172a'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 2500) }
 
@@ -886,30 +966,16 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
 
   useEffect(() => { load() }, [load])
 
-  // ── Focus mode: inject a full-screen overlay via portal ──────
-  // Must escape the scrollable parent's stacking context, so we use
-  // a body-level portal rather than relying on z-index within the
-  // fixed+overflow:auto container in App.tsx.
-  useEffect(() => {
-    return () => { /* cleanup handled by portal unmount */ }
-  }, [focusMode])
-
   const toggleExpand = (id: number) => setExpanded(prev => {
     const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next
   })
 
-  // ── Expand All / Collapse All (Item 5) ───────────────────────
-  const expandAll = () => {
-    const all = new Set(nodes.map(n => n.id)); setExpanded(all)
-  }
+  const expandAll = () => { const all = new Set(nodes.map(n => n.id)); setExpanded(all) }
   const collapseAll = () => { setExpanded(new Set()) }
 
-  // ── Template download (Item 2) ────────────────────────────────
-  const downloadTemplate = () => {
-    window.open(`${API}/foundational/${projectId}/wbs/template`, '_blank')
-  }
+  const downloadTemplate = () => window.open(`${API}/foundational/${projectId}/wbs/template`, '_blank')
 
-  // ── Tooltip handlers (Item 7) ────────────────────────────────
+  // ── Tooltip handlers ─────────────────────────────────────────
   const handleRowEnter = (node: WBSNode, e: React.MouseEvent) => {
     if (tooltipTimer.current) clearTimeout(tooltipTimer.current)
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
@@ -932,83 +998,195 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
     showToast(`✓ WBS node ${created.code} added`)
   }
 
-  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  // ── Bulk operations ──────────────────────────────────────────
+  const handleSelectNode = (id: number, checked: boolean) => {
+    setSelectedNodes(prev => {
+      const next = new Set(prev)
+      if (checked) next.add(id); else next.delete(id)
+      return next
+    })
+  }
+
+  const handleSelectAll = () => {
+    if (selectedNodes.size === nodes.length) {
+      setSelectedNodes(new Set())
+    } else {
+      setSelectedNodes(new Set(nodes.map(n => n.id)))
+    }
+  }
+
+  const applyBulkRag = async () => {
+    if (!bulkRag || selectedNodes.size === 0) return
+    try {
+      await axios.post(`${API}/foundational/${projectId}/wbs/bulk-rag`, { ids: [...selectedNodes], rag: bulkRag })
+      await load()
+      showToast(`✓ RAG updated for ${selectedNodes.size} nodes`)
+      setSelectedNodes(new Set())
+      setBulkRag('')
+    } catch { showToast('Failed to update RAG') }
+  }
+
+  const exportSelected = () => {
+    const ids = [...selectedNodes].join(',')
+    window.open(`${API}/foundational/${projectId}/wbs/export?ids=${ids}`, '_blank')
+  }
+
+  const deleteSelected = async () => {
+    if (!confirm(`Delete ${selectedNodes.size} selected node(s)? Only safe nodes (no children, no PO refs) will be removed.`)) return
+    try {
+      const { data } = await axios.post(`${API}/foundational/${projectId}/wbs/bulk-delete`, { ids: [...selectedNodes] })
+      await load()
+      showToast(`✓ Deleted ${data.deleted} node(s), skipped ${data.skipped}`)
+      setSelectedNodes(new Set())
+    } catch { showToast('Failed to delete nodes') }
+  }
+
+  // ── Filter logic ─────────────────────────────────────────────
+  const hasActiveFilter = searchQ.trim() || ragFilter !== 'all' || depthFilter !== 'all'
+
+  const nodeFilterFn = (n: WBSNode): boolean => {
+    const depth = n.code.split('.').length
+    if (depthFilter !== 'all') {
+      const maxDepth = parseInt(depthFilter.replace('level1-', '').replace('level1', '1'))
+      if (depthFilter === 'level1' && depth !== 1) return false
+      if (depthFilter === 'level1-2' && depth > 2) return false
+      if (depthFilter === 'level1-3' && depth > 3) return false
+    }
+    if (ragFilter !== 'all') {
+      const r = ragFilter === 'none' ? null : ragFilter
+      if (n.rag !== r) return false
+    }
+    if (searchQ.trim()) {
+      const q = searchQ.toLowerCase()
+      return n.code.toLowerCase().includes(q) || n.description.toLowerCase().includes(q)
+    }
+    return true
+  }
+
+  const visibleIds = hasActiveFilter ? collectVisible(tree, nodeFilterFn) : null
+  const searchMatchIds = searchQ.trim() ? new Set(nodes.filter(n => {
+    const q = searchQ.toLowerCase()
+    return n.code.toLowerCase().includes(q) || n.description.toLowerCase().includes(q)
+  }).map(n => n.id)) : null
+
   const secBtn: React.CSSProperties = { padding: '6px 12px', borderRadius: 6, border: bd, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }
 
-  // The inner JSX is shared between normal and focus-mode renders.
-  // In focus mode we portal it to document.body to escape the
-  // fixed+overflow:auto stacking context in App.tsx.
   const wbsContent = (inFocus: boolean) => (
     <div style={{ paddingTop: 20, fontFamily: 'IBM Plex Sans, sans-serif',
-      ...(inFocus ? { position: 'fixed' as const, inset: 0, background: dark ? '#0f172a' : '#f1f4f8', zIndex: 9100, overflowY: 'auto' as const, padding: 20 } : {}) }}>
+      ...(inFocus ? { position: 'fixed' as const, inset: 0, background: dark ? '#0f172a' : '#f1f4f8', zIndex: 9100, display: 'flex', flexDirection: 'column' as const, padding: '20px 20px 0' } : {}) }}>
 
-      {/* ── Focus exit button (Item 6) ── */}
       {inFocus && (
-        <button onClick={() => setFocusMode(false)} style={{ position: 'fixed', top: 16, right: 16, zIndex: 9101, padding: '6px 14px', borderRadius: 6, border: bd, background: dark ? '#1e293b' : '#fff', color: col, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}>
+        <button onClick={() => { setFocusMode(false); setFocusNode(null) }} style={{ position: 'fixed', top: 16, right: 16, zIndex: 9101, padding: '6px 14px', borderRadius: 6, border: bd, background: dark ? '#1e293b' : '#fff', color: col, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}>
           ✕ Exit focus
         </button>
       )}
 
-      {/* ── Breadcrumb ── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16, fontSize: 12, color: '#94a3b8', flexWrap: 'wrap' }}>
+      {/* Breadcrumb */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16, fontSize: 12, color: '#94a3b8', flexWrap: 'wrap', flexShrink: 0 }}>
         <button onClick={onBack} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 12, cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>← Dashboard</button>
         <span>›</span><span>{projectName}</span><span>›</span><span>Foundational</span><span>›</span>
         <span style={{ color: col, fontWeight: 600 }}>WBS</span>
       </div>
 
-      {/* ── Header ── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, flexShrink: 0 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: col, letterSpacing: '-0.02em' }}>🌲 WBS</h2>
           <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 3 }}>Work Breakdown Structure — {projectName}</div>
         </div>
-        {/* Buttons: secondary actions left, primary right */}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          {/* Item 5: Expand / Collapse All */}
-          <button onClick={expandAll}   style={secBtn} title="Expand all nodes">⊞ Expand all</button>
-          <button onClick={collapseAll} style={secBtn} title="Collapse to top level">⊟ Collapse all</button>
-          {/* Item 6: Focus mode */}
-          <button onClick={() => setFocusMode(f => !f)} style={{ ...secBtn, color: focusMode ? '#E84E0F' : '#64748b' }} title="Toggle focus mode">⛶ Focus</button>
-          {/* Item 2: Template download */}
-          <button onClick={downloadTemplate} style={secBtn} title="Download XLSX template">↓ Template</button>
-          {/* Item 3: Upload */}
+          <button onClick={expandAll}   style={secBtn}>⊞ Expand all</button>
+          <button onClick={collapseAll} style={secBtn}>⊟ Collapse all</button>
+          <button onClick={() => { setFocusMode(f => !f); setFocusNode(null) }} style={{ ...secBtn, color: focusMode ? '#E84E0F' : '#64748b' }}>⛶ Focus</button>
+          <button onClick={downloadTemplate} style={secBtn}>↓ Template</button>
           <button onClick={() => setShowUpload(true)} style={secBtn}>↑ Upload XER/Excel</button>
-          {/* Help */}
           <HelpButton screenName="WBS" sections={WBS_HELP} dark={dark} />
-          {/* Add node */}
           <button onClick={() => setShowAdd(true)} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>+ Add node</button>
         </div>
       </div>
 
-      {/* ── Table ── */}
-      <div style={{ background: dark ? '#1e293b' : '#fff', border: bd, borderRadius: 10, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-        <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: focusMode ? 'calc(100vh - 140px)' : 'calc(100vh - 260px)' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ background: dark ? '#0f172a' : '#f4f7fb', borderBottom: bd, position: 'sticky', top: 0, zIndex: 2 }}>
-                <th style={{ width: 4, padding: 0 }} />
-                <th style={{ padding: '8px 8px 8px 22px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap' }}>Code</th>
-                <th style={{ padding: '8px 4px 8px 4px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left' }}>WBS Node</th>
-                <th style={{ padding: '8px 12px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap' }}>ROS</th>
-                <th style={{ padding: '8px 12px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left' }}>Notes</th>
-                <th style={{ width: 80 }} />
-                <th style={{ width: 36 }} />
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan={7} style={{ padding: '32px 16px', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>Loading WBS…</td></tr>
-              ) : tree.length === 0 ? (
-                <tr><td colSpan={7} style={{ padding: '32px 16px', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>No WBS nodes yet. Click + Add node to get started.</td></tr>
-              ) : tree.map(node => (
-                <WBSRow key={node.id} node={node} depth={0} dark={dark}
-                  expanded={expanded} onToggle={toggleExpand}
-                  onEdit={setEditNode} onDelete={setDeleteNode}
-                  onRowEnter={handleRowEnter} onRowLeave={handleRowLeave} />
-              ))}
-            </tbody>
-          </table>
+      {/* ── Search & Filter bar ──────────────────────────────── */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap', flexShrink: 0 }}>
+        <input value={searchQ} onChange={e => setSearchQ(e.target.value)}
+          placeholder="Search code or name…"
+          style={{ flex: '1 1 180px', height: 32, padding: '0 10px', borderRadius: 6, border: bd, background: dark ? '#1e293b' : '#fff', color: col, fontSize: 12, fontFamily: 'inherit', outline: 'none' }} />
+        {/* RAG filter pills */}
+        <div style={{ display: 'flex', gap: 4 }}>
+          {[['all','All'],['green','🟢'],['amber','🟡'],['red','🔴'],['blue','🔵'],['none','⚪']].map(([v,l]) => (
+            <button key={v} onClick={() => setRagFilter(v)}
+              style={{ padding: '4px 10px', borderRadius: 6, border: `1px solid ${ragFilter === v ? '#2563eb' : (dark ? '#334155' : '#dde3ed')}`, background: ragFilter === v ? '#2563eb' : 'none', color: ragFilter === v ? '#fff' : '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', fontWeight: ragFilter === v ? 600 : 400 }}>
+              {l}
+            </button>
+          ))}
         </div>
+        {/* Depth filter */}
+        <select value={depthFilter} onChange={e => setDepthFilter(e.target.value)}
+          style={{ height: 32, padding: '0 8px', borderRadius: 6, border: bd, background: dark ? '#1e293b' : '#fff', color: col, fontSize: 12, fontFamily: 'inherit', outline: 'none' }}>
+          <option value="all">All levels</option>
+          <option value="level1">Level 1 only</option>
+          <option value="level1-2">Level 1-2</option>
+          <option value="level1-3">Level 1-3</option>
+        </select>
+        {hasActiveFilter && (
+          <button onClick={() => { setSearchQ(''); setRagFilter('all'); setDepthFilter('all') }}
+            style={{ padding: '4px 10px', borderRadius: 6, border: `1px solid rgba(239,68,68,0.3)`, background: 'rgba(239,68,68,0.08)', color: '#ef4444', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+            ✕ Clear filters
+          </button>
+        )}
+      </div>
+
+      {/* Table + panel flex container */}
+      <div style={{ display: 'flex', flex: inFocus ? 1 : undefined, overflow: 'hidden', ...(inFocus ? {} : {}) }}>
+        {/* Tree table */}
+        <div style={{ flex: 1, minWidth: 0, background: dark ? '#1e293b' : '#fff', border: bd, borderRadius: focusNode ? '10px 0 0 10px' : 10, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', ...(inFocus ? { display: 'flex', flexDirection: 'column' } : {}) }}>
+          <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: inFocus ? undefined : 'calc(100vh - 310px)', flex: inFocus ? 1 : undefined }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: dark ? '#0f172a' : '#f4f7fb', borderBottom: bd, position: 'sticky', top: 0, zIndex: 2 }}>
+                  <th style={{ width: 4, padding: 0 }} />
+                  <th style={{ width: 28, padding: '8px 4px', textAlign: 'center' }}>
+                    <input type="checkbox"
+                      checked={selectedNodes.size === nodes.length && nodes.length > 0}
+                      onChange={handleSelectAll}
+                      style={{ cursor: 'pointer', accentColor: '#2563eb' }} />
+                  </th>
+                  <th style={{ padding: '8px 8px 8px 22px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap' }}>Code</th>
+                  <th style={{ padding: '8px 4px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left' }}>WBS Node</th>
+                  <th style={{ padding: '8px 12px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap' }}>ROS</th>
+                  {!focusMode && <th style={{ padding: '8px 12px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left' }}>Notes</th>}
+                  {!focusMode && <th style={{ padding: '8px 8px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'right', whiteSpace: 'nowrap' }}>PO Qty</th>}
+                  {!focusMode && <th style={{ width: 80 }} />}
+                  <th style={{ width: 36 }} />
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr><td colSpan={9} style={{ padding: '32px 16px', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>Loading WBS…</td></tr>
+                ) : tree.length === 0 ? (
+                  <tr><td colSpan={9} style={{ padding: '32px 16px', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>No WBS nodes yet. Click + Add node to get started.</td></tr>
+                ) : tree.map(node => (
+                  <WBSRow key={node.id} node={node} depth={0} dark={dark}
+                    expanded={expanded} onToggle={toggleExpand}
+                    onEdit={setEditNode} onDelete={setDeleteNode}
+                    onRowEnter={handleRowEnter} onRowLeave={handleRowLeave}
+                    focusMode={focusMode} onFocusClick={n => setFocusNode(n)}
+                    selected={selectedNodes.has(node.id)}
+                    onSelect={handleSelectNode}
+                    searchMatch={searchMatchIds ? searchMatchIds.has(node.id) : false}
+                    filterVisible={visibleIds ? visibleIds.has(node.id) : true}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Focus panel */}
+        {focusMode && focusNode && (
+          <FocusPanel node={focusNode} projectId={projectId} dark={dark}
+            onClose={() => setFocusNode(null)}
+            onEditNode={n => setEditNode(n)} />
+        )}
       </div>
 
       {/* ── Modals ── */}
@@ -1025,10 +1203,33 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
         <UploadModal projectId={projectId} dark={dark} onClose={() => setShowUpload(false)} onImported={() => { load(); showToast('✓ WBS imported successfully') }} />
       )}
 
-      {/* ── Tooltip (Item 7) ── */}
-      {tooltip && <WBSTooltip node={tooltip.node} projectId={projectId} anchorRect={tooltip.rect} />}
+      {/* Tooltip (normal mode only) */}
+      {!focusMode && tooltip && <WBSTooltip node={tooltip.node} projectId={projectId} anchorRect={tooltip.rect} />}
 
-      {/* ── Toast ── */}
+      {/* ── Bulk operations floating bar ── */}
+      {selectedNodes.size > 0 && (
+        <div style={{ position: 'fixed', bottom: 24, left: 244, right: 24, zIndex: 9200, background: dark ? '#1e293b' : '#fff', border: `1px solid #2563eb`, borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10, boxShadow: '0 8px 28px rgba(37,99,235,0.25)', fontFamily: 'IBM Plex Sans, sans-serif' }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#2563eb', whiteSpace: 'nowrap' }}>{selectedNodes.size} node{selectedNodes.size !== 1 ? 's' : ''} selected</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, flexWrap: 'wrap' }}>
+            <select value={bulkRag} onChange={e => setBulkRag(e.target.value)}
+              style={{ height: 30, padding: '0 8px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 12, fontFamily: 'inherit', outline: 'none' }}>
+              <option value="">Change RAG…</option>
+              <option value="green">🟢 On track</option>
+              <option value="amber">🟡 At risk</option>
+              <option value="red">🔴 Breached</option>
+              <option value="blue">🔵 In progress</option>
+            </select>
+            {bulkRag && (
+              <button onClick={applyBulkRag} style={{ padding: '5px 12px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Apply RAG</button>
+            )}
+            <button onClick={exportSelected} style={{ padding: '5px 12px', borderRadius: 6, border: bd, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>↓ Export selected</button>
+            <button onClick={deleteSelected} style={{ padding: '5px 12px', borderRadius: 6, border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>🗑 Delete safe</button>
+          </div>
+          <button onClick={() => setSelectedNodes(new Set())} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 14, cursor: 'pointer', padding: '2px 4px', flexShrink: 0 }}>✕</button>
+        </div>
+      )}
+
+      {/* Toast */}
       {toast && (
         <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: '#0d1117', border: '1px solid rgba(34,197,94,0.28)', borderRadius: 8, padding: '9px 18px', fontSize: 13, fontWeight: 500, color: '#f1f5f9', zIndex: 9999, whiteSpace: 'nowrap', boxShadow: '0 8px 28px rgba(0,0,0,0.45)', pointerEvents: 'none' }}>
           {toast}

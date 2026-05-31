@@ -38,14 +38,20 @@ function audit(req, action, entity, before, after) {
 // WBS ENDPOINTS
 // ═══════════════════════════════════════════════════════════════
 
-// GET /api/foundational/:projectId/wbs — full tree
+// GET /api/foundational/:projectId/wbs — full tree with per-node PO qty stats
 router.get('/:projectId/wbs', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
     const [rows] = await db.query(
-      `SELECT w.*, u.full_name AS owner_name
+      `SELECT w.*, u.full_name AS owner_name,
+        COALESCE(po_agg.po_qty, 0) AS po_qty
        FROM wbs_nodes w
        LEFT JOIN users u ON u.id = w.owner_id
+       LEFT JOIN (
+         SELECT l.wbs_code_snapshot AS code, p.project_id, SUM(l.qty) AS po_qty
+         FROM po_lines l JOIN purchase_orders p ON p.id = l.po_id
+         GROUP BY l.wbs_code_snapshot, p.project_id
+       ) po_agg ON po_agg.code = w.code AND po_agg.project_id = w.project_id
        WHERE w.project_id = ?
        ORDER BY w.code`,
       [pid]
@@ -122,22 +128,21 @@ router.get('/:projectId/wbs/allocation-check/:targetId', async (req, res) => {
 router.post('/:projectId/wbs', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
-    const { code, description, parent_id, rag, ros_date, notes, owner_id, planned_start, planned_end } = req.body
+    const { code, description, parent_id, rag, ros_date, notes, owner_id, planned_start, planned_end, forecast_start, forecast_end, actual_start, actual_end } = req.body
     if (!code?.trim() || !description?.trim()) {
       return res.status(400).json({ error: 'Code and description are required' })
     }
-    // Check duplicate code in project
-    const [[dup]] = await db.query(
-      'SELECT id FROM wbs_nodes WHERE project_id=? AND code=?', [pid, code.trim()]
-    )
+    const [[dup]] = await db.query('SELECT id FROM wbs_nodes WHERE project_id=? AND code=?', [pid, code.trim()])
     if (dup) return res.status(409).json({ error: `WBS code ${code} already exists in this project` })
 
     const [r] = await db.query(
-      `INSERT INTO wbs_nodes (project_id, parent_id, code, description, rag, ros_date, notes, owner_id, planned_start, planned_end)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO wbs_nodes (project_id, parent_id, code, description, rag, ros_date, notes, owner_id, planned_start, planned_end, forecast_start, forecast_end, actual_start, actual_end)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [pid, parent_id || null, code.trim(), description.trim(),
        rag || null, ros_date || null, notes || null, owner_id || null,
-       planned_start || null, planned_end || null]
+       planned_start || null, planned_end || null,
+       forecast_start || null, forecast_end || null,
+       actual_start || null, actual_end || null]
     )
     audit(req, 'wbs_created', `wbs_nodes/${r.insertId}`, {}, { code, description, project_id: pid })
     const [[created]] = await db.query('SELECT * FROM wbs_nodes WHERE id=?', [r.insertId])
@@ -148,20 +153,37 @@ router.post('/:projectId/wbs', async (req, res) => {
   }
 })
 
-// PATCH /api/foundational/:projectId/wbs/:id — update node (notes + ros)
+// PATCH /api/foundational/:projectId/wbs/:id — update node (notes, ros, rag, forecast/actual dates)
 router.patch('/:projectId/wbs/:id', async (req, res) => {
   try {
     const id  = Number(req.params.id)
     const pid = Number(req.params.projectId)
-    const { notes, ros_date, rag } = req.body
+    const { notes, ros_date, rag, forecast_start, forecast_end, actual_start, actual_end, planned_start, planned_end } = req.body
     const [[before]] = await db.query('SELECT * FROM wbs_nodes WHERE id=? AND project_id=?', [id, pid])
     if (!before) return res.status(404).json({ error: 'WBS node not found' })
 
     await db.query(
-      'UPDATE wbs_nodes SET notes=?, ros_date=?, rag=?, updated_at=NOW() WHERE id=?',
-      [notes ?? before.notes, ros_date ?? before.ros_date, rag ?? before.rag, id]
+      `UPDATE wbs_nodes SET
+        notes=?, ros_date=?, rag=?,
+        planned_start=?, planned_end=?,
+        forecast_start=?, forecast_end=?,
+        actual_start=?, actual_end=?,
+        updated_at=NOW()
+       WHERE id=?`,
+      [
+        notes ?? before.notes,
+        ros_date ?? before.ros_date,
+        rag ?? before.rag,
+        planned_start !== undefined ? (planned_start || null) : before.planned_start,
+        planned_end   !== undefined ? (planned_end   || null) : before.planned_end,
+        forecast_start !== undefined ? (forecast_start || null) : before.forecast_start,
+        forecast_end   !== undefined ? (forecast_end   || null) : before.forecast_end,
+        actual_start   !== undefined ? (actual_start   || null) : before.actual_start,
+        actual_end     !== undefined ? (actual_end     || null) : before.actual_end,
+        id,
+      ]
     )
-    audit(req, 'wbs_updated', `wbs_nodes/${id}`, { notes: before.notes, ros_date: before.ros_date }, { notes, ros_date })
+    audit(req, 'wbs_updated', `wbs_nodes/${id}`, before, req.body)
     const [[updated]] = await db.query('SELECT * FROM wbs_nodes WHERE id=?', [id])
     res.json(updated)
   } catch (e) {
@@ -374,7 +396,102 @@ router.post('/:projectId/wbs/import', uploadWBS.single('file'), async (req, res)
   }
 })
 
-// GET /api/foundational/:projectId/wbs/:nodeId/materials — tooltip data
+// GET /api/foundational/:projectId/wbs/:nodeId/pos — POs referencing this node
+router.get('/:projectId/wbs/:nodeId/pos', async (req, res) => {
+  try {
+    const pid    = Number(req.params.projectId)
+    const nodeId = Number(req.params.nodeId)
+    const [[node]] = await db.query('SELECT code FROM wbs_nodes WHERE id=?', [nodeId])
+    if (!node) return res.status(404).json({ error: 'Node not found' })
+
+    const [pos] = await db.query(
+      `SELECT id, po_number, vendor, status, total_value, currency
+       FROM purchase_orders
+       WHERE project_id=? AND wbs_code=?
+       ORDER BY po_number`,
+      [pid, node.code]
+    )
+    res.json(pos)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// GET /api/foundational/:projectId/wbs/export?ids=1,2,3 — export selected nodes to XLSX
+router.get('/:projectId/wbs/export', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const ids = String(req.query.ids || '').split(',').map(Number).filter(Boolean)
+    if (!ids.length) return res.status(400).json({ error: 'No IDs provided' })
+
+    const [rows] = await db.query(
+      `SELECT w.code, w.description, w.rag, w.ros_date, w.planned_start, w.planned_end,
+              w.forecast_start, w.forecast_end, w.actual_start, w.actual_end,
+              w.notes, u.full_name AS owner
+       FROM wbs_nodes w
+       LEFT JOIN users u ON u.id = w.owner_id
+       WHERE w.project_id=? AND w.id IN (${ids.map(() => '?').join(',')})
+       ORDER BY w.code`,
+      [pid, ...ids]
+    )
+
+    const wb = XLSX.utils.book_new()
+    const headers = ['Code','Description','RAG','ROS Date','Planned Start','Planned End','Forecast Start','Forecast End','Actual Start','Actual End','Owner','Notes']
+    const data = [headers, ...rows.map(r => [r.code, r.description, r.rag, r.ros_date, r.planned_start, r.planned_end, r.forecast_start, r.forecast_end, r.actual_start, r.actual_end, r.owner, r.notes])]
+    const ws = XLSX.utils.aoa_to_sheet(data)
+    ws['!cols'] = headers.map(() => ({ wch: 18 }))
+    XLSX.utils.book_append_sheet(wb, ws, 'WBS Export')
+
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
+    res.setHeader('Content-Disposition', 'attachment; filename="WBS_Export.xlsx"')
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    res.send(buf)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// POST /api/foundational/:projectId/wbs/bulk-rag — change RAG for multiple nodes
+router.post('/:projectId/wbs/bulk-rag', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const { ids, rag } = req.body
+    if (!ids?.length) return res.status(400).json({ error: 'No IDs provided' })
+    await db.query(
+      `UPDATE wbs_nodes SET rag=?, updated_at=NOW() WHERE project_id=? AND id IN (${ids.map(() => '?').join(',')})`,
+      [rag, pid, ...ids]
+    )
+    res.json({ ok: true, updated: ids.length })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// POST /api/foundational/:projectId/wbs/bulk-delete — delete safe nodes (no children, no PO refs)
+router.post('/:projectId/wbs/bulk-delete', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const { ids } = req.body
+    if (!ids?.length) return res.status(400).json({ error: 'No IDs provided' })
+
+    const deleted = []; const skipped = []
+    for (const id of ids) {
+      const [[childCheck]] = await db.query('SELECT COUNT(*) AS cnt FROM wbs_nodes WHERE parent_id=? AND project_id=?', [id, pid])
+      if (childCheck.cnt > 0) { skipped.push(id); continue }
+      const [[node]] = await db.query('SELECT code FROM wbs_nodes WHERE id=? AND project_id=?', [id, pid])
+      if (!node) { skipped.push(id); continue }
+      const [[poCheck]] = await db.query('SELECT COUNT(*) AS cnt FROM purchase_orders WHERE project_id=? AND wbs_code=?', [pid, node.code])
+      if (poCheck.cnt > 0) { skipped.push(id); continue }
+      await db.query('DELETE FROM wbs_nodes WHERE id=?', [id])
+      deleted.push(id)
+    }
+    res.json({ ok: true, deleted: deleted.length, skipped: skipped.length })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// GET /api/foundational/:projectId/wbs/:nodeId/materials — tooltip + panel data
 router.get('/:projectId/wbs/:nodeId/materials', async (req, res) => {
   try {
     const pid    = Number(req.params.projectId)
@@ -383,11 +500,11 @@ router.get('/:projectId/wbs/:nodeId/materials', async (req, res) => {
     if (!node) return res.status(404).json({ error: 'Node not found' })
 
     const [commodities] = await db.query(
-      'SELECT code, name, uom FROM commodity_library WHERE project_id=? AND wbs_node_id=? AND status="active" LIMIT 10',
+      'SELECT code, name, uom FROM commodity_library WHERE project_id=? AND wbs_node_id=? AND status="active" LIMIT 20',
       [pid, nodeId]
     )
     const [equipment] = await db.query(
-      'SELECT tag, description FROM equipment_list WHERE project_id=? AND wbs_node_id=? LIMIT 10',
+      'SELECT tag, description, status FROM equipment_list WHERE project_id=? AND wbs_node_id=? LIMIT 20',
       [pid, nodeId]
     )
     res.json({ wbsCode: node.code, commodities, equipment })
@@ -667,6 +784,101 @@ router.get('/:projectId/certificates/:id/download', async (req, res) => {
     if (!fs.existsSync(fp)) return res.status(404).json({ error: 'File not on disk' })
     res.download(fp, cert.filename.replace(/^\d+-/, ''))
   } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+// COMMODITY TEMPLATE DOWNLOAD
+// ═══════════════════════════════════════════════════════════════
+
+// GET /api/foundational/:projectId/commodities/template — XLSX download
+router.get('/:projectId/commodities/template', async (req, res) => {
+  try {
+    const wb = XLSX.utils.book_new()
+    const headers = ['Commodity Code', 'WBS Code', 'Name/Description', 'Unit of Measure', 'Estimated Qty', 'Trace Level', 'Preservation', 'Preferred Vendor', 'Notes']
+    const examples = [
+      ['CS-PLATE-001',   '02.01.01', 'Carbon Steel Plate A516 Gr70',   'T',   '12.5', 'Mill cert',    'None',              'LIBERTY Steel', 'Material cert required'],
+      ['WELD-CONS-001',  '02.01.01', 'Welding Consumables ER70S-6',    'KG',  '200',  'Drum number',  'None',              'Lincoln Electric', ''],
+      ['HV-CABLE-001',   '03.01.01', 'HV Cable 11kV 3Cx150mm2 XLPE',  'M',   '500',  'Drum number',  'Dry storage',       'Prysmian',       ''],
+    ]
+    const wsData = [headers, ...examples]
+    const ws = XLSX.utils.aoa_to_sheet(wsData)
+    ws['!cols'] = headers.map(h => ({ wch: h === 'Name/Description' ? 40 : 20 }))
+    ws['!freeze'] = { xSplit: 0, ySplit: 1 }
+    XLSX.utils.book_append_sheet(wb, ws, 'Commodity Template')
+
+    // Instructions sheet
+    const instrData = [
+      ['Column', 'Required', 'Description'],
+      ['Commodity Code', 'Yes', 'Unique code per project e.g. CS-PLATE-001'],
+      ['WBS Code',       'Yes', 'Dotted WBS code this commodity belongs to e.g. 02.01.01'],
+      ['Name/Description', 'Yes', 'Material name or description'],
+      ['Unit of Measure', 'Yes', 'EA, M, M², M³, KG, T, LT, SET, LOT'],
+      ['Estimated Qty',  'No',  'Estimated quantity (numeric)'],
+      ['Trace Level',    'No',  'Heat number | Heat + cert | Mill cert | Drum number | Serial | None'],
+      ['Preservation',   'No',  'None | Dry storage | Climate controlled | Painted-wrapped | N2 purge'],
+      ['Preferred Vendor', 'No', 'Preferred vendor name (optional)'],
+      ['Notes',          'No',  'Additional notes (optional)'],
+    ]
+    const wsI = XLSX.utils.aoa_to_sheet(instrData)
+    wsI['!cols'] = [{ wch: 22 }, { wch: 10 }, { wch: 60 }]
+    XLSX.utils.book_append_sheet(wb, wsI, 'Instructions')
+
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
+    res.setHeader('Content-Disposition', 'attachment; filename="Commodity_Upload_Template.xlsx"')
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    res.send(buf)
+  } catch (e) {
+    console.error('[commodities:template]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+// EQUIPMENT TEMPLATE DOWNLOAD
+// ═══════════════════════════════════════════════════════════════
+
+// GET /api/foundational/:projectId/equipment/template — XLSX download
+router.get('/:projectId/equipment/template', async (req, res) => {
+  try {
+    const wb = XLSX.utils.book_new()
+    const headers = ['Equipment Tag', 'Equipment Type', 'WBS Code', 'Description', 'Area/Location', 'Criticality', 'PO Reference', 'Vendor', 'Weight (kg)', 'Overall Size (LxWxH)', 'Notes']
+    const examples = [
+      ['V-101', 'Vessel',     '02.01.01', 'HP Separator 1st Stage',       'Train 1',    'A-Critical', 'PO-2024-003', 'GHD Fabricators', '12500', '4500x2200x2200', 'ASME VIII Div 1'],
+      ['P-101A', 'Pump',      '02.02.01', 'Feed Pump — Duty',              'Pump Stn',   'A-Critical', 'PO-TEST-001', 'Flowserve',       '850',   '1200x500x700',   'API 610 OH2'],
+      ['SW-001', 'Panel',     '03.01.01', '11kV MV Switchboard Panel A',  'Substation', 'A-Critical', 'PO-2024-004', 'ABB',             '2100',  '2100x600x2300',  'IEC 62271-200'],
+    ]
+    const wsData = [headers, ...examples]
+    const ws = XLSX.utils.aoa_to_sheet(wsData)
+    ws['!cols'] = headers.map(h => ({ wch: h === 'Description' ? 35 : 18 }))
+    ws['!freeze'] = { xSplit: 0, ySplit: 1 }
+    XLSX.utils.book_append_sheet(wb, ws, 'Equipment Template')
+
+    const instrData = [
+      ['Column', 'Required', 'Description'],
+      ['Equipment Tag',    'Yes', 'Unique tag number per project e.g. V-101, P-101A, SW-001'],
+      ['Equipment Type',   'Yes', 'Vessel | Pump | Compressor | Heat exchanger | Tank | Filter | Valve | Motor | Skid | Instrument | Pipe spool | Structural | Cable drum | Panel | Package'],
+      ['WBS Code',         'Yes', 'Dotted WBS code this equipment belongs to e.g. 02.01.01'],
+      ['Description',      'Yes', 'Equipment description'],
+      ['Area/Location',    'No',  'Area or location tag e.g. Train 1, Substation, Pump Stn'],
+      ['Criticality',      'No',  'A-Critical | B-Major | C-Standard'],
+      ['PO Reference',     'No',  'PO number if already raised e.g. PO-2024-003'],
+      ['Vendor',           'No',  'Equipment vendor or manufacturer'],
+      ['Weight (kg)',      'No',  'Approximate weight in kilograms (numeric)'],
+      ['Overall Size (LxWxH)', 'No', 'Approximate envelope dimensions in mm e.g. 4500x2200x2200'],
+      ['Notes',            'No',  'Any relevant notes, specs or references'],
+    ]
+    const wsI = XLSX.utils.aoa_to_sheet(instrData)
+    wsI['!cols'] = [{ wch: 24 }, { wch: 10 }, { wch: 80 }]
+    XLSX.utils.book_append_sheet(wb, wsI, 'Instructions')
+
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
+    res.setHeader('Content-Disposition', 'attachment; filename="Equipment_Upload_Template.xlsx"')
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    res.send(buf)
+  } catch (e) {
+    console.error('[equipment:template]', e.message)
     res.status(500).json({ error: e.message })
   }
 })
