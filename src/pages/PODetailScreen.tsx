@@ -107,6 +107,12 @@ function fmtCurrency(val: number | null, ccy = 'AUD') {
   return new Intl.NumberFormat('en-AU', { style: 'currency', currency: ccy, maximumFractionDigits: 0 }).format(val)
 }
 
+// ─── FIX 1: fmtValueCode — "AUD 1,420,000" format (code prefix not $ symbol)
+function fmtValueCode(val: number | null, ccy = 'AUD') {
+  if (val == null) return '—'
+  return `${ccy} ${Math.round(val).toLocaleString('en-AU')}`
+}
+
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`
@@ -1107,19 +1113,22 @@ const PODetailInner = ({ dark, poId, projectName, onBack }: PODetailInnerProps) 
 
       {/* ── Meta grid ────────────────────────────────────────────────────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 24 }}>
-        <MetaItem dark={dark} label="Currency"       value={po.currency} />
-        <MetaItem dark={dark} label="Total Value"   value={fmtCurrency(po.value ?? totalValue, po.currency)} />
-        <MetaItem dark={dark} label="Incoterms"     value={po.incoterms} />
+        <MetaItem dark={dark} label="Currency"        value={po.currency} />
+        {/* FIX 1: use fmtValueCode so value shows "AUD 1,420,000" not "$1,420,000" */}
+        <MetaItem dark={dark} label="Total Value"    value={fmtValueCode(po.value ?? totalValue, po.currency)} />
+        <MetaItem dark={dark} label="Incoterms"      value={po.incoterms} />
         <MetaItem dark={dark} label="Handover Point" value={po.handover_point} />
-        <MetaItem dark={dark} label="WBS"           value={po.wbs_code} mono />
-        <MetaItem dark={dark} label="Vendor"       value={po.supplier_name ?? po.vendor_name} />
-        <MetaItem dark={dark} label="Owner"        value={po.owner_name} />
-        <MetaItem dark={dark} label="Expeditor"    value={po.expeditor_name} />
-        <MetaItem dark={dark} label="Group"        value={po.group_category?.replace(/_/g, ' ')} />
-        <MetaItem dark={dark} label="ROS Date"     value={fmtDate(po.ros_date)} />
-        <MetaItem dark={dark} label="PO Placed"    value={fmtDate(po.milestone_po_date)} />
-        <MetaItem dark={dark} label="FAT Date"     value={fmtDate(po.milestone_fat_date)} />
-        <MetaItem dark={dark} label="Est. Arrival" value={fmtDate(po.milestone_eta_date)} />
+        <MetaItem dark={dark} label="WBS"            value={po.wbs_code} mono />
+        <MetaItem dark={dark} label="Vendor"         value={po.supplier_name ?? po.vendor_name} />
+        <MetaItem dark={dark} label="Owner"          value={po.owner_name} />
+        <MetaItem dark={dark} label="Expeditor"      value={po.expeditor_name} />
+        <MetaItem dark={dark} label="Group"          value={po.group_category?.replace(/_/g, ' ')} />
+        <MetaItem dark={dark} label="ROS Date"       value={fmtDate(po.ros_date)} />
+        {/* FIX 2: CDD added to meta grid per wireframe */}
+        <MetaItem dark={dark} label="CDD"            value={fmtDate(po.contract_delivery_date)} />
+        <MetaItem dark={dark} label="PO Placed"      value={fmtDate(po.milestone_po_date)} />
+        <MetaItem dark={dark} label="FAT Date"       value={fmtDate(po.milestone_fat_date)} />
+        <MetaItem dark={dark} label="Est. Arrival"   value={fmtDate(po.milestone_eta_date)} />
       </div>
 
       {/* ── Tab bar ──────────────────────────────────────────────────────────── */}
