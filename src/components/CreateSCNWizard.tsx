@@ -93,6 +93,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
   const [etd, setEtd]                         = useState('')
   const [eta, setEta]                         = useState('')
   const [transportMode, setTransportMode]     = useState('')
+  const [transportError, setTransportError]   = useState('')
   const [forwarder, setForwarder]             = useState('')
   const [incoterms, setIncoterms]             = useState('')
 
@@ -455,7 +456,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
           {MODES.map(m => (
             <button
               key={m.id}
-              onClick={() => setTransportMode(m.id)}
+              onClick={() => { setTransportMode(m.id); setTransportError('') }}
               style={{
                 padding: '12px 16px', borderRadius: 8, cursor: 'pointer',
                 fontFamily: 'inherit', fontSize: 12, textAlign: 'left',
@@ -469,6 +470,12 @@ export const CreateSCNWizard: React.FC<Props> = ({
             </button>
           ))}
         </div>
+        {/* ─── TRANSPORT ERROR ──────────────────────────────── */}
+        {transportError && (
+          <p style={{ color: '#ef4444', fontSize: 12, marginTop: 4, marginBottom: 0 }}>
+            {transportError}
+          </p>
+        )}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
@@ -768,9 +775,16 @@ export const CreateSCNWizard: React.FC<Props> = ({
             )}
             {step < 5 ? (
               <button
-                onClick={() => setStep(s => (s + 1) as Step)}
-                disabled={!canNext}
-                style={{ ...blueBtn, opacity: canNext ? 1 : 0.5, cursor: canNext ? 'pointer' : 'not-allowed' }}
+                onClick={() => {
+                  if (step === 2 && !transportMode) {
+                    setTransportError('Please select a transport mode to continue')
+                    return
+                  }
+                  setTransportError('')
+                  setStep(s => (s + 1) as Step)
+                }}
+                disabled={step === 1 && !canNext}
+                style={{ ...blueBtn, opacity: (step === 1 && !canNext) ? 0.5 : 1, cursor: (step === 1 && !canNext) ? 'not-allowed' : 'pointer' }}
               >
                 {step === 1
                   ? `Next — ${countSelected()} item${countSelected() !== 1 ? 's' : ''} →`

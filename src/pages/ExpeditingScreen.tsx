@@ -773,10 +773,10 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
                 {/* KPI strip — aggregated across all packages */}
                 <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:10,marginBottom:20}}>
                   {[
-                    {label:'TOTAL PACKAGES', value:vdrlPoList.reduce((s,p)=>s+(p.package_count||0),0), color:col},
-                    {label:'TOTAL DOCS',     value:vdrlPoList.reduce((s,p)=>s+(p.total_docs||0),0),    color:col},
-                    {label:'SUBMITTED',      value:vdrlPoList.reduce((s,p)=>s+(p.submitted_count||0),0), color:'#22c55e'},
-                    {label:'OVERDUE',        value:vdrlPoList.reduce((s,p)=>s+(p.overdue_count||0),0),  color:'#ef4444'},
+                    {label:'TOTAL PACKAGES', value:vdrlPoList.reduce((s,p)=>s+(parseInt(String(p.package_count))||0),0), color:col},
+                    {label:'TOTAL DOCS',     value:vdrlPoList.reduce((s,p)=>s+(parseInt(String(p.total_docs))||0),0),    color:col},
+                    {label:'SUBMITTED',      value:vdrlPoList.reduce((s,p)=>s+(parseInt(String(p.submitted_count))||0),0), color:'#22c55e'},
+                    {label:'OVERDUE',        value:vdrlPoList.reduce((s,p)=>s+(parseInt(String(p.overdue_count))||0),0),  color:'#ef4444'},
                     {label:'ABF CLEARED',    value:vdrlStats?.abf_cleared_count||0,                     color:'#f59e0b'},
                   ].map(({label,value,color})=>(
                     <div key={label} style={{background:cardBg,border:bd,borderRadius:8,padding:'12px 16px'}}>

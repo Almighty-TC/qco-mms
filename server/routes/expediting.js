@@ -721,7 +721,20 @@ router.get('/:projectId/vdrl/po-list', async (req, res) => {
       GROUP BY po.id
       ORDER BY po.po_number
     `, [pid, pid])
-    res.json(rows)
+    // ─── CAST NUMERIC FIELDS ──────────────────────────────────────
+    // MySQL node driver returns COUNT/SUM columns as strings; cast to
+    // numbers here so the frontend reduce() sums correctly.
+    const cast = rows.map(r => ({
+      ...r,
+      package_count:   parseInt(r.package_count)   || 0,
+      total_docs:      parseInt(r.total_docs)       || 0,
+      submitted_count: parseInt(r.submitted_count)  || 0,
+      overdue_count:   parseInt(r.overdue_count)    || 0,
+      progress_pct:    r.total_docs > 0
+        ? Math.round((parseInt(r.submitted_count) || 0) / (parseInt(r.total_docs) || 1) * 100)
+        : 0,
+    }))
+    res.json(cast)
   } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
 })
 
