@@ -226,6 +226,21 @@ router.delete('/:projectId/wbs/:id', async (req, res) => {
   }
 })
 
+// GET /api/foundational/:projectId/wbs/milestones — ROS milestone markers for Gantt
+router.get('/:projectId/wbs/milestones', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const [rows] = await db.query(
+      `SELECT id AS node_id, code, description AS name, ros_date, rag
+       FROM wbs_nodes WHERE project_id=? AND ros_date IS NOT NULL ORDER BY ros_date`,
+      [pid]
+    )
+    res.json(rows)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // GET /api/foundational/:projectId/wbs/template — XLSX download
 router.get('/:projectId/wbs/template', async (req, res) => {
   try {

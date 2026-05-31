@@ -6,6 +6,7 @@ import { createPortal } from 'react-dom'
 import axios from 'axios'
 import { HelpButton } from '../components/HelpDrawer'
 import { WBS_HELP } from '../helpContent'
+import { WBSGanttView } from '../components/WBSGanttView'
 
 const API = 'http://localhost:3001/api'
 
@@ -937,6 +938,10 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
   const [tooltip, setTooltip]         = useState<{ node: WBSNode; x: number; y: number } | null>(null)
   const tooltipTimer                  = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [toast, setToast]             = useState('')
+  // ── Gantt view state ─────────────────────────────────────────
+  const [wbsView, setWbsView]         = useState<'tree' | 'gantt'>('tree')
+  const [ganttZoom, setGanttZoom]     = useState<'quarters' | 'months'>('quarters')
+  const [ganttDepth, setGanttDepth]   = useState<number>(2)
   // ── Search & filter state ────────────────────────────────────
   const [searchQ, setSearchQ]         = useState('')
   const [ragFilter, setRagFilter]     = useState<string>('all')
@@ -1096,14 +1101,39 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
           <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: col, letterSpacing: '-0.02em' }}>🌲 WBS</h2>
           <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 3 }}>Work Breakdown Structure — {projectName}</div>
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <button onClick={expandAll}   style={secBtn}>⊞ Expand all</button>
-          <button onClick={collapseAll} style={secBtn}>⊟ Collapse all</button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center' }}>
+          {/* View toggle */}
+          <div style={{ display: 'flex', border: bd, borderRadius: 6, overflow: 'hidden' }}>
+            <button onClick={() => setWbsView('tree')} style={{ padding: '5px 12px', border: 'none', background: wbsView === 'tree' ? '#E84E0F' : (dark ? '#1e293b' : '#f4f7fb'), color: wbsView === 'tree' ? '#fff' : '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', fontWeight: wbsView === 'tree' ? 600 : 400 }}>⊞ Tree</button>
+            <button onClick={() => setWbsView('gantt')} style={{ padding: '5px 12px', border: 'none', borderLeft: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: wbsView === 'gantt' ? '#E84E0F' : (dark ? '#1e293b' : '#f4f7fb'), color: wbsView === 'gantt' ? '#fff' : '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', fontWeight: wbsView === 'gantt' ? 600 : 400 }}>📊 Gantt</button>
+          </div>
+          {/* Tree-only controls */}
+          {wbsView === 'tree' && <>
+            <button onClick={expandAll}   style={secBtn}>⊞ Expand all</button>
+            <button onClick={collapseAll} style={secBtn}>⊟ Collapse all</button>
+          </>}
+          {/* Gantt-only controls */}
+          {wbsView === 'gantt' && <>
+            <div style={{ display: 'flex', border: bd, borderRadius: 6, overflow: 'hidden' }}>
+              {(['quarters','months'] as const).map((z,i) => (
+                <button key={z} onClick={() => setGanttZoom(z)} style={{ padding: '5px 10px', border: 'none', borderLeft: i>0 ? `1px solid ${dark?'#334155':'#dde3ed'}` : 'none', background: ganttZoom===z ? '#2563eb' : (dark?'#1e293b':'#f4f7fb'), color: ganttZoom===z ? '#fff' : '#64748b', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', fontWeight: ganttZoom===z ? 600 : 400, textTransform: 'capitalize' }}>
+                  {z}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: 'flex', border: bd, borderRadius: 6, overflow: 'hidden' }}>
+              {[{label:'L1',val:0},{label:'L1–L2',val:1},{label:'L1–L3',val:2}].map((d,i) => (
+                <button key={d.val} onClick={() => setGanttDepth(d.val)} style={{ padding: '5px 10px', border: 'none', borderLeft: i>0 ? `1px solid ${dark?'#334155':'#dde3ed'}` : 'none', background: ganttDepth===d.val ? '#2563eb' : (dark?'#1e293b':'#f4f7fb'), color: ganttDepth===d.val ? '#fff' : '#64748b', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', fontWeight: ganttDepth===d.val ? 600 : 400 }}>
+                  {d.label}
+                </button>
+              ))}
+            </div>
+          </>}
           <button onClick={() => { setFocusMode(f => !f); setFocusNode(null) }} style={{ ...secBtn, color: focusMode ? '#E84E0F' : '#64748b' }}>⛶ Focus</button>
           <button onClick={downloadTemplate} style={secBtn}>↓ Template</button>
           <button onClick={() => setShowUpload(true)} style={secBtn}>↑ Upload XER/Excel</button>
           <HelpButton screenName="WBS" sections={WBS_HELP} dark={dark} />
-          <button onClick={() => setShowAdd(true)} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>+ Add node</button>
+          {wbsView === 'tree' && <button onClick={() => setShowAdd(true)} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>+ Add node</button>}
         </div>
       </div>
 
@@ -1137,8 +1167,22 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
         )}
       </div>
 
+      {/* Gantt view — shown when wbsView==='gantt' */}
+      {wbsView === 'gantt' && (
+        <WBSGanttView
+          nodes={nodes}
+          projectId={projectId}
+          dark={dark}
+          zoom={ganttZoom}
+          maxDepth={ganttDepth}
+          expanded={expanded}
+          onToggle={toggleExpand}
+          onNodeClick={node => { setEditNode(node) }}
+        />
+      )}
+
       {/* Table + panel flex container */}
-      <div style={{ display: 'flex', flex: inFocus ? 1 : undefined, overflow: 'hidden', ...(inFocus ? {} : {}) }}>
+      {wbsView === 'tree' && <div style={{ display: 'flex', flex: inFocus ? 1 : undefined, overflow: 'hidden', ...(inFocus ? {} : {}) }}>
         {/* Tree table */}
         <div style={{ flex: 1, minWidth: 0, background: dark ? '#1e293b' : '#fff', border: bd, borderRadius: focusNode ? '10px 0 0 10px' : 10, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', ...(inFocus ? { display: 'flex', flexDirection: 'column' } : {}) }}>
           <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: inFocus ? undefined : 'calc(100vh - 310px)', flex: inFocus ? 1 : undefined }}>
@@ -1189,7 +1233,7 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
             onClose={() => setFocusNode(null)}
             onEditNode={n => setEditNode(n)} />
         )}
-      </div>
+      </div>}  {/* end wbsView==='tree' */}
 
       {/* ── Modals ── */}
       {editNode && (

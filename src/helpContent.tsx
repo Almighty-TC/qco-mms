@@ -153,6 +153,23 @@ export const WBS_HELP: HelpSection[] = [
       {Tip("The tooltip flips position automatically to avoid overflowing the screen edge.")}
     </>,
   },
+  {
+    title: 'Gantt view',
+    content: <>
+      {P(<>Switch between <strong>Tree</strong> and <strong>📊 Gantt</strong> views using the toggle buttons in the WBS toolbar. All other features (search, RAG filter, add node) are unchanged.</>)}
+      {P(<><strong>What the bars mean:</strong></>)}
+      <ul style={{ margin: '0 0 10px', paddingLeft: 18, fontSize: 13 }}>
+        <li><span style={{ color: '#85B7EB', fontWeight: 600 }}>Blue bar</span> — <strong>Planned</strong> baseline schedule. Never changes once set.</li>
+        <li><span style={{ color: '#EF9F27', fontWeight: 600 }}>Amber bar</span> — <strong>Forecast</strong> current best estimate. Updates as the project progresses. Only shown when different from planned.</li>
+        <li><span style={{ color: '#97C459', fontWeight: 600 }}>Green bar</span> — <strong>Actual</strong> dates achieved. Solid end = complete; extends to today = work in progress.</li>
+      </ul>
+      {P(<>The <strong style={{ color: '#E84E0F' }}>orange diamond ◆</strong> at any date marks the <strong>ROS milestone</strong> (Required On Site).</>)}
+      {P(<>The <strong style={{ color: '#E84E0F' }}>orange vertical line</strong> is <strong>today's date</strong>.</>)}
+      {P(<><strong>Zoom:</strong> Click <strong>Quarters</strong> for an overview or <strong>Months</strong> for detail. This changes column width.</>)}
+      {P(<><strong>Depth:</strong> <strong>L1</strong> shows only top-level nodes, <strong>L1–L2</strong> adds their children, <strong>L1–L3</strong> adds grandchildren. Clicking a parent row in Gantt expands/collapses its children.</>)}
+      {Tip('Clicking a bar row in Gantt view opens the note editor for that node — same as clicking Notes in tree view.')}
+    </>,
+  },
 ]
 
 // ═══════════════════════════════════════════════════════════════
