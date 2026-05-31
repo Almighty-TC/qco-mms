@@ -102,6 +102,233 @@ router.post('/:projectId', async (req, res) => {
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// TEMPLATE DOWNLOAD + FILE PRE-PARSE
+// Must be registered before /:projectId/:mtoId to avoid route shadowing.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── GET /:projectId/template — download a formatted XLSX import template ─────
+// Returns an ExcelJS workbook with header row, 3 example rows, blank data rows,
+// dropdown validations, and an Instructions sheet.
+router.get('/:projectId/template', async (req, res) => {
+  const ExcelJS = require('exceljs')
+  const wb = new ExcelJS.Workbook()
+  wb.creator = 'QCO MMS'
+  wb.created = new Date()
+
+  const ws = wb.addWorksheet('MTO Lines', { views: [{ state: 'frozen', ySplit: 3 }] })
+  ws.columns = [
+    { key: 'line_number', width: 12 }, { key: 'wbs_code', width: 14 },
+    { key: 'description', width: 52 }, { key: 'quantity', width: 10 },
+    { key: 'uom', width: 8 }, { key: 'ros_date', width: 14 },
+    { key: 'inspection_class', width: 18 }, { key: 'vdrl_required', width: 16 },
+    { key: 'heat_number_required', width: 20 }, { key: 'unit_rate', width: 12 },
+    { key: 'total_value', width: 12 }, { key: 'notes', width: 30 },
+  ]
+
+  // Row 1: orange title banner
+  ws.mergeCells('A1:L1')
+  const titleCell = ws.getCell('A1')
+  titleCell.value = 'QCO MMS — MTO Import Template'
+  titleCell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 13, name: 'Calibri' }
+  titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE84E0F' } }
+  titleCell.alignment = { vertical: 'middle', horizontal: 'center' }
+  ws.getRow(1).height = 30
+
+  // Row 2: spacer
+  ws.getRow(2).height = 6
+
+  // Row 3: column headers (dark blue background)
+  const headers = ['Line Number','WBS Code','Description','Quantity','UOM','ROS Date','Inspection Class','VDRL Required','Heat Number Required','Unit Rate','Total Value','Notes']
+  const headerRow = ws.getRow(3)
+  headers.forEach((h, i) => {
+    const cell = headerRow.getCell(i + 1)
+    cell.value = h
+    cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10, name: 'Calibri' }
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1e3a5f' } }
+    cell.alignment = { vertical: 'middle', horizontal: 'left' }
+    cell.border = { bottom: { style: 'thin', color: { argb: 'FF334155' } } }
+  })
+  headerRow.height = 22
+
+  // Helper: grey italic for example rows
+  function exStyle(cell) {
+    cell.font = { italic: true, color: { argb: 'FF94a3b8' }, size: 10, name: 'Calibri' }
+  }
+
+  // Rows 4-6: example rows
+  const examples = [
+    ['L-001','02.01.01','HP Separator Vessel — 3-phase horizontal',1,'EA','31-Aug-2025','Class I','Y','Y','','','Delete before uploading'],
+    ['L-002','02.02.01','Centrifugal Feed Pump P-101A',2,'EA','31-Oct-2025','Class II','N','N','','','Delete before uploading'],
+    ['L-003','03.01.01','HV Cable 11kV 3C×150mm² XLPE',250,'m','15-Dec-2025','Class III','Y','N','','','Delete before uploading'],
+  ]
+  examples.forEach((ex, i) => {
+    const row = ws.getRow(4 + i)
+    ex.forEach((val, j) => { const c = row.getCell(j+1); c.value = val; exStyle(c) })
+    row.height = 18
+  })
+
+  // Rows 7-53: blank data rows
+  for (let r = 7; r <= 53; r++) ws.getRow(r).height = 18
+
+  // Data validations
+  ws.dataValidations.add('E4:E53', { type: 'list', allowBlank: true, formulae: ['"EA,m,m2,m3,kg,t,LT,SET,LOT"'], showErrorMessage: true, errorTitle: 'Invalid UOM', error: 'Select: EA, m, m2, m3, kg, t, LT, SET, LOT' })
+  ws.dataValidations.add('G4:G53', { type: 'list', allowBlank: true, formulae: ['"Class I,Class II,Class III"'], showErrorMessage: true, errorTitle: 'Invalid', error: 'Select: Class I, Class II, or Class III' })
+  ws.dataValidations.add('H4:H53', { type: 'list', allowBlank: true, formulae: ['"Y,N"'], showErrorMessage: true, errorTitle: 'Invalid', error: 'Enter Y or N' })
+  ws.dataValidations.add('I4:I53', { type: 'list', allowBlank: true, formulae: ['"Y,N"'], showErrorMessage: true, errorTitle: 'Invalid', error: 'Enter Y or N' })
+
+  // Instructions sheet
+  const ws2 = wb.addWorksheet('Instructions')
+  ws2.getColumn(1).width = 80
+  const instrLines = [
+    ['QCO MMS — MTO Template Instructions', true, 'FFE84E0F', 13],
+    ['', false, null, 11],
+    ['COLUMN GUIDE', true, 'FF1e3a5f', 11],
+    ['Line Number — Required. Format: L-001. Must be unique.', false, null, 10],
+    ['WBS Code — Must match a WBS code in your project (e.g. 02.01.01).', false, null, 10],
+    ['Description — Required for every line.', false, null, 10],
+    ['Quantity — Numeric.', false, null, 10],
+    ['UOM — Unit of measure. Use dropdown: EA, m, m2, m3, kg, t, LT, SET, LOT', false, null, 10],
+    ['ROS Date — Format: DD-MMM-YYYY (e.g. 31-Aug-2025)', false, null, 10],
+    ['Inspection Class — Class I (statutory), Class II (witness), Class III (review only)', false, null, 10],
+    ['VDRL Required — Y if vendor documents required. N otherwise.', false, null, 10],
+    ['Heat Number Required — Y for steel, pipe, valves, pressure parts.', false, null, 10],
+    ['', false, null, 10],
+    ['UPLOAD RULES', true, 'FF1e3a5f', 11],
+    ['1. Delete example rows (4–6) before uploading.', false, null, 10],
+    ['2. Do not change the column headers in row 3.', false, null, 10],
+    ['3. Rows with blank Description are skipped on import.', false, null, 10],
+    ['4. Lines on a raised PO cannot have Qty/WBS/Description changed.', false, null, 10],
+    ['5. Save as .xlsx or .csv before uploading.', false, null, 10],
+  ]
+  instrLines.forEach(([text, bold, color, size], i) => {
+    const c = ws2.getCell(i+1, 1)
+    c.value = text
+    c.font = { bold, size, name: 'Calibri', color: color ? { argb: color } : { argb: 'FF0f172a' } }
+    c.alignment = { wrapText: true }
+  })
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  res.setHeader('Content-Disposition', 'attachment; filename="QCO_MTO_Template.xlsx"')
+  await wb.xlsx.write(res)
+  res.end()
+})
+
+// ─── POST /:projectId/parse-file — parse & validate an XLSX/CSV before commit ─
+// Returns preview, warnings, and error flags. Does NOT insert any data.
+router.post('/:projectId/parse-file', upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file provided', hasErrors: true })
+  try {
+    const [wbsRows] = await db.query('SELECT code FROM wbs_nodes WHERE project_id = ?', [req.params.projectId])
+    const validWBS = new Set(wbsRows.map(r => r.code))
+    const XLSX_LIB = require('xlsx')
+    const wb = XLSX_LIB.read(req.file.buffer, { type: 'buffer', cellDates: true })
+    const sheetName = wb.SheetNames.includes('MTO Lines') ? 'MTO Lines' : wb.SheetNames[0]
+    const ws = wb.Sheets[sheetName]
+    const rawRows = XLSX_LIB.utils.sheet_to_json(ws, { defval: null })
+    if (!rawRows.length) return res.status(400).json({ error: 'File is empty or unreadable', hasErrors: true })
+
+    function norm(k) { return k.trim().toLowerCase().replace(/\s+/g, '_') }
+    const firstRow = rawRows[0]
+    const normKeys = Object.keys(firstRow).map(norm)
+    if (!normKeys.includes('description'))
+      return res.status(400).json({ error: 'Required column "Description" not found. Check headers match the template.', hasErrors: true })
+    const hasLineNum = normKeys.includes('line_number') || normKeys.includes('line_#') || normKeys.includes('line_no')
+    if (!hasLineNum)
+      return res.status(400).json({ error: 'Required column "Line Number" not found. Check headers match the template.', hasErrors: true })
+
+    const rows = rawRows.map((row, idx) => {
+      const n = {}
+      for (const [k, v] of Object.entries(row)) n[norm(k)] = v
+      if (!n.line_number && n['line_#']) n.line_number = n['line_#']
+      if (!n.line_number && n.line_no) n.line_number = n.line_no
+      n._rowNum = idx + 4
+      return n
+    })
+
+    const warnings = [], validLines = []
+    let linesSkipped = 0
+    const lineNumbers = new Map()
+    const VALID_UOM = new Set(['EA','m','m2','m3','kg','t','LT','SET','LOT'])
+    const VALID_INSP = new Set(['class i','class ii','class iii'])
+
+    function normYN(v) {
+      if (v == null || v === '') return 0
+      const s = String(v).trim().toLowerCase()
+      if (['y','yes','1','true'].includes(s)) return 1
+      if (['n','no','0','false'].includes(s)) return 0
+      return null
+    }
+
+    function parseDate(v) {
+      if (v == null || v === '') return null
+      if (v instanceof Date) return v.toISOString().slice(0,10)
+      if (typeof v === 'number') {
+        const d = XLSX_LIB.SSF.parse_date_code(v)
+        if (d) return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`
+      }
+      const s = String(v).trim()
+      const parsed = new Date(s)
+      if (!isNaN(parsed.getTime())) return parsed.toISOString().slice(0,10)
+      return null
+    }
+
+    for (const row of rows) {
+      const rn = row._rowNum
+      const notesVal = String(row.notes || '').toLowerCase()
+      if (notesVal.includes('delete before uploading') || notesVal.includes('example')) {
+        linesSkipped++; warnings.push({ row: rn, message: 'Example row skipped', severity: 'warning' }); continue
+      }
+      if (!row.description || String(row.description).trim() === '') {
+        linesSkipped++; warnings.push({ row: rn, message: 'Description missing — row skipped', severity: 'warning' }); continue
+      }
+      const lineNum = row.line_number ? String(row.line_number).trim() : ''
+      if (!lineNum) {
+        linesSkipped++; warnings.push({ row: rn, message: 'Line number missing — row skipped', severity: 'warning' }); continue
+      }
+      if (lineNumbers.has(lineNum)) {
+        warnings.push({ row: rn, message: `Duplicate line number ${lineNum} (first seen row ${lineNumbers.get(lineNum)})`, severity: 'error' })
+      } else lineNumbers.set(lineNum, rn)
+
+      let uom = row.uom ? String(row.uom).trim() : ''
+      if (uom && !VALID_UOM.has(uom)) { warnings.push({ row: rn, message: `UOM '${uom}' not recognised — defaulting to EA`, severity: 'warning' }); uom = 'EA' }
+      let insp = row.inspection_class ? String(row.inspection_class).trim() : 'Class II'
+      if (!VALID_INSP.has(insp.toLowerCase())) { warnings.push({ row: rn, message: `Inspection class '${insp}' not recognised — defaulting to Class II`, severity: 'warning' }); insp = 'Class II' }
+
+      let vdrl = normYN(row.vdrl_required)
+      if (vdrl === null) { warnings.push({ row: rn, message: `VDRL value not recognised — defaulting to N`, severity: 'warning' }); vdrl = 0 }
+      let heatReq = normYN(row.heat_number_required)
+      if (heatReq === null) { warnings.push({ row: rn, message: `Heat Number Required value not recognised — defaulting to N`, severity: 'warning' }); heatReq = 0 }
+
+      const wbsCode = row.wbs_code ? String(row.wbs_code).trim() : null
+      if (wbsCode && validWBS.size > 0 && !validWBS.has(wbsCode))
+        warnings.push({ row: rn, message: `WBS '${wbsCode}' not found in project — imported as-is`, severity: 'warning' })
+
+      let qty = null
+      if (row.quantity != null && row.quantity !== '') {
+        const n = parseFloat(String(row.quantity))
+        if (isNaN(n)) warnings.push({ row: rn, message: `Quantity '${row.quantity}' is not a number — left blank`, severity: 'warning' })
+        else qty = n
+      }
+
+      const rosDate = parseDate(row.ros_date)
+      if (row.ros_date != null && row.ros_date !== '' && !rosDate)
+        warnings.push({ row: rn, message: `ROS date '${row.ros_date}' could not be parsed — left blank`, severity: 'warning' })
+
+      validLines.push({ line_number: lineNum, wbs_code: wbsCode, description: String(row.description).trim(), quantity: qty, uom: uom || null, ros_date: rosDate, inspection_class: insp, vdrl_required: vdrl, heat_number_required: heatReq })
+    }
+
+    res.json({
+      linesFound: rows.length, linesValid: validLines.length, linesSkipped,
+      warnings, hasErrors: warnings.some(w => w.severity === 'error'),
+      preview: validLines.slice(0, 15)
+    })
+  } catch (e) {
+    console.error('parse-file', e.message)
+    res.status(500).json({ error: 'Failed to parse file: ' + e.message, hasErrors: true })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SINGLE MTO — DETAIL + LINES + REVISIONS + DIFF
 // ═══════════════════════════════════════════════════════════════════════════════
 

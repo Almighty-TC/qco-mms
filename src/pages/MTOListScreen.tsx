@@ -1,7 +1,8 @@
 // ─── MTO LIST SCREEN ─────────────────────────────────────────────────────────
 // Shows all MTO registers for the selected project. Active MTOs are clickable;
 // superseded MTOs are shown at reduced opacity with a "Superseded" pill.
-// New MTO wizard supports manual entry (3 steps) and file upload.
+// New MTO wizard supports manual entry (2 steps: metadata → lines).
+// Upload MTO wizard supports file-based import with preview and conflict check.
 import React, { useState, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import axios from 'axios'
@@ -40,6 +41,7 @@ interface NewLineRow {
   ros_date: string
   inspection_class: string
   vdrl_required: boolean
+  heat_no_required: boolean
 }
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
@@ -59,6 +61,7 @@ const newRow = (): NewLineRow => ({
   ros_date: '',
   inspection_class: 'Class II',
   vdrl_required: false,
+  heat_no_required: false,
 })
 
 // ─── STATUS PILL ─────────────────────────────────────────────────────────────
@@ -80,7 +83,7 @@ const StatusPill = ({ s }: { s: 'active' | 'superseded' }) => {
 }
 
 // ─── NEW MTO MODAL ───────────────────────────────────────────────────────────
-// 3-step wizard: method choice → metadata form → lines (manual) or upload
+// 2-step wizard: metadata form → lines (manual entry only)
 const NewMTOModal = ({
   dark, projectId, wbsNodes, onClose, onCreated,
 }: {
@@ -91,8 +94,7 @@ const NewMTOModal = ({
   onCreated: (mto: MTORegister) => void
 }) => {
   const { addToast } = useToast()
-  const [step, setStep]     = useState<1 | 2 | 3>(1)
-  const [method, setMethod] = useState<'manual' | 'upload' | null>(null)
+  const [step, setStep]     = useState<1 | 2>(1)
 
   // Form fields
   const [name,     setName]     = useState('')
@@ -100,9 +102,8 @@ const NewMTOModal = ({
   const [revision, setRevision] = useState('A')
   const [owner,    setOwner]    = useState('')
   const [desc,     setDesc]     = useState('')
-  const [file,     setFile]     = useState<File | null>(null)
 
-  // Lines (manual step 3)
+  // Lines (step 2)
   const [lines, setLines] = useState<NewLineRow[]>([newRow()])
 
   const [saving, setSaving] = useState(false)
@@ -115,8 +116,7 @@ const NewMTOModal = ({
                  borderRadius: 6, padding: '7px 10px', fontSize: 13,
                  fontFamily: 'IBM Plex Sans, sans-serif', width: '100%', boxSizing: 'border-box' as const }
 
-  const canCreate = name.trim() && ref.trim() &&
-    (method === 'upload' ? !!file : lines.some(l => l.description.trim()))
+  const canCreate = name.trim() && ref.trim() && lines.some(l => l.description.trim())
 
   async function handleCreate() {
     setSaving(true)
@@ -127,32 +127,26 @@ const NewMTOModal = ({
         { name, reference: ref, current_revision: revision, owner: owner || null, description: desc || null }
       )
 
-      if (method === 'manual') {
-        // 2. Post each line
-        for (const l of lines.filter(r => r.description.trim())) {
-          await axios.post(`${API}/mto/${projectId}/${mto.id}/lines`, {
-            line_number:      l.line_number  || `L-${String(lines.indexOf(l)+1).padStart(3,'0')}`,
-            wbs_code:         l.wbs_code     || null,
-            description:      l.description,
-            quantity:         l.quantity     ? parseFloat(l.quantity) : null,
-            uom:              l.uom          || null,
-            ros_date:         l.ros_date     || null,
-            inspection_class: l.inspection_class,
-            vdrl_required:    l.vdrl_required ? 1 : 0,
-          })
-        }
-      } else if (method === 'upload' && file) {
-        const fd = new FormData()
-        fd.append('file', file)
-        fd.append('revision', revision)
-        fd.append('notes', `Initial upload Rev ${revision}`)
-        await axios.post(`${API}/mto/${projectId}/${mto.id}/upload`, fd)
+      // 2. Post each line
+      for (const l of lines.filter(r => r.description.trim())) {
+        await axios.post(`${API}/mto/${projectId}/${mto.id}/lines`, {
+          line_number:      l.line_number  || `L-${String(lines.indexOf(l)+1).padStart(3,'0')}`,
+          wbs_code:         l.wbs_code     || null,
+          description:      l.description,
+          quantity:         l.quantity     ? parseFloat(l.quantity) : null,
+          uom:              l.uom          || null,
+          ros_date:         l.ros_date     || null,
+          inspection_class: l.inspection_class,
+          vdrl_required:    l.vdrl_required ? 1 : 0,
+          heat_no_required: l.heat_no_required ? 1 : 0,
+        })
       }
 
       addToast('success', `${mto.reference} created`)
       onCreated(mto)
-    } catch (e: any) {
-      addToast('error', e.response?.data?.error ?? 'Failed to create MTO')
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      addToast('error', err.response?.data?.error ?? 'Failed to create MTO')
     } finally {
       setSaving(false)
     }
@@ -164,213 +158,574 @@ const NewMTOModal = ({
 
   const revOptions = ['A','B','C','D','E','F']
 
+  // ─── Helper: auto-generate line number for a new row ──────────────────────
+  function addLine() {
+    const nextNum = lines.length + 1
+    const lineNum = `L-${String(nextNum).padStart(3, '0')}`
+    setLines(prev => [...prev, { ...newRow(), line_number: lineNum }])
+  }
+
+  // ─── Missing description count for footer status ─────────────────────────
+  const missingDesc = lines.filter(l => !l.description.trim()).length
+
+  // ─── STEP 1: compact metadata modal ──────────────────────────────────────
+  if (step === 1) {
+    const step1Body = (
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9000,
+        display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div onClick={e => e.stopPropagation()} style={{
+          background: bg, border: bd, borderRadius: 12, padding: 28,
+          width: '92%', maxWidth: 560, maxHeight: '88vh', overflowY: 'auto',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.4)', fontFamily: 'IBM Plex Sans, sans-serif',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: col }}>New MTO Register</div>
+              <div style={{ fontSize: 12, color: sub, marginTop: 2 }}>Step 1 of 2 — Details</div>
+            </div>
+            <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: sub, fontSize: 20, cursor: 'pointer', lineHeight: 1 }}>×</button>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
+            <div style={{ gridColumn: '1/-1' }}>
+              <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4 }}>MTO Name *</label>
+              <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Mechanical & Piping MTO" style={inp} />
+            </div>
+            <div>
+              <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4 }}>Reference *</label>
+              <input value={ref} onChange={e => setRef(e.target.value)} placeholder="e.g. MTO-PIL-004" style={{ ...inp, fontFamily: 'JetBrains Mono, monospace' }} />
+            </div>
+            <div>
+              <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4 }}>Revision</label>
+              <select value={revision} onChange={e => setRevision(e.target.value)} style={inp}>
+                {revOptions.map(r => <option key={r} value={r}>Rev {r}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4 }}>Owner</label>
+              <input value={owner} onChange={e => setOwner(e.target.value)} placeholder="e.g. Ben Smith" style={inp} />
+            </div>
+            <div style={{ gridColumn: '1/-1' }}>
+              <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4 }}>Description</label>
+              <textarea value={desc} onChange={e => setDesc(e.target.value)} rows={2}
+                placeholder="Brief description of this MTO's scope"
+                style={{ ...inp, resize: 'vertical' }} />
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
+            <button onClick={onClose} style={{ background: 'transparent', border: bd, color: sub, padding: '7px 16px', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+            <button
+              onClick={() => { if (lines.length === 1 && !lines[0].line_number) setLines([{ ...newRow(), line_number: 'L-001' }]); setStep(2) }}
+              disabled={!name.trim() || !ref.trim()}
+              style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '7px 18px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, opacity: (!name.trim() || !ref.trim()) ? 0.5 : 1 }}>
+              Next → Add lines
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+    return createPortal(step1Body, document.body)
+  }
+
+  // ─── STEP 2: Full-screen line items editor ───────────────────────────────
+  const rowBg  = (i: number) => i % 2 === 0 ? (dark ? '#1e293b' : '#fff') : (dark ? '#1a2640' : '#f8fafc')
+  const cellPad: React.CSSProperties = { padding: '0 6px', verticalAlign: 'middle', height: 44 }
+  const cellInp: React.CSSProperties = {
+    height: 34, width: '100%', borderRadius: 6, fontSize: 12, outline: 'none', boxSizing: 'border-box',
+    background: dark ? '#0f172a' : '#fff', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`,
+    color: dark ? '#f1f5f9' : '#0f172a', padding: '0 8px', fontFamily: 'IBM Plex Sans, sans-serif',
+  }
+  const thStyle: React.CSSProperties = {
+    padding: '0 6px', height: 40, textAlign: 'left', fontWeight: 700, fontSize: 11,
+    color: dark ? '#94a3b8' : '#475569', whiteSpace: 'nowrap', userSelect: 'none',
+    background: dark ? '#0f172a' : '#f1f5f9', letterSpacing: '0.06em', textTransform: 'uppercase',
+    borderBottom: `2px solid ${dark ? '#334155' : '#e2e8f0'}`,
+    position: 'sticky', top: 0, zIndex: 1,
+  }
+
+  const fullscreenBody = (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 9100, overflowY: 'auto',
+      background: dark ? '#0f172a' : '#f4f7fb', fontFamily: 'IBM Plex Sans, sans-serif',
+      animation: 'fadeIn 150ms ease',
+    }}>
+      {/* ── Sticky header ── */}
+      <div style={{
+        position: 'sticky', top: 0, zIndex: 10, background: dark ? '#1e293b' : '#fff',
+        borderBottom: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, padding: '12px 32px',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+      }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: dark ? '#f1f5f9' : '#0f172a' }}>New MTO Register</div>
+          <div style={{ fontSize: 12, color: sub, fontFamily: 'JetBrains Mono, monospace', marginTop: 2 }}>
+            {ref} · Rev {revision} · Step 2 of 2 — Line Items
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button onClick={() => setStep(1)}
+            style={{ background: 'transparent', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, color: sub, padding: '7px 14px', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
+            ← Back
+          </button>
+          <button onClick={onClose}
+            style={{ background: 'transparent', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, color: sub, padding: '7px 14px', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
+            Cancel
+          </button>
+          <button onClick={handleCreate} disabled={!canCreate || saving}
+            style={{ background: canCreate && !saving ? '#15803d' : '#94a3b8', color: '#fff', border: 'none', padding: '7px 18px', borderRadius: 6, cursor: canCreate ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600, minWidth: 140 }}>
+            {saving ? 'Creating…' : '✓ Create MTO'}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Body ── */}
+      <div style={{ maxWidth: 1280, margin: '0 auto', padding: '20px 32px 100px' }}>
+
+        {/* ── Metadata summary bar ── */}
+        <div style={{
+          background: dark ? '#1e293b' : '#fff', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`,
+          borderRadius: 8, padding: '10px 18px', marginBottom: 20,
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        }}>
+          <div style={{ fontSize: 13, color: sub, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, color: dark ? '#f1f5f9' : '#0f172a' }}>{ref}</span>
+            <span>·</span><span>Rev {revision}</span>
+            {owner && <><span>·</span><span>{owner}</span></>}
+            {name && <><span>·</span><span style={{ color: dark ? '#f1f5f9' : '#0f172a', fontWeight: 500 }}>{name}</span></>}
+          </div>
+          <button onClick={() => setStep(1)}
+            style={{ background: 'none', border: 'none', color: '#2563eb', fontSize: 12, cursor: 'pointer' }}>
+            ← Edit details
+          </button>
+        </div>
+
+        {/* ── Line items note ── */}
+        <div style={{ fontSize: 12, color: sub, marginBottom: 10 }}>
+          Line numbers auto-generate as L-001, L-002 etc. — you can edit them freely.
+        </div>
+
+        {/* ── Table ── */}
+        <div style={{ background: dark ? '#1e293b' : '#fff', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: 10, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+            <colgroup>
+              <col style={{ width: 110 }} /> {/* LINE NUMBER */}
+              <col style={{ width: 145 }} /> {/* WBS CODE */}
+              <col />                         {/* DESCRIPTION (flex) */}
+              <col style={{ width: 75 }} />  {/* QTY */}
+              <col style={{ width: 80 }} />  {/* UOM */}
+              <col style={{ width: 130 }} /> {/* ROS DATE */}
+              <col style={{ width: 120 }} /> {/* INSP CLASS */}
+              <col style={{ width: 64 }} />  {/* VDRL */}
+              <col style={{ width: 80 }} />  {/* HEAT NO */}
+              <col style={{ width: 40 }} />  {/* × */}
+            </colgroup>
+            <thead>
+              <tr>
+                <th style={thStyle}>Line Number</th>
+                <th style={thStyle}>WBS Code</th>
+                <th style={{ ...thStyle }}><span style={{ color: '#ef4444' }}>*</span> Description</th>
+                <th style={thStyle}>Qty</th>
+                <th style={thStyle}>UOM</th>
+                <th style={thStyle}>ROS Date</th>
+                <th style={thStyle}>Inspection Class</th>
+                <th style={{ ...thStyle, textAlign: 'center' }}>VDRL</th>
+                <th style={{ ...thStyle, textAlign: 'center' }}>Heat No.</th>
+                <th style={thStyle} />
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((l, idx) => (
+                <tr key={l.key} style={{ background: rowBg(idx), borderBottom: `1px solid ${dark ? '#1e2d4a' : '#f0f3f9'}` }}>
+                  {/* LINE NUMBER */}
+                  <td style={cellPad}>
+                    <input value={l.line_number} onChange={e => updateLine(l.key,'line_number',e.target.value)}
+                      placeholder={`L-${String(idx+1).padStart(3,'0')}`}
+                      style={{ ...cellInp, fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }} />
+                  </td>
+                  {/* WBS CODE */}
+                  <td style={cellPad}>
+                    <select value={l.wbs_code} onChange={e => updateLine(l.key,'wbs_code',e.target.value)}
+                      style={{ ...cellInp }}>
+                      <option value="">— select</option>
+                      {wbsNodes.map(w => <option key={w.id} value={w.code}>{w.code}</option>)}
+                    </select>
+                  </td>
+                  {/* DESCRIPTION */}
+                  <td style={cellPad}>
+                    <input value={l.description} onChange={e => updateLine(l.key,'description',e.target.value)}
+                      placeholder="Item description *"
+                      style={{ ...cellInp, border: !l.description.trim() && lines.length > 1 ? '1px solid #fca5a5' : cellInp.border }} />
+                  </td>
+                  {/* QTY */}
+                  <td style={cellPad}>
+                    <input value={l.quantity} onChange={e => updateLine(l.key,'quantity',e.target.value)}
+                      type="number" min="0" placeholder="0"
+                      style={{ ...cellInp, fontFamily: 'JetBrains Mono, monospace', textAlign: 'right' }} />
+                  </td>
+                  {/* UOM */}
+                  <td style={cellPad}>
+                    <select value={l.uom} onChange={e => updateLine(l.key,'uom',e.target.value)} style={cellInp}>
+                      {['EA','m','m2','m3','kg','t','LT','SET','LOT'].map(u => <option key={u}>{u}</option>)}
+                    </select>
+                  </td>
+                  {/* ROS DATE */}
+                  <td style={cellPad}>
+                    <input value={l.ros_date} onChange={e => updateLine(l.key,'ros_date',e.target.value)}
+                      type="date" style={{ ...cellInp, fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }} />
+                  </td>
+                  {/* INSP CLASS */}
+                  <td style={cellPad}>
+                    <select value={l.inspection_class} onChange={e => updateLine(l.key,'inspection_class',e.target.value)} style={cellInp}>
+                      {['Class I','Class II','Class III'].map(c => <option key={c}>{c}</option>)}
+                    </select>
+                  </td>
+                  {/* VDRL */}
+                  <td style={{ ...cellPad, textAlign: 'center' }}>
+                    <input type="checkbox" checked={l.vdrl_required}
+                      onChange={e => updateLine(l.key,'vdrl_required',e.target.checked)}
+                      style={{ width: 16, height: 16, cursor: 'pointer', accentColor: '#2563eb' }} />
+                  </td>
+                  {/* HEAT NO */}
+                  <td style={{ ...cellPad, textAlign: 'center' }}>
+                    <input type="checkbox" checked={l.heat_no_required}
+                      onChange={e => updateLine(l.key,'heat_no_required',e.target.checked)}
+                      style={{ width: 16, height: 16, cursor: 'pointer', accentColor: '#2563eb' }} />
+                  </td>
+                  {/* DELETE */}
+                  <td style={{ ...cellPad, textAlign: 'center' }}>
+                    <button
+                      onClick={() => lines.length > 1 && setLines(prev => prev.filter(r => r.key !== l.key))}
+                      disabled={lines.length === 1}
+                      style={{ background: 'none', border: 'none', cursor: lines.length > 1 ? 'pointer' : 'default', fontSize: 16, color: lines.length > 1 ? '#ef4444' : '#c4cedf', lineHeight: 1, padding: 0 }}
+                      title={lines.length > 1 ? 'Remove line' : 'Cannot remove the only line'}>
+                      ×
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* ── Below table ── */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 }}>
+          <button onClick={addLine}
+            style={{ background: 'transparent', border: `1px solid #2563eb`, color: '#2563eb', padding: '6px 16px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 500 }}>
+            + Add line
+          </button>
+          <span style={{ fontSize: 12, color: sub }}>{lines.length} line{lines.length !== 1 ? 's' : ''}</span>
+        </div>
+      </div>
+
+      {/* ── Sticky footer status bar ── */}
+      <div style={{
+        position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 10,
+        background: dark ? '#1e293b' : '#fff', borderTop: `1px solid ${dark ? '#334155' : '#e2e8f0'}`,
+        padding: '14px 32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        boxShadow: '0 -2px 8px rgba(0,0,0,0.08)',
+      }}>
+        <div style={{ fontSize: 13, color: missingDesc > 0 ? '#f59e0b' : '#22c55e', fontWeight: 600 }}>
+          {missingDesc > 0
+            ? `⚠ ${missingDesc} line${missingDesc > 1 ? 's' : ''} missing description`
+            : `✓ ${lines.length} line${lines.length !== 1 ? 's' : ''} ready`}
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={() => setStep(1)}
+            style={{ background: 'transparent', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, color: sub, padding: '8px 16px', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
+            ← Back
+          </button>
+          <button onClick={onClose}
+            style={{ background: 'transparent', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, color: sub, padding: '8px 16px', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
+            Cancel
+          </button>
+          <button onClick={handleCreate} disabled={!canCreate || saving}
+            style={{ background: canCreate && !saving ? '#15803d' : '#94a3b8', color: '#fff', border: 'none', padding: '8px 20px', borderRadius: 6, cursor: canCreate ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 600, minWidth: 150 }}>
+            {saving ? 'Creating…' : '✓ Create MTO'}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Fade-in keyframe ── */}
+      <style>{`@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }`}</style>
+    </div>
+  )
+  return createPortal(fullscreenBody, document.body)
+}
+
+// ─── PARSE RESULT TYPE ───────────────────────────────────────────────────────
+interface ParseWarning { row: number; message: string; severity: 'warning' | 'error' }
+interface ParseResult {
+  linesFound: number
+  linesValid: number
+  linesSkipped: number
+  warnings: ParseWarning[]
+  hasErrors: boolean
+  preview: Array<{ line_number: string; wbs_code: string | null; description: string; quantity: number | null; uom: string | null }>
+}
+
+// ─── UPLOAD NEW MTO MODAL ────────────────────────────────────────────────────
+// 3-step wizard: metadata → upload file → preview & confirm
+const UploadNewMTOModal = ({
+  dark, projectId, onClose, load, downloadTemplate, addToast,
+}: {
+  dark: boolean
+  projectId: number
+  onClose: () => void
+  load: () => void
+  downloadTemplate: () => void
+  addToast: (type: 'success' | 'error' | 'info', msg: string) => void
+}) => {
+  const [step,         setStep]        = useState<1 | 2 | 3>(1)
+  const [name,         setName]        = useState('')
+  const [ref,          setRef]         = useState('')
+  const [revision,     setRevision]    = useState('A')
+  const [owner,        setOwner]       = useState('')
+  const [notes,        setNotes]       = useState('')
+  const [file,         setFile]        = useState<File | null>(null)
+  const [fileKey,      setFileKey]     = useState(0)
+  const [parseResult,  setParseResult] = useState<ParseResult | null>(null)
+  const [creating,     setCreating]    = useState(false)
+  const [parseError,   setParseError]  = useState('')
+  const [parsePending, setParsePending] = useState(false)
+
+  const bg  = dark ? '#0f172a' : '#fff'
+  const bd  = `1px solid ${dark ? '#334155' : '#e2e8f0'}`
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const sub = dark ? '#94a3b8' : '#64748b'
+  const inp = { background: dark ? '#1e293b' : '#f8fafc', border: bd, color: col,
+                borderRadius: 6, padding: '7px 10px', fontSize: 13,
+                fontFamily: 'IBM Plex Sans, sans-serif', width: '100%', boxSizing: 'border-box' as const }
+
+  const revOptions = ['A','B','C','D','E','F']
+
+  const handleParseFile = async () => {
+    if (!file) return
+    setParsePending(true); setParseError('')
+    try {
+      const fd = new FormData(); fd.append('file', file)
+      const { data } = await axios.post<ParseResult>(`${API}/mto/${projectId}/parse-file`, fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+      setParseResult(data); setStep(3)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setParseError(err.response?.data?.error ?? 'Failed to parse file')
+    } finally { setParsePending(false) }
+  }
+
+  const handleCreate = async () => {
+    if (!parseResult || parseResult.hasErrors) return
+    setCreating(true)
+    try {
+      // Step 1: create MTO record
+      const { data: newMto } = await axios.post(`${API}/mto/${projectId}`, { name, reference: ref, current_revision: revision, owner, description: notes })
+      // Step 2: upload file to create lines
+      const fd2 = new FormData(); fd2.append('file', file!); fd2.append('revision', revision); fd2.append('notes', notes)
+      await axios.post(`${API}/mto/${projectId}/${newMto.id}/upload`, fd2, { headers: { 'Content-Type': 'multipart/form-data' } })
+      addToast('success', `${ref} created — ${parseResult.linesValid} lines imported`)
+      onClose(); load()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      addToast('error', err.response?.data?.error ?? 'Failed to create MTO')
+      setCreating(false)
+    }
+  }
+
+  const errorWarnings   = parseResult?.warnings.filter(w => w.severity === 'error')   ?? []
+  const generalWarnings = parseResult?.warnings.filter(w => w.severity === 'warning') ?? []
+
+  const createBtnLabel = parseResult?.hasErrors
+    ? 'Resolve errors first'
+    : (parseResult?.warnings.length ?? 0) > 0
+      ? '⚠ Import with warnings'
+      : '✓ Create MTO'
+
   const body = (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9000,
       display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div onClick={e => e.stopPropagation()} style={{
         background: bg, border: bd, borderRadius: 12, padding: 28,
-        width: '90%', maxWidth: 780, maxHeight: '88vh', overflowY: 'auto',
+        width: '90%', maxWidth: 720, maxHeight: '90vh', overflowY: 'auto',
         boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
       }}>
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
           <div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: col, fontFamily: 'IBM Plex Sans, sans-serif' }}>
-              New MTO Register
-            </div>
-            <div style={{ fontSize: 12, color: sub, marginTop: 2, fontFamily: 'IBM Plex Sans, sans-serif' }}>
-              Step {step} of {method === 'manual' ? 3 : 2}
-            </div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: col, fontFamily: 'IBM Plex Sans, sans-serif' }}>Upload MTO</div>
+            <div style={{ fontSize: 12, color: sub, marginTop: 2, fontFamily: 'IBM Plex Sans, sans-serif' }}>Step {step} of 3</div>
           </div>
           <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: sub, fontSize: 20, cursor: 'pointer', lineHeight: 1 }}>×</button>
         </div>
 
-        {/* ─── STEP 1: Choose method ─── */}
+        {/* ─── STEP 1: Metadata ─── */}
         {step === 1 && (
           <div>
-            <div style={{ fontSize: 13, color: sub, marginBottom: 16, fontFamily: 'IBM Plex Sans, sans-serif' }}>
-              How would you like to create this MTO?
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-              {([
-                ['manual', '✏️', 'Create manually', 'Enter line items directly in the form.'],
-                ['upload', '📤', 'Upload file', 'Import lines from an XLSX or CSV file.'],
-              ] as const).map(([m, icon, title, sub2]) => (
-                <div key={m} onClick={() => { setMethod(m); setStep(2) }} style={{
-                  border: `2px solid ${method === m ? '#2563eb' : (dark ? '#334155' : '#e2e8f0')}`,
-                  borderRadius: 10, padding: 20, cursor: 'pointer', textAlign: 'center',
-                  background: method === m ? 'rgba(37,99,235,0.07)' : (dark ? '#1e293b' : '#f8fafc'),
-                  transition: 'border-color 0.15s',
-                }}>
-                  <div style={{ fontSize: 28, marginBottom: 8 }}>{icon}</div>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: col, fontFamily: 'IBM Plex Sans, sans-serif', marginBottom: 4 }}>{title}</div>
-                  <div style={{ fontSize: 12, color: sub, fontFamily: 'IBM Plex Sans, sans-serif' }}>{sub2}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* ─── STEP 2: Metadata form ─── */}
-        {step === 2 && (
-          <div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
-              {/* Name */}
               <div style={{ gridColumn: '1/-1' }}>
                 <label style={{ fontSize: 12, color: sub, fontFamily: 'IBM Plex Sans, sans-serif', display: 'block', marginBottom: 4 }}>MTO Name *</label>
                 <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Mechanical & Piping MTO" style={inp} />
               </div>
-              {/* Reference */}
               <div>
                 <label style={{ fontSize: 12, color: sub, fontFamily: 'IBM Plex Sans, sans-serif', display: 'block', marginBottom: 4 }}>Reference *</label>
                 <input value={ref} onChange={e => setRef(e.target.value)} placeholder="e.g. MTO-PIL-004" style={{ ...inp, fontFamily: 'JetBrains Mono, monospace' }} />
               </div>
-              {/* Revision */}
               <div>
                 <label style={{ fontSize: 12, color: sub, fontFamily: 'IBM Plex Sans, sans-serif', display: 'block', marginBottom: 4 }}>Revision</label>
                 <select value={revision} onChange={e => setRevision(e.target.value)} style={inp}>
                   {revOptions.map(r => <option key={r} value={r}>Rev {r}</option>)}
                 </select>
               </div>
-              {/* Owner */}
               <div>
                 <label style={{ fontSize: 12, color: sub, fontFamily: 'IBM Plex Sans, sans-serif', display: 'block', marginBottom: 4 }}>Owner</label>
                 <input value={owner} onChange={e => setOwner(e.target.value)} placeholder="e.g. Ben Smith" style={inp} />
               </div>
-              {/* Description */}
               <div style={{ gridColumn: '1/-1' }}>
                 <label style={{ fontSize: 12, color: sub, fontFamily: 'IBM Plex Sans, sans-serif', display: 'block', marginBottom: 4 }}>Description</label>
-                <textarea value={desc} onChange={e => setDesc(e.target.value)} rows={2}
+                <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2}
                   placeholder="Brief description of this MTO's scope"
                   style={{ ...inp, resize: 'vertical' }} />
               </div>
-
-              {/* Upload zone (upload method only) */}
-              {method === 'upload' && (
-                <div style={{ gridColumn: '1/-1' }}>
-                  <label style={{ fontSize: 12, color: sub, fontFamily: 'IBM Plex Sans, sans-serif', display: 'block', marginBottom: 4 }}>Upload File *</label>
-                  <div style={{
-                    border: `2px dashed ${file ? '#2563eb' : (dark ? '#334155' : '#e2e8f0')}`,
-                    borderRadius: 8, padding: '20px 16px', textAlign: 'center', cursor: 'pointer',
-                    background: dark ? '#1e293b' : '#f8fafc',
-                  }}
-                    onDragOver={e => e.preventDefault()}
-                    onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) setFile(f) }}
-                    onClick={() => { const i = document.createElement('input'); i.type='file'; i.accept='.xlsx,.csv'; i.onchange=()=>{if(i.files?.[0]) setFile(i.files[0])}; i.click() }}>
-                    {file
-                      ? <span style={{ color: '#2563eb', fontWeight: 600, fontSize: 13, fontFamily: 'IBM Plex Sans, sans-serif' }}>📎 {file.name}</span>
-                      : <span style={{ color: sub, fontSize: 13, fontFamily: 'IBM Plex Sans, sans-serif' }}>Drop an XLSX or CSV file here, or click to browse</span>}
-                  </div>
-                </div>
-              )}
             </div>
-
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
-              <button onClick={() => setStep(1)} style={{ background: 'transparent', border: bd, color: sub, padding: '7px 16px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontFamily: 'IBM Plex Sans, sans-serif' }}>← Back</button>
+              <button onClick={onClose} style={{ background: 'transparent', border: bd, color: sub, padding: '7px 16px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontFamily: 'IBM Plex Sans, sans-serif' }}>Cancel</button>
               <button
-                onClick={() => method === 'manual' ? setStep(3) : (canCreate && handleCreate())}
-                disabled={!name.trim() || !ref.trim() || saving}
-                style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '7px 18px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'IBM Plex Sans, sans-serif', opacity: (!name.trim() || !ref.trim() || saving) ? 0.5 : 1 }}>
-                {method === 'manual' ? 'Next: Add Lines →' : (saving ? 'Creating…' : '✓ Create MTO')}
+                onClick={() => setStep(2)}
+                disabled={!name.trim() || !ref.trim()}
+                style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '7px 18px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'IBM Plex Sans, sans-serif', opacity: (!name.trim() || !ref.trim()) ? 0.5 : 1 }}>
+                Next →
               </button>
             </div>
           </div>
         )}
 
-        {/* ─── STEP 3: Lines (manual) ─── */}
-        {step === 3 && method === 'manual' && (
+        {/* ─── STEP 2: Upload File ─── */}
+        {step === 2 && (
           <div>
-            <div style={{ fontSize: 13, color: sub, marginBottom: 12, fontFamily: 'IBM Plex Sans, sans-serif' }}>
-              Add line items for <strong style={{ color: col }}>{ref} Rev {revision}</strong>
+            <div style={{ fontSize: 13, color: sub, marginBottom: 6, fontFamily: 'IBM Plex Sans, sans-serif' }}>
+              Upload your MTO as XLSX or CSV. Column headers must match the template.
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <button onClick={downloadTemplate} style={{ background: 'none', border: 'none', color: '#2563eb', fontSize: 12, cursor: 'pointer', padding: 0, fontFamily: 'IBM Plex Sans, sans-serif', textDecoration: 'underline' }}>
+                ↓ Download template
+              </button>
             </div>
 
-            {/* Lines table */}
+            <div
+              onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor = '#2563eb' }}
+              onDragLeave={e => { e.currentTarget.style.borderColor = dark ? '#334155' : '#dde3ed' }}
+              onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) { setFile(f); setParseResult(null); setParseError('') }; e.currentTarget.style.borderColor = dark ? '#334155' : '#dde3ed' }}
+              onClick={() => document.getElementById('mto-upload-input')?.click()}
+              style={{ border: `2px dashed ${dark ? '#334155' : '#dde3ed'}`, borderRadius: 8, padding: '28px 20px', textAlign: 'center', cursor: 'pointer', transition: 'border-color 150ms', marginBottom: 12 }}>
+              {file ? (
+                <div style={{ fontSize: 13, color: '#22c55e' }}>✓ {file.name} · {(file.size/1024).toFixed(0)} KB</div>
+              ) : (
+                <div style={{ fontSize: 13, color: '#94a3b8' }}>Drop XLSX or CSV here, or click to browse</div>
+              )}
+            </div>
+            <input id="mto-upload-input" type="file" accept=".xlsx,.csv" style={{ display: 'none' }} key={fileKey} onChange={e => { const f = e.target.files?.[0]; if (f) { setFile(f); setParseResult(null); setParseError('') } }} />
+
+            {parseError && (
+              <div style={{ padding: '8px 12px', borderRadius: 6, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', fontSize: 12, marginBottom: 12 }}>
+                {parseError}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
+              <button onClick={() => setStep(1)} style={{ background: 'transparent', border: bd, color: sub, padding: '7px 16px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontFamily: 'IBM Plex Sans, sans-serif' }}>← Back</button>
+              <button
+                onClick={handleParseFile}
+                disabled={!file || parsePending}
+                style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '7px 18px', borderRadius: 6, cursor: (!file || parsePending) ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'IBM Plex Sans, sans-serif', opacity: (!file || parsePending) ? 0.5 : 1 }}>
+                {parsePending ? 'Checking file…' : 'Preview file →'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ─── STEP 3: Preview & Confirm ─── */}
+        {step === 3 && parseResult && (
+          <div>
+            {/* Stat chips */}
+            <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+              {[
+                { label: 'Lines found', val: parseResult.linesFound, color: col },
+                { label: 'Valid',       val: parseResult.linesValid, color: '#22c55e' },
+                { label: 'Skipped',     val: parseResult.linesSkipped, color: sub },
+                { label: 'Warnings',    val: parseResult.warnings.length, color: parseResult.warnings.length > 0 ? '#d97706' : sub },
+              ].map(c => (
+                <div key={c.label} style={{ padding: '8px 14px', borderRadius: 8, background: dark ? '#1e293b' : '#f4f7fb', border: bd }}>
+                  <div style={{ fontSize: 10, color: sub, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>{c.label}</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: c.color }}>{c.val}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Error banner */}
+            {parseResult.hasErrors && (
+              <div style={{ padding: '10px 14px', borderRadius: 6, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', marginBottom: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#ef4444', marginBottom: 6 }}>⚠ {errorWarnings.length} error{errorWarnings.length !== 1 ? 's' : ''} found — cannot import until resolved.</div>
+                {errorWarnings.map((w, i) => (
+                  <div key={i} style={{ fontSize: 12, color: '#ef4444', marginBottom: 2 }}>Row {w.row}: {w.message}</div>
+                ))}
+              </div>
+            )}
+
+            {/* Warning section */}
+            {!parseResult.hasErrors && generalWarnings.length > 0 && (
+              <div style={{ padding: '10px 14px', borderRadius: 6, background: 'rgba(217,119,6,0.08)', border: '1px solid rgba(217,119,6,0.25)', marginBottom: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: '#d97706', marginBottom: 4 }}>{generalWarnings.length} warning{generalWarnings.length !== 1 ? 's' : ''}</div>
+                {generalWarnings.map((w, i) => (
+                  <div key={i} style={{ fontSize: 12, color: '#d97706', marginBottom: 2 }}>Row {w.row}: {w.message}</div>
+                ))}
+              </div>
+            )}
+
+            {/* Success banner */}
+            {!parseResult.hasErrors && generalWarnings.length === 0 && (
+              <div style={{ padding: '10px 14px', borderRadius: 6, background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)', marginBottom: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#22c55e' }}>✓ {parseResult.linesValid} lines ready to import</div>
+              </div>
+            )}
+
+            {/* Preview table */}
             <div style={{ overflowX: 'auto', marginBottom: 12 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: dark ? '#1e293b' : '#f1f5f9', borderBottom: bd }}>
-                    {['#','WBS','Description *','Qty','UOM','ROS','Insp','VDRL',''].map((h,i) => (
-                      <th key={i} style={{ padding: '6px 8px', textAlign: 'left', color: sub, fontFamily: 'IBM Plex Sans, sans-serif', fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
+                    {['LINE','WBS','DESCRIPTION','QTY','UOM'].map(h => (
+                      <th key={h} style={{ padding: '6px 8px', textAlign: 'left', color: sub, fontFamily: 'IBM Plex Sans, sans-serif', fontWeight: 600, fontSize: 10, letterSpacing: '0.05em', textTransform: 'uppercase' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {lines.map((l, idx) => (
-                    <tr key={l.key} style={{ borderBottom: bd }}>
-                      {/* # */}
-                      <td style={{ padding: '4px 8px', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11, whiteSpace: 'nowrap' }}>
-                        <input value={l.line_number} onChange={e => updateLine(l.key,'line_number',e.target.value)}
-                          placeholder={`L-${String(idx+1).padStart(3,'0')}`}
-                          style={{ width: 64, ...inp, padding: '4px 6px', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }} />
-                      </td>
-                      {/* WBS */}
-                      <td style={{ padding: '4px 8px' }}>
-                        <select value={l.wbs_code} onChange={e => updateLine(l.key,'wbs_code',e.target.value)}
-                          style={{ ...inp, padding: '4px 6px', fontSize: 11, width: 120 }}>
-                          <option value="">—</option>
-                          {wbsNodes.map(w => <option key={w.id} value={w.code}>{w.code}</option>)}
-                        </select>
-                      </td>
-                      {/* Description */}
-                      <td style={{ padding: '4px 8px', minWidth: 200 }}>
-                        <input value={l.description} onChange={e => updateLine(l.key,'description',e.target.value)}
-                          placeholder="Description *"
-                          style={{ ...inp, padding: '4px 6px', fontSize: 11, width: '100%' }} />
-                      </td>
-                      {/* Qty */}
-                      <td style={{ padding: '4px 8px' }}>
-                        <input value={l.quantity} onChange={e => updateLine(l.key,'quantity',e.target.value)}
-                          type="number" min="0" style={{ ...inp, padding: '4px 6px', fontSize: 11, width: 70, fontFamily: 'JetBrains Mono, monospace' }} />
-                      </td>
-                      {/* UOM */}
-                      <td style={{ padding: '4px 8px' }}>
-                        <select value={l.uom} onChange={e => updateLine(l.key,'uom',e.target.value)}
-                          style={{ ...inp, padding: '4px 6px', fontSize: 11, width: 64 }}>
-                          {['EA','m','m2','m3','kg','t','LS'].map(u => <option key={u}>{u}</option>)}
-                        </select>
-                      </td>
-                      {/* ROS */}
-                      <td style={{ padding: '4px 8px' }}>
-                        <input value={l.ros_date} onChange={e => updateLine(l.key,'ros_date',e.target.value)}
-                          type="date" style={{ ...inp, padding: '4px 6px', fontSize: 11, width: 130, fontFamily: 'JetBrains Mono, monospace' }} />
-                      </td>
-                      {/* Insp */}
-                      <td style={{ padding: '4px 8px' }}>
-                        <select value={l.inspection_class} onChange={e => updateLine(l.key,'inspection_class',e.target.value)}
-                          style={{ ...inp, padding: '4px 6px', fontSize: 11, width: 90 }}>
-                          {['Class I','Class II','Class III'].map(c => <option key={c}>{c}</option>)}
-                        </select>
-                      </td>
-                      {/* VDRL */}
-                      <td style={{ padding: '4px 8px', textAlign: 'center' }}>
-                        <input type="checkbox" checked={l.vdrl_required}
-                          onChange={e => updateLine(l.key,'vdrl_required',e.target.checked)} />
-                      </td>
-                      {/* Delete */}
-                      <td style={{ padding: '4px 8px' }}>
-                        <button onClick={() => setLines(prev => prev.filter(r => r.key !== l.key))}
-                          style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 14, padding: '0 4px' }}
-                          title="Remove line">×</button>
-                      </td>
+                  {parseResult.preview.slice(0, 10).map((r, i) => (
+                    <tr key={i} style={{ borderBottom: bd }}>
+                      <td style={{ padding: '6px 8px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col }}>{r.line_number}</td>
+                      <td style={{ padding: '6px 8px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{r.wbs_code ?? '—'}</td>
+                      <td style={{ padding: '6px 8px', fontSize: 12, color: col, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.description}</td>
+                      <td style={{ padding: '6px 8px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col }}>{r.quantity ?? '—'}</td>
+                      <td style={{ padding: '6px 8px', fontSize: 11, color: sub }}>{r.uom ?? '—'}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              {parseResult.linesValid > 10 && (
+                <div style={{ fontSize: 12, color: sub, padding: '6px 8px', fontFamily: 'IBM Plex Sans, sans-serif' }}>
+                  …and {parseResult.linesValid - 10} more lines
+                </div>
+              )}
             </div>
-
-            <button onClick={() => setLines(prev => [...prev, newRow()])}
-              style={{ background: 'transparent', border: bd, color: '#2563eb', padding: '5px 14px', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontFamily: 'IBM Plex Sans, sans-serif', marginBottom: 16 }}>
-              + Add line
-            </button>
 
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <button onClick={() => setStep(2)} style={{ background: 'transparent', border: bd, color: sub, padding: '7px 16px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontFamily: 'IBM Plex Sans, sans-serif' }}>← Back</button>
-              <button
-                onClick={handleCreate}
-                disabled={!canCreate || saving}
-                style={{ background: '#15803d', color: '#fff', border: 'none', padding: '7px 18px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'IBM Plex Sans, sans-serif', opacity: (!canCreate || saving) ? 0.5 : 1 }}>
-                {saving ? 'Creating…' : '✓ Create MTO'}
-              </button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={onClose} style={{ background: 'transparent', border: bd, color: sub, padding: '7px 16px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontFamily: 'IBM Plex Sans, sans-serif' }}>Cancel</button>
+                <button
+                  onClick={handleCreate}
+                  disabled={parseResult.hasErrors || creating}
+                  style={{ background: parseResult.hasErrors ? '#94a3b8' : '#15803d', color: '#fff', border: 'none', padding: '7px 18px', borderRadius: 6, cursor: (parseResult.hasErrors || creating) ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'IBM Plex Sans, sans-serif', opacity: (parseResult.hasErrors || creating) ? 0.6 : 1 }}>
+                  {creating ? 'Creating…' : createBtnLabel}
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -392,10 +747,11 @@ const MTOListInner = ({
   onViewMTO: (id: number) => void
 }) => {
   const { addToast } = useToast()
-  const [mtos,       setMtos]       = useState<MTORegister[]>([])
-  const [loading,    setLoading]    = useState(true)
-  const [showNew,    setShowNew]    = useState(false)
-  const [wbsNodes,   setWbsNodes]   = useState<WBSNode[]>([])
+  const [mtos,          setMtos]          = useState<MTORegister[]>([])
+  const [loading,       setLoading]       = useState(true)
+  const [showNew,       setShowNew]       = useState(false)
+  const [showUploadMTO, setShowUploadMTO] = useState(false)
+  const [wbsNodes,      setWbsNodes]      = useState<WBSNode[]>([])
 
   const col  = dark ? '#f1f5f9' : '#0f172a'
   const sub  = dark ? '#94a3b8' : '#64748b'
@@ -424,6 +780,17 @@ const MTOListInner = ({
       .catch(() => {})
   }, [projectId])
 
+  // ─── TEMPLATE DOWNLOAD ────────────────────────────────────────────────────
+  const downloadTemplate = async () => {
+    try {
+      const res = await axios.get(`${API}/mto/${projectId}/template`, { responseType: 'blob' })
+      const url = window.URL.createObjectURL(new Blob([res.data]))
+      const a = document.createElement('a')
+      a.href = url; a.download = 'QCO_MTO_Template.xlsx'; a.click()
+      window.URL.revokeObjectURL(url)
+    } catch { addToast('error', 'Template download failed') }
+  }
+
   const thStyle: React.CSSProperties = {
     padding: '10px 14px', textAlign: 'left', fontSize: 11,
     fontWeight: 700, color: sub, fontFamily: 'IBM Plex Sans, sans-serif',
@@ -450,6 +817,8 @@ const MTOListInner = ({
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <HelpButton screenName="MTO Register" sections={MTO_REGISTER_HELP} dark={dark} />
+          <button onClick={downloadTemplate} style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>↓ Template</button>
+          <button onClick={() => setShowUploadMTO(true)} style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'IBM Plex Sans, sans-serif' }}>↑ Upload MTO</button>
           <button
             onClick={() => setShowNew(true)}
             style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: 7, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
@@ -528,6 +897,17 @@ const MTOListInner = ({
           wbsNodes={wbsNodes}
           onClose={() => setShowNew(false)}
           onCreated={mto => { setShowNew(false); load(); onViewMTO(mto.id) }}
+        />
+      )}
+
+      {showUploadMTO && (
+        <UploadNewMTOModal
+          dark={dark}
+          projectId={projectId}
+          onClose={() => setShowUploadMTO(false)}
+          load={load}
+          downloadTemplate={downloadTemplate}
+          addToast={addToast}
         />
       )}
 

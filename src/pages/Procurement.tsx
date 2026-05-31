@@ -753,20 +753,20 @@ const NewPOWizard = ({ dark, projectId, suppliers, uoms, users, wbsNodes, onClos
   const updateLine = (i: number, field: keyof POLine, val: string | number | null) =>
     setLines(p => p.map((l, idx) => idx === i ? { ...l, [field]: val } : l))
 
-  const validateStep1 = () => {
-    if (!poNumber.trim()) return 'PO number is required'
-    if (!vendorName.trim() && !supplierId) return 'Vendor or supplier is required'
-    return ''
-  }
-
   const next = () => {
     if (step === 1) {
-      // ─── BUG-5: validate base fields then WBS + Incoterms ─────────────────
-      const e = validateStep1(); if (e) { setErr(e); return }
-      let ok = true
-      if (!wbsCode.trim()) { setWbsErr('WBS is required'); ok = false } else setWbsErr('')
-      if (!incoterms.trim()) { setIncoErr('Incoterms is required'); ok = false } else setIncoErr('')
-      if (!ok) return
+      // ─── BUG-5: per-field validation errors for Step 1 ────────────────────
+      const errors: Record<string,string> = {}
+      if (!poNumber.trim()) errors.poNumber = 'PO number is required'
+      if (!wbsCode?.trim()) errors.wbs = 'WBS is required'
+      if (!incoterms?.trim()) errors.incoterms = 'Incoterms is required'
+      if (!supplierId && !vendorName.trim()) errors.vendor = 'Vendor is required'
+      if (!wbsCode?.trim()) setWbsErr('WBS is required'); else setWbsErr('')
+      if (!incoterms?.trim()) setIncoErr('Incoterms is required'); else setIncoErr('')
+      if (Object.keys(errors).length > 0) {
+        if (errors.poNumber || errors.vendor) setErr(errors.poNumber || errors.vendor)
+        return
+      }
     }
     setErr(''); setStep(s => s + 1)
   }
@@ -855,7 +855,9 @@ const NewPOWizard = ({ dark, projectId, suppliers, uoms, users, wbsNodes, onClos
                 {suppliers.map(s => <option key={s.id} value={s.id}>{s.code} · {s.name}</option>)}
               </select>
             </Field>
-            <Field label="Vendor (if no supplier)" half><input value={vendorName} onChange={e => { setVendorName(e.target.value); setSupplierId('') }} placeholder="Free-text vendor" style={inp(dark)} disabled={!!supplierId} /></Field>
+            <Field label="Vendor (if no supplier)" half>
+              <input value={vendorName} onChange={e => { setVendorName(e.target.value); setSupplierId(''); if (e.target.value || supplierId) setErr('') }} placeholder="Free-text vendor" style={inp(dark)} disabled={!!supplierId} />
+            </Field>
           </div>
           <div style={{ display: 'flex', gap: 12 }}>
             {/* Item 4: expanded group/category with "Other (specify)" option */}
