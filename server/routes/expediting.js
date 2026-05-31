@@ -545,7 +545,7 @@ router.post('/:projectId/vdrl/documents', async (req, res) => {
        VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
       [package_id, doc_number || null, title.trim(), doc_type || null,
        discipline || null, revision || 'R0', required_date || null, promised_date || null,
-       status || 'not_submitted', notes || null, req.user.id]
+       status || 'Not submitted', notes || null, req.user.id]
     )
     const [[doc]] = await db.query('SELECT * FROM vdrl_documents WHERE id=?', [r.insertId])
     res.status(201).json(doc)
@@ -699,6 +699,243 @@ router.post('/:projectId/scn', async (req, res) => {
     console.error('[scn:create]', e.message)
     res.status(500).json({ error: e.message })
   }
+})
+
+// ─── VDRL PO LIST ─────────────────────────────────────────────
+// Returns locked POs that have VDRL packages, with doc counts and progress.
+router.get('/:projectId/vdrl/po-list', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const [rows] = await db.query(`
+      SELECT
+        po.id, po.po_number, po.po_name, po.vendor_name,
+        COUNT(DISTINCT pkg.id) AS package_count,
+        COUNT(d.id) AS total_docs,
+        SUM(CASE WHEN d.status IN ('approved','submitted') THEN 1 ELSE 0 END) AS submitted_count,
+        SUM(CASE WHEN d.required_date IS NOT NULL AND d.required_date < CURDATE()
+                  AND d.status NOT IN ('approved','submitted') THEN 1 ELSE 0 END) AS overdue_count
+      FROM purchase_orders po
+      JOIN vdrl_packages pkg ON pkg.po_id = po.id AND pkg.project_id = ?
+      LEFT JOIN vdrl_documents d ON d.package_id = pkg.id
+      WHERE po.project_id = ? AND po.is_locked = 1
+      GROUP BY po.id
+      ORDER BY po.po_number
+    `, [pid, pid])
+    res.json(rows)
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
+})
+
+// ─── VDRL TEMPLATE DOWNLOAD ───────────────────────────────────
+// Generates and streams a formatted .xlsx upload template.
+router.get('/:projectId/vdrl/template', async (req, res) => {
+  try {
+    const ExcelJS = require('exceljs')
+    const wb = new ExcelJS.Workbook()
+    wb.creator = 'QCO MMS'
+
+    // Sheet 1: VDRL Documents
+    const ws = wb.addWorksheet('VDRL Documents', { views: [{ state: 'frozen', ySplit: 2 }] })
+    ws.columns = [
+      { key: 'po_reference',    width: 18 }, { key: 'package_name',   width: 30 },
+      { key: 'doc_number',      width: 18 }, { key: 'document_title', width: 40 },
+      { key: 'document_type',   width: 18 }, { key: 'revision',       width: 10 },
+      { key: 'required_date',   width: 20 }, { key: 'promised_date',  width: 20 },
+      { key: 'abf_required',    width: 15 }, { key: 'discipline',     width: 20 },
+      { key: 'owner',           width: 20 }, { key: 'notes',          width: 40 },
+    ]
+
+    // Row 1: orange title banner
+    ws.mergeCells('A1:L1')
+    const titleCell = ws.getCell('A1')
+    titleCell.value = 'QCO MMS — VDRL Document Upload Template'
+    titleCell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 14, name: 'Calibri' }
+    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE84E0F' } }
+    titleCell.alignment = { vertical: 'middle', horizontal: 'center' }
+    ws.getRow(1).height = 28
+
+    // Row 2: column headers (dark blue bg)
+    const headers = ['PO Reference','Package Name','Doc Number','Document Title','Document Type','Revision','Required Date (dd/mm/yyyy)','Promised Date (dd/mm/yyyy)','ABF Required (Y/N)','Discipline','Owner','Notes']
+    const hRow = ws.getRow(2)
+    headers.forEach((h, i) => {
+      const c = hRow.getCell(i + 1)
+      c.value = h
+      c.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10, name: 'Calibri' }
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1e3a5f' } }
+      c.alignment = { vertical: 'middle', horizontal: 'left' }
+      c.border = { bottom: { style: 'thin', color: { argb: 'FF334155' } } }
+    })
+    hRow.height = 20
+
+    // Helper: grey italic style for example rows
+    function exStyle(cell) {
+      cell.font = { italic: true, color: { argb: 'FF94a3b8' }, size: 10, name: 'Calibri' }
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8F8F8' } }
+    }
+
+    // Rows 3-5: example rows
+    const examples = [
+      ['PO-2024-001','Control Valve VDRL Package','CV-MDRA-001','Mechanical Data Book','Data Book','R0','30/06/2025','15/06/2025','Y','Instrumentation','J. Smith','Required before shipment'],
+      ['PO-2024-001','Control Valve VDRL Package','CV-DWG-001','GA Drawing','Drawing','R1','15/07/2025','01/07/2025','N','Mechanical','',''],
+      ['PO-2024-002','Structural Steel VDRL Package','SS-CERT-001','Mill Test Reports','Certificate','R0','14/06/2025','','Y','Structural','',''],
+    ]
+    examples.forEach((ex, i) => {
+      const row = ws.getRow(3 + i)
+      ex.forEach((val, j) => { const c = row.getCell(j + 1); c.value = val; exStyle(c) })
+      row.height = 18
+    })
+
+    // Rows 6-25: blank data rows with validation
+    for (let r = 6; r <= 25; r++) ws.getRow(r).height = 18
+    ws.dataValidations.add('E6:E25', { type: 'list', allowBlank: true, formulae: ['"Data Book,Drawing,Procedure,Certificate,Calculation,Report,Manual,Schedule,ITP,Other"'], showErrorMessage: true, errorTitle: 'Invalid Type', error: 'Select from the list' })
+    ws.dataValidations.add('I6:I25', { type: 'list', allowBlank: true, formulae: ['"Y,N"'], showErrorMessage: true, errorTitle: 'Invalid', error: 'Enter Y or N' })
+
+    // Sheet 2: Instructions
+    const ws2 = wb.addWorksheet('Instructions')
+    ws2.getColumn(1).width = 80
+    const instrLines = [
+      ['QCO MMS — VDRL Template Instructions', true, 'FFE84E0F', 13],
+      ['', false, null, 10],
+      ['HOW TO USE', true, 'FF1e3a5f', 11],
+      ['1. Do not change column headers in row 2.', false, null, 10],
+      ['2. Delete the 3 grey example rows (rows 3-5) before uploading.', false, null, 10],
+      ['3. PO Reference must match an existing approved PO in the system.', false, null, 10],
+      ['4. Package Name: if a package exists for that PO, docs are added to it; otherwise a new package is created.', false, null, 10],
+      ['5. Doc Number must be unique per package.', false, null, 10],
+      ['6. Required Date / Promised Date format: dd/mm/yyyy (e.g. 30/06/2025).', false, null, 10],
+      ['7. ABF Required: Y = document must be AFC before construction proceeds; N = not an ABF gate document.', false, null, 10],
+      ['8. Save as .xlsx before uploading.', false, null, 10],
+    ]
+    instrLines.forEach(([text, bold, color, size], i) => {
+      const c = ws2.getCell(i + 1, 1)
+      c.value = text
+      c.font = { bold, size, name: 'Calibri', color: color ? { argb: color } : { argb: 'FF0f172a' } }
+      c.alignment = { wrapText: true }
+    })
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    res.setHeader('Content-Disposition', 'attachment; filename="QCO_VDRL_Template.xlsx"')
+    await wb.xlsx.write(res)
+    res.end()
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
+})
+
+// ─── VDRL UPLOAD ──────────────────────────────────────────────
+// Parses an uploaded .xlsx file and imports VDRL documents.
+// Supports ?dryRun=true for preview without writing to DB.
+const uploadVDRL = require('multer')({
+  storage: require('multer').memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.originalname.endsWith('.xlsx')) cb(null, true)
+    else cb(new Error('Only .xlsx files'))
+  },
+})
+
+router.post('/:projectId/vdrl/upload', uploadVDRL.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file provided' })
+  const pid = Number(req.params.projectId)
+  const dryRun = req.query.dryRun === 'true'
+
+  try {
+    const XLSX_LIB = require('xlsx')
+    const wb = XLSX_LIB.read(req.file.buffer, { type: 'buffer', cellDates: true })
+    const sheetName = wb.SheetNames.includes('VDRL Documents') ? 'VDRL Documents' : wb.SheetNames[0]
+    const ws = wb.Sheets[sheetName]
+    const rawRows = XLSX_LIB.utils.sheet_to_json(ws, { defval: null })
+
+    function norm(k) { return k.trim().toLowerCase().replace(/\s+/g, '_') }
+
+    const results = []
+    let created = 0, skipped = 0
+
+    for (const [idx, rawRow] of rawRows.entries()) {
+      const row = {}
+      for (const [k, v] of Object.entries(rawRow)) row[norm(k)] = v
+
+      const rowNum = idx + 3 // offset for header rows
+      const poRef  = String(row.po_reference || '').trim()
+      const pkgName = String(row.package_name || row.package || '').trim()
+      const docNum = String(row.doc_number || '').trim()
+      const title  = String(row.document_title || row.title || '').trim()
+      const docType = String(row.document_type || '').trim()
+
+      // Skip example rows
+      if (['CV-MDRA-001', 'CV-DWG-001', 'SS-CERT-001'].includes(docNum)) {
+        results.push({ row: rowNum, status: 'skip', message: 'Example row skipped', poRef, docNum })
+        skipped++; continue
+      }
+
+      // Skip blank rows
+      if (!poRef && !docNum && !title) { skipped++; continue }
+
+      // Validate PO reference
+      if (!poRef) { results.push({ row: rowNum, status: 'error', message: 'PO Reference is required', poRef, docNum }); continue }
+      const [[po]] = await db.query(
+        'SELECT id, po_name, vendor_name FROM purchase_orders WHERE po_number=? AND project_id=? AND is_locked=1',
+        [poRef, pid]
+      )
+      if (!po) { results.push({ row: rowNum, status: 'error', message: `PO ${poRef} not found or not approved`, poRef, docNum }); continue }
+
+      if (!title) { results.push({ row: rowNum, status: 'error', message: 'Document Title is required', poRef, docNum }); continue }
+
+      if (!dryRun) {
+        // Lookup or create package for this PO
+        const finalPkgName = pkgName || `${po.po_name || poRef} VDRL Package`
+        let [[pkg]] = await db.query('SELECT id FROM vdrl_packages WHERE po_id=? AND project_id=?', [po.id, pid])
+        if (!pkg) {
+          const [r] = await db.query(
+            'INSERT INTO vdrl_packages (project_id, po_id, name, status, created_by) VALUES (?,?,?,?,?)',
+            [pid, po.id, finalPkgName, 'active', req.user.id]
+          )
+          pkg = { id: r.insertId }
+        }
+
+        // Check for duplicate doc_number within this package
+        if (docNum) {
+          const [[dup]] = await db.query('SELECT id FROM vdrl_documents WHERE package_id=? AND doc_number=?', [pkg.id, docNum])
+          if (dup) {
+            results.push({ row: rowNum, status: 'skip', message: `Doc number ${docNum} already exists in this package`, poRef, docNum })
+            skipped++; continue
+          }
+        }
+
+        // Parse dd/mm/yyyy or ISO dates
+        const parseDate = (v) => {
+          if (!v) return null
+          if (v instanceof Date) return v.toISOString().slice(0, 10)
+          const s = String(v).trim()
+          if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) { const [d, m, y] = s.split('/'); return `${y}-${m}-${d}` }
+          const p = new Date(s); return isNaN(p.getTime()) ? null : p.toISOString().slice(0, 10)
+        }
+        const abfReq = ['y', 'yes', '1'].includes(String(row.abf_required || '').toLowerCase()) ? 1 : 0
+
+        await db.query(
+          `INSERT INTO vdrl_documents
+            (package_id, doc_number, title, doc_type, discipline, revision,
+             required_date, promised_date, status, abf_required, notes, created_by)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [pkg.id, docNum || null, title, docType || null,
+           row.discipline || null, row.revision || 'R0',
+           parseDate(row.required_date), parseDate(row.promised_date),
+           'Not submitted', abfReq, row.notes || null, req.user.id]
+        )
+        created++
+      }
+
+      results.push({ row: rowNum, status: 'ok', message: 'Ready to import', poRef, docNum, title, docType })
+    }
+
+    const hasErrors = results.some(r => r.status === 'error')
+    res.json({
+      total: rawRows.length,
+      created: dryRun ? 0 : created,
+      skipped,
+      errors: results.filter(r => r.status === 'error'),
+      preview: results.slice(0, 15),
+      hasErrors,
+      dryRun,
+    })
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
 })
 
 // ─── HEAT NUMBER ──────────────────────────────────────────────
