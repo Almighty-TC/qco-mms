@@ -1438,7 +1438,15 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
   const expandAll = () => { const all = new Set(nodes.map(n => n.id)); setExpanded(all) }
   const collapseAll = () => { setExpanded(new Set()) }
 
-  const downloadTemplate = () => window.open(`${API}/foundational/${projectId}/wbs/template`, '_blank')
+  const downloadTemplate = async () => {
+    // Blob download — never window.open (would open in tab not download)
+    try {
+      const res = await axios.get(`${API}/foundational/${projectId}/wbs/template`, { responseType: 'blob' })
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+      const a = document.createElement('a'); a.href = url; a.download = 'WBS_Upload_Template.xlsx'
+      document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url)
+    } catch { showToast('❌ Template download failed') }
+  }
 
   // ── Tooltip handlers ─────────────────────────────────────────
   const handleRowEnter = (node: WBSNode, e: React.MouseEvent) => {

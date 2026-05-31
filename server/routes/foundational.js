@@ -587,7 +587,7 @@ router.get('/:projectId/wbs/:nodeId/readiness', async (req, res) => {
     // Uses contract_delivery_date (not the deprecated cdd alias) for RAG.
     const today = node.ros_date ? node.ros_date : new Date().toISOString().slice(0, 10)
     const [posRows] = await db.query(
-      `SELECT po_number, supplier_name, status, contract_delivery_date AS cdd, ros_date,
+      `SELECT po_number, vendor_name AS supplier_name, status, contract_delivery_date AS cdd, ros_date,
         CASE
           WHEN ros_date IS NOT NULL AND ros_date < ? THEN 'red'
           WHEN contract_delivery_date IS NOT NULL AND contract_delivery_date < ? THEN 'red'
