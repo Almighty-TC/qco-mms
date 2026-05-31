@@ -848,3 +848,87 @@ When conflicts exist, the Upload button is **disabled**. You must either:
 2. Raise a Variation Request through Procurement for the locked line
 
 **Duplicate revision protection:** If you attempt to upload a revision letter that already exists (e.g. Rev C when Rev C already exists), the system returns an error: "Revision C already exists — upload a new revision letter." The Upload Rev button in the header always shows the next available letter.
+
+---
+
+## Module 6 — Expediting
+
+The Expediting module tracks all locked (approved) POs through a 5-milestone chain from PO Award through to ROS/ETA. Each PO has a RAG (Red / Amber / Blue / Complete) status computed from milestone forecast dates.
+
+### 6.1 Accessing Expediting
+
+Click **Expediting** in the left sidebar. The module is project-scoped — you must have a project selected on the Dashboard first.
+
+Only POs with `is_locked = 1` (approved) appear in the Expediting Register.
+
+### 6.2 Expediting Register
+
+The register table shows:
+- **RAG stripe** — coloured left edge: Red = Breached, Amber = At Risk, Blue = On Track, Green = Complete
+- **PO Ref** — PO number in monospace; ★ if Critical Path
+- **Vendor / Group** — supplier name and commodity group
+- **Material** — PO description
+- **Owner / Expeditor** — assigned team members
+- **Milestones** — 5-dot visual timeline; hover for details
+- **ROS** — Required On Site date
+- **Status** — PO workflow status pill
+
+**Filtering:** Use the search bar, RAG filter pills, Critical Only toggle, or ROS date range to narrow the list. Sub-tabs (All / Ongoing / Complete) further segment the view.
+
+**Navigating to a PO:** Click any row or the **View →** button to open the full PO Detail screen.
+
+### 6.3 Milestone RAG Logic
+
+| Milestone Status | Trigger |
+|---|---|
+| Complete | `actual_date` is set |
+| Breached | `forecast_date` is in the past, no `actual_date` |
+| At Risk | `forecast_date` is within 14 days |
+| In Progress | `forecast_date` is set and > 14 days away |
+| Not Started | No `forecast_date` set |
+
+**PO RAG** rolls up from milestones: any Breached = Red; any At Risk = Amber; all Complete = Complete; otherwise Blue (on track).
+
+### 6.4 PO Detail Screen
+
+Click a PO row to open its full detail screen. The sticky header shows the breadcrumb and a Help button. The PO header card always shows:
+- PO reference, name, RAG pill, Critical Path star
+- 2×4 meta grid: Vendor, Group, Owner, Expeditor, PO Award date, CDD, ROS, Incoterms
+- 5 key date boxes: PO AWARD, FAT, ESD, ETA, ROS
+- Milestone timeline with dot labels and dates
+
+#### Tabs
+
+| Tab | Content |
+|---|---|
+| Line Items & SCNs | Expandable PO lines with qty, heat numbers, child items |
+| Milestones | 5 milestone cards with PLANNED / FORECAST / ACTUAL dates + edit |
+| ITP | Inspection & Test Plan items |
+| VDRL | Vendor Document Requirements List |
+| Action Notes | Free-text notes thread + Post Note |
+| Audit Trail | All forecast/actual date changes with reason |
+
+### 6.5 Updating Forecast Dates
+
+1. Open a PO and go to the **Milestones** tab.
+2. Click the **✎** pencil icon next to **FORECAST**.
+3. Enter the new forecast date and a mandatory reason.
+4. Click **Save**. The change is recorded in the Audit Trail.
+
+> ⚠ Setting a forecast date in the past immediately marks the milestone as Breached (red).
+
+### 6.6 Recording Actual Dates
+
+Use the same process — click ✎ next to **ACTUAL** on any milestone. A reason is required.
+
+### 6.7 Child Items
+
+Expand a PO line, then click **+ Add** in the Child Items section. Enter description, qty, UOM, and optional notes. Child items represent partial deliveries, sub-assemblies or inspection lots tracked under a parent line.
+
+### 6.8 Action Notes
+
+Go to the **Action Notes** tab, type a note in the text area, and click **Post Note**. Notes are timestamped and attributed to the current user. Use them to record vendor calls, inspection outcomes, or expediting actions taken.
+
+### 6.9 VDRL Documents
+
+The **VDRL** tab shows the vendor document requirements package for the PO. Statuses: Approved, Under review, Overdue, Not submitted, Resubmit. Required By dates are shown for overdue documents.

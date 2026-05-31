@@ -13,6 +13,7 @@ import { FoundWBSScreen } from './pages/FoundWBSScreen'
 import { FoundCommodityScreen } from './pages/FoundCommodityScreen'
 import { FoundEquipmentScreen } from './pages/FoundEquipmentScreen'
 import { ExpeditingScreen } from './pages/ExpeditingScreen'
+import { ExpPODetailScreen } from './pages/ExpPODetailScreen'
 import { MTOListScreen } from './pages/MTOListScreen'
 import { MTODetailScreen } from './pages/MTODetailScreen'
 import { ForcePasswordChange } from './components/ForcePasswordChange'
@@ -24,7 +25,7 @@ import './App.css'
 // 'admin' enforces role === 'admin'; 'procurement' is project-scoped.
 // ─── ROUTING — state-based, no router library ─────────────────────────────────
 // 'po-detail' is Phase 3 PO Detail Screen — full dedicated screen.
-type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'mto-list' | 'mto-detail'
+type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail'
 
 // ─── PROJECT TYPE ───────────────────────────────────────────
 // Mirrors the API response shape. Snake_case DB columns (total_pos, at_risk)
@@ -693,8 +694,9 @@ function App() {
   const [selectedProjectName, setSelectedProjectName] = useState<string>('')
   // ─── PO Detail Screen (Phase 3) ─────────────────────────────────────────
   // selectedPOId tracks which PO the user navigated to in Phase 3.
-  const [selectedPOId,  setSelectedPOId]  = useState<number | null>(null)
-  const [selectedMTOId, setSelectedMTOId] = useState<number | null>(null)
+  const [selectedPOId,    setSelectedPOId]    = useState<number | null>(null)
+  const [selectedMTOId,   setSelectedMTOId]   = useState<number | null>(null)
+  const [selectedExpPOId, setSelectedExpPOId] = useState<number | null>(null)
   const [showChangePw,  setShowChangePw]  = useState(false)
   const [showProfile,   setShowProfile]   = useState(false)
 
@@ -865,6 +867,7 @@ function App() {
               : page === 'foundational-commodities' ? `Foundational · Commodity Library · ${selectedProjectName}`
               : page === 'foundational-equipment' ? `Foundational · Equipment List · ${selectedProjectName}`
               : page === 'expediting' ? `Expediting · ${selectedProjectName}`
+              : page === 'expediting-po-detail' ? `Expediting PO Detail · ${selectedProjectName}`
               : page === 'mto-list'   ? `MTO Register · ${selectedProjectName}`
               : page === 'mto-detail' ? `MTO Detail · ${selectedProjectName}`
               : 'Dashboard'}
@@ -1116,7 +1119,16 @@ function App() {
               Old /vdrl route maps to this screen with view=vdrl. */}
           {page === 'expediting' && selectedProjectId && (
             <ExpeditingScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
-              onBack={() => setPage('dashboard')} />
+              onBack={() => setPage('dashboard')}
+              onNavigateToPODetail={(poId: number) => { setSelectedExpPOId(poId); setPage('expediting-po-detail') }} />
+          )}
+
+          {/* ─── EXPEDITING PO DETAIL ──────────────────────────
+              Full dedicated screen for a single expediting PO. */}
+          {page === 'expediting-po-detail' && selectedProjectId && selectedExpPOId && (
+            <ExpPODetailScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
+              poId={selectedExpPOId}
+              onBack={() => setPage('expediting')} />
           )}
 
           {/* ─── MTO REGISTER ────────────────────────────────────

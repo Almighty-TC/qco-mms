@@ -523,6 +523,49 @@ export const MTO_REGISTER_HELP: HelpSection[] = [
 // ─── MTO DETAIL HELP ─────────────────────────────────────────
 export const MTO_DETAIL_HELP: HelpSection[] = MTO_REGISTER_HELP
 
+// ─── EXPEDITING PO DETAIL HELP ───────────────────────────────
+// Help sections for the ExpPODetailScreen dedicated screen.
+export const EXPEDITING_PO_DETAIL_HELP: HelpSection[] = [
+  {
+    title: 'PO Header',
+    content: <>
+      {P(<>The PO header shows key metadata — vendor, owner, RAG status and the milestone timeline summary at a glance. The 5 key date boxes show the scheduled dates for each major milestone.</>)}
+    </>,
+  },
+  {
+    title: 'Line Items & SCNs',
+    content: <>
+      {P(<>Each PO line can be expanded to view quantities, child items and heat number fields. Lines with <strong>heat_number_required</strong> show an editable heat number input.</>)}
+      {Tip('Click the line header to expand / collapse. Add child items using the + Add button.')}
+    </>,
+  },
+  {
+    title: 'Milestones tab',
+    content: <>
+      {P(<>Edit forecast dates by clicking the pencil icon next to <strong>FORECAST</strong>. A reason is mandatory. Click <strong>Changed N×</strong> to see the full change history for that milestone.</>)}
+      {Warning('A forecast date in the past will immediately show as Breached (red).')}
+    </>,
+  },
+  {
+    title: 'VDRL tab',
+    content: <>
+      {P(<>The VDRL tab shows all vendor documents required for this PO. Statuses: <strong>Approved</strong>, <strong>Under review</strong>, <strong>Overdue</strong>, <strong>Not submitted</strong>, <strong>Resubmit</strong>.</>)}
+    </>,
+  },
+  {
+    title: 'Action Notes',
+    content: <>
+      {P(<>Post free-text action notes against the PO. Notes are visible to all team members and are timestamped. Use them to record vendor calls, inspection results, or expediting actions taken.</>)}
+    </>,
+  },
+  {
+    title: 'Audit Trail',
+    content: <>
+      {P(<>The Audit Trail tab shows every forecast or actual date change recorded — who made it, when, what changed and why.</>)}
+    </>,
+  },
+]
+
 // ─── EXPEDITING HELP ─────────────────────────────────────────
 // Help sections shown in the Expediting Register screen.
 export const EXPEDITING_HELP: HelpSection[] = [
