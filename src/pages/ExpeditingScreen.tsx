@@ -8,6 +8,8 @@ import { BackButton } from '../components/BackButton'
 import { HelpButton } from '../components/HelpDrawer'
 import { MilestoneTimeline } from '../components/MilestoneTimeline'
 import { EXPEDITING_HELP } from '../helpContent'
+import { ExpPODrawer } from '../components/ExpPODrawer'
+import { CreateSCNWizard } from '../components/CreateSCNWizard'
 
 const API = 'http://localhost:3001/api'
 
@@ -299,6 +301,12 @@ export const ExpeditingScreen = ({ dark, projectId, projectName, onBack, onNavig
   const [actionLog, setActionLog] = useState<any[]>([])
   const [logLoading, setLogLoading] = useState(false)
 
+  // ─── DRAWER + WIZARD STATE ────────────────────────────────
+  // drawerPoId: ID of PO open in the 400px slide-in drawer.
+  // scnWizardState: PO + optional pre-selected line for SCN wizard.
+  const [drawerPoId, setDrawerPoId] = useState<number | null>(null)
+  const [scnWizardState, setSCNWizardState] = useState<{ poId: number; lineId?: number } | null>(null)
+
   const col     = dark ? '#f1f5f9' : '#0f172a'
   const bg      = dark ? '#0f172a' : '#f4f7fb'
   const cardBg  = dark ? '#1e293b' : '#fff'
@@ -501,7 +509,7 @@ export const ExpeditingScreen = ({ dark, projectId, projectName, onBack, onNavig
                     return (
                       <tr key={po.id}
                         style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, cursor: 'pointer', opacity: po.rag === 'complete' ? 0.65 : 1 }}
-                        onClick={() => onNavigateToPODetail(po.id)}
+                        onClick={() => setDrawerPoId(po.id)}
                       >
                         {/* BUG-3 FIX: ★ star column */}
                         <td style={{ padding: '10px 6px', width: 28, textAlign: 'center' }}
@@ -516,8 +524,9 @@ export const ExpeditingScreen = ({ dark, projectId, projectName, onBack, onNavig
                           <div style={{ width: 3, height: 32, borderRadius: 2, background: RAG_COLORS[po.rag] || '#94a3b8' }} />
                         </td>
                         {/* PO Ref */}
-                        <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
-                          <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: '#E84E0F', fontWeight: 600 }}>
+                        <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}
+                            onClick={e => { e.stopPropagation(); onNavigateToPODetail(po.id) }}>
+                          <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: '#E84E0F', fontWeight: 600, cursor: 'pointer' }}>
                             {po.po_number}
                           </div>
                           {po.po_name && <div style={{ fontSize: 11, color: sub }}>{po.po_name}</div>}
@@ -550,10 +559,10 @@ export const ExpeditingScreen = ({ dark, projectId, projectName, onBack, onNavig
                             {ragPill.label}
                           </span>
                         </td>
-                        {/* Navigate */}
+                        {/* Navigate — opens drawer; PO ref cell navigates to full screen */}
                         <td style={{ padding: '10px 12px' }}>
                           <button
-                            onClick={e => { e.stopPropagation(); onNavigateToPODetail(po.id) }}
+                            onClick={e => { e.stopPropagation(); setDrawerPoId(po.id) }}
                             style={{ fontSize: 11, padding: '4px 10px', borderRadius: 5, border: bd, background: 'transparent', color: col, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                             View →
                           </button>
@@ -709,6 +718,27 @@ export const ExpeditingScreen = ({ dark, projectId, projectName, onBack, onNavig
             </div>
           ))}
         </div>
+      )}
+
+      {/* ── PO DRAWER ── */}
+      <ExpPODrawer
+        poId={drawerPoId}
+        projectId={projectId}
+        dark={dark}
+        onClose={() => setDrawerPoId(null)}
+        onOpenFullScreen={(id) => { setDrawerPoId(null); onNavigateToPODetail(id) }}
+        onCreateSCN={(poId, lineId) => { setDrawerPoId(null); setSCNWizardState({ poId, lineId }) }}
+      />
+
+      {/* ── CREATE SCN WIZARD ── */}
+      {scnWizardState && (
+        <CreateSCNWizard
+          poId={scnWizardState.poId}
+          projectId={projectId}
+          preSelectedLineId={scnWizardState.lineId}
+          onClose={() => setSCNWizardState(null)}
+          onCreated={(_scn) => { setSCNWizardState(null) }}
+        />
       )}
     </div>
   )

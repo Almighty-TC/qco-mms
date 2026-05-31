@@ -180,7 +180,9 @@ router.get('/:projectId/po/:poId', async (req, res) => {
 
     // ─── LINES ────────────────────────────────────────────────
     const [lines] = await db.query(
-      `SELECT l.*, cm.name AS commodity_name, cm.trace_level
+      `SELECT l.*, cm.name AS commodity_name, cm.trace_level,
+        COALESCE(l.qty_assigned, 0) AS qty_assigned,
+        GREATEST(0, COALESCE(l.qty, 0) - COALESCE(l.qty_assigned, 0)) AS qty_available
        FROM po_lines l
        LEFT JOIN commodity_library cm ON cm.id = l.commodity_id
        WHERE l.po_id=? ORDER BY l.line_number`,
@@ -633,6 +635,70 @@ router.get('/:projectId/po/:poId/audit', async (req, res) => {
 
     res.json(combined)
   } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── WAREHOUSES ───────────────────────────────────────────────
+// Returns all warehouses for use in the SCN wizard destination selector.
+router.get('/:projectId/warehouses', async (req, res) => {
+  try {
+    const [rows] = await db.query('SELECT id, name, code, type, location, manager, phone FROM warehouses ORDER BY name')
+    res.json(rows)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── CREATE SCN ───────────────────────────────────────────────
+// Creates a Shipment Control Note, updates qty_assigned on selected lines,
+// and inserts any additional items not on the PO.
+router.post('/:projectId/scn', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const {
+      po_id, selected_lines = [], additional_items = [],
+      pickup_location, destination_warehouse_id, grid_bay,
+      cdd, etd, eta, transport_mode, forwarder_name, incoterms,
+      packages = [], notify_forwarder,
+    } = req.body
+
+    if (!po_id) return res.status(400).json({ error: 'po_id required' })
+
+    // Generate SCN ref
+    const [[{ n }]] = await db.query('SELECT COUNT(*) AS n FROM shipment_control_notes')
+    const scnRef = `SCN-${new Date().getFullYear()}-${String(n + 1).padStart(4, '0')}`
+
+    // Insert SCN
+    const [r] = await db.query(
+      `INSERT INTO shipment_control_notes
+        (scn_ref, po_id, project_id, origin_location, destination_warehouse_id,
+         etd, eta, mode, forwarder_name, incoterms, status, notes, created_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,'draft',?,?)`,
+      [scnRef, po_id, pid, pickup_location || null, destination_warehouse_id || null,
+       etd || null, eta || null, transport_mode || null, forwarder_name || null,
+       incoterms || null, null, req.user.id]
+    )
+    const scnId = r.insertId
+
+    // Update po_lines qty_assigned for each selected line
+    for (const { po_line_id, qty_allocated } of selected_lines) {
+      await db.query(
+        'UPDATE po_lines SET qty_assigned = COALESCE(qty_assigned,0) + ? WHERE id = ? AND po_id = ?',
+        [Number(qty_allocated) || 0, po_line_id, po_id]
+      )
+    }
+
+    // Insert additional items (not on PO)
+    for (const item of additional_items) {
+      if (!item.description?.trim()) continue
+      await db.query(
+        'INSERT INTO scn_additional_items (scn_id, description, qty, uom, created_by) VALUES (?,?,?,?,?)',
+        [scnId, item.description.trim(), item.qty || null, item.uom || 'EA', req.user.id]
+      )
+    }
+
+    res.status(201).json({ id: scnId, scn_ref: scnRef, status: 'draft' })
+  } catch (e) {
+    console.error('[scn:create]', e.message)
+    res.status(500).json({ error: e.message })
+  }
 })
 
 // ─── HEAT NUMBER ──────────────────────────────────────────────

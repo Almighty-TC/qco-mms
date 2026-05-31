@@ -7,6 +7,7 @@ import { BackButton } from '../components/BackButton'
 import { HelpButton } from '../components/HelpDrawer'
 import { MilestoneTimeline } from '../components/MilestoneTimeline'
 import { EXPEDITING_HELP } from '../helpContent'
+import { CreateSCNWizard } from '../components/CreateSCNWizard'
 
 const API = 'http://localhost:3001/api'
 
@@ -128,6 +129,11 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
   // Audit log
   const [auditLog, setAuditLog] = useState<any[]>([])
   const [auditFilter, setAuditFilter] = useState<'all'|'milestone_forecast'|'note_added'>('all')
+
+  // ─── SCN WIZARD ───────────────────────────────────────────
+  // showSCNWizard: toggles the Create SCN wizard modal.
+  const [showSCNWizard, setShowSCNWizard] = useState(false)
+  const [scnPreLineId, setScnPreLineId] = useState<number | undefined>(undefined)
 
   const col    = dark ? '#f1f5f9' : '#0f172a'
   const bg     = dark ? '#0f172a' : '#f4f7fb'
@@ -277,6 +283,16 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
         <span style={{ color: sub, fontSize: 12 }}>›</span>
         <span style={{ color: col, fontWeight: 600, fontSize: 12, fontFamily: 'JetBrains Mono, monospace' }}>{po.po_number}</span>
         <div style={{ flex: 1 }} />
+        <button
+          onClick={() => { setScnPreLineId(undefined); setShowSCNWizard(true) }}
+          style={{
+            padding: '7px 16px', borderRadius: 6, border: 'none',
+            background: '#2563eb', color: '#fff',
+            fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+          }}
+        >
+          + Create SCN
+        </button>
         <HelpButton screenName="Expediting PO Detail" sections={EXPEDITING_HELP} dark={dark} />
       </div>
 
@@ -788,6 +804,17 @@ export const ExpPODetailScreen = ({ dark, projectId, projectName, poId, onBack }
 
         </div>
       </div>
+
+      {/* ── CREATE SCN WIZARD ── */}
+      {showSCNWizard && (
+        <CreateSCNWizard
+          poId={po.id}
+          projectId={projectId}
+          preSelectedLineId={scnPreLineId}
+          onClose={() => setShowSCNWizard(false)}
+          onCreated={() => { setShowSCNWizard(false); fetchPO() }}
+        />
+      )}
     </div>
   )
 }
