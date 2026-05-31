@@ -9,16 +9,25 @@ router.get('/', async (req, res) => {
   try {
     const [rows] = await db.query(`
       SELECT
-        id,
-        code,
-        name,
-        rag,
-        phase,
-        total_pos  AS totalPOs,
-        at_risk    AS atRisk,
-        breached
-      FROM projects
-      ORDER BY created_at DESC
+        p.id,
+        p.code,
+        p.name,
+        p.rag,
+        p.phase,
+        (SELECT COUNT(*) FROM purchase_orders po WHERE po.project_id = p.id) AS totalPOs,
+        (SELECT COUNT(*) FROM purchase_orders po
+         WHERE po.project_id = p.id
+           AND po.contract_delivery_date IS NOT NULL
+           AND po.contract_delivery_date < CURDATE()
+           AND po.status NOT IN ('complete','cancelled','closed')) AS breached,
+        (SELECT COUNT(*) FROM purchase_orders po
+         WHERE po.project_id = p.id
+           AND po.contract_delivery_date IS NOT NULL
+           AND po.contract_delivery_date >= CURDATE()
+           AND po.contract_delivery_date < DATE_ADD(CURDATE(), INTERVAL 30 DAY)
+           AND po.status NOT IN ('complete','cancelled','closed')) AS atRisk
+      FROM projects p
+      ORDER BY p.created_at DESC
     `);
     res.json(rows);
   } catch (err) {

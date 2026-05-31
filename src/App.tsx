@@ -731,13 +731,28 @@ function App() {
         breached: p.breached ?? 0,
       }))
       setProjects(normalised)
+      // ─── RESTORE LAST SELECTED PROJECT ──────────────────────
+      // On first load, restore the last-selected project from localStorage
+      // so the user lands directly in the right project context.
+      if (!selectedProjectId) {
+        try {
+          const stored = localStorage.getItem('qmat_last_project')
+          if (stored) {
+            const { id, name } = JSON.parse(stored)
+            if (id && normalised.some(p => p.id === id)) {
+              setSelectedProjectId(id)
+              setSelectedProjectName(name)
+            }
+          }
+        } catch { /* ignore malformed stored value */ }
+      }
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: string } }; message?: string }
       setError(e.response?.data?.error ?? e.message ?? 'Unable to load projects')
     } finally {
       setLoading(false)
     }
-  }, [token])
+  }, [token]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetchProjects() }, [fetchProjects])
 
@@ -979,7 +994,7 @@ function App() {
             <DashboardHome
               projects={projects} loading={loading} error={error} dark={dark}
               containerRef={containerRef} startResize={startResize}
-              onSelectProject={p => { setSelectedProjectId(p.id); setSelectedProjectName(p.name); setPage('procurement') }}
+              onSelectProject={p => { setSelectedProjectId(p.id); setSelectedProjectName(p.name); localStorage.setItem('qmat_last_project', JSON.stringify({ id: p.id, name: p.name })); setPage('procurement') }}
             />
           )}
           {page === 'admin' && (
@@ -1028,7 +1043,7 @@ function App() {
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
                       {projects.map(p => (
-                        <button key={p.id} onClick={() => { setSelectedProjectId(p.id); setSelectedProjectName(p.name) }}
+                        <button key={p.id} onClick={() => { setSelectedProjectId(p.id); setSelectedProjectName(p.name); localStorage.setItem('qmat_last_project', JSON.stringify({ id: p.id, name: p.name })) }}
                           style={{
                             padding: '14px 18px', borderRadius: 8, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`,
                             background: dark ? '#1e293b' : '#fff', cursor: 'pointer', textAlign: 'left',

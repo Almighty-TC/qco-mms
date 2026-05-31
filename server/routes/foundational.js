@@ -574,23 +574,30 @@ router.get('/:projectId/wbs/:nodeId/readiness', async (req, res) => {
     )
     if (!node) return res.status(404).json({ error: 'Node not found' })
 
-    // Committed materials (sum po_lines.qty where wbs_code_snapshot = node.code)
+    // ─── COMMITTED MATERIALS ─────────────────────────────────────────────────────
+    // Sum po_lines.qty where wbs_code_snapshot matches this node OR any child (prefix).
     const [[matRow]] = await db.query(
       `SELECT COALESCE(SUM(l.qty), 0) AS committed
        FROM po_lines l JOIN purchase_orders p ON p.id = l.po_id
-       WHERE p.project_id=? AND l.wbs_code_snapshot=?`,
-      [pid, node.code]
+       WHERE p.project_id=? AND (l.wbs_code_snapshot=? OR l.wbs_code_snapshot LIKE ?)`,
+      [pid, node.code, `${node.code}.%`]
     )
 
-    // POs linked to this WBS node
+    // ─── POs LINKED TO THIS WBS NODE (exact + children prefix match) ─────────
+    // Uses contract_delivery_date (not the deprecated cdd alias) for RAG.
     const today = node.ros_date ? node.ros_date : new Date().toISOString().slice(0, 10)
     const [posRows] = await db.query(
-      `SELECT po_number, supplier_name, status, cdd, ros_date,
-        CASE WHEN cdd IS NOT NULL AND cdd < ? THEN 'red'
-             WHEN cdd IS NOT NULL AND cdd < DATE_ADD(?, INTERVAL 30 DAY) THEN 'amber'
-             ELSE 'green' END AS rag
-       FROM purchase_orders WHERE project_id=? AND wbs_code=?`,
-      [today, today, pid, node.code]
+      `SELECT po_number, supplier_name, status, contract_delivery_date AS cdd, ros_date,
+        CASE
+          WHEN ros_date IS NOT NULL AND ros_date < ? THEN 'red'
+          WHEN contract_delivery_date IS NOT NULL AND contract_delivery_date < ? THEN 'red'
+          WHEN contract_delivery_date IS NOT NULL AND contract_delivery_date < DATE_ADD(?, INTERVAL 30 DAY) THEN 'amber'
+          ELSE 'green'
+        END AS rag
+       FROM purchase_orders
+       WHERE project_id=? AND (wbs_code=? OR wbs_code LIKE ?)
+       ORDER BY contract_delivery_date ASC`,
+      [today, today, today, pid, node.code, `${node.code}.%`]
     )
 
     res.json({
@@ -903,6 +910,120 @@ router.get('/:projectId/certificates/:id/download', async (req, res) => {
 })
 
 // ═══════════════════════════════════════════════════════════════
+// COMMODITY VALIDATE + IMPORT
+// ═══════════════════════════════════════════════════════════════
+
+// POST /api/foundational/:projectId/commodities/validate — validate upload before import
+const uploadCommodity = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } })
+router.post('/:projectId/commodities/validate', uploadCommodity.single('file'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    if (!req.file) return res.status(400).json({ error: 'No file provided' })
+    const wb   = XLSX.read(req.file.buffer, { type: 'buffer' })
+    const ws   = wb.Sheets[wb.SheetNames[0]]
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+    if (rows.length < 2) return res.status(400).json({ error: 'File appears empty' })
+
+    // Normalise header names
+    const headers = rows[0].map(h => String(h).toLowerCase().trim())
+    const col = name => headers.findIndex(h => h === name)
+    const codeIdx = col('commodity code')
+    const wbsIdx  = col('wbs code')
+    const nameIdx = col('name/description') >= 0 ? col('name/description') : col('description')
+
+    const dataRows = rows.slice(1).filter(r => r.some(c => c !== ''))
+
+    // Fetch existing codes + valid WBS codes for this project
+    const [existingRows] = await db.query('SELECT code FROM commodity_library WHERE project_id=?', [pid])
+    const existingCodes = new Set(existingRows.map(r => r.code.toLowerCase()))
+    const [wbsRows] = await db.query('SELECT code FROM wbs_nodes WHERE project_id=?', [pid])
+    const validWbs = new Set(wbsRows.map(r => r.code))
+
+    const seenInFile = {}
+    const results = []
+
+    for (let i = 0; i < dataRows.length; i++) {
+      const r    = dataRows[i]
+      const code = codeIdx >= 0 ? String(r[codeIdx] || '').trim() : ''
+      const name = nameIdx >= 0 ? String(r[nameIdx] || '').trim() : ''
+      const wbs  = wbsIdx  >= 0 ? String(r[wbsIdx]  || '').trim() : ''
+      const rowNum = i + 2
+
+      const errors = []; const warnings = []
+
+      if (!code) errors.push('Missing commodity code')
+      if (!name) errors.push('Missing name/description')
+      if (code && seenInFile[code.toLowerCase()]) errors.push(`Duplicate code "${code}" within this file`)
+      if (code) {
+        seenInFile[code.toLowerCase()] = true
+        if (existingCodes.has(code.toLowerCase())) warnings.push(`Code "${code}" already exists in project (will update)`)
+      }
+      if (wbs && !validWbs.has(wbs)) warnings.push(`WBS code "${wbs}" not found in project`)
+
+      results.push({
+        row: rowNum, code, name: name.slice(0, 60), wbs,
+        status: errors.length > 0 ? 'error' : warnings.length > 0 ? 'warning' : 'ok',
+        errors, warnings,
+      })
+    }
+
+    const readyCount   = results.filter(r => r.status === 'ok').length
+    const warningCount = results.filter(r => r.status === 'warning').length
+    const errorCount   = results.filter(r => r.status === 'error').length
+    res.json({ results, summary: { total: results.length, ready: readyCount, warnings: warningCount, errors: errorCount } })
+  } catch (e) {
+    console.error('[commodities:validate]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// POST /api/foundational/:projectId/commodities/import — import validated file
+router.post('/:projectId/commodities/import', uploadCommodity.single('file'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    if (!req.file) return res.status(400).json({ error: 'No file provided' })
+    const wb   = XLSX.read(req.file.buffer, { type: 'buffer' })
+    const ws   = wb.Sheets[wb.SheetNames[0]]
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+    const headers = rows[0].map(h => String(h).toLowerCase().trim())
+    const col = name => headers.findIndex(h => h === name)
+    const codeIdx = col('commodity code')
+    const wbsIdx  = col('wbs code')
+    const nameIdx = col('name/description') >= 0 ? col('name/description') : col('description')
+    const uomIdx  = col('unit of measure')
+
+    // Resolve WBS node IDs
+    const [wbsRows] = await db.query('SELECT id, code FROM wbs_nodes WHERE project_id=?', [pid])
+    const wbsMap = {}
+    for (const w of wbsRows) wbsMap[w.code] = w.id
+
+    const dataRows = rows.slice(1).filter(r => r.some(c => c !== ''))
+    let imported = 0, skipped = 0
+
+    for (const r of dataRows) {
+      const code = codeIdx >= 0 ? String(r[codeIdx] || '').trim() : ''
+      const name = nameIdx >= 0 ? String(r[nameIdx] || '').trim() : ''
+      const wbs  = wbsIdx  >= 0 ? String(r[wbsIdx]  || '').trim() : ''
+      const uom  = uomIdx  >= 0 ? String(r[uomIdx]  || '').trim() : 'EA'
+      if (!code || !name) { skipped++; continue }
+      const wbsNodeId = wbs && wbsMap[wbs] ? wbsMap[wbs] : null
+      await db.query(
+        `INSERT INTO commodity_library (project_id, code, name, uom, wbs_code, wbs_node_id, created_by)
+         VALUES (?,?,?,?,?,?,?)
+         ON DUPLICATE KEY UPDATE name=VALUES(name), uom=VALUES(uom), wbs_code=VALUES(wbs_code), wbs_node_id=VALUES(wbs_node_id)`,
+        [pid, code, name, uom || 'EA', wbs || null, wbsNodeId, req.user.id]
+      )
+      imported++
+    }
+    audit(req, 'commodities_imported', `projects/${pid}`, {}, { imported, skipped })
+    res.json({ ok: true, imported, skipped })
+  } catch (e) {
+    console.error('[commodities:import]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
 // COMMODITY TEMPLATE DOWNLOAD
 // ═══════════════════════════════════════════════════════════════
 
@@ -945,6 +1066,132 @@ router.get('/:projectId/commodities/template', async (req, res) => {
     res.send(buf)
   } catch (e) {
     console.error('[commodities:template]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+// EQUIPMENT VALIDATE + IMPORT
+// ═══════════════════════════════════════════════════════════════
+
+// POST /api/foundational/:projectId/equipment/validate — validate upload before import
+const uploadEquipment = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } })
+router.post('/:projectId/equipment/validate', uploadEquipment.single('file'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    if (!req.file) return res.status(400).json({ error: 'No file provided' })
+    const wb   = XLSX.read(req.file.buffer, { type: 'buffer' })
+    const ws   = wb.Sheets[wb.SheetNames[0]]
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+    if (rows.length < 2) return res.status(400).json({ error: 'File appears empty' })
+
+    const headers = rows[0].map(h => String(h).toLowerCase().trim())
+    const col = name => headers.findIndex(h => h === name)
+    const tagIdx  = col('equipment tag')
+    const descIdx = col('description')
+    const wbsIdx  = col('wbs code')
+
+    const dataRows = rows.slice(1).filter(r => r.some(c => c !== ''))
+
+    const [existingRows] = await db.query('SELECT tag FROM equipment_list WHERE project_id=?', [pid])
+    const existingTags = new Set(existingRows.map(r => r.tag.toLowerCase()))
+    const [wbsRows] = await db.query('SELECT code FROM wbs_nodes WHERE project_id=?', [pid])
+    const validWbs = new Set(wbsRows.map(r => r.code))
+
+    const seenInFile = {}
+    const results = []
+
+    for (let i = 0; i < dataRows.length; i++) {
+      const r    = dataRows[i]
+      const tag  = tagIdx  >= 0 ? String(r[tagIdx]  || '').trim() : ''
+      const desc = descIdx >= 0 ? String(r[descIdx] || '').trim() : ''
+      const wbs  = wbsIdx  >= 0 ? String(r[wbsIdx]  || '').trim() : ''
+      const rowNum = i + 2
+
+      const errors = []; const warnings = []
+
+      if (!tag)  errors.push('Missing equipment tag')
+      if (!desc) errors.push('Missing description')
+      if (tag && seenInFile[tag.toLowerCase()]) errors.push(`Duplicate tag "${tag}" within this file`)
+      if (tag) {
+        seenInFile[tag.toLowerCase()] = true
+        if (existingTags.has(tag.toLowerCase())) warnings.push(`Tag "${tag}" already exists in project (will update)`)
+      }
+      if (wbs && !validWbs.has(wbs)) warnings.push(`WBS code "${wbs}" not found in project`)
+
+      results.push({
+        row: rowNum, tag, description: desc.slice(0, 60), wbs,
+        status: errors.length > 0 ? 'error' : warnings.length > 0 ? 'warning' : 'ok',
+        errors, warnings,
+      })
+    }
+
+    const readyCount   = results.filter(r => r.status === 'ok').length
+    const warningCount = results.filter(r => r.status === 'warning').length
+    const errorCount   = results.filter(r => r.status === 'error').length
+    res.json({ results, summary: { total: results.length, ready: readyCount, warnings: warningCount, errors: errorCount } })
+  } catch (e) {
+    console.error('[equipment:validate]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// POST /api/foundational/:projectId/equipment/import — import validated file
+router.post('/:projectId/equipment/import', uploadEquipment.single('file'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    if (!req.file) return res.status(400).json({ error: 'No file provided' })
+    const wb   = XLSX.read(req.file.buffer, { type: 'buffer' })
+    const ws   = wb.Sheets[wb.SheetNames[0]]
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+    const headers = rows[0].map(h => String(h).toLowerCase().trim())
+    const col = name => headers.findIndex(h => h === name)
+    const tagIdx   = col('equipment tag')
+    const typeIdx  = col('equipment type')
+    const wbsIdx   = col('wbs code')
+    const descIdx  = col('description')
+    const areaIdx  = col('area/location')
+    const critIdx  = col('criticality')
+    const poIdx    = col('po reference')
+    const vendIdx  = col('vendor')
+    const wtIdx    = col('weight (kg)')
+    const sizeIdx  = col('overall size (lxwxh)')
+    const notesIdx = col('notes')
+
+    const [wbsRows] = await db.query('SELECT id, code FROM wbs_nodes WHERE project_id=?', [pid])
+    const wbsMap = {}
+    for (const w of wbsRows) wbsMap[w.code] = w.id
+
+    const dataRows = rows.slice(1).filter(r => r.some(c => c !== ''))
+    let imported = 0, skipped = 0
+
+    for (const r of dataRows) {
+      const tag  = tagIdx  >= 0 ? String(r[tagIdx]  || '').trim() : ''
+      const desc = descIdx >= 0 ? String(r[descIdx] || '').trim() : ''
+      const wbs  = wbsIdx  >= 0 ? String(r[wbsIdx]  || '').trim() : ''
+      if (!tag || !desc) { skipped++; continue }
+      const wbsNodeId = wbs && wbsMap[wbs] ? wbsMap[wbs] : null
+      const equipType = typeIdx >= 0 ? String(r[typeIdx] || '').trim() || 'Vessel' : 'Vessel'
+      await db.query(
+        `INSERT INTO equipment_list (project_id, tag, equipment_type, wbs_code, wbs_node_id, description, area_location, criticality, po_reference, vendor, weight_kg, size_lwh, notes, created_by)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         ON DUPLICATE KEY UPDATE description=VALUES(description), equipment_type=VALUES(equipment_type), wbs_code=VALUES(wbs_code), wbs_node_id=VALUES(wbs_node_id)`,
+        [pid, tag, equipType, wbs || null, wbsNodeId, desc,
+         areaIdx  >= 0 ? (String(r[areaIdx]  || '').trim() || null) : null,
+         critIdx  >= 0 ? (String(r[critIdx]  || '').trim() || 'C-Standard') : 'C-Standard',
+         poIdx    >= 0 ? (String(r[poIdx]    || '').trim() || null) : null,
+         vendIdx  >= 0 ? (String(r[vendIdx]  || '').trim() || null) : null,
+         wtIdx    >= 0 ? (Number(r[wtIdx]) || null) : null,
+         sizeIdx  >= 0 ? (String(r[sizeIdx] || '').trim() || null) : null,
+         notesIdx >= 0 ? (String(r[notesIdx]|| '').trim() || null) : null,
+         req.user.id]
+      )
+      imported++
+    }
+    audit(req, 'equipment_imported', `projects/${pid}`, {}, { imported, skipped })
+    res.json({ ok: true, imported, skipped })
+  } catch (e) {
+    console.error('[equipment:import]', e.message)
     res.status(500).json({ error: e.message })
   }
 })
