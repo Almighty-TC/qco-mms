@@ -644,3 +644,52 @@ Each template includes an **Instructions** sheet and 3 example rows.
 ---
 
 *QCO MMS User Manual — © QCO Group 2026. For support contact your system administrator.*
+
+---
+
+## 13. Admin — Currency and Package Types
+
+### 13.1 Currency
+
+**Admin → Currency tab**
+
+Manage the currencies available for selection when creating Purchase Orders.
+
+**Table columns:** Code · Name · Symbol · Status · Actions
+
+**Adding a currency:**
+1. Click **+ Add currency**
+2. Enter **Currency Code** (e.g. AUD, USD — auto-uppercased, max 10 chars)
+3. Enter **Name** (e.g. Australian Dollar)
+4. Enter **Symbol** (e.g. $, €, £)
+5. Toggle **Active** to control visibility in PO creation dropdowns
+6. Click **✓ Save**
+
+**Editing:** Click **Edit** on any row to update name, symbol or active status. Code cannot be changed after creation.
+
+**Deactivating:** Click **Deactivate** to hide a currency from PO creation dropdowns while keeping historical PO data intact.
+
+**Deleting:** Click **Delete** — blocked with an error if the currency is used on any existing Purchase Order.
+
+### 13.2 Package Types
+
+**Admin → Package Types tab**
+
+Manage the package types available in Shipment Control Notes (SCNs) when defining packages.
+
+Example types: Crate (timber), Pallet, Drum, Bundle, Skid.
+
+**Table columns:** Name · Description · Status · Actions
+
+**Adding a package type:**
+1. Click **+ Add package type**
+2. Enter **Name** (required, must be unique)
+3. Enter **Description** (optional — e.g. "Timber framed crate")
+4. Toggle **Active** to control visibility in SCN package selection
+5. Click **✓ Save**
+
+**Editing:** Click **Edit** to update name, description or active status.
+
+**Deactivating:** Click **Deactivate** to hide from SCN dropdowns while keeping historical data.
+
+**Deleting:** Click **Delete** — blocked if the type is referenced on any existing SCN item.

@@ -1538,4 +1538,122 @@ router.delete('/inco-terms/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
+// ═══════════════════════════════════════════════════════════════
+// CURRENCIES
+// ═══════════════════════════════════════════════════════════════
+
+router.get('/currencies', async (req, res) => {
+  try {
+    const [rows] = await db.query('SELECT * FROM currencies ORDER BY code')
+    res.json(rows)
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+router.post('/currencies', async (req, res) => {
+  try {
+    const { code, name, symbol, is_active = 1 } = req.body
+    if (!code?.trim()) return res.status(400).json({ error: 'Currency code is required' })
+    if (!name?.trim()) return res.status(400).json({ error: 'Currency name is required' })
+    if (!symbol?.trim()) return res.status(400).json({ error: 'Currency symbol is required' })
+    const upperCode = code.trim().toUpperCase()
+    const [[dup]] = await db.query('SELECT id FROM currencies WHERE code=?', [upperCode])
+    if (dup) return res.status(409).json({ error: `Currency code ${upperCode} already exists` })
+    const [r] = await db.query('INSERT INTO currencies (code, name, symbol, is_active) VALUES (?,?,?,?)',
+      [upperCode, name.trim(), symbol.trim(), is_active ? 1 : 0])
+    const [[created]] = await db.query('SELECT * FROM currencies WHERE id=?', [r.insertId])
+    res.status(201).json(created)
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+router.put('/currencies/:id', async (req, res) => {
+  try {
+    const { name, symbol, is_active } = req.body
+    if (!name?.trim()) return res.status(400).json({ error: 'Name is required' })
+    if (!symbol?.trim()) return res.status(400).json({ error: 'Symbol is required' })
+    await db.query('UPDATE currencies SET name=?, symbol=?, is_active=?, updated_at=NOW() WHERE id=?',
+      [name.trim(), symbol.trim(), is_active ? 1 : 0, req.params.id])
+    const [[updated]] = await db.query('SELECT * FROM currencies WHERE id=?', [req.params.id])
+    res.json(updated)
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+router.patch('/currencies/:id/status', async (req, res) => {
+  try {
+    const { is_active } = req.body
+    await db.query('UPDATE currencies SET is_active=?, updated_at=NOW() WHERE id=?', [is_active ? 1 : 0, req.params.id])
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+router.delete('/currencies/:id', async (req, res) => {
+  try {
+    const [[curr]] = await db.query('SELECT code FROM currencies WHERE id=?', [req.params.id])
+    if (!curr) return res.status(404).json({ error: 'Currency not found' })
+    const [[inUse]] = await db.query('SELECT COUNT(*) AS n FROM purchase_orders WHERE currency=?', [curr.code])
+    if (inUse.n > 0) return res.status(409).json({ error: `Cannot delete — currency ${curr.code} is used on ${inUse.n} purchase order(s)` })
+    await db.query('DELETE FROM currencies WHERE id=?', [req.params.id])
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ═══════════════════════════════════════════════════════════════
+// PACKAGE TYPES
+// ═══════════════════════════════════════════════════════════════
+
+router.get('/package-types', async (req, res) => {
+  try {
+    const [rows] = await db.query('SELECT * FROM package_types ORDER BY name')
+    res.json(rows)
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+router.post('/package-types', async (req, res) => {
+  try {
+    const { name, description, is_active = 1 } = req.body
+    if (!name?.trim()) return res.status(400).json({ error: 'Package type name is required' })
+    const [[dup]] = await db.query('SELECT id FROM package_types WHERE name=?', [name.trim()])
+    if (dup) return res.status(409).json({ error: `Package type "${name.trim()}" already exists` })
+    const [r] = await db.query('INSERT INTO package_types (name, description, is_active) VALUES (?,?,?)',
+      [name.trim(), description?.trim() || null, is_active ? 1 : 0])
+    const [[created]] = await db.query('SELECT * FROM package_types WHERE id=?', [r.insertId])
+    res.status(201).json(created)
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+router.put('/package-types/:id', async (req, res) => {
+  try {
+    const { name, description, is_active } = req.body
+    if (!name?.trim()) return res.status(400).json({ error: 'Name is required' })
+    // Check duplicate name (excluding self)
+    const [[dup]] = await db.query('SELECT id FROM package_types WHERE name=? AND id!=?', [name.trim(), req.params.id])
+    if (dup) return res.status(409).json({ error: `Package type "${name.trim()}" already exists` })
+    await db.query('UPDATE package_types SET name=?, description=?, is_active=?, updated_at=NOW() WHERE id=?',
+      [name.trim(), description?.trim() || null, is_active ? 1 : 0, req.params.id])
+    const [[updated]] = await db.query('SELECT * FROM package_types WHERE id=?', [req.params.id])
+    res.json(updated)
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+router.patch('/package-types/:id/status', async (req, res) => {
+  try {
+    const { is_active } = req.body
+    await db.query('UPDATE package_types SET is_active=?, updated_at=NOW() WHERE id=?', [is_active ? 1 : 0, req.params.id])
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+router.delete('/package-types/:id', async (req, res) => {
+  try {
+    const [[pt]] = await db.query('SELECT name FROM package_types WHERE id=?', [req.params.id])
+    if (!pt) return res.status(404).json({ error: 'Package type not found' })
+    // Check if in use on any SCN (scn_additional_items or shipment_control_notes)
+    const [[inUse]] = await db.query(
+      'SELECT COUNT(*) AS n FROM scn_additional_items WHERE package_type=?', [pt.name]
+    ).catch(() => [[{ n: 0 }]])
+    if (inUse.n > 0) return res.status(409).json({ error: `Cannot delete — "${pt.name}" is used on ${inUse.n} SCN item(s)` })
+    await db.query('DELETE FROM package_types WHERE id=?', [req.params.id])
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
 module.exports = router

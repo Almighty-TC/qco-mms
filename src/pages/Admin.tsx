@@ -3330,13 +3330,340 @@ function IncoTermsTab({ dark }: { dark: boolean }) {
 // ═══════════════════════════════════════════════════════════
 // ─── ADMIN ──────────────────────────────────────────────────
 // Root admin page. Tab bar routes to the sub-sections.
+// ─── CURRENCY TAB ────────────────────────────────────────────
+interface Currency { id: number; code: string; name: string; symbol: string; is_active: number }
+const CURR_COLS: AdminCol[] = [
+  { label: 'Code',   width: 90,  minWidth: 70 },
+  { label: 'Name',   width: 220, minWidth: 150 },
+  { label: 'Symbol', width: 70,  minWidth: 60 },
+  { label: 'Status', width: 110, minWidth: 90 },
+  { label: 'Actions',width: 180, minWidth: 150, noResize: true },
+]
+
+function CurrenciesTab({ dark }: { dark: boolean }) {
+  const { addToast } = useToast()
+  const [rows,      setRows]      = useState<Currency[]>([])
+  const [loading,   setLoading]   = useState(true)
+  const [error,     setError]     = useState('')
+  const [showForm,  setShowForm]  = useState(false)
+  const [editId,    setEditId]    = useState<number | null>(null)
+  const [form,      setForm]      = useState({ code: '', name: '', symbol: '', is_active: 1 })
+  const [formErr,   setFormErr]   = useState('')
+  const [saving,    setSaving]    = useState(false)
+  const [delTarget, setDelTarget] = useState<Currency | null>(null)
+  const [delSaving, setDelSaving] = useState(false)
+  const [delErr,    setDelErr]    = useState('')
+
+  const load = useCallback(async () => {
+    setLoading(true); setError('')
+    try { const { data } = await axios.get(`${API}/currencies`); setRows(data) }
+    catch { setError('Failed to load currencies') }
+    finally { setLoading(false) }
+  }, [])
+  useEffect(() => { load() }, [load])
+
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const bd  = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+
+  const openAdd  = () => { setForm({ code: '', name: '', symbol: '', is_active: 1 }); setEditId(null); setFormErr(''); setShowForm(true) }
+  const openEdit = (c: Currency) => { setForm({ code: c.code, name: c.name, symbol: c.symbol, is_active: c.is_active }); setEditId(c.id); setFormErr(''); setShowForm(true) }
+
+  const save = async () => {
+    if (!form.code.trim()) { setFormErr('Code is required'); return }
+    if (!form.name.trim()) { setFormErr('Name is required'); return }
+    if (!form.symbol.trim()) { setFormErr('Symbol is required'); return }
+    setSaving(true); setFormErr('')
+    try {
+      editId != null
+        ? await axios.put(`${API}/currencies/${editId}`, form)
+        : await axios.post(`${API}/currencies`, form)
+      setShowForm(false); load()
+      addToast('success', `Currency ${form.code} saved`)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      const msg = err.response?.data?.error ?? 'Save failed'
+      setFormErr(msg); addToast('error', msg)
+    } finally { setSaving(false) }
+  }
+
+  const toggleActive = async (c: Currency) => {
+    try {
+      await axios.patch(`${API}/currencies/${c.id}/status`, { is_active: c.is_active ? 0 : 1 })
+      load(); addToast('success', `${c.code} ${c.is_active ? 'deactivated' : 'activated'}`)
+    } catch { addToast('error', 'Status update failed') }
+  }
+
+  const doDelete = async () => {
+    if (!delTarget) return
+    setDelSaving(true); setDelErr('')
+    try {
+      await axios.delete(`${API}/currencies/${delTarget.id}`)
+      setDelTarget(null); load(); addToast('success', `Currency ${delTarget.code} deleted`)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setDelErr(err.response?.data?.error ?? 'Delete failed')
+    } finally { setDelSaving(false) }
+  }
+
+  const inp: React.CSSProperties = { height: 36, padding: '0 10px', borderRadius: 6, width: '100%', border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }
+
+  return (
+    <div className="admin-tab-content">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: col }}>Currency</h3>
+          <p style={{ margin: '4px 0 0', fontSize: 13, color: '#94a3b8' }}>{rows.length} currencies configured</p>
+        </div>
+        <button onClick={openAdd} style={{ padding: '7px 16px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>+ Add currency</button>
+      </div>
+      {error && <div style={{ padding: '10px 14px', background: 'rgba(239,68,68,0.08)', borderRadius: 6, color: '#ef4444', fontSize: 13, marginBottom: 12 }}>{error}</div>}
+      <AdminTable tableId="admin_currencies" columns={CURR_COLS} dark={dark} empty="No currencies found.">
+        {rows.map(c => (
+          <AdminRow key={c.id} dark={dark}>
+            <AdminCell col={CURR_COLS[0]}><span style={{ fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: col }}>{c.code}</span></AdminCell>
+            <AdminCell col={CURR_COLS[1]}><span style={{ color: col }}>{c.name}</span></AdminCell>
+            <AdminCell col={CURR_COLS[2]}><span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#64748b' }}>{c.symbol}</span></AdminCell>
+            <AdminCell col={CURR_COLS[3]}>
+              <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 9999, background: c.is_active ? 'rgba(34,197,94,0.12)' : 'rgba(148,163,184,0.15)', color: c.is_active ? '#15803d' : '#64748b' }}>
+                {c.is_active ? 'Active' : 'Inactive'}
+              </span>
+            </AdminCell>
+            <AdminCell col={CURR_COLS[4]}>
+              <AdminActions>
+                <button onClick={() => openEdit(c)} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 5, border: bd, background: 'none', color: '#64748b', cursor: 'pointer', fontFamily: 'inherit' }}>Edit</button>
+                <button onClick={() => toggleActive(c)} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 5, border: bd, background: 'none', color: c.is_active ? '#b45309' : '#15803d', cursor: 'pointer', fontFamily: 'inherit' }}>
+                  {c.is_active ? 'Deactivate' : 'Activate'}
+                </button>
+                <button onClick={() => { setDelTarget(c); setDelErr('') }} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.3)', background: 'none', color: '#ef4444', cursor: 'pointer', fontFamily: 'inherit' }}>Delete</button>
+              </AdminActions>
+            </AdminCell>
+          </AdminRow>
+        ))}
+      </AdminTable>
+
+      {/* Add/Edit Modal */}
+      {showForm && createPortal(
+        <div onClick={() => setShowForm(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: dark ? '#1e293b' : '#fff', borderRadius: 10, padding: 28, width: 420, boxShadow: '0 16px 48px rgba(0,0,0,0.4)', fontFamily: 'IBM Plex Sans, sans-serif', border: bd }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: col, marginBottom: 20 }}>{editId ? 'Edit Currency' : 'Add Currency'}</div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 5 }}>Currency Code *</label>
+              <input value={form.code} onChange={e => setForm(p=>({...p, code: e.target.value.toUpperCase().slice(0,10)}))} disabled={!!editId} placeholder="e.g. AUD" style={{ ...inp, opacity: editId ? 0.6 : 1, fontFamily: 'JetBrains Mono, monospace' }} />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 5 }}>Name *</label>
+              <input value={form.name} onChange={e => setForm(p=>({...p, name: e.target.value}))} placeholder="e.g. Australian Dollar" style={inp} />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 5 }}>Symbol *</label>
+              <input value={form.symbol} onChange={e => setForm(p=>({...p, symbol: e.target.value.slice(0,5)}))} placeholder="e.g. $" style={{ ...inp, width: 80 }} />
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 20, fontSize: 13, color: col }}>
+              <input type="checkbox" checked={!!form.is_active} onChange={e => setForm(p=>({...p, is_active: e.target.checked ? 1 : 0}))} style={{ accentColor: '#2563eb' }} />
+              Active (shown in PO creation dropdowns)
+            </label>
+            {formErr && <div style={{ marginBottom: 12, fontSize: 12, color: '#ef4444', background: 'rgba(239,68,68,0.08)', borderRadius: 6, padding: '6px 10px' }}>{formErr}</div>}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button onClick={() => setShowForm(false)} style={{ padding: '7px 14px', borderRadius: 6, border: bd, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+              <button onClick={save} disabled={saving} style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', opacity: saving ? 0.7 : 1 }}>
+                {saving ? 'Saving…' : '✓ Save'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Delete Confirm Modal */}
+      {delTarget && createPortal(
+        <div onClick={() => setDelTarget(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: dark ? '#1e293b' : '#fff', borderRadius: 10, padding: 28, width: 400, boxShadow: '0 16px 48px rgba(0,0,0,0.4)', fontFamily: 'IBM Plex Sans, sans-serif', border: '1px solid rgba(239,68,68,0.3)' }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#ef4444', marginBottom: 12 }}>Delete Currency</div>
+            <div style={{ fontSize: 13, color: col, marginBottom: 16 }}>
+              Delete <strong style={{ fontFamily: 'JetBrains Mono, monospace' }}>{delTarget.code}</strong> ({delTarget.name})?
+              This cannot be undone.
+            </div>
+            {delErr && <div style={{ marginBottom: 12, fontSize: 12, color: '#ef4444', background: 'rgba(239,68,68,0.08)', borderRadius: 6, padding: '6px 10px' }}>{delErr}</div>}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button onClick={() => setDelTarget(null)} style={{ padding: '7px 14px', borderRadius: 6, border: bd, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+              <button onClick={doDelete} disabled={delSaving} style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: '#ef4444', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', opacity: delSaving ? 0.7 : 1 }}>
+                {delSaving ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+    </div>
+  )
+}
+
+// ─── PACKAGE TYPES TAB ───────────────────────────────────────
+interface PackageType { id: number; name: string; description: string | null; is_active: number }
+const PT_COLS: AdminCol[] = [
+  { label: 'Name',        width: 200, minWidth: 140 },
+  { label: 'Description', width: 280, minWidth: 150 },
+  { label: 'Status',      width: 110, minWidth: 90  },
+  { label: 'Actions',     width: 180, minWidth: 150, noResize: true },
+]
+
+function PackageTypesTab({ dark }: { dark: boolean }) {
+  const { addToast } = useToast()
+  const [rows,      setRows]      = useState<PackageType[]>([])
+  const [loading,   setLoading]   = useState(true)
+  const [error,     setError]     = useState('')
+  const [showForm,  setShowForm]  = useState(false)
+  const [editId,    setEditId]    = useState<number | null>(null)
+  const [form,      setForm]      = useState({ name: '', description: '', is_active: 1 })
+  const [formErr,   setFormErr]   = useState('')
+  const [saving,    setSaving]    = useState(false)
+  const [delTarget, setDelTarget] = useState<PackageType | null>(null)
+  const [delSaving, setDelSaving] = useState(false)
+  const [delErr,    setDelErr]    = useState('')
+
+  const load = useCallback(async () => {
+    setLoading(true); setError('')
+    try { const { data } = await axios.get(`${API}/package-types`); setRows(data) }
+    catch { setError('Failed to load package types') }
+    finally { setLoading(false) }
+  }, [])
+  useEffect(() => { load() }, [load])
+
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const bd  = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+
+  const openAdd  = () => { setForm({ name: '', description: '', is_active: 1 }); setEditId(null); setFormErr(''); setShowForm(true) }
+  const openEdit = (p: PackageType) => { setForm({ name: p.name, description: p.description ?? '', is_active: p.is_active }); setEditId(p.id); setFormErr(''); setShowForm(true) }
+
+  const save = async () => {
+    if (!form.name.trim()) { setFormErr('Name is required'); return }
+    setSaving(true); setFormErr('')
+    try {
+      editId != null
+        ? await axios.put(`${API}/package-types/${editId}`, form)
+        : await axios.post(`${API}/package-types`, form)
+      setShowForm(false); load()
+      addToast('success', `Package type "${form.name}" saved`)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      const msg = err.response?.data?.error ?? 'Save failed'
+      setFormErr(msg); addToast('error', msg)
+    } finally { setSaving(false) }
+  }
+
+  const toggleActive = async (p: PackageType) => {
+    try {
+      await axios.patch(`${API}/package-types/${p.id}/status`, { is_active: p.is_active ? 0 : 1 })
+      load(); addToast('success', `"${p.name}" ${p.is_active ? 'deactivated' : 'activated'}`)
+    } catch { addToast('error', 'Status update failed') }
+  }
+
+  const doDelete = async () => {
+    if (!delTarget) return
+    setDelSaving(true); setDelErr('')
+    try {
+      await axios.delete(`${API}/package-types/${delTarget.id}`)
+      setDelTarget(null); load(); addToast('success', `"${delTarget.name}" deleted`)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setDelErr(err.response?.data?.error ?? 'Delete failed')
+    } finally { setDelSaving(false) }
+  }
+
+  const inp: React.CSSProperties = { height: 36, padding: '0 10px', borderRadius: 6, width: '100%', border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }
+
+  return (
+    <div className="admin-tab-content">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: col }}>Package Types</h3>
+          <p style={{ margin: '4px 0 0', fontSize: 13, color: '#94a3b8' }}>{rows.length} package types — used in Shipment Control Notes</p>
+        </div>
+        <button onClick={openAdd} style={{ padding: '7px 16px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>+ Add package type</button>
+      </div>
+      {error && <div style={{ padding: '10px 14px', background: 'rgba(239,68,68,0.08)', borderRadius: 6, color: '#ef4444', fontSize: 13, marginBottom: 12 }}>{error}</div>}
+      <AdminTable tableId="admin_package_types" columns={PT_COLS} dark={dark} empty="No package types found.">
+        {rows.map(p => (
+          <AdminRow key={p.id} dark={dark}>
+            <AdminCell col={PT_COLS[0]}><span style={{ fontWeight: 500, color: col }}>{p.name}</span></AdminCell>
+            <AdminCell col={PT_COLS[1]}><span style={{ fontSize: 12, color: '#64748b' }}>{p.description ?? '—'}</span></AdminCell>
+            <AdminCell col={PT_COLS[2]}>
+              <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 9999, background: p.is_active ? 'rgba(34,197,94,0.12)' : 'rgba(148,163,184,0.15)', color: p.is_active ? '#15803d' : '#64748b' }}>
+                {p.is_active ? 'Active' : 'Inactive'}
+              </span>
+            </AdminCell>
+            <AdminCell col={PT_COLS[3]}>
+              <AdminActions>
+                <button onClick={() => openEdit(p)} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 5, border: bd, background: 'none', color: '#64748b', cursor: 'pointer', fontFamily: 'inherit' }}>Edit</button>
+                <button onClick={() => toggleActive(p)} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 5, border: bd, background: 'none', color: p.is_active ? '#b45309' : '#15803d', cursor: 'pointer', fontFamily: 'inherit' }}>
+                  {p.is_active ? 'Deactivate' : 'Activate'}
+                </button>
+                <button onClick={() => { setDelTarget(p); setDelErr('') }} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.3)', background: 'none', color: '#ef4444', cursor: 'pointer', fontFamily: 'inherit' }}>Delete</button>
+              </AdminActions>
+            </AdminCell>
+          </AdminRow>
+        ))}
+      </AdminTable>
+
+      {/* Add/Edit Modal */}
+      {showForm && createPortal(
+        <div onClick={() => setShowForm(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: dark ? '#1e293b' : '#fff', borderRadius: 10, padding: 28, width: 420, boxShadow: '0 16px 48px rgba(0,0,0,0.4)', fontFamily: 'IBM Plex Sans, sans-serif', border: bd }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: col, marginBottom: 20 }}>{editId ? 'Edit Package Type' : 'Add Package Type'}</div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 5 }}>Name *</label>
+              <input value={form.name} onChange={e => setForm(p=>({...p, name: e.target.value}))} placeholder="e.g. Crate (timber)" style={inp} />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 5 }}>Description</label>
+              <input value={form.description} onChange={e => setForm(p=>({...p, description: e.target.value}))} placeholder="Optional description" style={inp} />
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 20, fontSize: 13, color: col }}>
+              <input type="checkbox" checked={!!form.is_active} onChange={e => setForm(p=>({...p, is_active: e.target.checked ? 1 : 0}))} style={{ accentColor: '#2563eb' }} />
+              Active (shown in SCN package type selection)
+            </label>
+            {formErr && <div style={{ marginBottom: 12, fontSize: 12, color: '#ef4444', background: 'rgba(239,68,68,0.08)', borderRadius: 6, padding: '6px 10px' }}>{formErr}</div>}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button onClick={() => setShowForm(false)} style={{ padding: '7px 14px', borderRadius: 6, border: bd, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+              <button onClick={save} disabled={saving} style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', opacity: saving ? 0.7 : 1 }}>
+                {saving ? 'Saving…' : '✓ Save'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Delete Confirm Modal */}
+      {delTarget && createPortal(
+        <div onClick={() => setDelTarget(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: dark ? '#1e293b' : '#fff', borderRadius: 10, padding: 28, width: 400, boxShadow: '0 16px 48px rgba(0,0,0,0.4)', fontFamily: 'IBM Plex Sans, sans-serif', border: '1px solid rgba(239,68,68,0.3)' }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#ef4444', marginBottom: 12 }}>Delete Package Type</div>
+            <div style={{ fontSize: 13, color: col, marginBottom: 16 }}>
+              Delete <strong>"{delTarget.name}"</strong>? This cannot be undone.
+            </div>
+            {delErr && <div style={{ marginBottom: 12, fontSize: 12, color: '#ef4444', background: 'rgba(239,68,68,0.08)', borderRadius: 6, padding: '6px 10px' }}>{delErr}</div>}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button onClick={() => setDelTarget(null)} style={{ padding: '7px 14px', borderRadius: 6, border: bd, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+              <button onClick={doDelete} disabled={delSaving} style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: '#ef4444', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', opacity: delSaving ? 0.7 : 1 }}>
+                {delSaving ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+    </div>
+  )
+}
+
 // Only users with role='admin' reach this page (guarded both
 // in App.tsx and on every /api/admin route server-side).
 //
 // Single-admin workflow: any admin can perform any user-management
 // action immediately. Every mutation is logged to the audit trail.
 // ═══════════════════════════════════════════════════════════
-type AdminTab = 'users' | 'suppliers' | 'warehouses' | 'uom' | 'acronyms' | 'incoterms' | 'projects' | 'permissions' | 'notifications' | 'settings'
+type AdminTab = 'users' | 'suppliers' | 'warehouses' | 'uom' | 'acronyms' | 'incoterms' | 'currencies' | 'package_types' | 'projects' | 'permissions' | 'notifications' | 'settings'
 
 export function Admin({ dark }: { dark: boolean }) {
   const [tab, setTab] = useState<AdminTab>('users')
@@ -3374,6 +3701,8 @@ export function Admin({ dark }: { dark: boolean }) {
     { key: 'uom',           label: 'Units of Measure',   icon: '📏' },
     { key: 'acronyms',      label: 'Acronyms',           icon: '🔤' },
     { key: 'incoterms',     label: 'INCO Terms',         icon: '🚢' },
+    { key: 'currencies',    label: 'Currency',           icon: '💱' },
+    { key: 'package_types', label: 'Package Types',      icon: '📦' },
     { key: 'projects',      label: 'Projects',           icon: '📁' },
     { key: 'notifications', label: 'Notifications',      icon: '🔔' },
     { key: 'settings',      label: 'System Settings',    icon: '⚙️' },
@@ -3417,6 +3746,8 @@ export function Admin({ dark }: { dark: boolean }) {
       {tab === 'uom'           && <UomTab            dark={dark} />}
       {tab === 'acronyms'      && <AcronymsTab       dark={dark} />}
       {tab === 'incoterms'     && <IncoTermsTab      dark={dark} />}
+      {tab === 'currencies'    && <CurrenciesTab     dark={dark} />}
+      {tab === 'package_types' && <PackageTypesTab   dark={dark} />}
       {tab === 'projects'      && <ProjectsAdminTab  dark={dark} />}
       {tab === 'permissions'   && <PermissionsTab    dark={dark} />}
       {tab === 'notifications' && <NotificationsTab  dark={dark} />}
