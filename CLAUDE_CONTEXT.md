@@ -100,8 +100,7 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 | Procurement — New PO Wizard (Phase 2) | ✅ Built, working, tested |
 | Procurement — PO Detail Screen (Phase 3) | ✅ Complete |
 | MTO Register | ⏳ Not started |
-| Expediting | ⏳ Not started |
-| VDRL | ⏳ Not started |
+| Expediting (incl. VDRL Register tab) | ⏳ Not started |
 | Logistics | ⏳ Not started |
 | Material Control | ⏳ Not started |
 | Traceability | ⏳ Not started |
@@ -119,8 +118,10 @@ The left sidebar must contain these items in this order:
    - Foundational (🏗, collapsible): WBS · Commodity Library · Equipment List
    - MTO Register (📋)
    - Procurement (🧾)
-   - VDRL (📑)
-   - Expediting (🚨 — red alert count badge)
+   - Expediting (🚨 — compound badge: red=overdue milestones, amber=overdue vendor docs)
+     ↳ Contains two views: PO Register (expediting list) and VDRL Register
+     ↳ VDRL was previously a standalone sidebar item — now integrated into Expediting
+     ↳ Old route /project/:id/vdrl redirects to /project/:id/expediting?view=vdrl
    - Logistics (🚚)
    - Material Control (📦, collapsible): Receipting · Stock Register · FMR Register · Transfers
    - Traceability (🔗)
@@ -141,8 +142,7 @@ The left sidebar must contain these items in this order:
 1. **Foundational** → establishes WBS tree, Commodity Library (with trace levels), Equipment List (tagged items), AVL (approved vendors). Everything downstream references a WBS code.
 2. **MTO Register** → captures engineering take-off lines (qty, UOM, WBS, ROS, inspection class, VDRL flag). Revisions diff against each other. MTO lines feed procurement.
 3. **Procurement** → raises POs against MTO lines/WBS. **Approve & Lock** freezes the PO → locks linked MTO lines → passes PO to Expediting.
-4. **VDRL** → tracks vendor document requirements per PO/package. Review cycles, transmittals, MDR closeout.
-5. **Expediting** → monitors milestone chains on locked POs. Logs actions, issues notices, flags critical path.
+4. **Expediting** → monitors milestone chains on locked POs. Logs actions, issues notices, flags critical path. **Also contains the VDRL Register** (vendor document tracking per PO — review cycles, transmittals, MDR closeout). VDRL is no longer a standalone module — it lives inside Expediting as a tab view and as a per-PO panel section.
 6. **Logistics** → creates SCNs when goods ship. Tracks pipeline (pickup → transit → customs → delivery). Proof of Custody at handover.
 7. **Material Control** → receipts incoming SCNs (5-step wizard), creates stock, manages Stock Register, FMRs, inter-warehouse Transfers.
 8. **Traceability** → verifies certs (releasing goods from trace hold), maintains full chain per tag.
@@ -542,8 +542,14 @@ Currency · Total value (computed from lines) · Incoterms · Handover point · 
 ---
 
 ## MODULE 5: VDRL (Vendor Document Requirements List)
+**⚠ ARCHITECTURE CHANGE:** VDRL is no longer a standalone sidebar module.
+It now lives INSIDE Expediting in two places:
+1. **VDRL Register tab** in the Expediting Register screen (all docs across all POs)
+2. **VDRL section** in the Expediting PO Detail Panel (docs for one PO)
+The old route /project/:projectId/vdrl now redirects to /project/:projectId/expediting?view=vdrl.
+All specs below remain valid — the build target is just the Expediting module, not a standalone VDRL module.
 
-**Route:** /project/:projectId/vdrl
+**Route:** /project/:projectId/expediting?view=vdrl (was /project/:projectId/vdrl)
 
 **Dual-role screen:** QCO internal staff vs Supplier/vendor portal (role assigned at login)
 **Active package context** with Switch package and New package flow

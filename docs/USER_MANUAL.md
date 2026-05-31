@@ -456,15 +456,53 @@ A green confirmation screen shows:
 
 ---
 
-## 6. VDRL
+## 6. Expediting
 
-> **To be completed when the VDRL module is built.**
+> **Full documentation to be completed when the Expediting module is built.**
+
+### 6.1 Accessing Expediting
+
+Click **Expediting** (🚨) in the left sidebar. Expediting operates only on **Approved & Locked POs** passed from Procurement.
+
+The Expediting sidebar item shows two badges:
+- 🔴 **Red number** — count of overdue milestones
+- 🟡 **Amber number** — count of overdue vendor documents
+
+### 6.2 View toggle: PO Register and VDRL Register
+
+The Expediting screen has two views, toggled at the top:
+
+**📋 PO Register** — The list of all POs being actively expedited for this project. Shows milestone status, action logs, SCN management, and critical path tracking.
+
+**📑 VDRL Register** — The Vendor Document Requirements List for this project. Shows all vendor document obligations across all active POs, with review cycles, transmittals, and MDR closeout status.
+
+> **Note:** VDRL was previously a standalone sidebar module. It has been integrated into Expediting because vendor document tracking and milestone monitoring are done by the same expeditors, for the same POs. Having them in one place reduces navigation friction.
+
+### 6.3 VDRL Register
+
+The VDRL Register shows all vendor document requirements across the project. It has the following tabs:
+
+- **Register** — All documents, filterable by PO, type, and status
+- **Expediting** — Action log for vendor document follow-up
+- **Review cycle** — Documents currently under QCO review (Hold, Minor, Major)
+- **Transmittals** — Issued transmittals and reply tracking
+- **Vendor contacts** — Contact directory for vendors on this project
+- **MDR closeout** — Manufacturing Data Record completion tracking
+- **Alerts** 🔴 — Overdue documents requiring immediate action
+
+Each document has a status: **Not started** (grey) · **Submitted** (blue) · **Under review** (amber) · **Approved** (green) · **Overdue** (red)
+
+### 6.4 Per-PO VDRL panel
+
+When viewing a specific PO in the Expediting PO Detail Panel, a **📄 VDRL** button in the panel header shows vendor documents for that PO only — without leaving the PO context.
+
+To see documents across all POs, switch to the **VDRL Register** tab view.
 
 ---
 
-## 7. Expediting
+## 7. VDRL (Legacy reference)
 
-> **To be completed when the Expediting module is built.**
+> VDRL has been integrated into **Section 6 — Expediting**. The old /vdrl route automatically redirects to the Expediting module's VDRL Register tab. There is no standalone VDRL module.
 
 ---
 

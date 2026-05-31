@@ -12,6 +12,7 @@ import { PODetailScreen } from './pages/PODetailScreen'
 import { FoundWBSScreen } from './pages/FoundWBSScreen'
 import { FoundCommodityScreen } from './pages/FoundCommodityScreen'
 import { FoundEquipmentScreen } from './pages/FoundEquipmentScreen'
+import { ExpeditingScreen } from './pages/ExpeditingScreen'
 import { ForcePasswordChange } from './components/ForcePasswordChange'
 import { ChangePasswordModal } from './components/ChangePasswordModal'
 import './App.css'
@@ -21,7 +22,7 @@ import './App.css'
 // 'admin' enforces role === 'admin'; 'procurement' is project-scoped.
 // ─── ROUTING — state-based, no router library ─────────────────────────────────
 // 'po-detail' is Phase 3 PO Detail Screen — full dedicated screen.
-type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment'
+type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting'
 
 // ─── PROJECT TYPE ───────────────────────────────────────────
 // Mirrors the API response shape. Snake_case DB columns (total_pos, at_risk)
@@ -385,8 +386,34 @@ const Nav = ({
         {navItem('MTO Register', '📋')}
         {/* ─── PROCUREMENT — project-scoped module ───────────── */}
         {navItem('Procurement', '🧾', 'procurement')}
-        {navItem('VDRL', '📑')}
-        {navItem('Expediting', '🚨', undefined, 8)}
+        {/* ─── EXPEDITING — VDRL now lives inside Expediting ────
+            Compound badge: red = overdue milestones, amber = overdue
+            vendor docs. Shown as two stacked badges when both non-zero. */}
+        <div
+          key="expediting"
+          onClick={() => onNavigate('expediting')}
+          title={collapsed ? 'Expediting' : undefined}
+          style={{
+            display: 'flex', alignItems: 'center', gap: collapsed ? 0 : 9,
+            padding: collapsed ? '6px 0' : '6px 8px',
+            justifyContent: collapsed ? 'center' : 'flex-start',
+            borderRadius: 6, fontSize: 13, marginBottom: 1, userSelect: 'none',
+            cursor: 'pointer', transition: 'all 150ms ease',
+            background: activePage === 'expediting' ? 'rgba(232,78,15,0.12)' : 'transparent',
+            border: `1px solid ${activePage === 'expediting' ? 'rgba(232,78,15,0.28)' : 'transparent'}`,
+            color: activePage === 'expediting' ? '#E84E0F' : '#94a3b8',
+          }}
+          onMouseEnter={e => { if (activePage !== 'expediting') { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = '#e2e8f0' } }}
+          onMouseLeave={e => { if (activePage !== 'expediting') { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#94a3b8' } }}>
+          <span style={{ width: collapsed ? 20 : 15, textAlign: 'center', fontSize: collapsed ? 16 : 12, opacity: 0.65, flexShrink: 0 }}>🚨</span>
+          {!collapsed && <span style={{ flex: 1 }}>Expediting</span>}
+          {!collapsed && (
+            <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+              <span style={{ background: '#ef4444', color: '#fff', fontSize: 10, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', padding: '1px 5px', borderRadius: 9999, minWidth: 18, textAlign: 'center' }}>8</span>
+              <span style={{ background: '#f59e0b', color: '#fff', fontSize: 10, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', padding: '1px 5px', borderRadius: 9999, minWidth: 18, textAlign: 'center' }}>3</span>
+            </div>
+          )}
+        </div>
         {navItem('Logistics', '🚚')}
         {navItem('Material Control', '📦')}
         {navItem('Traceability', '🔗')}
@@ -834,6 +861,7 @@ function App() {
               : page === 'foundational-wbs' ? `Foundational · WBS · ${selectedProjectName}`
               : page === 'foundational-commodities' ? `Foundational · Commodity Library · ${selectedProjectName}`
               : page === 'foundational-equipment' ? `Foundational · Equipment List · ${selectedProjectName}`
+              : page === 'expediting' ? `Expediting · ${selectedProjectName}`
               : 'Dashboard'}
             </span>
           </div>
@@ -1075,6 +1103,14 @@ function App() {
           )}
           {page === 'foundational-equipment' && selectedProjectId && (
             <FoundEquipmentScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
+              onBack={() => setPage('dashboard')} />
+          )}
+
+          {/* ─── EXPEDITING (includes VDRL Register tab) ────────
+              VDRL moved from standalone sidebar into Expediting.
+              Old /vdrl route maps to this screen with view=vdrl. */}
+          {page === 'expediting' && selectedProjectId && (
+            <ExpeditingScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
               onBack={() => setPage('dashboard')} />
           )}
         </div>
