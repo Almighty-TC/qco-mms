@@ -3,6 +3,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import axios from 'axios'
+import { HelpButton } from '../components/HelpDrawer'
+import { WBS_HELP } from '../helpContent'
 
 const API = 'http://localhost:3001/api'
 
@@ -971,6 +973,8 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
           <button onClick={downloadTemplate} style={secBtn} title="Download XLSX template">↓ Template</button>
           {/* Item 3: Upload */}
           <button onClick={() => setShowUpload(true)} style={secBtn}>↑ Upload XER/Excel</button>
+          {/* Help */}
+          <HelpButton screenName="WBS" sections={WBS_HELP} dark={dark} />
           {/* Add node */}
           <button onClick={() => setShowAdd(true)} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>+ Add node</button>
         </div>

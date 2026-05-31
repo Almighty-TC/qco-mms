@@ -8,6 +8,8 @@ import { createPortal } from 'react-dom'
 import axios from 'axios'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { ToastContainer } from '../components/Toast'
+import { HelpButton } from '../components/HelpDrawer'
+import { PO_DETAIL_HELP } from '../helpContent'
 
 const API = 'http://localhost:3001/api'
 
@@ -1081,6 +1083,7 @@ const PODetailInner = ({ dark, poId, projectName, onBack }: PODetailInnerProps) 
           {po.description && <p style={{ fontSize: 13, color: '#94a3b8', margin: 0 }}>{po.description}</p>}
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+          <HelpButton screenName="PO Detail" sections={PO_DETAIL_HELP} dark={dark} />
           {!po.isLocked && (
             <button onClick={() => setApprove(true)} style={{ padding: '8px 18px', borderRadius: 6, border: 'none', background: '#15803d', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
               🔒 Approve & Lock PO

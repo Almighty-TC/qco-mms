@@ -8,6 +8,8 @@ import axios from 'axios'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { ToastContainer } from '../components/Toast'
 import { useColumnResize } from '../hooks/useColumnResize'
+import { HelpButton } from '../components/HelpDrawer'
+import { PO_REGISTER_HELP } from '../helpContent'
 
 const API = 'http://localhost:3001/api'
 
@@ -1513,7 +1515,7 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
           <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>{projectName}</div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button onClick={() => setShowHelp(true)} title="Help" style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: dark ? '#0f172a' : '#f4f7fb', color: '#94a3b8', fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>ℹ</button>
+          <HelpButton screenName="PO Register" sections={PO_REGISTER_HELP} dark={dark} />
           <button onClick={exportCSV} style={{ padding: '6px 12px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: dark ? '#0f172a' : '#f4f7fb', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>↓ Export</button>
           {/* ─── Item 6: Template download ─────────────────────────────────── */}
           <button

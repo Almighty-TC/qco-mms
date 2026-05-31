@@ -14,6 +14,11 @@ app.get('/health', (req, res) => {
   res.json({ status: 'QMAT API running', time: new Date() })
 })
 
+// ─── STATIC DOCS ──────────────────────────────────────────
+// Serves ~/docs/ so USER_MANUAL.md is accessible in-browser.
+const path = require('path')
+app.use('/docs', express.static(path.join(__dirname, '../docs')))
+
 // ─── PUBLIC ROUTES ──────────────────────────────────────────
 // Auth endpoints do not require a JWT — they issue one on login.
 app.use('/api/auth', require('./routes/auth'))

@@ -3,6 +3,8 @@ import { useEffect, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import axios from 'axios'
 import { CertificatesModal } from '../components/CertificatesModal'
+import { HelpButton } from '../components/HelpDrawer'
+import { EQUIPMENT_HELP } from '../helpContent'
 
 const API = 'http://localhost:3001/api'
 
@@ -348,6 +350,7 @@ export const FoundEquipmentScreen = ({ dark, projectId, projectName, onBack }: {
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button style={{ padding: '7px 14px', borderRadius: 6, border: bd, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>↑ Upload</button>
+          <HelpButton screenName="Equipment List" sections={EQUIPMENT_HELP} dark={dark} />
           <button onClick={() => setAddModal(true)} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>+ Add equipment</button>
         </div>
       </div>
