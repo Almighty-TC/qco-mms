@@ -39,6 +39,10 @@ app.use('/api/admin', authMiddleware, require('./routes/admin'))
 app.use('/api/procurement', authMiddleware, require('./routes/procurement'))
 app.use('/api/foundational', require('./routes/foundational'))
 
+// ─── EXPEDITING ROUTES ───────────────────────────────────────
+// Expediting register, milestone forecasting, line items, notes.
+app.use('/api/expediting', require('./routes/expediting'))
+
 // ─── MTO REGISTER ROUTES ─────────────────────────────────────
 // Material Take-Off register, line items, revisions and diff.
 app.use('/api/mto', require('./routes/mto'))

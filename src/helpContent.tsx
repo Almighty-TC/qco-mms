@@ -522,3 +522,49 @@ export const MTO_REGISTER_HELP: HelpSection[] = [
 
 // ─── MTO DETAIL HELP ─────────────────────────────────────────
 export const MTO_DETAIL_HELP: HelpSection[] = MTO_REGISTER_HELP
+
+// ─── EXPEDITING HELP ─────────────────────────────────────────
+// Help sections shown in the Expediting Register screen.
+export const EXPEDITING_HELP: HelpSection[] = [
+  {
+    title: 'Overview',
+    content: <>
+      {P(<>The <strong>Expediting Register</strong> shows all locked &amp; approved POs being actively tracked. Each PO has a 5-step milestone chain with RAG (Red/Amber/Green) status computed from forecast and planned dates.</>)}
+      {Tip('Only locked POs appear here. To lock a PO, approve it in the Procurement module.')}
+    </>,
+  },
+  {
+    title: 'Milestone dots',
+    content: <>
+      {P(<>Each row shows a chain of 5 coloured dots representing the PO milestone chain:</>)}
+      {RAGTable()}
+      {P(<>Dots: <strong>PO Award → FAT / Inspection → Ready for Shipment → ETD / Ship → ROS / ETA</strong>.</>)}
+    </>,
+  },
+  {
+    title: 'Forecast dates',
+    content: <>
+      {P(<>Open a PO detail panel and click a forecast date (or <em>Set forecast</em>) to update it. A <strong>reason is required</strong> every time a forecast is changed — this creates an audit trail.</>)}
+      {P(<>The "Changed N×" link shows full forecast history for that milestone.</>)}
+      {Warning('Changing a forecast to a past date will immediately mark the milestone as Breached (red).')}
+    </>,
+  },
+  {
+    title: 'Line items',
+    content: <>
+      {P(<>Each PO line is shown in the detail panel. Lines with <strong>Heat Number Required</strong> show a heat number field. Lines without a commodity or equipment tag linked show an amber warning.</>)}
+    </>,
+  },
+  {
+    title: 'Child items',
+    content: <>
+      {P(<>Sub-items can be added to any line using <strong>+ Add child item</strong>. Child items represent partial deliveries, inspections or sub-assemblies tracked under a parent line.</>)}
+    </>,
+  },
+  {
+    title: 'VDRL tab',
+    content: <>
+      {P(<>The VDRL Register tab will show all vendor document requirements across active POs. Per-PO VDRL documents are accessible from the PO detail panel via the Documents button (coming soon).</>)}
+    </>,
+  },
+]
