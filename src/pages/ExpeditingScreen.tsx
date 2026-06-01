@@ -666,10 +666,10 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
           ) : filtered.length === 0 ? (
             <div style={{ textAlign: 'center', color: sub, padding: '48px 0', fontSize: 13 }}>No POs match the filter.</div>
           ) : (
-            <div style={{ overflowX: 'auto' }}>
+            <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 260px)' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                <thead>
-                  <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
+                <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: dark ? '#162032' : '#f8fafc' }}>
+                  <tr style={{ borderBottom: bd }}>
                     {['★', '', 'PO Ref', 'Vendor / Group', 'Material', 'Owner / Expeditor', 'Milestones', 'ROS', 'Status', ''].map((h, i) => (
                       <th key={i} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
                         {h}

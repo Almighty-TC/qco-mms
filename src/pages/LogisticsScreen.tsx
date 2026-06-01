@@ -268,11 +268,11 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
         </div>
 
         {/* ── TABLE ─────────────────────────────────────────── */}
-        <div style={{ background: cardBg, border: bd, borderRadius: 8, overflow: 'hidden' }}>
-          <div style={{ overflowX: 'auto' }}>
+        <div style={{ background: cardBg, border: bd, borderRadius: 8 }}>
+          <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 260px)' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-              <thead>
-                <tr style={{ background: theadBg, borderBottom: bd, position: 'sticky', top: 0, zIndex: 1 }}>
+              <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
+                <tr style={{ borderBottom: bd }}>
                   {[['★','40px'],['SCN','110px'],['PO','100px'],['VENDOR','130px'],['FORWARDER','120px'],
                     ['ROUTE','160px'],['MODE','90px'],['ETD','100px'],['ETA','100px'],
                     ['PKGS','60px'],['WEIGHT','90px'],['STATUS','130px'],['RAG','50px']].map(([h,w]) => (
