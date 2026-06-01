@@ -50,6 +50,7 @@ app.use('/api/mto', require('./routes/mto'))
 // ─── LOGISTICS ROUTES ────────────────────────────────────────
 // SCN Register, status transitions, packages, documents, timeline.
 app.use('/api/logistics', require('./routes/logistics'))
+app.use('/api/mc', require('./routes/materialcontrol'))
 
 // ─── START SERVER ───────────────────────────────────────────
 const PORT = process.env.PORT || 3001

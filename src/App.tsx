@@ -17,6 +17,10 @@ import { ExpPODetailScreen } from './pages/ExpPODetailScreen'
 import { MTOListScreen } from './pages/MTOListScreen'
 import { MTODetailScreen } from './pages/MTODetailScreen'
 import { LogisticsScreen } from './pages/LogisticsScreen'
+import { MCReceiptingScreen } from './pages/MCReceiptingScreen'
+import { MCStockRegisterScreen } from './pages/MCStockRegisterScreen'
+import { MCFMRScreen } from './pages/MCFMRScreen'
+import { MCTransferScreen } from './pages/MCTransferScreen'
 import { ForcePasswordChange } from './components/ForcePasswordChange'
 import { ChangePasswordModal } from './components/ChangePasswordModal'
 import './App.css'
@@ -26,7 +30,7 @@ import './App.css'
 // 'admin' enforces role === 'admin'; 'procurement' is project-scoped.
 // ─── ROUTING — state-based, no router library ─────────────────────────────────
 // 'po-detail' is Phase 3 PO Detail Screen — full dedicated screen.
-type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics'
+type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers'
 
 // ─── PROJECT TYPE ───────────────────────────────────────────
 // Mirrors the API response shape. Snake_case DB columns (total_pos, at_risk)
@@ -419,7 +423,17 @@ const Nav = ({
           )}
         </div>
         {navItem('Logistics', '🚚', 'logistics')}
-        {navItem('Material Control', '📦')}
+        {navItem('Material Control', '📦', 'mc-receipting')}
+        {selectedProjectId && ['mc-receipting','mc-stock','mc-fmr','mc-transfers'].includes(activePage) && (
+          <div style={{ paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 1 }}>
+            {[['Receipting','mc-receipting'],['Stock Register','mc-stock'],['FMR Register','mc-fmr'],['Transfers','mc-transfers']].map(([label, pg]) => (
+              <button key={pg} onClick={() => onNavigate(pg as Page)}
+                style={{ padding: '5px 12px', textAlign: 'left', background: activePage === pg ? 'rgba(232,78,15,0.12)' : 'transparent', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, color: activePage === pg ? '#E84E0F' : '#94a3b8', fontFamily: 'inherit' }}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
         {navItem('Traceability', '🔗')}
         {navItem('Document Inbox', '📥')}
         {navItem('Audit', '🔍')}
@@ -703,6 +717,10 @@ function App() {
         'mto-detail': 'mto-detail',
         admin: 'admin',
         logistics: 'logistics',
+        'mc-receipting': 'mc-receipting',
+        'mc-stock': 'mc-stock',
+        'mc-fmr': 'mc-fmr',
+        'mc-transfers': 'mc-transfers',
       }
       if (map[seg]) return map[seg]
     }
@@ -1173,6 +1191,25 @@ function App() {
           {page === 'logistics' && selectedProjectId && (
             <LogisticsScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
               onBack={() => setPage('dashboard')} />
+          )}
+
+          {/* ─── MATERIAL CONTROL ────────────────────────────────
+              Receipting, Stock Register, FMR, Transfers. */}
+          {page === 'mc-receipting' && selectedProjectId && (
+            <MCReceiptingScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
+              onBack={() => setPage('dashboard')} />
+          )}
+          {page === 'mc-stock' && selectedProjectId && (
+            <MCStockRegisterScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
+              onBack={() => setPage('mc-receipting')} />
+          )}
+          {page === 'mc-fmr' && selectedProjectId && (
+            <MCFMRScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
+              userRole={user?.role ?? ''} onBack={() => setPage('mc-receipting')} />
+          )}
+          {page === 'mc-transfers' && selectedProjectId && (
+            <MCTransferScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
+              onBack={() => setPage('mc-receipting')} />
           )}
 
           {/* ─── MTO REGISTER ────────────────────────────────────
