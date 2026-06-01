@@ -29,7 +29,7 @@ export const HelpDrawer = ({ screenName, sections, dark, onClose }: HelpDrawerPr
   })
 
   const prose: React.CSSProperties = {
-    fontSize: 13, color: dark ? '#cbd5e1' : '#475569', lineHeight: 1.65,
+    fontSize: 13, color: dark ? '#e2e8f0' : '#475569', lineHeight: 1.65,
     fontFamily: 'IBM Plex Sans, sans-serif',
   }
 
@@ -50,7 +50,7 @@ export const HelpDrawer = ({ screenName, sections, dark, onClose }: HelpDrawerPr
         <div style={{ padding: '16px 20px', borderBottom: bd, flexShrink: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div>
             <div style={{ fontSize: 15, fontWeight: 700, color: col }}>? Help</div>
-            <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>{screenName}</div>
+            <div style={{ fontSize: 12, color: dark ? '#e2e8f0' : '#94a3b8', marginTop: 2 }}>{screenName}</div>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer', padding: '2px 4px', lineHeight: 1 }}>✕</button>
         </div>
@@ -70,7 +70,7 @@ export const HelpDrawer = ({ screenName, sections, dark, onClose }: HelpDrawerPr
                   fontFamily: 'inherit',
                 }}>
                 <span>{s.title}</span>
-                <span style={{ fontSize: 11, color: '#94a3b8', transition: 'transform 200ms', display: 'inline-block', transform: openSections.has(i) ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
+                <span style={{ fontSize: 11, color: dark ? '#cbd5e1' : '#94a3b8', transition: 'transform 200ms', display: 'inline-block', transform: openSections.has(i) ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
               </button>
 
               {openSections.has(i) && (
@@ -93,7 +93,7 @@ export const HelpDrawer = ({ screenName, sections, dark, onClose }: HelpDrawerPr
             onMouseLeave={e => { (e.target as HTMLElement).style.textDecoration = 'none' }}>
             📖 View full manual
           </a>
-          <button onClick={onClose} style={{ padding: '6px 14px', borderRadius: 6, border: bd, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+          <button onClick={onClose} style={{ padding: '6px 14px', borderRadius: 6, border: bd, background: 'none', color: dark ? '#cbd5e1' : '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
             ✕ Close
           </button>
         </div>
