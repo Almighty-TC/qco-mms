@@ -1037,42 +1037,114 @@ router.post('/:projectId/commodities/import', uploadCommodity.single('file'), as
 // ═══════════════════════════════════════════════════════════════
 
 // GET /api/foundational/:projectId/commodities/template — XLSX download
+// ─── Uses ExcelJS for dropdown data validation support. ──────────────────────
 router.get('/:projectId/commodities/template', async (req, res) => {
   try {
-    const wb = XLSX.utils.book_new()
-    const headers = ['Commodity Code', 'WBS Code', 'Name/Description', 'Unit of Measure', 'Estimated Qty', 'Trace Level', 'Preservation', 'Preferred Vendor', 'Notes']
-    const examples = [
-      ['CS-PLATE-001',   '02.01.01', 'Carbon Steel Plate A516 Gr70',   'T',   '12.5', 'Mill cert',    'None',              'LIBERTY Steel', 'Material cert required'],
-      ['WELD-CONS-001',  '02.01.01', 'Welding Consumables ER70S-6',    'KG',  '200',  'Drum number',  'None',              'Lincoln Electric', ''],
-      ['HV-CABLE-001',   '03.01.01', 'HV Cable 11kV 3Cx150mm2 XLPE',  'M',   '500',  'Drum number',  'Dry storage',       'Prysmian',       ''],
-    ]
-    const wsData = [headers, ...examples]
-    const ws = XLSX.utils.aoa_to_sheet(wsData)
-    ws['!cols'] = headers.map(h => ({ wch: h === 'Name/Description' ? 40 : 20 }))
-    ws['!freeze'] = { xSplit: 0, ySplit: 1 }
-    XLSX.utils.book_append_sheet(wb, ws, 'Commodity Template')
+    const ExcelJS = require('exceljs')
+    const wb = new ExcelJS.Workbook()
+    wb.creator = 'QCO MMS'
 
-    // Instructions sheet
+    // ── Sheet 1: Commodity Template ────────────────────────────────────────────
+    const ws = wb.addWorksheet('Commodity Template', { views: [{ state: 'frozen', ySplit: 1 }] })
+    ws.columns = [
+      { key: 'commodity_code', header: 'Commodity Code', width: 20 },
+      { key: 'wbs_code',       header: 'WBS Code',        width: 14 },
+      { key: 'name',           header: 'Name/Description', width: 40 },
+      { key: 'uom',            header: 'Unit of Measure',  width: 18 },
+      { key: 'qty',            header: 'Estimated Qty',    width: 16 },
+      { key: 'trace_level',    header: 'Trace Level',      width: 22 },
+      { key: 'preservation',   header: 'Preservation',     width: 22 },
+      { key: 'vendor',         header: 'Preferred Vendor', width: 22 },
+      { key: 'notes',          header: 'Notes',            width: 35 },
+    ]
+
+    // Style header row
+    const ORANGE = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE84E0F' } }
+    ws.getRow(1).eachCell(c => {
+      c.font  = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10, name: 'Calibri' }
+      c.fill  = ORANGE
+      c.alignment = { vertical: 'middle', horizontal: 'left' }
+    })
+    ws.getRow(1).height = 22
+
+    // Example rows (grey italic)
+    const examples = [
+      { commodity_code: 'CS-PLATE-001',  wbs_code: '02.01.01', name: 'Carbon Steel Plate A516 Gr70',  uom: 'T',  qty: '12.5', trace_level: 'heat_number', preservation: 'Dry storage',       vendor: 'LIBERTY Steel',   notes: 'Material cert required' },
+      { commodity_code: 'WELD-CONS-001', wbs_code: '02.01.01', name: 'Welding Consumables ER70S-6',   uom: 'KG', qty: '200',  trace_level: 'drum_number',  preservation: 'None',              vendor: 'Lincoln Electric', notes: '' },
+      { commodity_code: 'HV-CABLE-001',  wbs_code: '03.01.01', name: 'HV Cable 11kV 3Cx150mm2 XLPE', uom: 'M',  qty: '500',  trace_level: 'drum_number',  preservation: 'Dry storage',       vendor: 'Prysmian',         notes: '' },
+    ]
+    examples.forEach(ex => {
+      const row = ws.addRow(ex)
+      row.eachCell(c => { c.font = { italic: true, color: { argb: 'FF94a3b8' }, size: 10, name: 'Calibri' } })
+      row.height = 18
+    })
+
+    // ─── DROPDOWN VALIDATIONS (rows 2–500, showErrorMessage: false = guide only) ─
+    // col D (4) — Unit of Measure
+    ws.dataValidations.add('D2:D500', {
+      type: 'list', allowBlank: true, showErrorMessage: false,
+      formulae: ['"EA,NR,KG,T,M,MM,M2,M3,L,KL,SET,LOT,PR,LM,KN"'],
+    })
+    // col F (6) — Trace Level
+    ws.dataValidations.add('F2:F500', {
+      type: 'list', allowBlank: true, showErrorMessage: false,
+      formulae: ['"none,lot,heat_number,drum_number,serial_number"'],
+    })
+    // col G (7) — Preservation
+    ws.dataValidations.add('G2:G500', {
+      type: 'list', allowBlank: true, showErrorMessage: false,
+      formulae: ['"Dry storage,Climate controlled,Outdoor,Bonded,Refrigerated,None"'],
+    })
+
+    // ── Sheet 2: Reference (valid values legend) ───────────────────────────────
+    const wsRef = wb.addWorksheet('Reference')
+    wsRef.getColumn(1).width = 26
+    wsRef.getColumn(2).width = 65
+    const refTitle = wsRef.getCell('A1')
+    refTitle.value = 'QCO MMS — Commodity Template: Valid Values Reference'
+    refTitle.font = { bold: true, size: 12, color: { argb: 'FFE84E0F' } }
+    wsRef.getRow(1).height = 22
+    wsRef.addRow([])
+    wsRef.addRow(['Note: These values are suggestions. You may type any value not in this list.'])
+      .getCell(1).font = { italic: true, color: { argb: 'FF64748b' }, size: 10 }
+    wsRef.addRow([])
+    const refData = [
+      ['COLUMN', 'VALID VALUES'],
+      ['Unit of Measure (col D)', 'EA, NR, KG, T, M, MM, M2, M3, L, KL, SET, LOT, PR, LM, KN'],
+      ['Trace Level (col F)',     'none, lot, heat_number, drum_number, serial_number'],
+      ['Preservation (col G)',    'Dry storage, Climate controlled, Outdoor, Bonded, Refrigerated, None'],
+    ]
+    refData.forEach((row, i) => {
+      const r = wsRef.addRow(row)
+      if (i === 0) r.eachCell(c => { c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1e3a5f' } } })
+    })
+
+    // ── Sheet 3: Instructions ──────────────────────────────────────────────────
+    const wsI = wb.addWorksheet('Instructions')
+    wsI.getColumn(1).width = 22
+    wsI.getColumn(2).width = 10
+    wsI.getColumn(3).width = 60
     const instrData = [
       ['Column', 'Required', 'Description'],
       ['Commodity Code', 'Yes', 'Unique code per project e.g. CS-PLATE-001'],
       ['WBS Code',       'Yes', 'Dotted WBS code this commodity belongs to e.g. 02.01.01'],
       ['Name/Description', 'Yes', 'Material name or description'],
-      ['Unit of Measure', 'Yes', 'EA, M, M², M³, KG, T, LT, SET, LOT'],
+      ['Unit of Measure', 'Yes', 'Select from dropdown or type: EA, M, M2, M3, KG, T, SET, LOT etc.'],
       ['Estimated Qty',  'No',  'Estimated quantity (numeric)'],
-      ['Trace Level',    'No',  'Heat number | Heat + cert | Mill cert | Drum number | Serial | None'],
-      ['Preservation',   'No',  'None | Dry storage | Climate controlled | Painted-wrapped | N2 purge'],
+      ['Trace Level',    'No',  'Select from dropdown: none | lot | heat_number | drum_number | serial_number'],
+      ['Preservation',   'No',  'Select from dropdown: Dry storage | Climate controlled | Outdoor | Bonded | Refrigerated | None'],
       ['Preferred Vendor', 'No', 'Preferred vendor name (optional)'],
       ['Notes',          'No',  'Additional notes (optional)'],
     ]
-    const wsI = XLSX.utils.aoa_to_sheet(instrData)
-    wsI['!cols'] = [{ wch: 22 }, { wch: 10 }, { wch: 60 }]
-    XLSX.utils.book_append_sheet(wb, wsI, 'Instructions')
+    instrData.forEach((row, i) => {
+      const r = wsI.addRow(row)
+      if (i === 0) r.eachCell(c => { c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = ORANGE })
+    })
 
-    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
     res.setHeader('Content-Disposition', 'attachment; filename="Commodity_Upload_Template.xlsx"')
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    res.send(buf)
+    await wb.xlsx.write(res)
+    res.end()
   } catch (e) {
     console.error('[commodities:template]', e.message)
     res.status(500).json({ error: e.message })
@@ -1210,43 +1282,112 @@ router.post('/:projectId/equipment/import', uploadEquipment.single('file'), asyn
 // ═══════════════════════════════════════════════════════════════
 
 // GET /api/foundational/:projectId/equipment/template — XLSX download
+// ─── Uses ExcelJS for dropdown data validation support. ──────────────────────
 router.get('/:projectId/equipment/template', async (req, res) => {
   try {
-    const wb = XLSX.utils.book_new()
-    const headers = ['Equipment Tag', 'Equipment Type', 'WBS Code', 'Description', 'Area/Location', 'Criticality', 'PO Reference', 'Vendor', 'Weight (kg)', 'Overall Size (LxWxH)', 'Notes']
-    const examples = [
-      ['V-101', 'Vessel',     '02.01.01', 'HP Separator 1st Stage',       'Train 1',    'A-Critical', 'PO-2024-003', 'GHD Fabricators', '12500', '4500x2200x2200', 'ASME VIII Div 1'],
-      ['P-101A', 'Pump',      '02.02.01', 'Feed Pump — Duty',              'Pump Stn',   'A-Critical', 'PO-TEST-001', 'Flowserve',       '850',   '1200x500x700',   'API 610 OH2'],
-      ['SW-001', 'Panel',     '03.01.01', '11kV MV Switchboard Panel A',  'Substation', 'A-Critical', 'PO-2024-004', 'ABB',             '2100',  '2100x600x2300',  'IEC 62271-200'],
-    ]
-    const wsData = [headers, ...examples]
-    const ws = XLSX.utils.aoa_to_sheet(wsData)
-    ws['!cols'] = headers.map(h => ({ wch: h === 'Description' ? 35 : 18 }))
-    ws['!freeze'] = { xSplit: 0, ySplit: 1 }
-    XLSX.utils.book_append_sheet(wb, ws, 'Equipment Template')
+    const ExcelJS = require('exceljs')
+    const wb = new ExcelJS.Workbook()
+    wb.creator = 'QCO MMS'
 
+    // ── Sheet 1: Equipment Template ────────────────────────────────────────────
+    const ws = wb.addWorksheet('Equipment Template', { views: [{ state: 'frozen', ySplit: 1 }] })
+    ws.columns = [
+      { key: 'tag',         header: 'Equipment Tag',        width: 18 },
+      { key: 'type',        header: 'Equipment Type',       width: 22 },
+      { key: 'wbs_code',    header: 'WBS Code',             width: 14 },
+      { key: 'description', header: 'Description',          width: 35 },
+      { key: 'location',    header: 'Area/Location',        width: 18 },
+      { key: 'criticality', header: 'Criticality',          width: 16 },
+      { key: 'po_ref',      header: 'PO Reference',         width: 18 },
+      { key: 'vendor',      header: 'Vendor',               width: 20 },
+      { key: 'weight',      header: 'Weight (kg)',          width: 14 },
+      { key: 'size',        header: 'Overall Size (LxWxH)', width: 22 },
+      { key: 'notes',       header: 'Notes',                width: 30 },
+    ]
+
+    // Style header row
+    const ORANGE = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE84E0F' } }
+    ws.getRow(1).eachCell(c => {
+      c.font  = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10, name: 'Calibri' }
+      c.fill  = ORANGE
+      c.alignment = { vertical: 'middle', horizontal: 'left' }
+    })
+    ws.getRow(1).height = 22
+
+    // Example rows (grey italic)
+    const examples = [
+      { tag: 'V-101',  type: 'Vessel', wbs_code: '02.01.01', description: 'HP Separator 1st Stage',      location: 'Train 1',    criticality: 'A-Critical', po_ref: 'PO-2024-003', vendor: 'GHD Fabricators', weight: '12500', size: '4500x2200x2200', notes: 'ASME VIII Div 1' },
+      { tag: 'P-101A', type: 'Pump',   wbs_code: '02.02.01', description: 'Feed Pump — Duty',             location: 'Pump Stn',   criticality: 'A-Critical', po_ref: 'PO-TEST-001', vendor: 'Flowserve',       weight: '850',   size: '1200x500x700',   notes: 'API 610 OH2' },
+      { tag: 'SW-001', type: 'Panel',  wbs_code: '03.01.01', description: '11kV MV Switchboard Panel A', location: 'Substation', criticality: 'A-Critical', po_ref: 'PO-2024-004', vendor: 'ABB',             weight: '2100',  size: '2100x600x2300',  notes: 'IEC 62271-200' },
+    ]
+    examples.forEach(ex => {
+      const row = ws.addRow(ex)
+      row.eachCell(c => { c.font = { italic: true, color: { argb: 'FF94a3b8' }, size: 10, name: 'Calibri' } })
+      row.height = 18
+    })
+
+    // ─── DROPDOWN VALIDATIONS (rows 2–500, showErrorMessage: false = guide only) ─
+    // col B (2) — Equipment Type
+    ws.dataValidations.add('B2:B500', {
+      type: 'list', allowBlank: true, showErrorMessage: false,
+      formulae: ['"Vessel,Pump,Compressor,Heat exchanger,Tank,Filter,Valve,Motor,Skid,Instrument,Pipe spool,Structural,Cable drum,Panel,Package"'],
+    })
+    // col F (6) — Criticality
+    ws.dataValidations.add('F2:F500', {
+      type: 'list', allowBlank: true, showErrorMessage: false,
+      formulae: ['"A-Critical,B-Major,C-Standard"'],
+    })
+
+    // ── Sheet 2: Reference (valid values legend) ───────────────────────────────
+    const wsRef = wb.addWorksheet('Reference')
+    wsRef.getColumn(1).width = 28
+    wsRef.getColumn(2).width = 70
+    const refTitle = wsRef.getCell('A1')
+    refTitle.value = 'QCO MMS — Equipment Template: Valid Values Reference'
+    refTitle.font = { bold: true, size: 12, color: { argb: 'FFE84E0F' } }
+    wsRef.getRow(1).height = 22
+    wsRef.addRow([])
+    wsRef.addRow(['Note: These values are suggestions. You may type any value not in this list.'])
+      .getCell(1).font = { italic: true, color: { argb: 'FF64748b' }, size: 10 }
+    wsRef.addRow([])
+    const refData = [
+      ['COLUMN', 'VALID VALUES'],
+      ['Equipment Type (col B)', 'Vessel, Pump, Compressor, Heat exchanger, Tank, Filter, Valve, Motor, Skid, Instrument, Pipe spool, Structural, Cable drum, Panel, Package'],
+      ['Criticality (col F)',    'A-Critical, B-Major, C-Standard'],
+    ]
+    refData.forEach((row, i) => {
+      const r = wsRef.addRow(row)
+      if (i === 0) r.eachCell(c => { c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1e3a5f' } } })
+    })
+
+    // ── Sheet 3: Instructions ──────────────────────────────────────────────────
+    const wsI = wb.addWorksheet('Instructions')
+    wsI.getColumn(1).width = 24
+    wsI.getColumn(2).width = 10
+    wsI.getColumn(3).width = 80
     const instrData = [
       ['Column', 'Required', 'Description'],
       ['Equipment Tag',    'Yes', 'Unique tag number per project e.g. V-101, P-101A, SW-001'],
-      ['Equipment Type',   'Yes', 'Vessel | Pump | Compressor | Heat exchanger | Tank | Filter | Valve | Motor | Skid | Instrument | Pipe spool | Structural | Cable drum | Panel | Package'],
+      ['Equipment Type',   'Yes', 'Select from dropdown: Vessel | Pump | Compressor | Heat exchanger | Tank | Filter | Valve | Motor | Skid | Instrument | Pipe spool | Structural | Cable drum | Panel | Package'],
       ['WBS Code',         'Yes', 'Dotted WBS code this equipment belongs to e.g. 02.01.01'],
       ['Description',      'Yes', 'Equipment description'],
       ['Area/Location',    'No',  'Area or location tag e.g. Train 1, Substation, Pump Stn'],
-      ['Criticality',      'No',  'A-Critical | B-Major | C-Standard'],
+      ['Criticality',      'No',  'Select from dropdown: A-Critical | B-Major | C-Standard'],
       ['PO Reference',     'No',  'PO number if already raised e.g. PO-2024-003'],
       ['Vendor',           'No',  'Equipment vendor or manufacturer'],
       ['Weight (kg)',      'No',  'Approximate weight in kilograms (numeric)'],
       ['Overall Size (LxWxH)', 'No', 'Approximate envelope dimensions in mm e.g. 4500x2200x2200'],
       ['Notes',            'No',  'Any relevant notes, specs or references'],
     ]
-    const wsI = XLSX.utils.aoa_to_sheet(instrData)
-    wsI['!cols'] = [{ wch: 24 }, { wch: 10 }, { wch: 80 }]
-    XLSX.utils.book_append_sheet(wb, wsI, 'Instructions')
+    instrData.forEach((row, i) => {
+      const r = wsI.addRow(row)
+      if (i === 0) r.eachCell(c => { c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = ORANGE })
+    })
 
-    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
     res.setHeader('Content-Disposition', 'attachment; filename="Equipment_Upload_Template.xlsx"')
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    res.send(buf)
+    await wb.xlsx.write(res)
+    res.end()
   } catch (e) {
     console.error('[equipment:template]', e.message)
     res.status(500).json({ error: e.message })

@@ -170,11 +170,51 @@ router.get('/:projectId/template', async (req, res) => {
   // Rows 7-53: blank data rows
   for (let r = 7; r <= 53; r++) ws.getRow(r).height = 18
 
-  // Data validations
-  ws.dataValidations.add('E4:E53', { type: 'list', allowBlank: true, formulae: ['"EA,m,m2,m3,kg,t,LT,SET,LOT"'], showErrorMessage: true, errorTitle: 'Invalid UOM', error: 'Select: EA, m, m2, m3, kg, t, LT, SET, LOT' })
-  ws.dataValidations.add('G4:G53', { type: 'list', allowBlank: true, formulae: ['"Class I,Class II,Class III"'], showErrorMessage: true, errorTitle: 'Invalid', error: 'Select: Class I, Class II, or Class III' })
-  ws.dataValidations.add('H4:H53', { type: 'list', allowBlank: true, formulae: ['"Y,N"'], showErrorMessage: true, errorTitle: 'Invalid', error: 'Enter Y or N' })
-  ws.dataValidations.add('I4:I53', { type: 'list', allowBlank: true, formulae: ['"Y,N"'], showErrorMessage: true, errorTitle: 'Invalid', error: 'Enter Y or N' })
+  // ─── DROPDOWN VALIDATIONS (rows 4–500, showErrorMessage: false = guide only) ─
+  // col E (5) — UOM
+  ws.dataValidations.add('E4:E500', {
+    type: 'list', allowBlank: true, showErrorMessage: false,
+    formulae: ['"EA,NR,KG,T,M,MM,M2,M3,L,KL,SET,LOT,PR,LM,KN"'],
+  })
+  // col G (7) — Inspection Class
+  ws.dataValidations.add('G4:G500', {
+    type: 'list', allowBlank: true, showErrorMessage: false,
+    formulae: ['"Class I,Class II,Class III,Class IV"'],
+  })
+  // col H (8) — VDRL Required
+  ws.dataValidations.add('H4:H500', {
+    type: 'list', allowBlank: true, showErrorMessage: false,
+    formulae: ['"Yes,No"'],
+  })
+  // col I (9) — Heat Number Required
+  ws.dataValidations.add('I4:I500', {
+    type: 'list', allowBlank: true, showErrorMessage: false,
+    formulae: ['"Yes,No"'],
+  })
+
+  // ── Reference sheet (valid values legend) ─────────────────────────────────
+  const wsRef = wb.addWorksheet('Reference')
+  wsRef.getColumn(1).width = 32
+  wsRef.getColumn(2).width = 65
+  const refTitleCell = wsRef.getCell('A1')
+  refTitleCell.value = 'QCO MMS — MTO Template: Valid Values Reference'
+  refTitleCell.font = { bold: true, size: 12, color: { argb: 'FFE84E0F' } }
+  wsRef.getRow(1).height = 22
+  wsRef.addRow([])
+  wsRef.addRow(['Note: These values are suggestions. You may type any value not in this list.'])
+    .getCell(1).font = { italic: true, color: { argb: 'FF64748b' }, size: 10 }
+  wsRef.addRow([])
+  const refRows = [
+    ['COLUMN', 'VALID VALUES'],
+    ['UOM (col E)',                'EA, NR, KG, T, M, MM, M2, M3, L, KL, SET, LOT, PR, LM, KN'],
+    ['Inspection Class (col G)',   'Class I, Class II, Class III, Class IV'],
+    ['VDRL Required (col H)',      'Yes, No'],
+    ['Heat Number Required (col I)', 'Yes, No'],
+  ]
+  refRows.forEach((row, i) => {
+    const r = wsRef.addRow(row)
+    if (i === 0) r.eachCell(c => { c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1e3a5f' } } })
+  })
 
   // Instructions sheet
   const ws2 = wb.addWorksheet('Instructions')
@@ -187,11 +227,11 @@ router.get('/:projectId/template', async (req, res) => {
     ['WBS Code — Must match a WBS code in your project (e.g. 02.01.01).', false, null, 10],
     ['Description — Required for every line.', false, null, 10],
     ['Quantity — Numeric.', false, null, 10],
-    ['UOM — Unit of measure. Use dropdown: EA, m, m2, m3, kg, t, LT, SET, LOT', false, null, 10],
+    ['UOM — Select from dropdown (guide only): EA, NR, KG, T, M, MM, M2, M3, L, KL, SET, LOT, PR, LM, KN', false, null, 10],
     ['ROS Date — Format: DD-MMM-YYYY (e.g. 31-Aug-2025)', false, null, 10],
-    ['Inspection Class — Class I (statutory), Class II (witness), Class III (review only)', false, null, 10],
-    ['VDRL Required — Y if vendor documents required. N otherwise.', false, null, 10],
-    ['Heat Number Required — Y for steel, pipe, valves, pressure parts.', false, null, 10],
+    ['Inspection Class — Select from dropdown: Class I | Class II | Class III | Class IV', false, null, 10],
+    ['VDRL Required — Select Yes or No. Yes = vendor documents required.', false, null, 10],
+    ['Heat Number Required — Select Yes or No. Yes for steel, pipe, valves, pressure parts.', false, null, 10],
     ['', false, null, 10],
     ['UPLOAD RULES', true, 'FF1e3a5f', 11],
     ['1. Delete example rows (4–6) before uploading.', false, null, 10],

@@ -797,12 +797,44 @@ router.get('/:projectId/vdrl/template', async (req, res) => {
       row.height = 18
     })
 
-    // Rows 6-25: blank data rows with validation
+    // Rows 6-25: blank data rows
     for (let r = 6; r <= 25; r++) ws.getRow(r).height = 18
-    ws.dataValidations.add('E6:E25', { type: 'list', allowBlank: true, formulae: ['"Data Book,Drawing,Procedure,Certificate,Calculation,Report,Manual,Schedule,ITP,Other"'], showErrorMessage: true, errorTitle: 'Invalid Type', error: 'Select from the list' })
-    ws.dataValidations.add('I6:I25', { type: 'list', allowBlank: true, formulae: ['"Y,N"'], showErrorMessage: true, errorTitle: 'Invalid', error: 'Enter Y or N' })
 
-    // Sheet 2: Instructions
+    // ─── DROPDOWN VALIDATIONS (rows 3–500, showErrorMessage: false = guide only) ─
+    // col E (5) — Document Type (applies from example rows through data rows)
+    ws.dataValidations.add('E3:E500', {
+      type: 'list', allowBlank: true, showErrorMessage: false,
+      formulae: ['"Drawing,Datasheet,Certificate,Report,ITP,Manual,Procedure,Specification,Other"'],
+    })
+    // col I (9) — ABF Required (Yes/No)
+    ws.dataValidations.add('I3:I500', {
+      type: 'list', allowBlank: true, showErrorMessage: false,
+      formulae: ['"Yes,No"'],
+    })
+
+    // ── Reference sheet (valid values legend) ─────────────────────────────────
+    const wsRef = wb.addWorksheet('Reference')
+    wsRef.getColumn(1).width = 28
+    wsRef.getColumn(2).width = 70
+    const refTitleCell = wsRef.getCell('A1')
+    refTitleCell.value = 'QCO MMS — VDRL Template: Valid Values Reference'
+    refTitleCell.font = { bold: true, size: 12, color: { argb: 'FFE84E0F' } }
+    wsRef.getRow(1).height = 22
+    wsRef.addRow([])
+    wsRef.addRow(['Note: These values are suggestions. You may type any value not in this list.'])
+      .getCell(1).font = { italic: true, color: { argb: 'FF64748b' }, size: 10 }
+    wsRef.addRow([])
+    const refRows = [
+      ['COLUMN', 'VALID VALUES'],
+      ['Document Type (col E)', 'Drawing, Datasheet, Certificate, Report, ITP, Manual, Procedure, Specification, Other'],
+      ['ABF Required (col I)',  'Yes, No'],
+    ]
+    refRows.forEach((row, i) => {
+      const r = wsRef.addRow(row)
+      if (i === 0) r.eachCell(c => { c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1e3a5f' } } })
+    })
+
+    // Sheet 3: Instructions
     const ws2 = wb.addWorksheet('Instructions')
     ws2.getColumn(1).width = 80
     const instrLines = [
@@ -815,7 +847,7 @@ router.get('/:projectId/vdrl/template', async (req, res) => {
       ['4. Package Name: if a package exists for that PO, docs are added to it; otherwise a new package is created.', false, null, 10],
       ['5. Doc Number must be unique per package.', false, null, 10],
       ['6. Required Date / Promised Date format: dd/mm/yyyy (e.g. 30/06/2025).', false, null, 10],
-      ['7. ABF Required: Y = document must be AFC before construction proceeds; N = not an ABF gate document.', false, null, 10],
+      ['7. ABF Required: Yes = document must be AFC before construction proceeds; No = not an ABF gate document.', false, null, 10],
       ['8. Save as .xlsx before uploading.', false, null, 10],
     ]
     instrLines.forEach(([text, bold, color, size], i) => {

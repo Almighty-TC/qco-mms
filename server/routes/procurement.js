@@ -1199,7 +1199,53 @@ router.get('/template/po-upload', async (req, res) => {
     // Freeze panes: rows 1–19 stay visible while scrolling line items
     ws.views = [{ state: 'frozen', ySplit: 19 }]
 
-    // ── Sheet 2: Instructions ──────────────────────────────────────────────────
+    // ─── DROPDOWN VALIDATIONS (showErrorMessage: false = guide only) ───────────
+    // Header section: Currency at B6, INCO Terms at B7
+    ws.dataValidations.add('B6', {
+      type: 'list', allowBlank: true, showErrorMessage: false,
+      formulae: ['"AUD,USD,EUR,GBP,JPY,SGD,CAD,NZD,CNY,HKD,INR"'],
+    })
+    ws.dataValidations.add('B7', {
+      type: 'list', allowBlank: true, showErrorMessage: false,
+      formulae: ['"EXW,FCA,CPT,CIP,DAP,DPU,DDP,FAS,FOB,CFR,CIF"'],
+    })
+    // Line items: UOM at col E (5), rows 20–500
+    ws.dataValidations.add('E20:E500', {
+      type: 'list', allowBlank: true, showErrorMessage: false,
+      formulae: ['"EA,NR,KG,T,M,MM,M2,M3,L,KL,SET,LOT,PR,LM,KN"'],
+    })
+    // Line items: Heat No. Required at col K (11), rows 20–500
+    ws.dataValidations.add('K20:K500', {
+      type: 'list', allowBlank: true, showErrorMessage: false,
+      formulae: ['"Y,N"'],
+    })
+
+    // ── Sheet 2: Reference (valid values legend) ───────────────────────────────
+    const wsRef = wb.addWorksheet('Reference')
+    wsRef.getColumn(1).width = 36
+    wsRef.getColumn(2).width = 65
+    const ORANGE_REF = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE84E0F' } }
+    const refTitleCell = wsRef.getCell('A1')
+    refTitleCell.value = 'QCO MMS — PO Upload Template: Valid Values Reference'
+    refTitleCell.font = { bold: true, size: 12, color: { argb: 'FFE84E0F' } }
+    wsRef.getRow(1).height = 22
+    wsRef.addRow([])
+    wsRef.addRow(['Note: These values are suggestions. You may type any value not in this list.'])
+      .getCell(1).font = { italic: true, color: { argb: 'FF64748b' }, size: 10 }
+    wsRef.addRow([])
+    const refRows = [
+      ['COLUMN', 'VALID VALUES'],
+      ['Currency — header row (cell B6)',             'AUD, USD, EUR, GBP, JPY, SGD, CAD, NZD, CNY, HKD, INR'],
+      ['INCO Terms — header row (cell B7)',            'EXW, FCA, CPT, CIP, DAP, DPU, DDP, FAS, FOB, CFR, CIF'],
+      ['UOM — line items col E (rows 20+)',            'EA, NR, KG, T, M, MM, M2, M3, L, KL, SET, LOT, PR, LM, KN'],
+      ['Heat No. Required — line items col K (rows 20+)', 'Y, N'],
+    ]
+    refRows.forEach((row, i) => {
+      const r = wsRef.addRow(row)
+      if (i === 0) r.eachCell(c => { c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1e3a5f' } } })
+    })
+
+    // ── Sheet 3: Instructions ──────────────────────────────────────────────────
     const ws2 = wb.addWorksheet('Instructions')
     ws2.getColumn(1).width = 28
     ws2.getColumn(2).width = 14
