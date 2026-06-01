@@ -32,6 +32,7 @@ function dbToDisplay(dbStatus) {
     'in-transit':   'in_transit',
     customs_review: 'customs_review',
     arrived:        'pending_delivery',
+    partially_received: 'delivered',  // goods physically arrived (receipt in progress)
     received:       'delivered',
     closed:         'delivered',
     // new unified values (stored directly once set via this API)

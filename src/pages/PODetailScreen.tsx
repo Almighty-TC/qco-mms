@@ -38,6 +38,7 @@ interface PO {
 interface POLine {
   id: number; po_id: number; line_number: string; description: string
   qty: number | null; uom: string; unit_price: number | null; total_price: number | null
+  received_to_date?: number | null; remaining_qty?: number | null  // Phase 4: derived from receipt_lines
   ros_date: string | null; cdd: string | null; wbs_code: string | null
   heat_number_required: number; status: string; tag_number: string | null
   vdrl_required: number; cert_required: string | null
@@ -387,7 +388,7 @@ const LineItemsTab = ({ po, dark, onRefresh }: { po: PO; dark: boolean; onRefres
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead style={{ background: dark ? '#0f172a' : '#f4f7fb' }}>
             <tr>
-              {['Line#', 'Description', 'Qty', 'UOM', 'Unit Value', 'Total Value', 'WBS', 'CDD', 'ROS', 'Heat No.'].map(h => (
+              {['Line#', 'Description', 'Qty', 'UOM', 'Received', 'Remaining', 'Unit Value', 'Total Value', 'WBS', 'CDD', 'ROS', 'Heat No.'].map(h => (
                 <th key={h} style={thStyle}>{h}</th>
               ))}
               {editMode && <th style={thStyle} />}
@@ -395,7 +396,7 @@ const LineItemsTab = ({ po, dark, onRefresh }: { po: PO; dark: boolean; onRefres
           </thead>
           <tbody>
             {lines.length === 0 && (
-              <tr><td colSpan={editMode ? 11 : 10} style={{ ...tdStyle, textAlign: 'center', color: '#94a3b8', padding: '32px 0' }}>No line items</td></tr>
+              <tr><td colSpan={editMode ? 13 : 12} style={{ ...tdStyle, textAlign: 'center', color: '#94a3b8', padding: '32px 0' }}>No line items</td></tr>
             )}
             {lines.map((l, i) => (
               <tr key={l.id}>
@@ -424,6 +425,13 @@ const LineItemsTab = ({ po, dark, onRefresh }: { po: PO; dark: boolean; onRefres
                       </select>
                     : l.uom
                   }
+                </td>
+                {/* Phase 4: received-to-date + remaining, derived from receipt_lines (read-only) */}
+                <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: Number(l.received_to_date) > 0 ? '#2563eb' : '#94a3b8' }}>
+                  {Number(l.received_to_date ?? 0)}
+                </td>
+                <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: Number(l.remaining_qty ?? l.qty ?? 0) === 0 ? '#16a34a' : '#d97706' }}>
+                  {Number(l.remaining_qty ?? l.qty ?? 0)}
                 </td>
                 <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>
                   {editMode
@@ -463,11 +471,11 @@ const LineItemsTab = ({ po, dark, onRefresh }: { po: PO; dark: boolean; onRefres
           {lines.length > 0 && (
             <tfoot>
               <tr style={{ borderTop: `2px solid ${borderCol}` }}>
-                <td colSpan={editMode ? 6 : 5} style={{ padding: '10px', textAlign: 'right', fontWeight: 700, color: col, fontSize: 13 }}>Grand Total</td>
+                <td colSpan={7} style={{ padding: '10px', textAlign: 'right', fontWeight: 700, color: col, fontSize: 13 }}>Grand Total</td>
                 <td style={{ padding: '10px', textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, fontSize: 14, color: col }}>
                   {fmtCurrency(grandTotal, po.currency)}
                 </td>
-                <td colSpan={editMode ? 4 : 3} />
+                <td colSpan={editMode ? 5 : 4} />
               </tr>
             </tfoot>
           )}

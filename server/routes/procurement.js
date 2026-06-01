@@ -459,7 +459,9 @@ router.get('/pos/:id', async (req, res) => {
     const { atRiskDays } = await getProjectSettings(po.project_id)
 
     const [lines] = await db.query(`
-      SELECT l.*, u.code AS uom_code, u.description AS uom_name
+      SELECT l.*, u.code AS uom_code, u.description AS uom_name,
+             COALESCE((SELECT SUM(rl.received_qty) FROM receipt_lines rl WHERE rl.po_line_id = l.id), 0) AS received_to_date,
+             GREATEST(0, l.qty - COALESCE((SELECT SUM(rl.received_qty) FROM receipt_lines rl WHERE rl.po_line_id = l.id), 0)) AS remaining_qty
       FROM po_lines l LEFT JOIN units_of_measure u ON u.id = l.uom_id
       WHERE l.po_id = ? ORDER BY l.line_number
     `, [id])

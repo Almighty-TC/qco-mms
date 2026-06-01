@@ -27,6 +27,10 @@ interface Pipeline { arrived: number; in_transit: number; customs_hold: number; 
 // ─── HELPERS ──────────────────────────────────────────────────
 const fmt = (d?: string | null) => d ? new Date(d).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'
 
+// Phase 4: per-line "expected to receive now" = REMAINING (ordered − received-to-date,
+// from the API), so a second receipt only takes the balance. Falls back to ordered qty.
+const lineExpected = (l: any) => Number(l?.remaining ?? l?.qty) || 0
+
 const statusPill = (s: string) => {
   const m: Record<string, { label: string; bg: string; color: string }> = {
     arrived:        { label: 'Arrived — ready', bg: 'rgba(34,197,94,0.12)', color: '#16a34a' },
@@ -37,6 +41,7 @@ const statusPill = (s: string) => {
     in_transit_tr:  { label: 'Picked up',       bg: 'rgba(139,92,246,0.1)', color: '#7c3aed' },
     picked_up:      { label: 'Picked up',       bg: 'rgba(139,92,246,0.1)', color: '#7c3aed' },
     draft:          { label: 'Pending',          bg: 'rgba(148,163,184,0.1)','color': '#64748b' },
+    partially_received: { label: 'Partially received', bg: 'rgba(245,158,11,0.12)', color: '#d97706' },
   }
   return m[s] || { label: s, bg: 'rgba(148,163,184,0.1)', color: '#64748b' }
 }
@@ -175,7 +180,8 @@ const MCReceiptingInner = ({ dark, projectId, projectName, onBack }: {
                   </td></tr>
                 ) : rows.map(row => {
                   const pill = statusPill(row.status)
-                  const isArrived = row.status === 'arrived'
+                  // partially_received SCNs stay receivable for the balance.
+                  const isArrived = row.status === 'arrived' || row.status === 'partially_received'
                   return (
                     <tr key={`${row.type}-${row.id}`} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
                       <td style={{ padding: '9px 12px' }}>
@@ -273,9 +279,9 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
     axios.get(`${API}/mc/${projectId}/receipting/${scn.id}`)
       .then(r => {
         setDetail(r.data)
-        // Phase 1: receive against real PO lines — expected qty = po_line.qty.
+        // Phase 4: default actual = REMAINING to receive (ordered − received-to-date).
         const init: Record<number, number> = {}
-        ;(r.data.lines || []).forEach((l: any) => { init[l.id] = Number(l.qty) || 0 })
+        ;(r.data.lines || []).forEach((l: any) => { init[l.id] = lineExpected(l) })
         setActuals(init)
       })
       .catch(() => setDetail({ packages: [], lines: [] }))
@@ -288,7 +294,7 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
   useEffect(() => {
     const ls = detail?.lines || []
     const anyIssue = ls.some((l: any) => {
-      const exp = Number(l.qty) || 0
+      const exp = lineExpected(l)
       const act = actuals[l.id] ?? exp
       const dmg = damaged[l.id] ?? 0
       return act !== exp || dmg > 0
@@ -309,7 +315,7 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
       // Phase 1: persist the per-line received quantities + discrepancy detail
       // the wizard collected. Built from the real PO lines.
       const lines = (detail?.lines || []).map((l: any) => {
-        const expected = Number(l.qty) || 0
+        const expected = lineExpected(l)   // remaining-to-receive for THIS receipt
         const received = actuals[l.id] ?? expected
         const dmg = damaged[l.id] ?? 0
         // Phase 2 discrepancy rule: qty mismatch OR any damaged units.
@@ -409,7 +415,10 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                   <tr key={l.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
                     <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#E84E0F' }}>L-{String(l.line_number || l.id).padStart(3,'0')}</td>
                     <td style={{ padding: '8px 12px', color: col }}>{l.description || 'Line item'}</td>
-                    <td style={{ padding: '8px 12px', color: col, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{Number(l.qty)}</td>
+                    <td style={{ padding: '8px 12px', color: col, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>
+                      {lineExpected(l)}
+                      {Number(l.received_to_date) > 0 && <span style={{ color: sub }}> <span title="already received-to-date">(of {Number(l.qty)} ordered)</span></span>}
+                    </td>
                     <td style={{ padding: '8px 12px', color: sub }}>{l.uom || 'EA'}</td>
                   </tr>
                 ))}
@@ -434,8 +443,9 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
         {step === 2 && (() => {
           // Phase 2: ALL discrepancy state derived live from current values —
           // nothing latched. Re-evaluated on every render/change.
+          // Phase 4: "expected" = remaining-to-receive (so a 2nd receipt takes the balance).
           const lines = detail?.lines || []
-          const expOf = (l: any) => Number(l.qty) || 0
+          const expOf = (l: any) => lineExpected(l)
           const recOf = (l: any) => actuals[l.id] ?? expOf(l)
           const dmgOf = (l: any) => damaged[l.id] ?? 0
           // A line is a discrepancy when received != expected OR damaged > 0.
@@ -484,7 +494,10 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                       <tr key={l.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, background: rowHighlight }}>
                         <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#E84E0F' }}>L-{String(l.line_number || l.id).padStart(3,'0')}</td>
                         <td style={{ padding: '8px 12px', color: col }}>{l.description || 'Line item'}</td>
-                        <td style={{ padding: '8px 12px', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{expected}</td>
+                        <td style={{ padding: '8px 12px', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>
+                          {expected}
+                          {Number(l.received_to_date) > 0 && <span title="already received-to-date"> (of {Number(l.qty)})</span>}
+                        </td>
                         <td style={{ padding: '8px 12px', color: sub }}>{l.uom || 'EA'}</td>
                         <td style={{ padding: '8px 12px' }}>
                           <input type="number" value={actual} min={0}

@@ -49,13 +49,15 @@ router.get('/:projectId/receipting', rejectExternal, async (req, res) => {
     const { tab, search, destination } = req.query
 
     // Status mapping by tab
+    // 'partially_received' SCNs stay receivable (a remainder is still due),
+    // so they appear alongside 'arrived' in the receipting queue.
     const tabStatus = {
-      arrived:    ['arrived'],
+      arrived:    ['arrived', 'partially_received'],
       in_transit: ['in-transit', 'in_transit', 'pending'],
       customs:    ['customs_review'],
-      shipments:  ['arrived','in-transit','in_transit','pending','customs_review'],
+      shipments:  ['arrived','partially_received','in-transit','in_transit','pending','customs_review'],
       transfers:  [], // warehouse_transfers handled separately
-      all:        ['arrived','in-transit','in_transit','pending','customs_review','draft'],
+      all:        ['arrived','partially_received','in-transit','in_transit','pending','customs_review','draft'],
     }
 
     const statuses = tabStatus[tab] || tabStatus.all
@@ -137,7 +139,7 @@ router.get('/:projectId/receipting', rejectExternal, async (req, res) => {
       [pid]
     )
 
-    const arrived_count   = allRows.filter(r => r.status === 'arrived').length
+    const arrived_count   = allRows.filter(r => ['arrived','partially_received'].includes(r.status)).length
     const transit_count   = allRows.filter(r => ['in-transit','in_transit','pending'].includes(r.status)).length
     const customs_count   = allRows.filter(r => r.status === 'customs_review').length
     const total_awaiting  = arrived_count + transit_count + customs_count + tCount.n
@@ -174,9 +176,14 @@ router.get('/:projectId/receipting/:scnId', rejectExternal, async (req, res) => 
     if (!scn) return res.status(404).json({ error: 'SCN not found' })
 
     const [packages] = await db.query('SELECT * FROM scn_packages WHERE scn_id = ?', [scnId])
+    // Phase 4: received-to-date is DERIVED from receipt_lines (single source of
+    // truth — no qty_received/qty_assigned writes). remaining = ordered − received,
+    // clamped ≥ 0 so over-receipt never shows a negative balance.
     const [lines] = await db.query(
       `SELECT pl.id, pl.line_number, pl.description, pl.qty, pl.uom, pl.qty_assigned,
-              pl.wbs_code_snapshot, pl.tag_number, pl.equipment_tag, pl.commodity_id
+              pl.wbs_code_snapshot, pl.tag_number, pl.equipment_tag, pl.commodity_id,
+              COALESCE((SELECT SUM(rl.received_qty) FROM receipt_lines rl WHERE rl.po_line_id = pl.id), 0) AS received_to_date,
+              GREATEST(0, pl.qty - COALESCE((SELECT SUM(rl.received_qty) FROM receipt_lines rl WHERE rl.po_line_id = pl.id), 0)) AS remaining
        FROM po_lines pl WHERE pl.po_id = ?`,
       [scn.po_id || 0]
     )
@@ -200,11 +207,9 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
     const [[scn]] = await db.query('SELECT * FROM shipment_control_notes WHERE id = ?', [scnId])
     if (!scn) return res.status(404).json({ error: 'SCN not found' })
 
-    // Mark SCN as received
-    await db.query(
-      'UPDATE shipment_control_notes SET status=?, ata=CURDATE() WHERE id=?',
-      ['received', scnId]
-    )
+    // Stamp arrival now; the OPEN-vs-CLOSED status is decided AFTER the lines are
+    // persisted, based on received-to-date vs ordered (Phase 4 partial-remainder).
+    await db.query('UPDATE shipment_control_notes SET ata=CURDATE() WHERE id=?', [scnId])
 
     const whId = warehouse_id || scn.destination_warehouse_id || 1
     const condition = cargo_condition === 'good' ? 'good'
@@ -287,12 +292,27 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
       }
     }
 
+    // ── Phase 4: decide OPEN vs CLOSED from received-to-date vs ordered ──
+    // Fully received = every PO line's SUM(receipt_lines.received_qty) >= ordered qty.
+    // Otherwise the SCN stays open as 'partially_received' so the balance can be
+    // received later. (Legacy package path has no PO lines → treat as 'received'.)
+    let newStatus = 'received'
+    if (scn.po_id) {
+      const [[{ open_lines }]] = await db.query(
+        `SELECT COUNT(*) AS open_lines FROM po_lines pl
+         WHERE pl.po_id = ?
+           AND pl.qty > COALESCE((SELECT SUM(rl.received_qty) FROM receipt_lines rl WHERE rl.po_line_id = pl.id), 0)`,
+        [scn.po_id])
+      newStatus = Number(open_lines) > 0 ? 'partially_received' : 'received'
+    }
+    await db.query('UPDATE shipment_control_notes SET status=? WHERE id=?', [newStatus, scnId])
+
     await writeAudit(userId, 'receipt_complete', 'scn', scnId,
       { status: scn.status },
-      { status: 'received', location_code, cargo_condition, lines: Array.isArray(lines) ? lines.length : 0 },
+      { status: newStatus, location_code, cargo_condition, lines: Array.isArray(lines) ? lines.length : 0 },
       `/mc/${pid}/receipting/${scnId}/complete`)
 
-    res.json({ success: true, stock_created: stockCreated })
+    res.json({ success: true, stock_created: stockCreated, scn_status: newStatus })
   } catch (e) {
     console.error('[mc:receipt-complete]', e.message)
     res.status(500).json({ error: e.message })
