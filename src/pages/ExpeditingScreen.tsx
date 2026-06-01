@@ -666,7 +666,7 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
           ) : filtered.length === 0 ? (
             <div style={{ textAlign: 'center', color: sub, padding: '48px 0', fontSize: 13 }}>No POs match the filter.</div>
           ) : (
-            <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 260px)' }}>
+            <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 320px)' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: dark ? '#162032' : '#f8fafc' }}>
                   <tr style={{ borderBottom: bd }}>
@@ -724,7 +724,7 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
                         </td>
                         {/* Milestones */}
                         <td style={{ padding: '10px 12px' }}>
-                          <MilestoneTimeline milestones={po.milestones} size="sm" />
+                          <MilestoneTimeline milestones={po.milestones} size="sm" dark={dark} />
                         </td>
                         {/* ROS */}
                         <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{fmt(po.ros_date)}</td>
@@ -749,6 +749,31 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
               </table>
             </div>
           )}
+
+          {/* ── MILESTONE LEGEND ─────────────────────────────── */}
+          <div style={{
+            display: 'flex', gap: 20, alignItems: 'center',
+            padding: '8px 12px', borderTop: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`,
+            flexWrap: 'wrap',
+          }}>
+            {[
+              { label: 'Complete',    color: '#22c55e', hollow: false },
+              { label: 'In Progress', color: '#f59e0b', hollow: false },
+              { label: 'Breached',    color: '#ef4444', hollow: false },
+              { label: 'Not Started', color: '#94a3b8', hollow: true  },
+              { label: 'Future',      color: '#2563eb', hollow: false },
+            ].map(({ label, color, hollow }) => (
+              <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <div style={{
+                  width: 8, height: 8, borderRadius: '50%',
+                  background:  hollow ? 'transparent' : color,
+                  border:      hollow ? `2px solid ${color}` : 'none',
+                  flexShrink: 0,
+                }} />
+                <span style={{ fontSize: 11, color: '#94a3b8' }}>{label}</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

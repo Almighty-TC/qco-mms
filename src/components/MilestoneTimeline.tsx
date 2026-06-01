@@ -17,6 +17,7 @@ interface Props {
   milestones: Milestone[]
   size?: 'sm' | 'lg'
   showDates?: boolean
+  dark?: boolean
 }
 
 // ─── LABEL ABBREVIATIONS ─────────────────────────────────────
@@ -45,7 +46,7 @@ const fmtShort = (d: string | null | undefined) =>
 
 // ─── COMPONENT ────────────────────────────────────────────────
 export const MilestoneTimeline: React.FC<Props> = ({
-  milestones, size = 'sm', showDates = false,
+  milestones, size = 'sm', showDates = false, dark = false,
 }) => {
   // Pad to exactly 5 slots
   const slots = [
@@ -62,8 +63,12 @@ export const MilestoneTimeline: React.FC<Props> = ({
         const colour     = STATUS_COLORS[m.status] || '#94a3b8'
         const isFilled   = m.status !== 'not_started'
         const isLast     = i === slots.length - 1
-        const leftDone   = i > 0 && slots[i - 1].status === 'complete'
-        const connColour = leftDone ? '#22c55e' : '#e2e8f0'
+        // ─── CONNECTOR RULE ──────────────────────────────────────────
+        // Connector at slot i spans from dot i to dot i+1.
+        // Green if dot i is complete (covers complete→complete and
+        // complete→in_progress cases). Grey otherwise.
+        const greyConn   = dark ? '#334155' : '#e2e8f0'
+        const connColour = m.status === 'complete' ? '#22c55e' : greyConn
 
         // Date to display: actual → forecast → planned
         const displayDate = m.actual_date || m.forecast_date || m.planned_date
