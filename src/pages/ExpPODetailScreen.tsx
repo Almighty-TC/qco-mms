@@ -1143,8 +1143,8 @@ const ITPItemModal = ({
   }
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 3000, overflowY: 'auto', padding: '20px 0' }}>
-      <div style={{ background: cardBg, borderRadius: 12, padding: 28, width: 580, maxWidth: '94vw', border: bd, boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }}>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 3000, overflowY: 'auto', paddingTop: '5vh', paddingBottom: '5vh' }}>
+      <div style={{ background: cardBg, borderRadius: 12, padding: 28, width: 580, maxWidth: '94vw', border: bd, boxShadow: '0 20px 60px rgba(0,0,0,0.25)', maxHeight: '90vh', overflowY: 'auto', position: 'relative' }}>
         {/* Title */}
         <div style={{ fontWeight: 700, fontSize: 15, color: col, marginBottom: 20 }}>
           {mode === 'add' ? 'Add ITP Item' : `Edit ITP Item — #${item?.item_number}`}
