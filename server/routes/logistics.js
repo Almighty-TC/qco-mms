@@ -196,11 +196,12 @@ router.get('/register/:projectId', async (req, res) => {
       rag: computeRAG(r.status, r.eta),
     }))
 
-    // Pipeline counts
-    const [allStatuses] = await db.query(
-      'SELECT status FROM shipment_control_notes WHERE project_id = ?',
-      [pid]
-    )
+    // Pipeline counts — scoped to forwarder if applicable
+    const pipelineSql = role === 'freight_forwarder'
+      ? 'SELECT status FROM shipment_control_notes WHERE project_id = ? AND forwarder_user_id = ?'
+      : 'SELECT status FROM shipment_control_notes WHERE project_id = ?'
+    const pipelineParams = role === 'freight_forwarder' ? [pid, uid] : [pid]
+    const [allStatuses] = await db.query(pipelineSql, pipelineParams)
     const pipeline_counts = {
       pending_pickup:   0,
       in_transit:       0,

@@ -6,6 +6,7 @@ import React, { useState, useEffect } from 'react'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
+import { useCurrentUser } from '../hooks/useCurrentUser'
 
 const API = 'http://localhost:3001/api'
 
@@ -45,6 +46,11 @@ const MCReceiptingInner = ({ dark, projectId, projectName, onBack }: {
   dark: boolean; projectId: number; projectName: string; onBack: () => void
 }) => {
   const { addToast } = useToast()
+  const { isSubcontractor, isForwarder } = useCurrentUser()
+
+  // Subcontractors/forwarders redirected away — safety net in addition to sidebar hiding
+  if (isSubcontractor || isForwarder) { onBack(); return null }
+
   const col    = dark ? '#f1f5f9' : '#0f172a'
   const cardBg = dark ? '#1e293b' : '#fff'
   const bg     = dark ? '#0f172a' : '#f4f7fb'
