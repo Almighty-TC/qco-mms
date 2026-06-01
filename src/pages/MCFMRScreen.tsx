@@ -19,6 +19,8 @@ interface FMRRow {
   required_date?: string | null; work_order_ref?: string | null
   requested_by_name?: string | null; requested_by_company?: string | null
   status: string; is_critical_path: number; stock_on_hand?: number
+  warehouse_id?: number | null; warehouse_code?: string | null; warehouse_name?: string | null
+  line_count?: number; total_qty_requested?: number
 }
 
 interface FMRCounts { total: number; pending_approval: number; partial_issued: number; issued_today: number; overdue: number }
@@ -58,6 +60,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
   const [pickup, setPickup]       = useState<PickupWindow>('all')
   const [critOnly, setCritOnly]   = useState(false)
   const [approveFmr, setApproveFmr] = useState<FMRRow | null>(null)
+  const [viewFmr, setViewFmr]     = useState<FMRRow | null>(null)
   const [raiseFmr, setRaiseFmr]   = useState(false)
 
   const fetchFMRs = async () => {
@@ -196,16 +199,16 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                 <tr style={{ borderBottom: bd }}>
-                  {['FMR REF','ITEM','DESCRIPTION','WBS','QTY','ISSUED','REQUESTED BY','REQ. DATE','STATUS',''].map(h => (
+                  {['FMR REF','ITEMS','WBS','WAREHOUSE','QTY','REQUESTED BY','REQ. DATE','STATUS',''].map(h => (
                     <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={10} style={{ padding: 40, textAlign: 'center', color: sub }}>Loading…</td></tr>
+                  <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center', color: sub }}>Loading…</td></tr>
                 ) : fmrs.length === 0 ? (
-                  <tr><td colSpan={10} style={{ padding: 50, textAlign: 'center', color: sub }}>No FMRs found.</td></tr>
+                  <tr><td colSpan={9} style={{ padding: 50, textAlign: 'center', color: sub }}>No FMRs found.</td></tr>
                 ) : fmrs.map(fmr => {
                   const pill = statusPill(fmr.status)
                   const overdue = isOverdue(fmr.required_date)
@@ -218,13 +221,25 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
                           <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600 }}>{fmr.fmr_ref}</span>
                         </div>
                       </td>
-                      <td style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col }}>{fmr.item_code || '—'}</td>
-                      <td style={{ padding: '9px 12px', color: col, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fmr.description}</td>
-                      <td style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{fmr.wbs_code || '—'}</td>
-                      <td style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col }}>{fmr.qty_requested}</td>
-                      <td style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: fmr.qty_issued > 0 ? '#2563eb' : sub }}>
-                        {fmr.qty_issued > 0 ? fmr.qty_issued : '—'}
-                        {fmr.stock_on_hand !== undefined && <div style={{ fontSize: 10, color: sub }}>In stock: {fmr.stock_on_hand}</div>}
+                      <td style={{ padding: '9px 12px', maxWidth: 240, overflow: 'hidden' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col }}>{fmr.item_code || '—'}</span>
+                          {(fmr.line_count ?? 1) > 1 && (
+                            <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 6, background: dark ? '#334155' : '#eef2f7', color: sub, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                              +{(fmr.line_count as number) - 1} more
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 11, color: sub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fmr.description}</div>
+                      </td>
+                      <td style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>
+                        {(fmr.line_count ?? 1) > 1 ? 'multiple' : (fmr.wbs_code || '—')}
+                      </td>
+                      <td style={{ padding: '9px 12px', fontSize: 11, color: col, whiteSpace: 'nowrap' }}>
+                        {fmr.warehouse_code ? <><span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#2563eb' }}>{fmr.warehouse_code}</span> <span style={{ color: sub }}>· {fmr.warehouse_name}</span></> : '—'}
+                      </td>
+                      <td style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col }}>
+                        {(fmr.line_count ?? 1) > 1 ? `${fmr.line_count} lines` : `${fmr.qty_requested} ${fmr.uom}`}
                       </td>
                       <td style={{ padding: '9px 12px', color: col, fontSize: 11 }}>
                         {fmr.requested_by_name || '—'}
@@ -246,7 +261,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
                             Approve
                           </button>
                         ) : (
-                          <button style={{ padding: '4px 12px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>View</button>
+                          <button onClick={() => setViewFmr(fmr)} style={{ padding: '4px 12px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>View</button>
                         )}
                       </td>
                     </tr>
@@ -268,12 +283,21 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
         />
       )}
 
-      {/* Raise FMR Modal */}
+      {/* Raise FMR Modal — multi-line builder */}
       {raiseFmr && (
         <RaiseFMRModal
           dark={dark} projectId={projectId}
           onClose={() => setRaiseFmr(false)}
           onSaved={() => { setRaiseFmr(false); fetchFMRs(); addToast('success', 'FMR submitted for approval') }}
+          addToast={addToast}
+        />
+      )}
+
+      {/* FMR Detail Modal — multi-line, contractor-safe (no grid location) */}
+      {viewFmr && (
+        <FMRDetailModal
+          dark={dark} projectId={projectId} fmr={viewFmr}
+          onClose={() => setViewFmr(null)}
           addToast={addToast}
         />
       )}
@@ -420,7 +444,23 @@ const FMRApprovalModal = ({ dark, fmr, projectId, onClose, onSaved, addToast }: 
   )
 }
 
-// ─── RAISE FMR MODAL ──────────────────────────────────────────
+// ─── RAISE FMR MODAL — MULTI-LINE BUILDER ─────────────────────
+// One warehouse per FMR (auto-locked to the first item added). Items
+// are searched from contractor-scoped stock; equipment is qty-locked
+// to 1; same commodity against a different WBS = a separate line.
+// Grid/bin location is never shown — the picker endpoint omits it.
+interface PickItem {
+  item_id: number; item_code: string; description: string; wbs_code: string
+  qty_available: number; uom: string; warehouse_id: number
+  warehouse_code: string; warehouse_name: string; item_type: 'commodity' | 'equipment'
+  ros_date?: string | null
+}
+interface FMRLineDraft {
+  item_id: number; item_code: string; item_type: 'commodity' | 'equipment'
+  description: string; wbs_code: string; qty_requested: number; uom: string
+  warehouse_id: number; warehouse_code: string; warehouse_name: string; available: number
+}
+
 const RaiseFMRModal = ({ dark, projectId, onClose, onSaved, addToast }: {
   dark: boolean; projectId: number; onClose: () => void; onSaved: () => void
   addToast: (t: 'success'|'error', m: string) => void
@@ -431,69 +471,271 @@ const RaiseFMRModal = ({ dark, projectId, onClose, onSaved, addToast }: {
   const sub    = '#94a3b8'
   const inputSt: React.CSSProperties = { fontSize: 12, padding: '7px 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontFamily: 'inherit', width: '100%', boxSizing: 'border-box' }
 
-  const [form, setForm] = useState({ wbs_code: '', item_code: '', description: '', qty: '', uom: 'EA', required_date: '', work_order_ref: '', requested_by_name: '', requested_by_company: '' })
+  const [lines, setLines]   = useState<FMRLineDraft[]>([])
+  const [search, setSearch] = useState('')
+  const [whFilter, setWhFilter] = useState('')      // warehouse_id as string
+  const [wbsFilter, setWbsFilter] = useState('')
+  const [results, setResults] = useState<PickItem[]>([])
+  const [warehouses, setWarehouses] = useState<{ id: number; code: string; name: string }[]>([])
+  const [workOrder, setWorkOrder] = useState('')
+  const [requiredDate, setRequiredDate] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const set = (k: string, v: string) => setForm(p => ({ ...p, [k]: v }))
+
+  // Warehouse is locked to the first added line's warehouse.
+  const locked = lines.length > 0 ? { id: lines[0].warehouse_id, code: lines[0].warehouse_code, name: lines[0].warehouse_name } : null
+
+  // Initial scoped fetch → derive warehouse filter options.
+  useEffect(() => {
+    axios.get(`${API}/mc/${projectId}/fmr/items`).then(({ data }) => {
+      const seen = new Map<number, { id: number; code: string; name: string }>()
+      ;(data.data || []).forEach((i: PickItem) => { if (!seen.has(i.warehouse_id)) seen.set(i.warehouse_id, { id: i.warehouse_id, code: i.warehouse_code, name: i.warehouse_name }) })
+      setWarehouses([...seen.values()])
+    }).catch(() => {})
+  }, [projectId])
+
+  // Item search — debounced. When locked, force warehouse to the locked one.
+  useEffect(() => {
+    const run = async () => {
+      try {
+        const params: any = {}
+        if (search.trim()) params.q = search.trim()
+        if (wbsFilter.trim()) params.wbs_id = wbsFilter.trim()
+        const wh = locked ? String(locked.id) : whFilter
+        if (wh) params.warehouse_id = wh
+        const { data } = await axios.get(`${API}/mc/${projectId}/fmr/items`, { params })
+        setResults(data.data || [])
+      } catch (e: any) { addToast('error', e.response?.data?.error || 'Item search failed') }
+    }
+    const t = setTimeout(run, 250)
+    return () => clearTimeout(t)
+  }, [search, whFilter, wbsFilter, locked?.id, projectId]) // eslint-disable-line
+
+  const addLine = (it: PickItem) => {
+    // Enforce single-warehouse even if a stale cross-warehouse result is clicked.
+    if (locked && it.warehouse_id !== locked.id) {
+      addToast('error', 'All items in one FMR must come from the same warehouse'); return
+    }
+    // A stock row is a unique item+WBS; block exact duplicates.
+    if (lines.some(l => l.item_id === it.item_id)) { addToast('error', 'That item line is already added'); return }
+    setLines(p => [...p, {
+      item_id: it.item_id, item_code: it.item_code, item_type: it.item_type, description: it.description,
+      wbs_code: it.wbs_code, qty_requested: it.item_type === 'equipment' ? 1 : 1, uom: it.uom,
+      warehouse_id: it.warehouse_id, warehouse_code: it.warehouse_code, warehouse_name: it.warehouse_name,
+      available: Number(it.qty_available),
+    }])
+  }
+  const removeLine = (idx: number) => setLines(p => p.filter((_, i) => i !== idx))
+  const setQty = (idx: number, v: string) => setLines(p => p.map((l, i) => i === idx ? { ...l, qty_requested: Number(v) } : l))
 
   const submit = async () => {
-    if (!form.description.trim()) { setError('Description is required'); return }
-    if (!form.qty || Number(form.qty) <= 0) { setError('Quantity must be greater than 0'); return }
-    if (!form.required_date) { setError('Required date is required'); return }
-    setSaving(true); setError('')
+    setError('')
+    if (lines.length === 0) { setError('Add at least one line item'); return }
+    if (!requiredDate) { setError('Required date is required'); return }
+    setSaving(true)
     try {
       await axios.post(`${API}/mc/${projectId}/fmr`, {
-        ...form, qty_requested: Number(form.qty),
+        warehouse_id: locked!.id,
+        required_date: requiredDate,
+        work_order_ref: workOrder || undefined,
+        lines: lines.map(l => ({
+          item_id: l.item_id, item_code: l.item_code, item_type: l.item_type,
+          description: l.description, wbs_code: l.wbs_code, qty_requested: l.qty_requested, uom: l.uom,
+        })),
       })
       onSaved()
     } catch (e: any) { setError(e.response?.data?.error || 'Failed to submit FMR') }
     finally { setSaving(false) }
   }
 
+  // Hide already-added items from results.
+  const visibleResults = results.filter(r => !lines.some(l => l.item_id === r.item_id))
+
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
-      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 28, width: 460, maxWidth: '95vw', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: col, marginBottom: 4 }}>Raise FMR</div>
-        <div style={{ fontSize: 12, color: sub, marginBottom: 20 }}>Showing materials for your assigned WBS scope: 03.01 · 03.02 · 04.01</div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div><label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>WBS node (your scope only)</label>
-            <select value={form.wbs_code} onChange={e => set('wbs_code', e.target.value)} style={inputSt}>
-              <option value="">Select WBS…</option>
-              <option value="03.01.01">03.01.01 — Piping & Valves</option>
-              <option value="03.02.04">03.02.04 — Stainless Piping</option>
-              <option value="04.01.01">04.01.01 — Cables</option>
-            </select>
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 0, width: 860, maxWidth: '96vw', maxHeight: '92vh', display: 'flex', flexDirection: 'column', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        {/* Header */}
+        <div style={{ padding: '16px 22px', borderBottom: bd, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: col }}>Raise FMR</div>
+            <div style={{ fontSize: 12, color: sub, marginTop: 2 }}>Search items within your contract scope · one warehouse per FMR</div>
           </div>
-          <div><label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>Item (stock linked to selected WBS)</label>
-            <select value={form.item_code} onChange={e => set('item_code', e.target.value)} style={inputSt}>
-              <option value="">Select item…</option>
-              <option value="CS-002">CS-002 — Gate valve flanged DN400 ANSI 900#</option>
-              <option value="CS-001">CS-001 — Carbon steel pipe 16" API 5L X65</option>
-            </select>
-          </div>
-          <div><label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>Description *</label>
-            <input value={form.description} onChange={e => set('description', e.target.value)} placeholder="Item description" style={inputSt} />
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            <div><label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>Quantity requested *</label>
-              <input type="number" value={form.qty} onChange={e => set('qty', e.target.value)} min={0} style={inputSt} /></div>
-            <div><label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>Required date *</label>
-              <input type="date" value={form.required_date} onChange={e => set('required_date', e.target.value)} style={inputSt} /></div>
-          </div>
-          <div><label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>Work order reference</label>
-            <input value={form.work_order_ref} onChange={e => set('work_order_ref', e.target.value)} placeholder="WO-2025-XXXX" style={inputSt} /></div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: sub, cursor: 'pointer' }}>✕</button>
         </div>
 
-        {error && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 12 }}>{error}</div>}
+        <div style={{ flex: 1, overflow: 'auto', padding: 20, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
+          {/* Left — item picker */}
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: sub, textTransform: 'uppercase', marginBottom: 8 }}>Find items</div>
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search item name or code…" style={{ ...inputSt, marginBottom: 8 }} />
+            <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+              <select value={locked ? String(locked.id) : whFilter} onChange={e => setWhFilter(e.target.value)} disabled={!!locked} style={{ ...inputSt, opacity: locked ? 0.7 : 1 }}>
+                <option value="">All warehouses</option>
+                {warehouses.map(w => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}
+              </select>
+              <input value={wbsFilter} onChange={e => setWbsFilter(e.target.value)} placeholder="WBS filter…" style={inputSt} />
+            </div>
+            {locked && (
+              <div style={{ fontSize: 11, color: '#2563eb', background: dark ? '#162032' : '#eff6ff', border: `1px solid ${dark ? '#334155' : '#bfdbfe'}`, borderRadius: 6, padding: '6px 10px', marginBottom: 8 }}>
+                🔒 Locked to <strong>{locked.code} · {locked.name}</strong> — all items in one FMR must come from the same warehouse.
+              </div>
+            )}
+            <div style={{ border: bd, borderRadius: 8, overflow: 'auto', maxHeight: 340 }}>
+              {visibleResults.length === 0 ? (
+                <div style={{ padding: 24, textAlign: 'center', color: sub, fontSize: 12 }}>No items match.</div>
+              ) : visibleResults.map(it => (
+                <div key={it.item_id} style={{ padding: '9px 12px', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600 }}>{it.item_code}</span>
+                      {it.item_type === 'equipment' && <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 5, background: 'rgba(124,58,237,0.12)', color: '#7c3aed', fontWeight: 700 }}>EQUIP</span>}
+                    </div>
+                    <div style={{ fontSize: 11, color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.description}</div>
+                    <div style={{ fontSize: 10, color: sub, fontFamily: 'JetBrains Mono, monospace' }}>
+                      WBS {it.wbs_code} · {Number(it.qty_available)} {it.uom} avail · {it.warehouse_code}
+                    </div>
+                  </div>
+                  <button onClick={() => addLine(it)}
+                    style={{ padding: '4px 12px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 600, flexShrink: 0 }}>+ Add</button>
+                </div>
+              ))}
+            </div>
+          </div>
 
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 20 }}>
-          <button onClick={onClose} style={{ padding: '8px 18px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
-          <button onClick={submit} disabled={saving}
-            style={{ padding: '8px 18px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
-            {saving ? 'Submitting…' : 'Submit FMR'}
-          </button>
+          {/* Right — lines + header fields */}
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: sub, textTransform: 'uppercase', marginBottom: 8 }}>FMR lines ({lines.length})</div>
+            <div style={{ border: bd, borderRadius: 8, overflow: 'hidden', marginBottom: 14 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                <thead>
+                  <tr style={{ background: dark ? '#162032' : '#f8fafc' }}>
+                    {['ITEM','WBS','QTY','UOM',''].map(h => <th key={h} style={{ padding: '6px 8px', textAlign: 'left', fontSize: 9, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {lines.length === 0 ? (
+                    <tr><td colSpan={5} style={{ padding: 22, textAlign: 'center', color: sub }}>No lines yet — add items from the left.</td></tr>
+                  ) : lines.map((l, idx) => (
+                    <tr key={idx} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
+                      <td style={{ padding: '6px 8px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <span style={{ fontFamily: 'JetBrains Mono, monospace', color: col }}>{l.item_code}</span>
+                          {l.item_type === 'equipment' && <span style={{ fontSize: 8, padding: '0 4px', borderRadius: 4, background: 'rgba(124,58,237,0.12)', color: '#7c3aed', fontWeight: 700 }}>EQ</span>}
+                        </div>
+                        <div style={{ fontSize: 10, color: sub, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.description}</div>
+                      </td>
+                      <td style={{ padding: '6px 8px', fontFamily: 'JetBrains Mono, monospace', color: sub }}>{l.wbs_code}</td>
+                      <td style={{ padding: '6px 8px' }}>
+                        <input type="number" value={l.qty_requested} min={1}
+                          disabled={l.item_type === 'equipment'}
+                          onChange={e => setQty(idx, e.target.value)}
+                          title={l.item_type === 'equipment' ? 'Equipment qty is fixed at 1' : ''}
+                          style={{ width: 56, fontSize: 11, padding: '3px 5px', borderRadius: 4, border: bd, background: l.item_type === 'equipment' ? (dark ? '#1e293b' : '#eef2f7') : (dark ? '#0f172a' : '#fff'), color: col, fontFamily: 'JetBrains Mono, monospace', opacity: l.item_type === 'equipment' ? 0.7 : 1 }} />
+                      </td>
+                      <td style={{ padding: '6px 8px', color: sub }}>{l.uom}</td>
+                      <td style={{ padding: '6px 8px' }}>
+                        <button onClick={() => removeLine(idx)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 13 }}>✕</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div><label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>Work order reference</label>
+                <input value={workOrder} onChange={e => setWorkOrder(e.target.value)} placeholder="WO-2025-XXXX" style={inputSt} /></div>
+              <div><label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>Required date *</label>
+                <input type="date" value={requiredDate} onChange={e => setRequiredDate(e.target.value)} style={inputSt} /></div>
+            </div>
+            {error && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 12 }}>{error}</div>}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div style={{ padding: '14px 22px', borderTop: bd, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: 11, color: sub }}>{lines.length} line{lines.length !== 1 ? 's' : ''}{locked ? ` · ${locked.code}` : ''}</span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={onClose} style={{ padding: '8px 18px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
+            <button onClick={submit} disabled={saving || lines.length === 0 || !requiredDate}
+              style={{ padding: '8px 18px', borderRadius: 6, border: 'none', background: (lines.length && requiredDate) ? '#E84E0F' : '#94a3b8', color: '#fff', cursor: (lines.length && requiredDate && !saving) ? 'pointer' : 'default', fontSize: 12, fontWeight: 600 }}>
+              {saving ? 'Submitting…' : `Submit FMR (${lines.length})`}
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
+  )
+}
+
+// ─── FMR DETAIL MODAL — multi-line, contractor-safe ───────────
+// Loads header + all lines from /fmr/:id/detail. Shows warehouse code
+// (not grid/bin location). Used by the register View action.
+const FMRDetailModal = ({ dark, projectId, fmr, onClose, addToast }: {
+  dark: boolean; projectId: number; fmr: FMRRow; onClose: () => void
+  addToast: (t: 'success'|'error', m: string) => void
+}) => {
+  const col    = dark ? '#f1f5f9' : '#0f172a'
+  const cardBg = dark ? '#1e293b' : '#fff'
+  const bd     = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const sub    = '#94a3b8'
+  const [lines, setLines] = useState<any[]>([])
+  const [header, setHeader] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    axios.get(`${API}/mc/${projectId}/fmr/${fmr.id}/detail`)
+      .then(({ data }) => { setHeader(data.fmr); setLines(data.lines || []) })
+      .catch((e: any) => addToast('error', e.response?.data?.error || 'Failed to load FMR'))
+      .finally(() => setLoading(false))
+  }, [fmr.id]) // eslint-disable-line
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, width: 680, maxWidth: '95vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ padding: '16px 22px', borderBottom: bd, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: col, fontFamily: 'JetBrains Mono, monospace' }}>{fmr.fmr_ref}</div>
+            <div style={{ fontSize: 12, color: sub, marginTop: 2 }}>
+              {fmr.requested_by_name || '—'}{fmr.requested_by_company ? ` · ${fmr.requested_by_company}` : ''}
+              {(header?.warehouse_code || fmr.warehouse_code) ? ` · ${header?.warehouse_code || fmr.warehouse_code} ${header?.warehouse_name || fmr.warehouse_name || ''}` : ''}
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: sub, cursor: 'pointer' }}>✕</button>
+        </div>
+
+        <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
+          {loading ? <div style={{ padding: 30, textAlign: 'center', color: sub }}>Loading…</div> : (
+            <>
+              <div style={{ fontSize: 11, fontWeight: 700, color: sub, textTransform: 'uppercase', marginBottom: 8 }}>Line items ({lines.length})</div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
+                    {['ITEM','TYPE','DESCRIPTION','WBS','QTY REQ','ISSUED'].map(h => <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 9, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {lines.map(l => (
+                    <tr key={l.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
+                      <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600 }}>{l.item_code || '—'}</td>
+                      <td style={{ padding: '7px 10px' }}>
+                        <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 5, background: l.item_type === 'equipment' ? 'rgba(124,58,237,0.12)' : (dark ? '#334155' : '#eef2f7'), color: l.item_type === 'equipment' ? '#7c3aed' : sub, fontWeight: 600 }}>{l.item_type}</span>
+                      </td>
+                      <td style={{ padding: '7px 10px', color: col, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.description}</td>
+                      <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{l.wbs_code}</td>
+                      <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col }}>{Number(l.qty_requested)} {l.uom}</td>
+                      <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: Number(l.qty_issued) > 0 ? '#2563eb' : sub }}>{Number(l.qty_issued) > 0 ? `${Number(l.qty_issued)} ${l.uom}` : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div style={{ fontSize: 11, color: sub, marginTop: 14 }}>
+                Work order: <span style={{ color: col }}>{fmr.work_order_ref || '—'}</span> · Required: <span style={{ color: col }}>{fmt(fmr.required_date)}</span>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </>

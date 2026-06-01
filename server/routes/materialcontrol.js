@@ -343,15 +343,21 @@ router.get('/:projectId/fmr', async (req, res) => {
     }
     if (search) {
       const q = `%${search}%`
-      conditions.push('(f.fmr_ref LIKE ? OR f.item_code LIKE ? OR f.description LIKE ? OR f.wbs_code LIKE ? OR f.requested_by_name LIKE ?)')
-      params.push(q, q, q, q, q)
+      // Match the header OR any of its line items.
+      conditions.push(`(f.fmr_ref LIKE ? OR f.item_code LIKE ? OR f.description LIKE ? OR f.wbs_code LIKE ? OR f.requested_by_name LIKE ?
+        OR EXISTS (SELECT 1 FROM fmr_lines l WHERE l.fmr_id=f.id AND (l.item_code LIKE ? OR l.description LIKE ? OR l.wbs_code LIKE ?)))`)
+      params.push(q, q, q, q, q, q, q, q)
     }
 
     const [fmrs] = await db.query(
       `SELECT f.*,
-         -- Check stock availability
+         w.code AS warehouse_code, w.name AS warehouse_name,
+         (SELECT COUNT(*) FROM fmr_lines WHERE fmr_id=f.id) AS line_count,
+         (SELECT COALESCE(SUM(qty_requested),0) FROM fmr_lines WHERE fmr_id=f.id) AS total_qty_requested,
+         -- Check stock availability (header item, legacy summary)
          (SELECT COALESCE(SUM(qty_available),0) FROM warehouse_stock WHERE item_code=f.item_code AND project_id=f.project_id) AS stock_on_hand
        FROM fmr_requests f
+       LEFT JOIN warehouses w ON w.id = f.warehouse_id
        WHERE ${conditions.join(' AND ')}
        ORDER BY
          CASE WHEN f.required_date < CURDATE() THEN 0 ELSE 1 END,
@@ -378,31 +384,163 @@ router.get('/:projectId/fmr', async (req, res) => {
   }
 })
 
-// POST /api/mc/:projectId/fmr — raise new FMR (contractor)
+// ─── FMR WBS SCOPE HELPER ─────────────────────────────────────
+// Returns 'ALL' (unrestricted) or an array of WBS-code prefixes the
+// user may raise FMRs against. No user_wbs_access rows → treated as
+// unrestricted (internal/admin staff who aren't WBS-scoped).
+async function getFmrWbsScope(userId, pid) {
+  if (!userId) return 'ALL'
+  const [rows] = await db.query(
+    `SELECT wbs_code FROM user_wbs_access WHERE user_id=? AND project_id=?`, [userId, pid])
+  if (!rows.length) return 'ALL'
+  if (rows.some(r => r.wbs_code === 'ALL')) return 'ALL'
+  return rows.map(r => r.wbs_code)
+}
+const inScope = (scope, wbs) =>
+  scope === 'ALL' || (wbs && scope.some(p => wbs === p || wbs.startsWith(p + '.') || wbs.startsWith(p)))
+
+// GET /api/mc/:projectId/fmr/items — contractor item picker
+// Searches warehouse_stock by q (name/code), warehouse_id, wbs_id (wbs_code).
+// Restricts to the contractor's WBS scope. NEVER returns grid/bin location.
+router.get('/:projectId/fmr/items', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const { q, warehouse_id, wbs_id } = req.query
+    const scope = await getFmrWbsScope(req.user?.id, pid)
+
+    const conds = ['s.project_id = ?', 's.qty_available > 0']
+    const params = [pid]
+    if (warehouse_id) { conds.push('s.warehouse_id = ?'); params.push(Number(warehouse_id)) }
+    if (wbs_id)       { conds.push('s.wbs_code = ?');     params.push(wbs_id) }
+    if (q && q.trim()) {
+      const like = `%${q.trim()}%`
+      conds.push('(s.item_code LIKE ? OR s.description LIKE ? OR s.wbs_code LIKE ?)')
+      params.push(like, like, like)
+    }
+    // WBS scope restriction (skip when unrestricted).
+    if (scope !== 'ALL') {
+      if (!scope.length) return res.json({ data: [] })
+      conds.push('(' + scope.map(() => 's.wbs_code = ? OR s.wbs_code LIKE ?').join(' OR ') + ')')
+      scope.forEach(p => params.push(p, `${p}%`))
+    }
+
+    // NOTE: location_code (grid/bin) deliberately NOT selected — MC-internal only.
+    const [rows] = await db.query(
+      `SELECT s.id AS item_id, s.item_code, s.description, s.wbs_code,
+              s.qty_available, s.uom, s.warehouse_id,
+              w.code AS warehouse_code, w.name AS warehouse_name,
+              CASE WHEN e.tag IS NOT NULL THEN 'equipment' ELSE 'commodity' END AS item_type,
+              NULL AS ros_date
+       FROM warehouse_stock s
+       LEFT JOIN warehouses w ON w.id = s.warehouse_id
+       LEFT JOIN equipment_list e ON e.tag = s.item_code AND e.project_id = s.project_id
+       WHERE ${conds.join(' AND ')}
+       ORDER BY s.warehouse_id, s.item_code`,
+      params)
+    res.json({ data: rows })
+  } catch (e) {
+    console.error('[mc:fmr-items]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// POST /api/mc/:projectId/fmr — raise new MULTI-LINE FMR (contractor)
+// body: { warehouse_id, work_order_ref, required_date, requested_by_name,
+//         requested_by_company, lines: [{item_id,item_code,item_type,wbs_code,
+//         qty_requested,uom,description,ros_date}] }
 router.post('/:projectId/fmr', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
-    const { item_code, description, wbs_code, qty_requested, uom, required_date, work_order_ref, requested_by_name, requested_by_company } = req.body
     const userId = req.user?.id || 1
+    const { warehouse_id, required_date, work_order_ref, requested_by_name, requested_by_company, lines } = req.body
 
-    if (!description?.trim()) return res.status(400).json({ error: 'Description is required' })
-    if (!qty_requested || qty_requested <= 0) return res.status(400).json({ error: 'Quantity must be greater than 0' })
-    if (!required_date) return res.status(400).json({ error: 'Required date is required' })
+    // ── Header validation ─────────────────────────────────────
+    if (!warehouse_id) return res.status(422).json({ error: 'A warehouse is required — one warehouse per FMR' })
+    if (!Array.isArray(lines) || lines.length === 0) return res.status(422).json({ error: 'At least one line item is required' })
+    if (!required_date) return res.status(422).json({ error: 'Required date is required' })
 
-    // Generate FMR ref
+    const scope = await getFmrWbsScope(userId, pid)
+
+    // ── Line validation ───────────────────────────────────────
+    for (const ln of lines) {
+      const wbs = ln.wbs_code
+      const qty = Number(ln.qty_requested)
+      if (!wbs) return res.status(422).json({ error: 'Each line needs a WBS' })
+      if (!qty || qty <= 0) return res.status(422).json({ error: 'Each line needs a quantity greater than 0' })
+
+      // (a) item must belong to the chosen warehouse
+      if (ln.item_id) {
+        const [[stock]] = await db.query(
+          `SELECT warehouse_id FROM warehouse_stock WHERE id=? AND project_id=?`, [ln.item_id, pid])
+        if (!stock) return res.status(422).json({ error: `Item ${ln.item_code || ''} not found in stock` })
+        if (Number(stock.warehouse_id) !== Number(warehouse_id))
+          return res.status(422).json({ error: 'Mixed warehouse not allowed — all items in one FMR must come from the same warehouse' })
+      }
+      // (b) WBS must be in the contractor's scope
+      if (!inScope(scope, wbs))
+        return res.status(422).json({ error: `WBS ${wbs} is outside your contract scope of work` })
+      // (c) equipment lines: qty must be 1 and a single WBS
+      if (ln.item_type === 'equipment' && qty !== 1)
+        return res.status(422).json({ error: 'Equipment items are unique — quantity must be 1' })
+    }
+
+    // ── Generate ref + insert header (denormalised summary = first line) ──
     const [[{ maxId }]] = await db.query("SELECT COALESCE(MAX(id),0) AS maxId FROM fmr_requests WHERE project_id=?", [pid])
     const year = new Date().getFullYear()
-    const ref = `FMR-${year}-${String((maxId || 0) + 1).padStart(4,'0')}`
+    const ref = `FMR-${year}-${String((maxId || 0) + 1).padStart(4, '0')}`
+    const first = lines[0]
+    const totalQty = lines.reduce((s, l) => s + Number(l.qty_requested), 0)
 
     const [result] = await db.query(
-      `INSERT INTO fmr_requests (project_id,fmr_ref,item_code,description,wbs_code,qty_requested,uom,required_date,work_order_ref,requested_by_name,requested_by_company,status)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending_approval')`,
-      [pid, ref, item_code||null, description.trim(), wbs_code||null, qty_requested, uom||'EA', required_date, work_order_ref||null, requested_by_name||null, requested_by_company||null]
-    )
-    const [[fmr]] = await db.query('SELECT * FROM fmr_requests WHERE id=?', [result.insertId])
-    res.status(201).json(fmr)
+      `INSERT INTO fmr_requests
+         (project_id, warehouse_id, fmr_ref, item_code, description, wbs_code, qty_requested, uom,
+          required_date, work_order_ref, requested_by_name, requested_by_company, requested_by_user, status)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'pending_approval')`,
+      [pid, warehouse_id, ref, first.item_code || null, first.description || null, first.wbs_code || null,
+       totalQty, first.uom || 'EA', required_date, work_order_ref || null,
+       requested_by_name || null, requested_by_company || null, userId])
+    const fmrId = result.insertId
+
+    // ── Insert lines ──────────────────────────────────────────
+    for (const ln of lines) {
+      await db.query(
+        `INSERT INTO fmr_lines (fmr_id, item_id, item_code, item_type, description, wbs_code,
+           qty_requested, uom, line_status, ros_date)
+         VALUES (?,?,?,?,?,?,?,?, 'pending', ?)`,
+        [fmrId, ln.item_id || null, ln.item_code || null, ln.item_type === 'equipment' ? 'equipment' : 'commodity',
+         ln.description || null, ln.wbs_code, Number(ln.qty_requested), ln.uom || 'EA', ln.ros_date || required_date])
+    }
+
+    await writeAudit(userId, 'fmr_raised', 'fmr', fmrId, null,
+      { fmr_ref: ref, warehouse_id, line_count: lines.length, total_qty: totalQty },
+      `/mc/${pid}/fmr`)
+
+    const [[fmr]] = await db.query('SELECT * FROM fmr_requests WHERE id=?', [fmrId])
+    res.status(201).json({ ...fmr, line_count: lines.length })
   } catch (e) {
     console.error('[mc:fmr-create]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// GET /api/mc/:projectId/fmr/:fmrId/detail — header + all lines
+router.get('/:projectId/fmr/:fmrId/detail', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const fmrId = Number(req.params.fmrId)
+    const [[fmr]] = await db.query(
+      `SELECT f.*, w.code AS warehouse_code, w.name AS warehouse_name
+       FROM fmr_requests f LEFT JOIN warehouses w ON w.id=f.warehouse_id
+       WHERE f.id=? AND f.project_id=?`, [fmrId, pid])
+    if (!fmr) return res.status(404).json({ error: 'FMR not found' })
+    const [lines] = await db.query(
+      `SELECT id, item_id, item_code, item_type, description, wbs_code,
+              qty_requested, qty_issued, uom, line_status,
+              DATE_FORMAT(ros_date, '%Y-%m-%d') AS ros_date
+       FROM fmr_lines WHERE fmr_id=? ORDER BY id`, [fmrId])
+    res.json({ fmr, lines })
+  } catch (e) {
+    console.error('[mc:fmr-detail]', e.message)
     res.status(500).json({ error: e.message })
   }
 })

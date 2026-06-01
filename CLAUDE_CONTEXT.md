@@ -760,6 +760,14 @@ Register of pending receipts (inbound SCNs awaiting goods-in). Click row → Rec
 
 ### 8.3 FMR Register (MCFMRScreen)
 FMR = Field Material Request. Site material requests; raise/fulfil from stock.
+**MULTI-LINE model (built):** an FMR is raised by a contractor from site and holds MANY lines
+(`fmr_requests` header + `fmr_lines`). ONE WAREHOUSE PER FMR — `fmr_requests.warehouse_id`; the
+Raise modal auto-locks to the first item's warehouse and blocks items from any other warehouse.
+Each line = one item + one WBS + one qty; same commodity against a different WBS = a separate line
+(no per-line WBS splitting). Equipment lines are qty-locked to 1 and single-WBS. Lines must sit within
+the contractor's `user_wbs_access` scope. Item picker (`GET /mc/:pid/fmr/items`) and the contractor
+view NEVER expose grid/bin `location_code` (MC-internal only). Server validates warehouse/scope/equipment
+on `POST /mc/:pid/fmr` (422) and writes an audit row.
 
 ### 8.4 Transfers (MCTransferScreen)
 Inter-warehouse transfers. NewTransferModal (multi-step): from warehouse → to warehouse, select stock lines + qty, transport details, confirm.
