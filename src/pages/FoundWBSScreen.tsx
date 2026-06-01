@@ -8,6 +8,7 @@ import { HelpButton } from '../components/HelpDrawer'
 import { WBS_HELP } from '../helpContent'
 import { WBSGanttView } from '../components/WBSGanttView'
 import { BackButton } from '../components/BackButton'
+import { MilestoneLegend } from '../components/MilestoneLegend'
 
 const API = 'http://localhost:3001/api'
 
@@ -1703,6 +1704,8 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
             onClose={() => setFocusNode(null)}
             onEditNode={n => setEditNode(n)} />
         )}
+        {/* WBS RAG Legend */}
+        <MilestoneLegend dark={dark} />
       </div>}  {/* end wbsView==='tree' */}
 
       {/* ── Modals ── */}

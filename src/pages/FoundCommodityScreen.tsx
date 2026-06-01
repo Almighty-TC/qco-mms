@@ -6,6 +6,7 @@ import { CertificatesModal } from '../components/CertificatesModal'
 import { HelpButton } from '../components/HelpDrawer'
 import { COMMODITY_HELP } from '../helpContent'
 import { BackButton } from '../components/BackButton'
+import { MilestoneLegend } from '../components/MilestoneLegend'
 
 const API = 'http://localhost:3001/api'
 
@@ -385,6 +386,7 @@ export const FoundCommodityScreen = ({ dark, projectId, projectName, onBack }: {
             </table>
           )}
         </div>
+        <MilestoneLegend dark={dark} />
       </div>
 
       {/* Modals */}

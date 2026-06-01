@@ -12,6 +12,7 @@ import { ToastContainer } from '../components/Toast'
 import { HelpButton } from '../components/HelpDrawer'
 import { MTO_DETAIL_HELP } from '../helpContent'
 import { BackButton } from '../components/BackButton'
+import { MilestoneLegend } from '../components/MilestoneLegend'
 
 // ─── API BASE ────────────────────────────────────────────────────────────────
 const API = 'http://localhost:3001/api'
@@ -488,6 +489,7 @@ const LineItemsTab = ({
             </tbody>
           </table>
         </div>
+        <MilestoneLegend dark={dark} />
       )}
 
       {editTarget && (

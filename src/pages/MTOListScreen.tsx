@@ -11,6 +11,7 @@ import { ToastContainer } from '../components/Toast'
 import { HelpButton } from '../components/HelpDrawer'
 import { MTO_REGISTER_HELP } from '../helpContent'
 import { BackButton } from '../components/BackButton'
+import { MilestoneLegend } from '../components/MilestoneLegend'
 
 // ─── API BASE ────────────────────────────────────────────────────────────────
 const API = 'http://localhost:3001/api'
@@ -887,6 +888,7 @@ const MTOListInner = ({
             </table>
           </div>
         )}
+        <MilestoneLegend dark={dark} />
       </div>
 
       {/* ─── MODALS ─────────────────────────────────────── */}
