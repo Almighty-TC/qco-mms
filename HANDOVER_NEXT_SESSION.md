@@ -1,6 +1,6 @@
 # QCO MMS — HANDOVER: NEXT SESSION
 # Updated: 01 June 2026
-# Last commit: 39700e6
+# Last commit: 914126a
 # Read every word before doing anything.
 
 ---
@@ -69,7 +69,7 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 
 ---
 
-## 4. WHAT WAS DONE THIS SESSION (01 June 2026 — continued)
+## 4. WHAT WAS DONE THIS SESSION (01 June 2026 — final)
 
 - **Material Control module:** Fully built — Receipting (5-step wizard), Stock Register,
   FMR Register, Transfers. 3 new DB tables (warehouse_stock, fmr_requests, warehouse_transfers).
@@ -103,15 +103,19 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
   MTOListScreen, MTODetailScreen. Procurement has own inline legend. MC screens excluded (no
   milestone dots — text status pills only).
 
+- **Full regression test** (`914126a`) — ✅ Complete. All screens pass.
+  - VDRL drill-in back button: ✅ Confirmed already fixed — returns to list correctly.
+  - Bugs found and fixed during regression:
+    * Forwarder pipeline badge showed 31 (should show 8) → scoped pipeline_counts query to forwarder_user_id
+    * Subcontractor navigated to Receipting screen → nav defaults to mc-stock + redirect guard in MCReceiptingScreen
+
+- **Word user manual** — QCO_MMS_User_Manual.docx created at ~/Desktop/qmat/docs/
+  Covers all completed modules: Admin, Foundational, MTO, Procurement, Expediting, Logistics,
+  Material Control. Includes Role-Based Access Matrix appendix.
+
 ---
 
 ## 5. OPEN BUGS / KNOWN ISSUES
-
-- **VDRL drill-in back button** — blank screen on return from package detail view back to PO list.
-  Instructed to fix but confirm whether committed. Check `git log --oneline -10` for VDRL fix.
-
-- **Full regression test** — partially completed (all screens tested, all pass except status update
-  modal stale state issue below). Interrupted by role-based access work.
 
 - **SCNDetailModal status update** — status update via "Update Status" button doesn't close modal
   when API returns error (stale `selectedScn` state after direct API test). Works correctly in
@@ -123,13 +127,15 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 ## 6. NEXT SESSION PRIORITIES (in order)
 
 1. **Traceability module** — READ `CLAUDE_CONTEXT.md` Section "Module 9: Traceability"
-   AND the wireframe before writing any instruction.
+   AND the wireframe (`QMAT-prototype.html`) before writing any instruction.
 
-2. **After Traceability:** Document Inbox
+2. **Document Inbox** — after Traceability
 
-3. **After Document Inbox:** Audit module (immutable log viewer)
+3. **Audit** — immutable log viewer across all modules
 
-4. **Dashboard** — BUILD LAST (reads from all modules)
+4. **Reports** — analytics and summary reports
+
+5. **Dashboard** — BUILD LAST (reads from all modules, AI health score)
 
 ---
 
