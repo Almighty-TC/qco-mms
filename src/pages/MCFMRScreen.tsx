@@ -31,6 +31,7 @@ const statusPill = (s: string) => {
   const m: Record<string, { label: string; bg: string; color: string }> = {
     pending_approval: { label: 'Pending approval', bg: 'rgba(37,99,235,0.1)',   color: '#2563eb' },
     approved:         { label: 'Approved',          bg: 'rgba(34,197,94,0.1)',   color: '#16a34a' },
+    partially_approved: { label: 'Partially approved', bg: 'rgba(245,158,11,0.1)', color: '#d97706' },
     partial_issued:   { label: 'Partial issued',    bg: 'rgba(245,158,11,0.1)', color: '#d97706' },
     issued:           { label: 'Issued',             bg: 'rgba(34,197,94,0.12)', color: '#16a34a' },
     rejected:         { label: 'Rejected',           bg: 'rgba(239,68,68,0.1)', color: '#dc2626' },
@@ -305,7 +306,25 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
   )
 }
 
-// ─── FMR APPROVAL MODAL ───────────────────────────────────────
+// ─── FMR APPROVAL MODAL — PER-LINE ────────────────────────────
+// Loads ALL lines (GET /fmr/:id/approval) with per-line allocation +
+// system checks. Each line gets its own Approve full / Approve partial
+// / Reject control. WBS ceiling is enforced per line (full-approve is
+// blocked when requested > remaining allocation). The header status is
+// a roll-up of the line decisions. Confirm posts the full decisions[].
+type LineDecision = 'approve_full' | 'approve_partial' | 'reject'
+interface ApprovalLine {
+  line_id: number; item_code: string; item_type: 'commodity' | 'equipment'
+  description: string; wbs_code: string; qty_requested: number; uom: string
+  line_status: string
+  alloc: { on_hand: number; already_issued: number; wbs_total_allocation: number; remaining_allocation: number; in_transit: number }
+  checks: {
+    wbs_ceiling: { ok: boolean; requested: number; remaining: number }
+    stock: { ok: boolean; on_hand: number }
+    advance: { ok: boolean; days: number | null }
+  }
+}
+
 const FMRApprovalModal = ({ dark, fmr, projectId, onClose, onSaved, addToast }: {
   dark: boolean; fmr: FMRRow; projectId: number; onClose: () => void; onSaved: () => void
   addToast: (t: 'success'|'error', m: string) => void
@@ -314,130 +333,203 @@ const FMRApprovalModal = ({ dark, fmr, projectId, onClose, onSaved, addToast }: 
   const cardBg = dark ? '#1e293b' : '#fff'
   const bd     = `1px solid ${dark ? '#334155' : '#dde3ed'}`
   const sub    = '#94a3b8'
-  const inputSt: React.CSSProperties = { fontSize: 12, padding: '7px 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontFamily: 'inherit', width: '100%', boxSizing: 'border-box' }
+  const inputSt: React.CSSProperties = { fontSize: 12, padding: '6px 9px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontFamily: 'inherit', width: '100%', boxSizing: 'border-box' }
 
-  const [decision, setDecision]   = useState<'approve_full'|'approve_partial'|'reject'|''>('')
-  const [partialQty, setPartialQty] = useState('')
-  const [rejectReason, setRejectReason] = useState('')
-  const [saving, setSaving]       = useState(false)
-  const [error, setError]         = useState('')
+  const [header, setHeader] = useState<any>(null)
+  const [lines, setLines]   = useState<ApprovalLine[]>([])
+  const [loading, setLoading] = useState(true)
+  const [decisions, setDecisions] = useState<Record<number, { decision: LineDecision; qty: string; reason: string }>>({})
+  const [saving, setSaving] = useState(false)
+  const [error, setError]   = useState('')
 
-  const handleConfirm = async () => {
-    if (!decision) { setError('Select a decision'); return }
-    if (decision === 'approve_partial' && (!partialQty || Number(partialQty) <= 0)) { setError('Enter approved quantity'); return }
-    if (decision === 'reject' && !rejectReason.trim()) { setError('Rejection reason is required'); return }
-    setSaving(true); setError('')
+  useEffect(() => {
+    axios.get(`${API}/mc/${projectId}/fmr/${fmr.id}/approval`)
+      .then(({ data }) => { setHeader(data.fmr); setLines(data.lines || []) })
+      .catch((e: any) => addToast('error', e.response?.data?.error || 'Failed to load FMR'))
+      .finally(() => setLoading(false))
+  }, [fmr.id]) // eslint-disable-line
+
+  const setDec = (lineId: number, patch: Partial<{ decision: LineDecision; qty: string; reason: string }>) =>
+    setDecisions(p => ({ ...p, [lineId]: { decision: p[lineId]?.decision ?? 'approve_full', qty: p[lineId]?.qty ?? '', reason: p[lineId]?.reason ?? '', ...patch } }))
+
+  // ── Roll-up preview + per-line validity ────────────────────
+  const counts = { approve_full: 0, approve_partial: 0, reject: 0 }
+  lines.forEach(l => { const d = decisions[l.line_id]; if (d) counts[d.decision]++ })
+  const decidedAll = lines.length > 0 && lines.every(l => decisions[l.line_id])
+  const lineValid = (l: ApprovalLine) => {
+    const d = decisions[l.line_id]; if (!d) return false
+    if (d.decision === 'approve_full') return l.checks.wbs_ceiling.ok
+    if (d.decision === 'approve_partial') { const q = Number(d.qty); return q > 0 && q < l.qty_requested && q <= l.alloc.remaining_allocation && !!d.reason.trim() }
+    if (d.decision === 'reject') return !!d.reason.trim()
+    return false
+  }
+  const allValid = decidedAll && lines.every(lineValid)
+
+  // Roll-up preview label
+  const rollupPreview = (() => {
+    if (!decidedAll) return null
+    const anyApproved = counts.approve_full + counts.approve_partial > 0
+    const anyReject = counts.reject > 0
+    if (anyApproved && anyReject) return 'Partially approved'
+    if (anyReject && !anyApproved) return 'Rejected'
+    return 'Approved'
+  })()
+
+  const submit = async () => {
+    setError('')
+    if (!allValid) { setError('Every line needs a valid decision'); return }
+    setSaving(true)
     try {
       await axios.put(`${API}/mc/${projectId}/fmr/${fmr.id}/approve`, {
-        decision, approved_qty: decision === 'approve_partial' ? Number(partialQty) : undefined, rejection_reason: rejectReason || undefined,
+        decisions: lines.map(l => {
+          const d = decisions[l.line_id]
+          return {
+            line_id: l.line_id, decision: d.decision,
+            qty_approved: d.decision === 'approve_partial' ? Number(d.qty) : undefined,
+            reason: (d.decision === 'approve_partial' || d.decision === 'reject') ? d.reason.trim() : undefined,
+          }
+        }),
       })
       onSaved()
-    } catch (e: any) { setError(e.response?.data?.error || 'Failed to record decision') }
+    } catch (e: any) { setError(e.response?.data?.error || 'Failed to record decisions') }
     finally { setSaving(false) }
   }
 
-  // Simulated system check data
-  const wbsAlloc = 48, alreadyIssued = 12, remaining = wbsAlloc - alreadyIssued
-  const onHand = fmr.stock_on_hand || 42, inTransit = 6
-  const advanceDays = fmr.required_date ? Math.ceil((new Date(fmr.required_date).getTime() - Date.now()) / 86400000) : null
+  const decBtnColor: Record<LineDecision, string> = { approve_full: '#22c55e', approve_partial: '#f59e0b', reject: '#ef4444' }
 
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
-      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 28, width: 520, maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, width: 760, maxWidth: '96vw', maxHeight: '92vh', display: 'flex', flexDirection: 'column', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        {/* Header */}
+        <div style={{ padding: '16px 22px', borderBottom: bd, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: col }}>MC Approval — {fmr.fmr_ref}</div>
-            <div style={{ fontSize: 12, color: sub, marginTop: 2 }}>{fmr.requested_by_name} · {fmr.requested_by_company} · {fmr.work_order_ref}</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: col }}>MC Approval — <span style={{ fontFamily: 'JetBrains Mono, monospace' }}>{fmr.fmr_ref}</span></div>
+            <div style={{ fontSize: 12, color: sub, marginTop: 2 }}>
+              {fmr.requested_by_name || '—'}{fmr.requested_by_company ? ` · ${fmr.requested_by_company}` : ''} · {fmr.work_order_ref || '—'}
+              {(header?.warehouse_code || fmr.warehouse_code) ? ` · ${header?.warehouse_code || fmr.warehouse_code} ${header?.warehouse_name || fmr.warehouse_name || ''}` : ''}
+              {fmr.required_date ? ` · required ${fmt(fmr.required_date)}` : ''}
+            </div>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: sub, cursor: 'pointer' }}>✕</button>
         </div>
 
-        {/* Item card */}
-        <div style={{ background: dark ? '#162032' : '#f8fafc', border: bd, borderRadius: 8, padding: '12px 16px', marginBottom: 16 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: col, marginBottom: 4 }}>{fmr.description}</div>
-          <div style={{ display: 'flex', gap: 16, fontSize: 12, color: sub }}>
-            <span>{fmr.item_code}</span>
-            <span>WBS {fmr.wbs_code}</span>
-            <span>Qty requested: <strong style={{ color: col }}>{fmr.qty_requested} {fmr.uom}</strong></span>
-            <span>Required: <strong style={{ color: col }}>{fmr.required_date ? new Date(fmr.required_date).toLocaleDateString('en-AU') : '—'}</strong></span>
-          </div>
+        {/* Roll-up summary */}
+        <div style={{ padding: '10px 22px', borderBottom: bd, display: 'flex', gap: 14, alignItems: 'center', fontSize: 12, color: sub, flexWrap: 'wrap' }}>
+          <span><strong style={{ color: '#16a34a' }}>{counts.approve_full}</strong> full</span>
+          <span><strong style={{ color: '#d97706' }}>{counts.approve_partial}</strong> partial</span>
+          <span><strong style={{ color: '#dc2626' }}>{counts.reject}</strong> reject</span>
+          <span>· {lines.length - counts.approve_full - counts.approve_partial - counts.reject} undecided</span>
+          {rollupPreview && <span style={{ marginLeft: 'auto' }}>Header will become: <strong style={{ color: col }}>{rollupPreview}</strong></span>}
         </div>
 
-        {/* WBS qty breakdown */}
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: sub, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>WBS {fmr.wbs_code} · QTY BREAKDOWN</div>
-          {[
-            ['WBS total allocation', `${wbsAlloc} ${fmr.uom}`, col],
-            ['Already issued', `${alreadyIssued} ${fmr.uom}`, '#2563eb'],
-            ['Remaining allocation', `${remaining} ${fmr.uom}`, '#22c55e'],
-            ['On hand (WH-A)', `${onHand} ${fmr.uom}`, col],
-            ['In transit', `${inTransit} ${fmr.uom}`, '#d97706'],
-          ].map(([label, value, color]) => (
-            <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, fontSize: 13 }}>
-              <span style={{ color: sub }}>{label}</span>
-              <span style={{ fontWeight: 600, color }}>{value}</span>
-            </div>
-          ))}
-        </div>
+        {/* Lines */}
+        <div style={{ flex: 1, overflow: 'auto', padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {loading ? <div style={{ padding: 30, textAlign: 'center', color: sub }}>Loading…</div> : lines.map(l => {
+            const d = decisions[l.line_id]
+            const ceil = l.checks.wbs_ceiling
+            const partialMax = Math.min(l.qty_requested, l.alloc.remaining_allocation)
+            return (
+              <div key={l.line_id} style={{ border: bd, borderRadius: 10, overflow: 'hidden' }}>
+                {/* Line header */}
+                <div style={{ background: dark ? '#162032' : '#f8fafc', padding: '10px 14px', borderBottom: bd }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: '#2563eb', fontWeight: 700 }}>{l.item_code}</span>
+                    <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 5, background: l.item_type === 'equipment' ? 'rgba(124,58,237,0.12)' : (dark ? '#334155' : '#eef2f7'), color: l.item_type === 'equipment' ? '#7c3aed' : sub, fontWeight: 600 }}>{l.item_type}</span>
+                    <span style={{ fontSize: 12, color: col }}>{l.description}</span>
+                    <span style={{ marginLeft: 'auto', fontSize: 11, color: sub, fontFamily: 'JetBrains Mono, monospace' }}>WBS {l.wbs_code} · req <strong style={{ color: col }}>{Number(l.qty_requested)} {l.uom}</strong></span>
+                  </div>
+                </div>
 
-        {/* System checks */}
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: sub, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>SYSTEM CHECKS</div>
-          {[
-            { ok: true,  label: 'WBS ceiling check',   detail: `Requested ${fmr.qty_requested} ${fmr.uom} within remaining allocation of ${remaining} ${fmr.uom}` },
-            { ok: true,  label: 'Stock availability',  detail: `${onHand} ${fmr.uom} on hand in WH-A · A-07-01` },
-            { ok: false, label: 'Advance request flag', detail: advanceDays ? `Required date is ${advanceDays} days ahead — flagged for review` : 'No date set' },
-          ].map(({ ok, label, detail }) => (
-            <div key={label} style={{ display: 'flex', gap: 10, padding: '7px 0', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
-              <span style={{ color: ok ? '#22c55e' : '#f59e0b', fontSize: 14, flexShrink: 0 }}>{ok ? '✓' : '△'}</span>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: ok ? '#22c55e' : '#d97706' }}>{label}</div>
-                <div style={{ fontSize: 11, color: sub }}>{detail}</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0 }}>
+                  {/* Breakdown */}
+                  <div style={{ padding: '10px 14px', borderRight: bd }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: sub, textTransform: 'uppercase', marginBottom: 6 }}>WBS {l.wbs_code} · qty breakdown</div>
+                    {[
+                      ['WBS total allocation', l.alloc.wbs_total_allocation, col],
+                      ['Already issued', l.alloc.already_issued, '#2563eb'],
+                      ['Remaining allocation', l.alloc.remaining_allocation, '#22c55e'],
+                      ['On hand', l.alloc.on_hand, col],
+                      ['In transit', l.alloc.in_transit, '#d97706'],
+                    ].map(([label, value, c]) => (
+                      <div key={label as string} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11.5 }}>
+                        <span style={{ color: sub }}>{label}</span>
+                        <span style={{ fontWeight: 600, color: c as string, fontFamily: 'JetBrains Mono, monospace' }}>{Number(value)} {l.uom}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {/* Checks */}
+                  <div style={{ padding: '10px 14px' }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: sub, textTransform: 'uppercase', marginBottom: 6 }}>System checks</div>
+                    {[
+                      { ok: ceil.ok, label: 'WBS ceiling check', detail: `Requested ${ceil.requested} ${l.uom} ${ceil.ok ? 'within' : 'EXCEEDS'} remaining allocation of ${ceil.remaining} ${l.uom}` },
+                      { ok: l.checks.stock.ok, label: 'Stock availability', detail: `${l.checks.stock.on_hand} ${l.uom} on hand${(header?.warehouse_code || fmr.warehouse_code) ? ` · ${header?.warehouse_code || fmr.warehouse_code}` : ''}` },
+                      { ok: l.checks.advance.ok, label: 'Advance request flag', warn: !l.checks.advance.ok, detail: l.checks.advance.days !== null ? `Required date is ${l.checks.advance.days} days ahead${l.checks.advance.ok ? '' : ' — flagged for review'}` : 'No date set' },
+                    ].map(({ ok, label, detail, warn }: any) => (
+                      <div key={label} style={{ display: 'flex', gap: 8, padding: '3px 0' }}>
+                        <span style={{ color: ok ? '#22c55e' : (warn ? '#f59e0b' : '#ef4444'), fontSize: 13, flexShrink: 0 }}>{ok ? '✓' : (warn ? '△' : '✗')}</span>
+                        <div>
+                          <div style={{ fontSize: 11.5, fontWeight: 600, color: ok ? '#16a34a' : (warn ? '#d97706' : '#dc2626') }}>{label}</div>
+                          <div style={{ fontSize: 10.5, color: sub }}>{detail}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Per-line decision */}
+                <div style={{ padding: '10px 14px', borderTop: bd }}>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    {([
+                      { val: 'approve_full' as const, label: 'Approve full', disabled: !ceil.ok, title: ceil.ok ? '' : 'Exceeds remaining allocation — approve partial instead' },
+                      { val: 'approve_partial' as const, label: 'Approve partial', disabled: l.alloc.remaining_allocation <= 0 },
+                      { val: 'reject' as const, label: 'Reject', disabled: false },
+                    ]).map(opt => {
+                      const active = d?.decision === opt.val
+                      return (
+                        <button key={opt.val} disabled={opt.disabled} title={opt.title}
+                          onClick={() => setDec(l.line_id, { decision: opt.val })}
+                          style={{ flex: 1, padding: '7px', borderRadius: 6, border: `2px solid ${active ? decBtnColor[opt.val] : bd}`, background: active ? decBtnColor[opt.val] : 'none', color: opt.disabled ? sub : (active ? '#fff' : col), cursor: opt.disabled ? 'not-allowed' : 'pointer', fontSize: 11.5, fontWeight: 600, fontFamily: 'inherit', opacity: opt.disabled ? 0.5 : 1 }}>
+                          {opt.label}{opt.val === 'approve_full' && !ceil.ok ? ' 🚫' : ''}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {d?.decision === 'approve_partial' && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 8, marginTop: 8 }}>
+                      <div>
+                        <label style={{ fontSize: 10, color: sub, display: 'block', marginBottom: 3 }}>Approved qty (max {partialMax})</label>
+                        <input type="number" min={1} max={partialMax} value={d.qty} onChange={e => setDec(l.line_id, { qty: e.target.value })}
+                          style={inputSt} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 10, color: sub, display: 'block', marginBottom: 3 }}>Reason *</label>
+                        <input value={d.reason} onChange={e => setDec(l.line_id, { reason: e.target.value })} placeholder="Why partial?" style={inputSt} />
+                      </div>
+                    </div>
+                  )}
+                  {d?.decision === 'reject' && (
+                    <div style={{ marginTop: 8 }}>
+                      <label style={{ fontSize: 10, color: sub, display: 'block', marginBottom: 3 }}>Rejection reason *</label>
+                      <input value={d.reason} onChange={e => setDec(l.line_id, { reason: e.target.value })} placeholder="Why rejected?" style={inputSt} />
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
 
-        {/* Decision */}
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: col, marginBottom: 8 }}>DECISION</div>
-          <div style={{ display: 'flex', gap: 8, marginBottom: decision === 'approve_partial' ? 10 : 0 }}>
-            {[
-              { val: 'approve_full'    as const, label: 'Approve full',    bg: '#22c55e' },
-              { val: 'approve_partial' as const, label: 'Approve partial', bg: '#f59e0b' },
-              { val: 'reject'          as const, label: 'Reject',          bg: '#ef4444' },
-            ].map(opt => (
-              <button key={opt.val} onClick={() => setDecision(opt.val)}
-                style={{ flex: 1, padding: '8px', borderRadius: 6, border: `2px solid ${decision === opt.val ? opt.bg : bd}`, background: decision === opt.val ? opt.bg : 'none', color: decision === opt.val ? '#fff' : col, cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}>
-                {opt.label}
-              </button>
-            ))}
+        {/* Footer */}
+        <div style={{ padding: '14px 22px', borderTop: bd, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          {error ? <span style={{ color: '#ef4444', fontSize: 12 }}>{error}</span> : <span style={{ fontSize: 11, color: sub }}>{decidedAll ? 'All lines decided' : `${lines.length - counts.approve_full - counts.approve_partial - counts.reject} line(s) still need a decision`}</span>}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={onClose} style={{ padding: '8px 18px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
+            <button onClick={submit} disabled={saving || !allValid}
+              style={{ padding: '8px 18px', borderRadius: 6, border: 'none', background: allValid ? '#2563eb' : '#94a3b8', color: '#fff', cursor: allValid && !saving ? 'pointer' : 'not-allowed', fontSize: 12, fontWeight: 600 }}>
+              {saving ? 'Saving…' : 'Confirm decision'}
+            </button>
           </div>
-          {decision === 'approve_partial' && (
-            <div style={{ marginTop: 10 }}>
-              <label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>Approved quantity *</label>
-              <input type="number" value={partialQty} onChange={e => setPartialQty(e.target.value)} min={1} max={fmr.qty_requested}
-                placeholder={`Max: ${fmr.qty_requested} ${fmr.uom}`} style={inputSt} />
-            </div>
-          )}
-          {decision === 'reject' && (
-            <div style={{ marginTop: 10 }}>
-              <label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>Rejection reason *</label>
-              <textarea value={rejectReason} onChange={e => setRejectReason(e.target.value)} rows={2}
-                placeholder="Required — explain why this FMR is rejected" style={{ ...inputSt, resize: 'vertical' }} />
-            </div>
-          )}
-        </div>
-
-        {error && <div style={{ color: '#ef4444', fontSize: 12, marginBottom: 10 }}>{error}</div>}
-
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button onClick={onClose} style={{ padding: '8px 18px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
-          <button onClick={handleConfirm} disabled={saving || !decision}
-            style={{ padding: '8px 18px', borderRadius: 6, border: 'none', background: decision ? '#2563eb' : '#94a3b8', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
-            {saving ? 'Saving…' : 'Confirm decision'}
-          </button>
         </div>
       </div>
     </>

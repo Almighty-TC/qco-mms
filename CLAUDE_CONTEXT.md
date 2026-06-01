@@ -768,6 +768,16 @@ Each line = one item + one WBS + one qty; same commodity against a different WBS
 the contractor's `user_wbs_access` scope. Item picker (`GET /mc/:pid/fmr/items`) and the contractor
 view NEVER expose grid/bin `location_code` (MC-internal only). Server validates warehouse/scope/equipment
 on `POST /mc/:pid/fmr` (422) and writes an audit row.
+**PER-LINE APPROVAL (built):** MC approval is per line via `fmr_lines.line_status`
+('pending','approved','partially_approved','partial_issued','issued','rejected') +
+`qty_approved`/`approval_reason`/`approved_by`/`approved_date`. `PUT /mc/:pid/fmr/:id/approve`
+takes `{decisions:[{line_id,decision:'approve_full'|'approve_partial'|'reject',qty_approved?,reason?}]}`,
+validates per line (partial 0<qty<requested & ≤remaining; reject needs reason; **WBS ceiling**:
+full-approve blocked when requested > remaining allocation), writes an audit row per line, and
+recomputes the header roll-up (`rollUpStatus`: any pending→pending_approval; mix approved+rejected→
+partially_approved; all rejected→rejected; else approved). `GET /mc/:pid/fmr/:id/approval` returns
+every line with allocation (on_hand/already_issued/wbs_total_allocation/remaining_allocation/in_transit)
+and the three system checks. Approval modal renders one decision card per line.
 
 ### 8.4 Transfers (MCTransferScreen)
 Inter-warehouse transfers. NewTransferModal (multi-step): from warehouse → to warehouse, select stock lines + qty, transport details, confirm.

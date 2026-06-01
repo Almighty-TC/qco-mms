@@ -545,41 +545,164 @@ router.get('/:projectId/fmr/:fmrId/detail', async (req, res) => {
   }
 })
 
-// PUT /api/mc/:projectId/fmr/:fmrId/approve — MC approves/rejects (subcontractor = 403)
+// ─── PER-LINE ALLOCATION HELPER ───────────────────────────────
+// All figures are real & deterministic for a line's item+WBS:
+//   on_hand              = available stock in the FMR's warehouse
+//   already_issued       = qty already issued across all FMRs (this item+WBS)
+//   wbs_total_allocation = on_hand + already_issued (what was available to draw)
+//   remaining_allocation = on_hand (the ceiling a fresh approval draws against)
+// remaining_allocation is the WBS ceiling the approve endpoint enforces.
+async function fmrLineAllocation(pid, warehouseId, itemCode, wbsCode) {
+  const [[oh]] = await db.query(
+    `SELECT COALESCE(SUM(qty_available),0) AS on_hand FROM warehouse_stock
+     WHERE project_id=? AND item_code=? AND wbs_code=?${warehouseId ? ' AND warehouse_id=?' : ''}`,
+    warehouseId ? [pid, itemCode, wbsCode, warehouseId] : [pid, itemCode, wbsCode])
+  const [[iss]] = await db.query(
+    `SELECT COALESCE(SUM(fl.qty_issued),0) AS issued
+       FROM fmr_lines fl JOIN fmr_requests fr ON fr.id = fl.fmr_id
+      WHERE fr.project_id=? AND fl.item_code=? AND fl.wbs_code=?`, [pid, itemCode, wbsCode])
+  const on_hand = Number(oh.on_hand)
+  const already_issued = Number(iss.issued)
+  return {
+    on_hand,
+    already_issued,
+    wbs_total_allocation: on_hand + already_issued,
+    remaining_allocation: on_hand,
+    in_transit: 0,
+  }
+}
+
+// ─── FMR HEADER ROLL-UP ───────────────────────────────────────
+// Derives the header status from the set of line statuses.
+function rollUpStatus(lineStatuses) {
+  if (lineStatuses.some(s => s === 'pending')) return 'pending_approval'
+  const anyApproved = lineStatuses.some(s => s === 'approved' || s === 'partially_approved')
+  const anyRejected = lineStatuses.some(s => s === 'rejected')
+  if (anyApproved && anyRejected) return 'partially_approved'
+  if (anyRejected && !anyApproved) return 'rejected'
+  return 'approved' // all approved / partially_approved
+}
+
+// GET /api/mc/:projectId/fmr/:fmrId/approval — header + lines + per-line allocation
+// MC-internal: may include warehouse/grid context. Used by the approval modal.
+router.get('/:projectId/fmr/:fmrId/approval', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const fmrId = Number(req.params.fmrId)
+    const [[fmr]] = await db.query(
+      `SELECT f.*, w.code AS warehouse_code, w.name AS warehouse_name
+       FROM fmr_requests f LEFT JOIN warehouses w ON w.id=f.warehouse_id
+       WHERE f.id=? AND f.project_id=?`, [fmrId, pid])
+    if (!fmr) return res.status(404).json({ error: 'FMR not found' })
+
+    const [lines] = await db.query(
+      `SELECT id AS line_id, item_id, item_code, item_type, description, wbs_code,
+              qty_requested, qty_issued, qty_approved, uom, line_status, approval_reason
+       FROM fmr_lines WHERE fmr_id=? ORDER BY id`, [fmrId])
+
+    const advanceDays = fmr.required_date
+      ? Math.ceil((new Date(fmr.required_date).getTime() - Date.now()) / 86400000) : null
+
+    const enriched = []
+    for (const ln of lines) {
+      const alloc = await fmrLineAllocation(pid, fmr.warehouse_id, ln.item_code, ln.wbs_code)
+      const req_qty = Number(ln.qty_requested)
+      enriched.push({
+        ...ln,
+        alloc,
+        checks: {
+          // Correct ceiling: pass only when the requested qty fits the remaining allocation.
+          wbs_ceiling: { ok: req_qty <= alloc.remaining_allocation, requested: req_qty, remaining: alloc.remaining_allocation },
+          stock: { ok: req_qty <= alloc.on_hand, on_hand: alloc.on_hand },
+          advance: { ok: !(advanceDays !== null && advanceDays > 30), days: advanceDays },
+        },
+      })
+    }
+    res.json({ fmr, lines: enriched })
+  } catch (e) {
+    console.error('[mc:fmr-approval]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// PUT /api/mc/:projectId/fmr/:fmrId/approve — PER-LINE decisions (subcontractor = 403)
+// body: { decisions: [{ line_id, decision: 'approve_full'|'approve_partial'|'reject',
+//                       qty_approved?, reason? }] }
 router.put('/:projectId/fmr/:fmrId/approve', async (req, res) => {
   if (!APPROVAL_ALLOWED.has(req.user?.role)) return res.status(403).json({ error: 'Only Materials Controllers and Managers can approve FMRs' })
   try {
-    const { fmrId } = req.params
-    const { decision, approved_qty, rejection_reason } = req.body
+    const pid = Number(req.params.projectId)
+    const fmrId = Number(req.params.fmrId)
     const userId = req.user?.id || 1
+    const { decisions } = req.body
 
-    if (!['approve_full','approve_partial','reject'].includes(decision))
-      return res.status(400).json({ error: 'decision must be approve_full, approve_partial, or reject' })
+    if (!Array.isArray(decisions) || decisions.length === 0)
+      return res.status(422).json({ error: 'decisions array is required' })
 
-    const [[fmr]] = await db.query('SELECT * FROM fmr_requests WHERE id=?', [fmrId])
+    const [[fmr]] = await db.query('SELECT * FROM fmr_requests WHERE id=? AND project_id=?', [fmrId, pid])
     if (!fmr) return res.status(404).json({ error: 'FMR not found' })
 
-    let newStatus, newApprovedQty
-    if (decision === 'approve_full') {
-      newStatus = 'approved'; newApprovedQty = fmr.qty_requested
-    } else if (decision === 'approve_partial') {
-      if (!approved_qty || approved_qty <= 0) return res.status(400).json({ error: 'approved_qty required for partial approval' })
-      newStatus = 'approved'; newApprovedQty = approved_qty
-    } else {
-      if (!rejection_reason?.trim()) return res.status(400).json({ error: 'rejection_reason is required when rejecting' })
-      newStatus = 'rejected'; newApprovedQty = 0
+    const [lineRows] = await db.query('SELECT * FROM fmr_lines WHERE fmr_id=?', [fmrId])
+    const lineMap = new Map(lineRows.map(l => [l.id, l]))
+
+    // ── Validate every decision before writing anything ────────
+    const planned = []
+    for (const d of decisions) {
+      const line = lineMap.get(Number(d.line_id))
+      if (!line) return res.status(422).json({ error: `Unknown line_id ${d.line_id}` })
+      const reqQty = Number(line.qty_requested)
+      const alloc = await fmrLineAllocation(pid, fmr.warehouse_id, line.item_code, line.wbs_code)
+
+      if (d.decision === 'approve_full') {
+        // WBS ceiling: a full approval that exceeds remaining allocation is blocked.
+        if (reqQty > alloc.remaining_allocation)
+          return res.status(422).json({ error: `Line ${line.item_code} (${line.wbs_code}): requested ${reqQty} exceeds remaining allocation of ${alloc.remaining_allocation} — approve partial up to ${alloc.remaining_allocation} instead`, line_id: line.id })
+        planned.push({ line, status: 'approved', qty: reqQty, reason: null })
+
+      } else if (d.decision === 'approve_partial') {
+        const qty = Number(d.qty_approved)
+        if (!(qty > 0 && qty < reqQty))
+          return res.status(422).json({ error: `Line ${line.item_code}: partial qty must be greater than 0 and less than the requested ${reqQty}`, line_id: line.id })
+        if (qty > alloc.remaining_allocation)
+          return res.status(422).json({ error: `Line ${line.item_code}: ${qty} exceeds remaining allocation of ${alloc.remaining_allocation}`, line_id: line.id })
+        if (!d.reason || !d.reason.trim())
+          return res.status(422).json({ error: `Line ${line.item_code}: a reason is required for partial approval`, line_id: line.id })
+        planned.push({ line, status: 'partially_approved', qty, reason: d.reason.trim() })
+
+      } else if (d.decision === 'reject') {
+        if (!d.reason || !d.reason.trim())
+          return res.status(422).json({ error: `Line ${line.item_code}: a reason is required to reject`, line_id: line.id })
+        planned.push({ line, status: 'rejected', qty: 0, reason: d.reason.trim() })
+
+      } else {
+        return res.status(422).json({ error: `Line ${d.line_id}: decision must be approve_full, approve_partial or reject` })
+      }
     }
 
+    // ── Apply per-line + write an audit row per decision ───────
+    for (const p of planned) {
+      await db.query(
+        `UPDATE fmr_lines SET line_status=?, qty_approved=?, approval_reason=?, approved_by=?, approved_date=NOW() WHERE id=?`,
+        [p.status, p.qty, p.reason, userId, p.line.id])
+      await writeAudit(userId, 'fmr_line_decision', 'fmr_line', p.line.id,
+        { line_status: p.line.line_status },
+        { line_status: p.status, qty_approved: p.qty, reason: p.reason },
+        `/mc/${pid}/fmr/${fmrId}/approve`)
+    }
+
+    // ── Recompute + persist header roll-up ─────────────────────
+    const [allLines] = await db.query('SELECT line_status FROM fmr_lines WHERE fmr_id=?', [fmrId])
+    const newStatus = rollUpStatus(allLines.map(l => l.line_status))
+    const [[appQty]] = await db.query('SELECT COALESCE(SUM(qty_approved),0) AS q FROM fmr_lines WHERE fmr_id=?', [fmrId])
     await db.query(
-      'UPDATE fmr_requests SET status=?, approved_by=?, approved_at=NOW(), approved_qty=?, rejection_reason=? WHERE id=?',
-      [newStatus, userId, newApprovedQty||null, rejection_reason||null, fmrId]
-    )
+      `UPDATE fmr_requests SET status=?, approved_by=?, approved_at=NOW(), approved_qty=? WHERE id=?`,
+      [newStatus, userId, appQty.q, fmrId])
     await writeAudit(userId, 'fmr_decision', 'fmr', fmrId,
-      { status: fmr.status }, { status: newStatus, decision },
-      `/mc/${req.params.projectId}/fmr/${fmrId}/approve`)
+      { status: fmr.status }, { status: newStatus, lines_decided: planned.length },
+      `/mc/${pid}/fmr/${fmrId}/approve`)
 
     const [[updated]] = await db.query('SELECT * FROM fmr_requests WHERE id=?', [fmrId])
-    res.json({ success: true, fmr: updated })
+    res.json({ success: true, fmr: updated, header_status: newStatus })
   } catch (e) {
     console.error('[mc:fmr-approve]', e.message)
     res.status(500).json({ error: e.message })
