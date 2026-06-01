@@ -48,6 +48,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
   const [showStockTake, setShowStockTake] = useState(false)
   const [moveItem, setMoveItem] = useState<StockItem | null>(null)
   const [docsItem, setDocsItem] = useState<StockItem | null>(null)
+  const [resolveItem, setResolveItem] = useState<StockItem | null>(null)
 
   const fetchStock = async () => {
     setLoading(true)
@@ -202,14 +203,22 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                           <td style={{ padding: '8px 12px' }}>
                             {item.trace_hold ? <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: 'rgba(239,68,68,0.1)', color: '#ef4444', fontWeight: 600 }}>hold</span> : <span style={{ color: sub }}>—</span>}
                           </td>
-                          {/* Subcontractors: no Docs or Move buttons */}
+                          {/* Subcontractors: no Docs/Move/Resolve buttons */}
                           {!isSubcontractor && (
                             <td style={{ padding: '8px 12px' }}>
                               <div style={{ display: 'flex', gap: 6 }}>
-                                <button onClick={() => setDocsItem(item)}
-                                  style={{ padding: '4px 10px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>📎 Docs</button>
-                                <button onClick={() => setMoveItem(item)}
-                                  style={{ padding: '4px 10px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>→ Move</button>
+                                {item.condition_status === 'quarantine' ? (
+                                  // Quarantined stock: resolve (release / reject) instead of move.
+                                  <button onClick={() => setResolveItem(item)}
+                                    style={{ padding: '4px 10px', borderRadius: 5, border: 'none', background: '#f59e0b', color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>⚠ Resolve</button>
+                                ) : (
+                                  <>
+                                    <button onClick={() => setDocsItem(item)}
+                                      style={{ padding: '4px 10px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>📎 Docs</button>
+                                    <button onClick={() => setMoveItem(item)}
+                                      style={{ padding: '4px 10px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>→ Move</button>
+                                  </>
+                                )}
                               </div>
                             </td>
                           )}
@@ -247,7 +256,89 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
       {docsItem && (
         <DocsPanel dark={dark} item={docsItem} onClose={() => setDocsItem(null)} />
       )}
+
+      {/* Resolve quarantine modal */}
+      {resolveItem && (
+        <ResolveModal dark={dark} item={resolveItem} projectId={projectId}
+          onClose={() => setResolveItem(null)}
+          onSaved={(msg) => { setResolveItem(null); fetchStock(); addToast('success', msg) }}
+          addToast={addToast} />
+      )}
     </div>
+  )
+}
+
+// ─── RESOLVE QUARANTINE MODAL ─────────────────────────────────
+// Release a quarantined holding back to available (at a normal location)
+// or reject it (remove from stock). Both require a mandatory reason.
+const ResolveModal = ({ dark, item, projectId, onClose, onSaved, addToast }: {
+  dark: boolean; item: StockItem; projectId: number; onClose: () => void
+  onSaved: (msg: string) => void; addToast: (t: 'success'|'error', m: string) => void
+}) => {
+  const col    = dark ? '#f1f5f9' : '#0f172a'
+  const cardBg = dark ? '#1e293b' : '#fff'
+  const bd     = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const sub    = '#94a3b8'
+  const [action, setAction] = useState<'release'|'reject'>('release')
+  const [reason, setReason] = useState('')
+  const [toLocation, setToLocation] = useState('')
+  const [saving, setSaving] = useState(false)
+  const inputSt: React.CSSProperties = { fontSize: 12, padding: '7px 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontFamily: 'inherit', width: '100%', boxSizing: 'border-box' }
+
+  const submit = async () => {
+    if (!reason.trim()) { addToast('error', 'A reason is required'); return }
+    if (action === 'release' && !toLocation.trim()) { addToast('error', 'A destination location is required to release'); return }
+    setSaving(true)
+    try {
+      await axios.post(`${API}/mc/${projectId}/stock/${item.id}/resolve`, {
+        action, reason: reason.trim(), to_location: action === 'release' ? toLocation.trim() : undefined,
+      })
+      onSaved(action === 'release' ? 'Released to available stock' : 'Rejected — removed from stock')
+    } catch (e: any) { addToast('error', e.response?.data?.error || 'Failed to resolve') }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 24, width: 440, maxWidth: '95vw', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: col, marginBottom: 4 }}>⚠ Resolve quarantined stock</div>
+        <div style={{ fontSize: 12, color: sub, marginBottom: 4 }}>{item.item_code} · {item.description}</div>
+        <div style={{ fontSize: 11, color: sub, marginBottom: 16, fontFamily: 'JetBrains Mono, monospace' }}>{Number(item.qty)} {item.uom} held at {item.location_code || 'QUARANTINE'}</div>
+
+        {/* Action toggle */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+          {([['release','Release → available','#22c55e'],['reject','Reject → remove','#ef4444']] as const).map(([val,label,bg]) => (
+            <button key={val} onClick={() => setAction(val)}
+              style={{ flex: 1, padding: '8px', borderRadius: 6, border: `2px solid ${action === val ? bg : bd}`, background: action === val ? bg : 'none', color: action === val ? '#fff' : col, cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {action === 'release' && (
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>Destination location *</label>
+            <input value={toLocation} onChange={e => setToLocation(e.target.value)} placeholder="e.g. A-04-03" style={inputSt} />
+          </div>
+        )}
+
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>Reason *</label>
+          <textarea value={reason} onChange={e => setReason(e.target.value)} rows={3}
+            placeholder={action === 'release' ? 'Why is this stock fit for release?' : 'Why is this stock being rejected?'}
+            style={{ ...inputSt, resize: 'vertical' }} />
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={{ padding: '8px 16px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
+          <button onClick={submit} disabled={saving}
+            style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: action === 'release' ? '#22c55e' : '#ef4444', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+            {saving ? 'Saving…' : (action === 'release' ? 'Release stock' : 'Reject stock')}
+          </button>
+        </div>
+      </div>
+    </>
   )
 }
 

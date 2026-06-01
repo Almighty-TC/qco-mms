@@ -8,6 +8,12 @@ const { authenticateToken } = require('../middleware/auth')
 
 router.use(authenticateToken)
 
+// ─── QUARANTINE LOCATION (Phase 3) ────────────────────────────
+// Damaged stock is held at this designated location_code (a "place"),
+// with condition_status='quarantine', trace_hold=1, qty_available=0 —
+// so it is never issuable. Released stock moves to a normal location.
+const QUARANTINE_LOCATION = 'QUARANTINE'
+
 // ─── ROLE GUARDS ──────────────────────────────────────────────
 const RECEIPTING_ALLOWED = new Set(['admin','ceo','director','project_director','project_manager','procurement_manager','procurement_officer','expediting_manager','expeditor','logistics_manager','warehouse','materials_controller','quality_engineer'])
 const APPROVAL_ALLOWED   = new Set(['admin','ceo','director','project_director','project_manager','materials_controller'])
@@ -236,20 +242,31 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
            expectedQty, receivedQty, damagedQty, uom,
            ln.discrepancy_type || null, ln.discrepancy_notes || null, userId])
 
-        // TODO(phase-3): split good vs damaged — route damaged_qty to a
-        // quarantine/hold location and reduce qty_available accordingly.
-        // Phase 2 leaves all received_qty as available (unchanged behaviour).
+        // ── Phase 3: split good vs damaged into DISTINCT per-line holdings ──
+        // (HEAT-READY: never pooled into a shared row — each split is its own row.)
+        const goodQty    = receivedQty - damagedQty
+        const itemCode   = ln.item_code || (ln.po_line_id ? `${scn.scn_ref}-L${ln.line_number || ln.po_line_id}` : `SCN-${scn.scn_ref}`)
+        const descr      = ln.description || scn.notes || 'Received goods'
+        const wbs        = ln.wbs_code || null
 
-        // Stock row sourced from the received quantity + real line identity.
-        if (receivedQty > 0) {
+        // Good qty → available at its normal grid location.
+        if (goodQty > 0) {
           await db.query(
-            `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,vendor_name,received_date,received_by)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,CURDATE(),?)`,
-            [pid, whId, scnId, ln.po_line_id || null,
-             ln.item_code || (ln.po_line_id ? `${scn.scn_ref}-L${ln.line_number || ln.po_line_id}` : `SCN-${scn.scn_ref}`),
-             ln.description || scn.notes || 'Received goods',
-             ln.wbs_code || null, receivedQty, receivedQty, uom,
-             location_code, condition, scn.vendor_name, userId])
+            `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,received_date,received_by)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,CURDATE(),?)`,
+            [pid, whId, scnId, ln.po_line_id || null, itemCode, descr, wbs,
+             goodQty, goodQty, uom, location_code, (damagedQty > 0 ? 'good' : condition), scn.vendor_name, userId])
+          stockCreated++
+        }
+
+        // Damaged qty → QUARANTINE location, NOT issuable (qty_available = 0).
+        if (damagedQty > 0) {
+          await db.query(
+            `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,received_date,received_by,notes)
+             VALUES (?,?,?,?,?,?,?,?,0,?,?,?,1,?,CURDATE(),?,?)`,
+            [pid, whId, scnId, ln.po_line_id || null, itemCode, descr, wbs,
+             damagedQty, uom, QUARANTINE_LOCATION, 'quarantine', scn.vendor_name, userId,
+             `Damaged on receipt — ${ln.discrepancy_notes || 'pending QA review'}`])
           stockCreated++
         }
       }
@@ -374,6 +391,49 @@ router.put('/:projectId/stock/:itemId/move', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// POST /api/mc/:projectId/stock/:itemId/resolve — resolve a quarantined holding
+// body: { action: 'release' | 'reject', reason (MANDATORY), to_location? }
+//  release → condition_status='good', trace_hold=0, qty_available=qty, moved to a
+//            normal location (to_location); the holding becomes issuable.
+//  reject  → holding removed from stock entirely.
+// Mandatory reason; logged via audit_log (matches stock_move / reasoned-change pattern).
+router.post('/:projectId/stock/:itemId/resolve', rejectExternal, async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const itemId = Number(req.params.itemId)
+    const userId = req.user?.id || 1
+    const { action, reason, to_location } = req.body || {}
+
+    if (!['release', 'reject'].includes(action)) return res.status(422).json({ error: "action must be 'release' or 'reject'" })
+    if (!reason || !reason.trim()) return res.status(422).json({ error: 'A reason is required' })
+
+    const [[item]] = await db.query('SELECT * FROM warehouse_stock WHERE id=? AND project_id=?', [itemId, pid])
+    if (!item) return res.status(404).json({ error: 'Stock item not found' })
+    if (item.condition_status !== 'quarantine') return res.status(422).json({ error: 'Only quarantined stock can be resolved' })
+
+    if (action === 'release') {
+      if (!to_location || !to_location.trim()) return res.status(422).json({ error: 'A destination (normal) location is required to release' })
+      await db.query(
+        `UPDATE warehouse_stock SET condition_status='good', trace_hold=0, qty_available=qty, location_code=? WHERE id=?`,
+        [to_location.trim(), itemId])
+      await writeAudit(userId, 'quarantine_release', 'warehouse_stock', itemId,
+        { condition_status: 'quarantine', location_code: item.location_code, qty_available: item.qty_available },
+        { condition_status: 'good', location_code: to_location.trim(), qty_available: item.qty, reason: reason.trim() },
+        `/mc/${pid}/stock/${itemId}/resolve`)
+    } else {
+      await db.query('DELETE FROM warehouse_stock WHERE id=?', [itemId])
+      await writeAudit(userId, 'quarantine_reject', 'warehouse_stock', itemId,
+        { condition_status: 'quarantine', qty: item.qty, item_code: item.item_code },
+        { removed: true, reason: reason.trim() },
+        `/mc/${pid}/stock/${itemId}/resolve`)
+    }
+    res.json({ success: true, action })
+  } catch (e) {
+    console.error('[mc:stock-resolve]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // ═══════════════════════════════════════════════════════════════
 // FMR REGISTER
 // ═══════════════════════════════════════════════════════════════
@@ -412,7 +472,7 @@ router.get('/:projectId/fmr', async (req, res) => {
          (SELECT COUNT(*) FROM fmr_lines WHERE fmr_id=f.id) AS line_count,
          (SELECT COALESCE(SUM(qty_requested),0) FROM fmr_lines WHERE fmr_id=f.id) AS total_qty_requested,
          -- Check stock availability (header item, legacy summary)
-         (SELECT COALESCE(SUM(qty_available),0) FROM warehouse_stock WHERE item_code=f.item_code AND project_id=f.project_id) AS stock_on_hand
+         (SELECT COALESCE(SUM(qty_available),0) FROM warehouse_stock WHERE item_code=f.item_code AND project_id=f.project_id AND condition_status != 'quarantine') AS stock_on_hand
        FROM fmr_requests f
        LEFT JOIN warehouses w ON w.id = f.warehouse_id
        WHERE ${conditions.join(' AND ')}
@@ -465,7 +525,7 @@ router.get('/:projectId/fmr/items', async (req, res) => {
     const { q, warehouse_id, wbs_id } = req.query
     const scope = await getFmrWbsScope(req.user?.id, pid)
 
-    const conds = ['s.project_id = ?', 's.qty_available > 0']
+    const conds = ['s.project_id = ?', 's.qty_available > 0', "s.condition_status != 'quarantine'"]
     const params = [pid]
     if (warehouse_id) { conds.push('s.warehouse_id = ?'); params.push(Number(warehouse_id)) }
     if (wbs_id)       { conds.push('s.wbs_code = ?');     params.push(wbs_id) }
@@ -612,7 +672,7 @@ router.get('/:projectId/fmr/:fmrId/detail', async (req, res) => {
 async function fmrLineAllocation(pid, warehouseId, itemCode, wbsCode) {
   const [[oh]] = await db.query(
     `SELECT COALESCE(SUM(qty_available),0) AS on_hand FROM warehouse_stock
-     WHERE project_id=? AND item_code=? AND wbs_code=?${warehouseId ? ' AND warehouse_id=?' : ''}`,
+     WHERE project_id=? AND item_code=? AND wbs_code=? AND condition_status != 'quarantine'${warehouseId ? ' AND warehouse_id=?' : ''}`,
     warehouseId ? [pid, itemCode, wbsCode, warehouseId] : [pid, itemCode, wbsCode])
   const [[iss]] = await db.query(
     `SELECT COALESCE(SUM(fl.qty_issued),0) AS issued
