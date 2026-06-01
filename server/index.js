@@ -52,6 +52,10 @@ app.use('/api/mto', require('./routes/mto'))
 app.use('/api/logistics', require('./routes/logistics'))
 app.use('/api/mc', require('./routes/materialcontrol'))
 
+// ─── TRACEABILITY ROUTES ─────────────────────────────────────
+// VDRL register, cert approvals, trace chain, holds.
+app.use('/api/traceability', require('./routes/traceability'))
+
 // ─── START SERVER ───────────────────────────────────────────
 const PORT = process.env.PORT || 3001
 app.listen(PORT, () => {

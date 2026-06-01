@@ -103,7 +103,7 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 | Expediting (incl. VDRL Register tab) | ⏳ Not started |
 | Logistics | ⏳ Not started |
 | Material Control | ⏳ Not started |
-| Traceability | ⏳ Not started |
+| Traceability | ✅ Complete — VDRL, cert approvals, trace chain, holds + 6 modals |
 | Document Inbox | ⏳ Not started |
 | Audit | ⏳ Not started |
 | Reports | ⏳ Not started |

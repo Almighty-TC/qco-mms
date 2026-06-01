@@ -21,6 +21,7 @@ import { MCReceiptingScreen } from './pages/MCReceiptingScreen'
 import { MCStockRegisterScreen } from './pages/MCStockRegisterScreen'
 import { MCFMRScreen } from './pages/MCFMRScreen'
 import { MCTransferScreen } from './pages/MCTransferScreen'
+import { TraceabilityScreen } from './pages/TraceabilityScreen'
 import { ForcePasswordChange } from './components/ForcePasswordChange'
 import { ChangePasswordModal } from './components/ChangePasswordModal'
 import './App.css'
@@ -30,7 +31,7 @@ import './App.css'
 // 'admin' enforces role === 'admin'; 'procurement' is project-scoped.
 // ─── ROUTING — state-based, no router library ─────────────────────────────────
 // 'po-detail' is Phase 3 PO Detail Screen — full dedicated screen.
-type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers'
+type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers' | 'traceability'
 
 // ─── PROJECT TYPE ───────────────────────────────────────────
 // Mirrors the API response shape. Snake_case DB columns (total_pos, at_risk)
@@ -448,7 +449,7 @@ const Nav = ({
         </>}
 
         {userRole !== 'subcontractor' && userRole !== 'freight_forwarder' && <>
-          {navItem('Traceability', '🔗')}
+          {navItem('Traceability', '🔗', 'traceability')}
           {navItem('Document Inbox', '📥')}
         </>}
         {navItem('Audit', '🔍')}
@@ -940,6 +941,7 @@ function App() {
               : page === 'expediting-po-detail' ? `Expediting PO Detail · ${selectedProjectName}`
               : page === 'mto-list'   ? `MTO Register · ${selectedProjectName}`
               : page === 'mto-detail' ? `MTO Detail · ${selectedProjectName}`
+              : page === 'traceability' ? `Traceability · ${selectedProjectName}`
               : 'Dashboard'}
             </span>
           </div>
@@ -1225,6 +1227,13 @@ function App() {
           {page === 'mc-transfers' && selectedProjectId && (
             <MCTransferScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
               onBack={() => setPage('mc-receipting')} />
+          )}
+
+          {/* ─── TRACEABILITY ────────────────────────────────────
+              VDRL register, cert approvals, trace chain, holds. */}
+          {page === 'traceability' && selectedProjectId && (
+            <TraceabilityScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
+              onBack={() => setPage('dashboard')} />
           )}
 
           {/* ─── MTO REGISTER ────────────────────────────────────
