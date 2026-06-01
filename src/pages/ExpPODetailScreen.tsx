@@ -46,8 +46,17 @@ interface VDRLPackage {
   id: number; name: string; status: string; documents: VDRLDocument[]
 }
 interface ITPItem {
-  id: number; item_number: string; description: string; status: string
-  requirement_description?: string | null; inspection_type?: string | null
+  id: number; item_number: number; description: string
+  inspection_type: string; timing: string
+  witness_required: number; certificate_required: number
+  planned_date?: string | null; forecast_date?: string | null
+  po_line_id?: number | null; line_description?: string | null
+  status: string; completion_date?: string | null; completion_notes?: string | null
+  notes?: string | null; forecast_changed_count?: number
+}
+interface ITPDateHistory {
+  id: number; old_value: string | null; new_value: string | null
+  change_reason: string | null; changed_by_name?: string | null; created_at: string
 }
 interface PODetail {
   id: number; po_number: string; po_name?: string | null
@@ -69,7 +78,7 @@ interface PODetail {
 
 interface Props {
   dark: boolean; projectId: number; projectName: string
-  poId: number; onBack: () => void
+  poId: number; onBack: () => void; userRole?: string
 }
 
 type ActiveTab = 'lines' | 'milestones' | 'itp' | 'vdrl' | 'notes' | 'audit'
@@ -102,7 +111,7 @@ const fmtMoney = (v?: number | null, cur = 'AUD') =>
 
 // ─── INNER COMPONENT ──────────────────────────────────────────
 // Must be wrapped in ToastProvider; use the exported ExpPODetailScreen below.
-const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack }: Props) => {
+const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, userRole = '' }: Props) => {
   const { addToast } = useToast()
   const [po, setPO]           = useState<PODetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -132,6 +141,43 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack }: 
   // Audit log
   const [auditLog, setAuditLog] = useState<any[]>([])
   const [auditFilter, setAuditFilter] = useState<'all'|'milestone_forecast'|'note_added'>('all')
+
+  // ─── ITP STATE ────────────────────────────────────────────────
+  // Independent load on tab mount. Mutations refetch the list.
+  const [itpItems, setItpItems]         = useState<ITPItem[]>([])
+  const [itpLoading, setItpLoading]     = useState(false)
+  const [itpError, setItpError]         = useState('')
+  const [itpModal, setItpModal]         = useState<{ mode: 'add' | 'edit'; item?: ITPItem } | null>(null)
+  const [itpDelConfirm, setItpDelConfirm] = useState<ITPItem | null>(null)
+  const [itpHistoryRow, setItpHistoryRow] = useState<number | null>(null)
+  const [itpHistory, setItpHistory]     = useState<ITPDateHistory[]>([])
+  const [itpHistoryLoading, setItpHistoryLoading] = useState(false)
+
+  const ITP_EDIT_ROLES = new Set(['admin','project_manager','senior_expeditor','procurement_officer'])
+  const canEditITP = ITP_EDIT_ROLES.has(userRole)
+
+  const fetchITP = () => {
+    setItpLoading(true)
+    setItpError('')
+    axios.get(`${API}/expediting/${projectId}/po/${poId}/itp`)
+      .then(r => setItpItems(r.data.items || []))
+      .catch(e => setItpError(e.response?.data?.error || 'Failed to load ITP items'))
+      .finally(() => setItpLoading(false))
+  }
+
+  useEffect(() => {
+    if (activeTab === 'itp') fetchITP()
+  }, [activeTab, poId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadItpHistory = (itemId: number) => {
+    if (itpHistoryRow === itemId) { setItpHistoryRow(null); return }
+    setItpHistoryRow(itemId)
+    setItpHistoryLoading(true)
+    axios.get(`${API}/expediting/${projectId}/po/${poId}/itp/${itemId}/date-history`)
+      .then(r => setItpHistory(r.data.history || []))
+      .catch(() => setItpHistory([]))
+      .finally(() => setItpHistoryLoading(false))
+  }
 
   // ─── SCN WIZARD ───────────────────────────────────────────
   // showSCNWizard: toggles the Create SCN wizard modal.
@@ -633,30 +679,224 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack }: 
           {/* ── TAB: ITP ── */}
           {activeTab === 'itp' && (
             <div style={{ padding: 20 }}>
-              {(po.itp_items || []).length === 0 ? (
-                <div style={{ color: sub, fontSize: 13, textAlign: 'center', padding: 40 }}>No ITP requirements configured for this PO.</div>
+              {/* ── Toolbar ── */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontWeight: 600, fontSize: 14, color: col }}>ITP Requirements</span>
+                  {!itpLoading && (
+                    <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 8, background: 'rgba(37,99,235,0.08)', color: '#2563eb', fontWeight: 600 }}>
+                      {itpItems.length} item{itpItems.length !== 1 ? 's' : ''}
+                    </span>
+                  )}
+                </div>
+                {canEditITP && (
+                  <button onClick={() => setItpModal({ mode: 'add' })}
+                    style={{ background: '#E84E0F', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                    + Add ITP item
+                  </button>
+                )}
+              </div>
+
+              {itpLoading ? (
+                <div style={{ textAlign: 'center', padding: 40, color: sub, fontSize: 13 }}>Loading ITP items…</div>
+              ) : itpError ? (
+                <div style={{ color: '#ef4444', fontSize: 13, padding: '12px 16px', background: 'rgba(239,68,68,0.07)', borderRadius: 8 }}>{itpError}</div>
+              ) : itpItems.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: 50, color: sub }}>
+                  <div style={{ fontSize: 28, marginBottom: 12 }}>📋</div>
+                  <div style={{ fontSize: 13, marginBottom: 12 }}>No ITP requirements configured for this PO.</div>
+                  {canEditITP && (
+                    <button onClick={() => setItpModal({ mode: 'add' })}
+                      style={{ background: 'none', border: `1px solid #E84E0F`, color: '#E84E0F', borderRadius: 6, padding: '6px 16px', fontSize: 12, cursor: 'pointer' }}>
+                      Add the first ITP item →
+                    </button>
+                  )}
+                </div>
               ) : (
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                  <thead>
-                    <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
-                      {['Item #', 'Description', 'Type', 'Status'].map(h => (
-                        <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(po.itp_items || []).map(i => (
-                      <tr key={i.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
-                        <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#E84E0F' }}>{i.item_number}</td>
-                        <td style={{ padding: '8px 12px', color: col }}>{i.description}</td>
-                        <td style={{ padding: '8px 12px', color: sub }}>{i.inspection_type || '—'}</td>
-                        <td style={{ padding: '8px 12px' }}>
-                          <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, background: 'rgba(148,163,184,0.1)', color: sub }}>{i.status}</span>
-                        </td>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
+                        {[
+                          ['#',             '48px',  'right'],
+                          ['Description',   'auto',  'left'],
+                          ['Type',          '160px', 'left'],
+                          ['Timing',        '100px', 'left'],
+                          ['Linked Line',   '140px', 'left'],
+                          ['Planned',       '110px', 'left'],
+                          ['Forecast',      '150px', 'left'],
+                          ['Status',        '120px', 'left'],
+                          ['Witness',       '72px',  'center'],
+                          ['Certificate',   '72px',  'center'],
+                          ['Actions',       '72px',  'center'],
+                        ].map(([h, w, align]) => (
+                          <th key={h} style={{ padding: '8px 10px', textAlign: align as any, fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', width: w, whiteSpace: 'nowrap' }}>{h}</th>
+                        ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {itpItems.map(item => {
+                        // ── inspection type pill colours
+                        const typeConf: Record<string, { label: string; bg: string; color: string }> = {
+                          hold_point:  { label: 'Hold point',       bg: 'rgba(239,68,68,0.1)',   color: '#ef4444' },
+                          witness:     { label: 'Witness point',    bg: 'rgba(232,78,15,0.1)',   color: '#E84E0F' },
+                          review:      { label: 'Review point',     bg: 'rgba(37,99,235,0.1)',   color: '#2563eb' },
+                          document:    { label: 'Information only', bg: 'rgba(148,163,184,0.1)', color: '#64748b' },
+                        }
+                        const tc = typeConf[item.inspection_type] || { label: item.inspection_type, bg: 'rgba(148,163,184,0.1)', color: '#64748b' }
+
+                        // ── status pill colours
+                        const stConf: Record<string, { bg: string; color: string }> = {
+                          not_started: { bg: 'rgba(148,163,184,0.12)', color: '#64748b' },
+                          in_progress: { bg: 'rgba(37,99,235,0.1)',    color: '#2563eb' },
+                          complete:    { bg: 'rgba(34,197,94,0.1)',     color: '#16a34a' },
+                          on_hold:     { bg: 'rgba(245,158,11,0.1)',    color: '#d97706' },
+                          waived:      { bg: 'rgba(124,58,237,0.1)',    color: '#7c3aed' },
+                        }
+                        const sc = stConf[item.status] || stConf.not_started
+
+                        const timingPill = item.timing === 'pre_delivery'
+                          ? { label: 'Pre-delivery', bg: 'rgba(37,99,235,0.1)', color: '#2563eb' }
+                          : { label: 'Post-delivery', bg: 'rgba(148,163,184,0.12)', color: '#64748b' }
+
+                        const fmtD = (d?: string | null) => d ? new Date(d).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'
+
+                        const histOpen = itpHistoryRow === item.id
+
+                        return (
+                          <React.Fragment key={item.id}>
+                            <tr style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
+                              <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{item.item_number}</td>
+                              <td style={{ padding: '8px 10px', color: col, maxWidth: 240 }}>
+                                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.description}>{item.description}</div>
+                              </td>
+                              <td style={{ padding: '8px 10px' }}>
+                                <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, background: tc.bg, color: tc.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{tc.label}</span>
+                              </td>
+                              <td style={{ padding: '8px 10px' }}>
+                                <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 8, background: timingPill.bg, color: timingPill.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{timingPill.label}</span>
+                              </td>
+                              <td style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>
+                                {item.line_description ? <span style={{ color: col }}>{item.line_description}</span> : '—'}
+                              </td>
+                              <td style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{fmtD(item.planned_date)}</td>
+                              <td style={{ padding: '8px 10px', fontSize: 11 }}>
+                                <div style={{ color: col }}>{fmtD(item.forecast_date)}</div>
+                                {(item.forecast_changed_count ?? 0) > 0 && (
+                                  <button onClick={() => loadItpHistory(item.id)}
+                                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#d97706', fontSize: 10, padding: 0, marginTop: 2 }}>
+                                    Changed {item.forecast_changed_count}×
+                                  </button>
+                                )}
+                              </td>
+                              <td style={{ padding: '8px 10px' }}>
+                                <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, background: sc.bg, color: sc.color, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                                  {item.status.replace(/_/g, ' ')}
+                                </span>
+                              </td>
+                              <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                                <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 8, background: item.witness_required ? 'rgba(232,78,15,0.1)' : 'rgba(148,163,184,0.1)', color: item.witness_required ? '#E84E0F' : sub, fontWeight: 600 }}>
+                                  {item.witness_required ? 'Yes' : 'No'}
+                                </span>
+                              </td>
+                              <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                                <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 8, background: item.certificate_required ? 'rgba(232,78,15,0.1)' : 'rgba(148,163,184,0.1)', color: item.certificate_required ? '#E84E0F' : sub, fontWeight: 600 }}>
+                                  {item.certificate_required ? 'Yes' : 'No'}
+                                </span>
+                              </td>
+                              <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                                {canEditITP && (
+                                  <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
+                                    <button title="Edit" onClick={() => setItpModal({ mode: 'edit', item })}
+                                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 14, padding: '2px 4px' }}>✎</button>
+                                    <button title="Delete" onClick={() => setItpDelConfirm(item)}
+                                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 14, padding: '2px 4px' }}>🗑</button>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+
+                            {/* ── Inline date-history panel ── */}
+                            {histOpen && (
+                              <tr>
+                                <td colSpan={11} style={{ padding: 0 }}>
+                                  <div style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd, padding: '10px 24px' }}>
+                                    <div style={{ fontSize: 11, fontWeight: 600, color: sub, marginBottom: 8 }}>Forecast date change history</div>
+                                    {itpHistoryLoading ? (
+                                      <div style={{ color: sub, fontSize: 12 }}>Loading…</div>
+                                    ) : itpHistory.length === 0 ? (
+                                      <div style={{ color: sub, fontSize: 12 }}>No changes recorded.</div>
+                                    ) : (
+                                      <table style={{ borderCollapse: 'collapse', fontSize: 11 }}>
+                                        <thead>
+                                          <tr>
+                                            {['Changed at','Changed by','From','To','Reason'].map(h => (
+                                              <th key={h} style={{ padding: '4px 12px', textAlign: 'left', color: sub, fontWeight: 600, fontSize: 10, textTransform: 'uppercase' }}>{h}</th>
+                                            ))}
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {itpHistory.map(h => (
+                                            <tr key={h.id}>
+                                              <td style={{ padding: '4px 12px', color: sub }}>{new Date(h.created_at).toLocaleString('en-AU', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
+                                              <td style={{ padding: '4px 12px', color: col }}>{h.changed_by_name || '—'}</td>
+                                              <td style={{ padding: '4px 12px', color: '#ef4444' }}>{h.old_value ? new Date(h.old_value).toLocaleDateString('en-AU') : '—'}</td>
+                                              <td style={{ padding: '4px 12px', color: '#16a34a' }}>{h.new_value ? new Date(h.new_value).toLocaleDateString('en-AU') : '—'}</td>
+                                              <td style={{ padding: '4px 12px', color: col }}>{h.change_reason || '—'}</td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* ── Delete confirm dialog ── */}
+              {itpDelConfirm && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 3000 }}>
+                  <div style={{ background: cardBg, borderRadius: 10, padding: 28, maxWidth: 380, width: '90%', border: bd }}>
+                    <div style={{ fontWeight: 600, marginBottom: 12, color: col }}>Delete ITP item #{itpDelConfirm.item_number}?</div>
+                    <div style={{ fontSize: 13, color: sub, marginBottom: 20 }}>This cannot be undone.</div>
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                      <button onClick={() => setItpDelConfirm(null)}
+                        style={{ padding: '6px 16px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
+                      <button onClick={async () => {
+                          try {
+                            await axios.delete(`${API}/expediting/${projectId}/po/${poId}/itp/${itpDelConfirm.id}`)
+                            setItpDelConfirm(null)
+                            fetchITP()
+                          } catch (e: any) {
+                            addToast('error', e.response?.data?.error || 'Failed to delete ITP item')
+                            setItpDelConfirm(null)
+                          }
+                        }}
+                        style={{ padding: '6px 16px', borderRadius: 6, border: 'none', background: '#ef4444', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Add / Edit modal ── */}
+              {itpModal && (
+                <ITPItemModal
+                  dark={dark} mode={itpModal.mode} item={itpModal.item}
+                  poLines={po?.po_lines || []}
+                  onClose={() => setItpModal(null)}
+                  onSaved={() => { setItpModal(null); fetchITP() }}
+                  projectId={projectId} poId={poId}
+                  addToast={addToast}
+                />
               )}
             </div>
           )}
@@ -819,6 +1059,214 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack }: 
           onToast={(msg, type) => addToast(type, msg)}
         />
       )}
+    </div>
+  )
+}
+
+// ─── ITP ITEM MODAL ──────────────────────────────────────────
+// Add / Edit modal for ITP requirements.
+// Inspection type values must match the DB enum: hold_point, witness, review, document.
+const ITPItemModal = ({
+  dark, mode, item, poLines, onClose, onSaved, projectId, poId, addToast,
+}: {
+  dark: boolean; mode: 'add' | 'edit'; item?: ITPItem
+  poLines: { id: number; line_number: string; description: string }[]
+  onClose: () => void; onSaved: () => void
+  projectId: number; poId: number
+  addToast: (type: 'success' | 'error', msg: string) => void
+}) => {
+  const [desc,        setDesc]       = useState(item?.description || '')
+  const [iType,       setIType]      = useState(item?.inspection_type || 'witness')
+  const [timing,      setTiming]     = useState(item?.timing || 'pre_delivery')
+  const [lineId,      setLineId]     = useState<string>(item?.po_line_id ? String(item.po_line_id) : '')
+  const [plannedDate, setPlanned]    = useState(item?.planned_date ? item.planned_date.slice(0,10) : '')
+  const [fcastDate,   setFcast]      = useState(item?.forecast_date ? item.forecast_date.slice(0,10) : '')
+  const [witness,     setWitness]    = useState(!!(item?.witness_required))
+  const [cert,        setCert]       = useState(!!(item?.certificate_required))
+  const [status,      setStatus]     = useState(item?.status || 'not_started')
+  const [compDate,    setCompDate]   = useState(item?.completion_date ? item.completion_date.slice(0,10) : '')
+  const [compNotes,   setCompNotes]  = useState(item?.completion_notes || '')
+  const [notes,       setNotes]      = useState(item?.notes || '')
+  const [fcastReason, setFcastReason]= useState('')
+  const [saving, setSaving]          = useState(false)
+  const [errors, setErrors]          = useState<Record<string, string>>({})
+
+  const origFcast = item?.forecast_date ? item.forecast_date.slice(0,10) : ''
+  const fcastChanged = mode === 'edit' && fcastDate !== origFcast
+
+  const col     = dark ? '#f1f5f9' : '#0f172a'
+  const cardBg  = dark ? '#1e293b' : '#fff'
+  const bd      = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const inputSt: React.CSSProperties = {
+    fontSize: 12, padding: '7px 10px', borderRadius: 6, border: bd,
+    background: dark ? '#0f172a' : '#f8fafc', color: col, fontFamily: 'inherit', width: '100%', boxSizing: 'border-box',
+  }
+  const lblSt: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#64748b', marginBottom: 4, display: 'block' }
+
+  const validate = () => {
+    const errs: Record<string, string> = {}
+    if (!desc.trim()) errs.desc = 'Description is required'
+    if (!iType) errs.iType = 'Inspection type is required'
+    if (!timing) errs.timing = 'Timing is required'
+    if (fcastChanged && !fcastReason.trim()) errs.fcastReason = 'Reason is required when changing forecast date'
+    return errs
+  }
+
+  const handleSave = async () => {
+    const errs = validate()
+    if (Object.keys(errs).length) { setErrors(errs); return }
+    setSaving(true)
+    try {
+      const body: any = {
+        description: desc.trim(), inspection_type: iType, timing,
+        po_line_id: lineId ? Number(lineId) : null,
+        planned_date: plannedDate || null, forecast_date: fcastDate || null,
+        witness_required: witness, certificate_required: cert,
+        status, notes: notes || null,
+        completion_date: status === 'complete' ? (compDate || null) : null,
+        completion_notes: compNotes || null,
+      }
+      if (fcastChanged) body.forecast_reason = fcastReason.trim()
+
+      if (mode === 'add') {
+        await axios.post(`http://localhost:3001/api/expediting/${projectId}/po/${poId}/itp`, body)
+        addToast('success', 'ITP item added')
+      } else {
+        await axios.put(`http://localhost:3001/api/expediting/${projectId}/po/${poId}/itp/${item!.id}`, body)
+        addToast('success', 'ITP item updated')
+      }
+      onSaved()
+    } catch (e: any) {
+      addToast('error', e.response?.data?.error || 'Failed to save ITP item')
+    }
+    setSaving(false)
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 3000, overflowY: 'auto', padding: '20px 0' }}>
+      <div style={{ background: cardBg, borderRadius: 12, padding: 28, width: 580, maxWidth: '94vw', border: bd, boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }}>
+        {/* Title */}
+        <div style={{ fontWeight: 700, fontSize: 15, color: col, marginBottom: 20 }}>
+          {mode === 'add' ? 'Add ITP Item' : `Edit ITP Item — #${item?.item_number}`}
+        </div>
+
+        {/* Description */}
+        <div style={{ marginBottom: 14 }}>
+          <label style={lblSt}>Description *</label>
+          <input value={desc} onChange={e => { setDesc(e.target.value); setErrors(p => ({ ...p, desc: '' })) }}
+            placeholder="e.g. Hydrostatic pressure test" style={inputSt} />
+          {errors.desc && <div style={{ color: '#ef4444', fontSize: 11, marginTop: 3 }}>{errors.desc}</div>}
+        </div>
+
+        {/* Row: Type + Timing */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+          <div>
+            <label style={lblSt}>Inspection Type *</label>
+            <select value={iType} onChange={e => setIType(e.target.value)} style={inputSt}>
+              <option value="hold_point">Hold point</option>
+              <option value="witness">Witness point</option>
+              <option value="review">Review point</option>
+              <option value="document">Information only</option>
+            </select>
+          </div>
+          <div>
+            <label style={lblSt}>Timing *</label>
+            <select value={timing} onChange={e => setTiming(e.target.value)} style={inputSt}>
+              <option value="pre_delivery">Pre-delivery</option>
+              <option value="post_delivery">Post-delivery</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Linked Line */}
+        <div style={{ marginBottom: 14 }}>
+          <label style={lblSt}>Linked Line Item</label>
+          <select value={lineId} onChange={e => setLineId(e.target.value)} style={inputSt}>
+            <option value="">— None —</option>
+            {poLines.map(l => (
+              <option key={l.id} value={String(l.id)}>Line {l.line_number} — {l.description}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Row: Planned + Forecast */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+          <div>
+            <label style={lblSt}>Planned Date</label>
+            <input type="date" value={plannedDate} onChange={e => setPlanned(e.target.value)} style={inputSt} />
+          </div>
+          <div>
+            <label style={lblSt}>Forecast Date</label>
+            <input type="date" value={fcastDate} onChange={e => { setFcast(e.target.value); setErrors(p => ({ ...p, fcastReason: '' })) }} style={inputSt} />
+          </div>
+        </div>
+
+        {/* Forecast reason (edit only when changing) */}
+        {fcastChanged && (
+          <div style={{ marginBottom: 14, background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '10px 14px' }}>
+            <label style={{ ...lblSt, color: '#d97706' }}>Reason for forecast date change *</label>
+            <textarea value={fcastReason} onChange={e => { setFcastReason(e.target.value); setErrors(p => ({ ...p, fcastReason: '' })) }}
+              rows={2} placeholder="Required — explain why the forecast date changed"
+              style={{ ...inputSt, resize: 'vertical' }} />
+            {errors.fcastReason && <div style={{ color: '#ef4444', fontSize: 11, marginTop: 3 }}>{errors.fcastReason}</div>}
+          </div>
+        )}
+
+        {/* Row: Witness + Certificate */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input type="checkbox" checked={witness} onChange={e => setWitness(e.target.checked)} />
+            <span style={{ fontSize: 12, color: col }}>Witness required</span>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input type="checkbox" checked={cert} onChange={e => setCert(e.target.checked)} />
+            <span style={{ fontSize: 12, color: col }}>Certificate required</span>
+          </label>
+        </div>
+
+        {/* Status */}
+        <div style={{ marginBottom: 14 }}>
+          <label style={lblSt}>Status *</label>
+          <select value={status} onChange={e => setStatus(e.target.value)} style={inputSt}>
+            <option value="not_started">Not started</option>
+            <option value="in_progress">In progress</option>
+            <option value="complete">Complete</option>
+            <option value="on_hold">On hold</option>
+            <option value="waived">Waived</option>
+          </select>
+        </div>
+
+        {/* Completion date (only if Complete) */}
+        {status === 'complete' && (
+          <div style={{ marginBottom: 14 }}>
+            <label style={lblSt}>Completion Date</label>
+            <input type="date" value={compDate} onChange={e => setCompDate(e.target.value)} style={inputSt} />
+          </div>
+        )}
+
+        {/* Completion notes */}
+        <div style={{ marginBottom: 14 }}>
+          <label style={lblSt}>Completion Notes</label>
+          <textarea value={compNotes} onChange={e => setCompNotes(e.target.value)}
+            rows={2} placeholder="Optional notes on completion or outcome" style={{ ...inputSt, resize: 'vertical' }} />
+        </div>
+
+        {/* General notes */}
+        <div style={{ marginBottom: 20 }}>
+          <label style={lblSt}>Notes</label>
+          <textarea value={notes} onChange={e => setNotes(e.target.value)}
+            rows={2} placeholder="Optional general notes" style={{ ...inputSt, resize: 'vertical' }} />
+        </div>
+
+        {/* Footer */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button onClick={onClose} style={{ padding: '7px 18px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
+          <button onClick={handleSave} disabled={saving}
+            style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: 12, fontWeight: 600, opacity: saving ? 0.7 : 1 }}>
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

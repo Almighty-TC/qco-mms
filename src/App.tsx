@@ -1162,7 +1162,7 @@ function App() {
               Full dedicated screen for a single expediting PO. */}
           {page === 'expediting-po-detail' && selectedProjectId && selectedExpPOId && (
             <ExpPODetailScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
-              poId={selectedExpPOId}
+              poId={selectedExpPOId} userRole={user?.role ?? ''}
               onBack={() => setPage('expediting')} />
           )}
 

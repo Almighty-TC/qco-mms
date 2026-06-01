@@ -983,6 +983,217 @@ router.post('/:projectId/vdrl/upload', uploadVDRL.single('file'), async (req, re
   } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
 })
 
+// ─── ITP CRUD ─────────────────────────────────────────────────
+// Full CRUD on itp_requirements (used as PO-level ITP items).
+// NOTE: itp_requirements.inspection_type enum uses 'hold_point','witness',
+// 'review','document' — these map to the UI labels Hold/Witness/Review/Info.
+
+// GET /:projectId/po/:poId/itp — list all ITP items for a PO
+router.get('/:projectId/po/:poId/itp', async (req, res) => {
+  try {
+    const poId = Number(req.params.poId)
+    const [items] = await db.query(
+      `SELECT r.*, pl.description AS line_description,
+              (SELECT COUNT(*) FROM date_change_log dcl
+               WHERE dcl.entity_type='itp_item' AND dcl.entity_id=r.id AND dcl.field_name='forecast_date') AS forecast_changed_count
+       FROM itp_requirements r
+       LEFT JOIN po_lines pl ON r.po_line_id = pl.id
+       WHERE r.po_id = ? AND (r.is_deleted IS NULL OR r.is_deleted = 0)
+       ORDER BY r.item_number ASC`,
+      [poId]
+    )
+    res.json({ items })
+  } catch (e) {
+    console.error('[itp:list]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// POST /:projectId/po/:poId/itp — create a new ITP item
+router.post('/:projectId/po/:poId/itp', async (req, res) => {
+  try {
+    const poId = Number(req.params.poId)
+    const { description, inspection_type, po_line_id, planned_date, forecast_date,
+            timing, witness_required, certificate_required, notes } = req.body
+
+    if (!description || !description.trim()) return res.status(400).json({ error: 'Description is required' })
+    if (!inspection_type) return res.status(400).json({ error: 'Inspection type is required' })
+    if (!timing) return res.status(400).json({ error: 'Timing is required' })
+
+    // item_number = MAX + 1 for this po_id, or 1 if none
+    const [[{ maxNum }]] = await db.query(
+      'SELECT COALESCE(MAX(item_number),0) AS maxNum FROM itp_requirements WHERE po_id=? AND (is_deleted IS NULL OR is_deleted=0)',
+      [poId]
+    )
+    const itemNumber = (parseInt(maxNum) || 0) + 1
+
+    const userId = req.user?.id || 1
+    const [result] = await db.query(
+      `INSERT INTO itp_requirements
+        (po_id, item_number, description, inspection_type, timing, witness_required, certificate_required,
+         planned_date, forecast_date, po_line_id, notes, status, is_deleted, created_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,'not_started',0,?)`,
+      [poId, itemNumber, description.trim(), inspection_type,
+       timing, witness_required ? 1 : 0, certificate_required ? 1 : 0,
+       planned_date || null, forecast_date || null,
+       po_line_id || null, notes || null, userId]
+    )
+    // Audit log
+    await db.query(
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, after_value, resource)
+       VALUES (?,?,?,?,?,?)`,
+      [userId, 'create', 'itp_requirement', result.insertId,
+       JSON.stringify({ description, inspection_type, timing }),
+       `/expediting/${req.params.projectId}/po/${poId}/itp`]
+    ).catch(() => {}) // audit failure is non-blocking
+
+    const [[newItem]] = await db.query(
+      `SELECT r.*, pl.description AS line_description
+       FROM itp_requirements r
+       LEFT JOIN po_lines pl ON r.po_line_id = pl.id
+       WHERE r.id = ?`,
+      [result.insertId]
+    )
+    res.status(201).json(newItem)
+  } catch (e) {
+    console.error('[itp:create]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// PUT /:projectId/po/:poId/itp/:itemId — update an ITP item
+router.put('/:projectId/po/:poId/itp/:itemId', async (req, res) => {
+  try {
+    const { poId, itemId } = req.params
+    const [[existing]] = await db.query(
+      'SELECT * FROM itp_requirements WHERE id=? AND po_id=?',
+      [itemId, poId]
+    )
+    if (!existing) return res.status(404).json({ error: 'ITP item not found' })
+
+    const {
+      description, inspection_type, po_line_id, planned_date, forecast_date,
+      timing, witness_required, certificate_required, notes,
+      status, completion_date, completion_notes, forecast_reason,
+    } = req.body
+
+    // If forecast_date is changing, require a reason
+    const forecastChanging = forecast_date !== undefined && forecast_date !== existing.forecast_date
+    if (forecastChanging && (!forecast_reason || !forecast_reason.trim())) {
+      return res.status(400).json({ error: 'A reason is required when changing the forecast date' })
+    }
+
+    const userId = req.user?.id || 1
+
+    await db.query(
+      `UPDATE itp_requirements SET
+         description       = COALESCE(?, description),
+         inspection_type   = COALESCE(?, inspection_type),
+         timing            = COALESCE(?, timing),
+         witness_required  = COALESCE(?, witness_required),
+         certificate_required = COALESCE(?, certificate_required),
+         planned_date      = ?,
+         forecast_date     = ?,
+         po_line_id        = ?,
+         notes             = ?,
+         status            = COALESCE(?, status),
+         completion_date   = ?,
+         completion_notes  = ?
+       WHERE id = ?`,
+      [
+        description ? description.trim() : null,
+        inspection_type || null,
+        timing || null,
+        witness_required !== undefined ? (witness_required ? 1 : 0) : null,
+        certificate_required !== undefined ? (certificate_required ? 1 : 0) : null,
+        planned_date !== undefined ? (planned_date || null) : existing.planned_date,
+        forecast_date !== undefined ? (forecast_date || null) : existing.forecast_date,
+        po_line_id !== undefined ? (po_line_id || null) : existing.po_line_id,
+        notes !== undefined ? (notes || null) : existing.notes,
+        status || null,
+        completion_date !== undefined ? (completion_date || null) : existing.completion_date,
+        completion_notes !== undefined ? (completion_notes || null) : existing.completion_notes,
+        itemId,
+      ]
+    )
+
+    // Record forecast date change
+    if (forecastChanging) {
+      await db.query(
+        `INSERT INTO date_change_log (entity_type, entity_id, field_name, old_value, new_value, change_reason, created_by)
+         VALUES ('itp_item', ?, 'forecast_date', ?, ?, ?, ?)`,
+        [itemId, existing.forecast_date || null, forecast_date || null, forecast_reason.trim(), userId]
+      ).catch(() => {})
+    }
+
+    // Audit log
+    await db.query(
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, before_value, after_value, resource)
+       VALUES (?,?,?,?,?,?,?)`,
+      [userId, 'update', 'itp_requirement', itemId,
+       JSON.stringify({ description: existing.description, status: existing.status }),
+       JSON.stringify({ description, status }),
+       `/expediting/${req.params.projectId}/po/${poId}/itp/${itemId}`]
+    ).catch(() => {})
+
+    const [[updated]] = await db.query(
+      `SELECT r.*, pl.description AS line_description
+       FROM itp_requirements r
+       LEFT JOIN po_lines pl ON r.po_line_id = pl.id
+       WHERE r.id = ?`,
+      [itemId]
+    )
+    res.json({ success: true, item: updated })
+  } catch (e) {
+    console.error('[itp:update]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// DELETE /:projectId/po/:poId/itp/:itemId — soft delete
+router.delete('/:projectId/po/:poId/itp/:itemId', async (req, res) => {
+  try {
+    const { poId, itemId } = req.params
+    const [[item]] = await db.query(
+      'SELECT id FROM itp_requirements WHERE id=? AND po_id=?', [itemId, poId]
+    )
+    if (!item) return res.status(404).json({ error: 'ITP item not found' })
+
+    const userId = req.user?.id || 1
+    await db.query('UPDATE itp_requirements SET is_deleted=1 WHERE id=?', [itemId])
+    await db.query(
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, resource)
+       VALUES (?,?,?,?,?)`,
+      [userId, 'delete', 'itp_requirement', itemId,
+       `/expediting/${req.params.projectId}/po/${poId}/itp/${itemId}`]
+    ).catch(() => {})
+
+    res.json({ success: true })
+  } catch (e) {
+    console.error('[itp:delete]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// GET /:projectId/po/:poId/itp/:itemId/date-history — forecast date change history
+router.get('/:projectId/po/:poId/itp/:itemId/date-history', async (req, res) => {
+  try {
+    const { itemId } = req.params
+    const [history] = await db.query(
+      `SELECT dcl.*, u.full_name AS changed_by_name
+       FROM date_change_log dcl
+       LEFT JOIN users u ON dcl.created_by = u.id
+       WHERE dcl.entity_type = 'itp_item' AND dcl.entity_id = ? AND dcl.field_name = 'forecast_date'
+       ORDER BY dcl.created_at DESC`,
+      [itemId]
+    )
+    res.json({ history })
+  } catch (e) {
+    console.error('[itp:date-history]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // ─── HEAT NUMBER ──────────────────────────────────────────────
 // Updates the heat number on a PO line.
 router.put('/:projectId/po/:poId/lines/:lineId/heat-number', async (req, res) => {
