@@ -52,3 +52,6 @@ Desktop.ini
 
 # Runtime-uploaded files (owned by modules, not source)
 server/uploads/
+
+# Local doc backups (kept out of version history)
+docs/_backup_*/

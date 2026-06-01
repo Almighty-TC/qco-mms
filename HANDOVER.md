@@ -3,6 +3,8 @@
 # This document is the complete briefing for the next chat session.
 # Read every word before doing anything.
 
+> ⚠ HISTORICAL — this file is a 31 May 2026 snapshot. For current module status, see HANDOVER_NEXT_SESSION.md (canonical). Sections below may show built modules as pending.
+
 ---
 
 ## 1. PROJECT IDENTITY
@@ -93,28 +95,11 @@ Present mode URL: https://claude.ai/design/p/019dd3c2-e535-7728-ada2-d48680d4dd4
 
 ---
 
-## 6. MODULE STATUS (as of 31 May 2026)
+## 6. MODULE STATUS
 
-| Module | Status |
-|--------|--------|
-| Login | ✅ Complete |
-| Dashboard | ⏳ NOT STARTED — BUILD LAST |
-| Admin | ✅ Complete |
-| Foundational — WBS | 🔄 Built, enhancements in progress (see Section 10) |
-| Foundational — Commodity Library | 🔄 Built, template download needed |
-| Foundational — Equipment List | 🔄 Built, template download needed |
-| Procurement — PO Register (Phase 1) | ✅ Complete |
-| Procurement — New PO Wizard (Phase 2) | ✅ Complete |
-| Procurement — PO Detail Screen (Phase 3) | ✅ Complete (all 7 tabs working) |
-| MTO Register | ⏳ Not started |
-| Expediting | ⏳ Not started |
-| VDRL | ⏳ Not started |
-| Logistics | ⏳ Not started |
-| Material Control | ⏳ Not started |
-| Traceability | ⏳ Not started |
-| Document Inbox | ⏳ Not started |
-| Audit | ⏳ Not started |
-| Reports | ⏳ Not started |
+> ⚠️ **Status is tracked in HANDOVER_NEXT_SESSION.md — see that file for current module status.**
+> (This table was stale as of 31 May 2026 and has been retired. The rest of this document is
+> historical context from the 31 May session.)
 
 ---
 

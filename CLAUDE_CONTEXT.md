@@ -88,25 +88,9 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 
 ## MODULE BUILD ORDER & STATUS
 
-| Module | Status |
-|--------|--------|
-| Login | ✅ Complete |
-| Dashboard | ⏳ Not started — BUILD LAST |
-| Admin | ✅ Complete |
-| Foundational — WBS | ✅ Complete |
-| Foundational — Commodity Library | ✅ Complete |
-| Foundational — Equipment List | ✅ Complete |
-| Procurement — PO Register (Phase 1) | ✅ Complete with fixes |
-| Procurement — New PO Wizard (Phase 2) | ✅ Built, working, tested |
-| Procurement — PO Detail Screen (Phase 3) | ✅ Complete |
-| MTO Register | ⏳ Not started |
-| Expediting (incl. VDRL Register tab) | ⏳ Not started |
-| Logistics | ⏳ Not started |
-| Material Control | ⏳ Not started |
-| Traceability | ✅ Complete — VDRL, cert approvals, trace chain, holds + 6 modals |
-| Document Inbox | ⏳ Not started |
-| Audit | ⏳ Not started |
-| Reports | ⏳ Not started |
+> ⚠️ **Module status is tracked in HANDOVER_NEXT_SESSION.md — see that file for current status.**
+> (The status table that was here contradicted this document's own body and has been retired.
+> The module specifications and architecture below remain the design source of truth.)
 
 ---
 

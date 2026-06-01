@@ -1,6 +1,8 @@
 # QCO MMS — HANDOVER: NEXT SESSION
-# Updated: 01 June 2026
-# Last commit: 914126a
+# Updated: 02 June 2026
+# Last commit: 1d1f775
+# ⭐ THIS FILE IS THE SINGLE CANONICAL MODULE-STATUS DOC. HANDOVER.md and
+#    CLAUDE_CONTEXT.md point here for status (their own status tables are retired).
 # Read every word before doing anything.
 
 ---
@@ -40,7 +42,7 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 
 ---
 
-## 3. MODULE STATUS (current as of 01 June 2026)
+## 3. MODULE STATUS (current as of 02 June 2026)
 
 | Module | Status | Notes |
 |--------|--------|-------|
@@ -56,16 +58,28 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 | MTO Register | ✅ Complete | List, new MTO, detail, rev diff, upload |
 | Expediting | ✅ Complete | Register, drawer, PO detail (6 tabs), SCN wizard, VDRL |
 | ITP | ✅ Complete | Full CRUD on ExpPODetailScreen ITP tab |
-| Logistics | ✅ Complete | SCN register, pipeline bar, detail modal (overview/packages/docs/timeline), status transitions, date edits with mandatory reason, packages CRUD, document upload, ★ critical path toggle |
+| Logistics | ✅ BUILT | SCN register, pipeline bar, 4-tab detail modal, status/date/packages/docs CRUD, ★ critical path. 31 SCNs / 62 packages in project 1. **GAP: Proof of Custody screen not built.** |
 | Material Control — Receipting | ✅ Complete | 5-step wizard with Back buttons, inline discrepancy flow, dual TCCC signature |
 | Material Control — Stock Register | ✅ Complete | Grouped by warehouse, condition pills, move/docs, stock take modal |
-| Material Control — FMR Register | ✅ Complete | MC + Contractor views, approval modal with system checks, Raise FMR |
-| Material Control — Transfers | ✅ Complete | Pipeline cards, detail modal with lifecycle stepper, 2-step new transfer wizard |
+| Material Control — FMR Register | ✅ Complete | Multi-line FMR + per-line approve/partial/reject with roll-up status + WBS ceiling check (rework 02 Jun, commits 57313b5 / 4c04de1). MC + Contractor views. |
+| Material Control — Transfers | ✅ BUILT | Pipeline cards, detail modal with lifecycle stepper, 2-step new transfer wizard. 5 transfers (full lifecycle) in project 1. **GAP: new-transfer wizard is free-text, NOT stock-line-linked — does not decrement warehouse_stock.** |
 | Role-Based Access | ✅ Complete | Subcontractor + Freight Forwarder scoped nav + API + UI (003a716, 39700e6) |
-| Traceability | ⏳ Not started | |
-| Document Inbox | ⏳ Not started | |
+| Deep-link routing | ✅ Fixed | BUG-08 (project switching) + BUG-09 (deep-link hydrates active project from URL) fixed (commit 9391bca) |
+| Traceability | ✅ BUILT & verified 02 Jun | Certs/approvals/trace chain/holds + 6 modals. Hard-mandatory 3-point QA verify checklist (server 422s if any box false; verifying releases the linked hold). Commit e3e68dd. |
+| Document Inbox / Document Management | ✅ BUILT & verified 02 Jun | Project-wide aggregate, READ-ONLY register over every module's existing doc tables; jump-to-source via deep link; CSV export. Commit 1d1f775. |
+| Meeting / RFI Register | ⏳ Not started | |
 | Audit | ⏳ Not started | |
 | Reports | ⏳ Not started | |
+
+**Remaining unbuilt modules:** Meeting/RFI Register · Audit · Reports · Dashboard (build last — reads from all modules).
+
+---
+
+## 3a. KNOWN GAPS (as of 02 June 2026)
+
+- **Logistics — Proof of Custody screen not built** (spec'd in CLAUDE_CONTEXT; `CreateSCNWizard` exists but is launched from Expediting, not the Logistics register).
+- **Transfers — not stock-linked**: the 2-step new-transfer wizard uses free-text item/description + from/to locations, so it does **not** pick from or decrement real `warehouse_stock` rows.
+- **Document Management** (read-only aggregator): download is a **mock toast** (the module owns no files — real downloads live on each source module's screen); **Material Control contributes 0 documents** (no FMR-docket / receipt-POD table exists); **upload routing is partial** — wired for Logistics + Procurement, other modules direct the user to their own uploader, Material Control marked "not yet supported".
 
 ---
 
