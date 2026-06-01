@@ -83,6 +83,12 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 
 ---
 
+## 3b. BACKLOG / NOT STARTED
+
+- **Heat / lot tracking** — spec captured, not built; scheduled after receipting Phases 1–4 as its own read-first-led mini-project. See [docs/HEAT_LOT_TRACKING_SPEC.md](docs/HEAT_LOT_TRACKING_SPEC.md).
+
+---
+
 ## 4. WHAT WAS DONE THIS SESSION (01 June 2026 — final)
 
 - **Material Control module:** Fully built — Receipting (5-step wizard), Stock Register,
