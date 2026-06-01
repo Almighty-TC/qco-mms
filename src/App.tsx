@@ -33,6 +33,33 @@ import './App.css'
 // 'po-detail' is Phase 3 PO Detail Screen — full dedicated screen.
 type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers' | 'traceability'
 
+// ─── DEEP-LINK PARSING ───────────────────────────────────────
+// Maps a URL path segment (/project/:id/<segment>) to an internal Page,
+// including human-friendly aliases (material-control/fmr → mc-fmr) so a
+// hard load / refresh of a deep link resolves the right screen AND the
+// active project (the :id in the same path — see parseDeepLink).
+const PAGE_SEGMENTS: Record<string, Page> = {
+  procurement: 'procurement', 'po-detail': 'po-detail',
+  expediting: 'expediting', 'expediting-po-detail': 'expediting-po-detail',
+  'mto-list': 'mto-list', 'mto-detail': 'mto-detail',
+  logistics: 'logistics', traceability: 'traceability',
+  'mc-receipting': 'mc-receipting', 'mc-stock': 'mc-stock', 'mc-fmr': 'mc-fmr', 'mc-transfers': 'mc-transfers',
+  'foundational-wbs': 'foundational-wbs', 'foundational-commodities': 'foundational-commodities', 'foundational-equipment': 'foundational-equipment',
+  // friendly aliases
+  'material-control/receipting': 'mc-receipting', 'material-control/fmr': 'mc-fmr',
+  'material-control/stock': 'mc-stock', 'material-control/transfers': 'mc-transfers',
+  'foundational/wbs': 'foundational-wbs', 'foundational/commodities': 'foundational-commodities', 'foundational/equipment': 'foundational-equipment',
+}
+// Reads /project/:projectId/:segment from the current URL so a hard load
+// hydrates both the active project and the page in one pass.
+function parseDeepLink(): { projectId: number | null; page: Page | null } {
+  try {
+    const m = window.location.pathname.match(/^\/project\/(\d+)\/(.+?)\/?$/)
+    if (!m) return { projectId: null, page: null }
+    return { projectId: Number(m[1]), page: PAGE_SEGMENTS[m[2]] ?? null }
+  } catch { return { projectId: null, page: null } }
+}
+
 // ─── PROJECT TYPE ───────────────────────────────────────────
 // Mirrors the API response shape. Snake_case DB columns (total_pos, at_risk)
 // are aliased to camelCase in server/routes/projects.js before being sent here.
@@ -718,29 +745,9 @@ function App() {
   const [dark,             setDark]             = useState(false)
   const [page,             setPage]             = useState<Page>(() => {
     // ─── URL-BASED PAGE RESTORE ──────────────────────────────────────────────
-    // Parse the pathname on first load so direct navigation (e.g. /project/1/expediting)
+    // Parse the pathname on first load so a deep link (e.g. /project/1/traceability)
     // renders the correct screen immediately rather than showing the Dashboard.
-    const path = window.location.pathname
-    const m = path.match(/^\/project\/\d+\/(.+)$/)
-    if (m) {
-      const seg = m[1]
-      const map: Record<string, Page> = {
-        expediting: 'expediting',
-        procurement: 'procurement',
-        'po-detail': 'po-detail',
-        'expediting-po-detail': 'expediting-po-detail',
-        'mto-list': 'mto-list',
-        'mto-detail': 'mto-detail',
-        admin: 'admin',
-        logistics: 'logistics',
-        'mc-receipting': 'mc-receipting',
-        'mc-stock': 'mc-stock',
-        'mc-fmr': 'mc-fmr',
-        'mc-transfers': 'mc-transfers',
-      }
-      if (map[seg]) return map[seg]
-    }
-    return 'dashboard'
+    return parseDeepLink().page ?? 'dashboard'
   })
   // ─── PROCUREMENT PROJECT SELECTION ──────────────────────────
   // Procurement is project-scoped. selectedProjectId tracks which
@@ -751,6 +758,10 @@ function App() {
   // render correctly on the first frame — no waiting for fetchProjects to complete.
   // This fixes direct URL navigation (e.g. /project/1/expediting) and page refresh.
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(() => {
+    // Prefer the :projectId in the URL (deep link / refresh) so the active
+    // project matches the address bar; fall back to the last-used project.
+    const dl = parseDeepLink()
+    if (dl.projectId) return dl.projectId
     try {
       const stored = localStorage.getItem('qmat_last_project')
       if (stored) { const { id } = JSON.parse(stored); return id ?? null }
@@ -758,9 +769,16 @@ function App() {
     return null
   })
   const [selectedProjectName, setSelectedProjectName] = useState<string>(() => {
+    // Only reuse the stored name when it matches the URL's project; otherwise
+    // it is filled from the project list once it loads (see reconcile effect).
+    const dl = parseDeepLink()
     try {
       const stored = localStorage.getItem('qmat_last_project')
-      if (stored) { const { name } = JSON.parse(stored); return name ?? '' }
+      if (stored) {
+        const { id, name } = JSON.parse(stored)
+        if (dl.projectId) return id === dl.projectId ? (name ?? '') : ''
+        return name ?? ''
+      }
     } catch {}
     return ''
   })
@@ -835,20 +853,8 @@ function App() {
         breached: p.breached ?? 0,
       }))
       setProjects(normalised)
-      // ─── RESTORE LAST SELECTED PROJECT ──────────────────────
-      // On first load, restore the last-selected project from localStorage
-      // so the user lands directly in the right project context.
-      // Uses functional form to avoid stale-closure issue with selectedProjectId.
-      try {
-        const stored = localStorage.getItem('qmat_last_project')
-        if (stored) {
-          const { id, name } = JSON.parse(stored)
-          if (id && normalised.some(p => p.id === id)) {
-            setSelectedProjectId(curr => curr ?? id)
-            setSelectedProjectName(curr => curr || name)
-          }
-        }
-      } catch { /* ignore malformed stored value */ }
+      // Active-project reconciliation now lives in a dedicated effect keyed on
+      // `projects` (see below) so it can validate a URL-derived :projectId too.
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: string } }; message?: string }
       setError(e.response?.data?.error ?? e.message ?? 'Unable to load projects')
@@ -858,6 +864,43 @@ function App() {
   }, [token]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetchProjects() }, [fetchProjects])
+
+  // ─── RECONCILE ACTIVE PROJECT WITH THE LOADED LIST ────────────
+  // Runs once the project list arrives. Validates the active id (which may
+  // have come from the URL :projectId or localStorage): fills the name from
+  // the list when missing, restores the last project when nothing is active,
+  // and clears an unknown id (e.g. a bad deep link) so the guard falls back
+  // to project-select instead of rendering a screen for a non-existent project.
+  useEffect(() => {
+    if (!projects.length) return
+    if (selectedProjectId != null) {
+      const match = projects.find(p => p.id === selectedProjectId)
+      if (match) { if (!selectedProjectName) setSelectedProjectName(match.name) }
+      else { setSelectedProjectId(null); setSelectedProjectName(''); setPage('dashboard') }
+    } else {
+      try {
+        const stored = localStorage.getItem('qmat_last_project')
+        if (stored) {
+          const { id, name } = JSON.parse(stored)
+          if (id && projects.some(p => p.id === id)) { setSelectedProjectId(id); setSelectedProjectName(name) }
+        }
+      } catch { /* ignore malformed stored value */ }
+    }
+  }, [projects]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── KEEP THE URL IN SYNC WITH STATE ──────────────────────────
+  // Mirrors the active project + page into the address bar (replaceState so
+  // the back button isn't polluted). A refresh then re-hydrates from it, and
+  // switching projects keeps URL ↔ active-project in sync every time (BUG-08).
+  useEffect(() => {
+    try {
+      // Only project-scoped pages get a deep path (so it round-trips on reload);
+      // dashboard / admin and any unmapped page reset to root.
+      const isProjectPage = !!selectedProjectId && Object.values(PAGE_SEGMENTS).includes(page)
+      const path = isProjectPage ? `/project/${selectedProjectId}/${page}` : '/'
+      if (window.location.pathname !== path) window.history.replaceState(null, '', path)
+    } catch { /* history API unavailable — non-fatal */ }
+  }, [page, selectedProjectId])
 
   if (!isAuthenticated) return <Login />
 
