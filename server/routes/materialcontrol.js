@@ -169,7 +169,8 @@ router.get('/:projectId/receipting/:scnId', rejectExternal, async (req, res) => 
 
     const [packages] = await db.query('SELECT * FROM scn_packages WHERE scn_id = ?', [scnId])
     const [lines] = await db.query(
-      `SELECT pl.id, pl.line_number, pl.description, pl.qty, pl.uom, pl.qty_assigned
+      `SELECT pl.id, pl.line_number, pl.description, pl.qty, pl.uom, pl.qty_assigned,
+              pl.wbs_code_snapshot, pl.tag_number, pl.equipment_tag, pl.commodity_id
        FROM po_lines pl WHERE pl.po_id = ?`,
       [scn.po_id || 0]
     )
@@ -183,7 +184,9 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
   try {
     const scnId = Number(req.params.scnId)
     const pid   = Number(req.params.projectId)
-    const { location_code, cargo_condition, actual_packages, notes, warehouse_id } = req.body
+    // Phase 1: `lines` carries the per-PO-line received quantities + discrepancy
+    // detail the wizard now sends. `actual_packages` kept for back-compat.
+    const { location_code, cargo_condition, actual_packages, notes, warehouse_id, lines } = req.body
     const userId = req.user?.id || 1
 
     if (!location_code) return res.status(400).json({ error: 'Grid location is required' })
@@ -197,28 +200,69 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
       ['received', scnId]
     )
 
-    // Create stock entries from packages
-    const [pkgs] = await db.query('SELECT * FROM scn_packages WHERE scn_id=?', [scnId])
-    for (const pkg of pkgs) {
-      await db.query(
-        `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,vendor_name,received_date,received_by)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,CURDATE(),?)`,
-        [pid, warehouse_id || scn.destination_warehouse_id || 1, scnId,
-         `SCN-${scn.scn_ref}-PKG${pkg.package_number}`,
-         pkg.description || scn.notes || 'Received goods',
-         null, pkg.gross_weight_kg || 1, pkg.gross_weight_kg || 1, 'EA',
-         location_code,
-         cargo_condition === 'good' ? 'good' : cargo_condition === 'minor_damage' ? 'minor_damage' : 'major_damage',
-         scn.vendor_name, userId]
-      )
+    const whId = warehouse_id || scn.destination_warehouse_id || 1
+    const condition = cargo_condition === 'good' ? 'good'
+      : cargo_condition === 'minor_damage' ? 'minor_damage'
+      : cargo_condition === 'major_damage' ? 'major_damage' : 'good'
+
+    let stockCreated = 0
+
+    if (Array.isArray(lines) && lines.length > 0) {
+      // ── Phase 1 path: receive against real PO lines ──────────
+      // Persist each line to receipt_lines, then create stock from the
+      // RECEIVED qty (not package weight). All received qty goes to
+      // available stock for now — good/quarantine split is Phase 3.
+      for (const ln of lines) {
+        const receivedQty = Number(ln.received_qty)
+        if (!(receivedQty >= 0)) continue
+        const expectedQty = ln.expected_qty != null ? Number(ln.expected_qty) : null
+        const uom = ln.uom || 'EA'
+
+        await db.query(
+          `INSERT INTO receipt_lines
+             (project_id, scn_id, scn_ref, po_line_id, description, expected_qty, received_qty, uom,
+              discrepancy_type, discrepancy_notes, received_by, received_date)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,CURDATE())`,
+          [pid, scnId, scn.scn_ref, ln.po_line_id || null, ln.description || null,
+           expectedQty, receivedQty, uom,
+           ln.discrepancy_type || null, ln.discrepancy_notes || null, userId])
+
+        // Stock row sourced from the received quantity + real line identity.
+        if (receivedQty > 0) {
+          await db.query(
+            `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,vendor_name,received_date,received_by)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,CURDATE(),?)`,
+            [pid, whId, scnId, ln.po_line_id || null,
+             ln.item_code || (ln.po_line_id ? `${scn.scn_ref}-L${ln.line_number || ln.po_line_id}` : `SCN-${scn.scn_ref}`),
+             ln.description || scn.notes || 'Received goods',
+             ln.wbs_code || null, receivedQty, receivedQty, uom,
+             location_code, condition, scn.vendor_name, userId])
+          stockCreated++
+        }
+      }
+    } else {
+      // ── Fallback (SCN with no linked PO lines): legacy package path ──
+      // TODO(phase-later): drop once every SCN receipts against PO lines.
+      const [pkgs] = await db.query('SELECT * FROM scn_packages WHERE scn_id=?', [scnId])
+      for (const pkg of pkgs) {
+        await db.query(
+          `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,vendor_name,received_date,received_by)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,CURDATE(),?)`,
+          [pid, whId, scnId,
+           `SCN-${scn.scn_ref}-PKG${pkg.package_number}`,
+           pkg.description || scn.notes || 'Received goods',
+           null, pkg.gross_weight_kg || 1, pkg.gross_weight_kg || 1, 'EA',
+           location_code, condition, scn.vendor_name, userId])
+        stockCreated++
+      }
     }
 
     await writeAudit(userId, 'receipt_complete', 'scn', scnId,
       { status: scn.status },
-      { status: 'received', location_code, cargo_condition },
+      { status: 'received', location_code, cargo_condition, lines: Array.isArray(lines) ? lines.length : 0 },
       `/mc/${pid}/receipting/${scnId}/complete`)
 
-    res.json({ success: true, stock_created: pkgs.length })
+    res.json({ success: true, stock_created: stockCreated })
   } catch (e) {
     console.error('[mc:receipt-complete]', e.message)
     res.status(500).json({ error: e.message })

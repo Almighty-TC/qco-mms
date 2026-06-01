@@ -271,8 +271,9 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
     axios.get(`${API}/mc/${projectId}/receipting/${scn.id}`)
       .then(r => {
         setDetail(r.data)
+        // Phase 1: receive against real PO lines — expected qty = po_line.qty.
         const init: Record<number, number> = {}
-        ;(r.data.packages || []).forEach((p: any) => { init[p.id] = p.gross_weight_kg || 1 })
+        ;(r.data.lines || []).forEach((l: any) => { init[l.id] = Number(l.qty) || 0 })
         setActuals(init)
       })
       .catch(() => setDetail({ packages: [], lines: [] }))
@@ -285,9 +286,30 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
     if (!cargoCondition) { addToast('error', 'Cargo condition is required'); return }
     setSaving(true)
     try {
+      // Phase 1: persist the per-line received quantities + discrepancy detail
+      // the wizard collected. Built from the real PO lines.
+      const lines = (detail?.lines || []).map((l: any) => {
+        const expected = Number(l.qty) || 0
+        const received = actuals[l.id] ?? expected
+        const mismatch = received !== expected
+        return {
+          po_line_id: l.id,
+          line_number: l.line_number,
+          description: l.description,
+          expected_qty: expected,
+          received_qty: received,
+          uom: l.uom || 'EA',
+          wbs_code: l.wbs_code_snapshot || null,
+          item_code: l.tag_number || l.equipment_tag || null,
+          discrepancy_type: discrepancyTypes[l.id] || null,
+          // Single shared notes field applies to whichever lines diverge.
+          discrepancy_notes: (mismatch || discrepancyTypes[l.id]) ? (discrepancyNotes.trim() || null) : null,
+        }
+      })
       await axios.post(`${API}/mc/${projectId}/receipting/${scn.id}/complete`, {
-        location_code: location.trim(), cargo_condition: cargoCondition, notes, actual_packages: Object.values(actuals).length,
-        warehouse_id: scn.destination_warehouse_id,
+        location_code: location.trim(), cargo_condition: cargoCondition, notes,
+        actual_packages: Object.values(actuals).length, warehouse_id: scn.destination_warehouse_id,
+        lines,
       })
       setStep(5)
     } catch (e: any) {
@@ -350,29 +372,28 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, background: cardBg, border: bd, borderRadius: 8 }}>
               <thead>
                 <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
-                  {['PACKAGE','DESCRIPTION','EXP. QTY','UOM','DG'].map(h => (
+                  {['LINE','DESCRIPTION','EXP. QTY','UOM'].map(h => (
                     <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {!detail ? (
-                  <tr><td colSpan={5} style={{ padding: 20, textAlign: 'center', color: sub }}>Loading…</td></tr>
-                ) : (detail.packages || []).length === 0 ? (
-                  <tr><td colSpan={5} style={{ padding: 20, textAlign: 'center', color: sub }}>No packages recorded for this SCN.</td></tr>
-                ) : (detail.packages || []).map((p: any) => (
-                  <tr key={p.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
-                    <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#E84E0F' }}>PKG-{String(p.package_number || p.id).padStart(3,'0')}</td>
-                    <td style={{ padding: '8px 12px', color: col }}>{p.description || 'Package'}</td>
-                    <td style={{ padding: '8px 12px', color: col, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{p.gross_weight_kg || 1}</td>
-                    <td style={{ padding: '8px 12px', color: sub }}>EA</td>
-                    <td style={{ padding: '8px 12px', color: p.is_dangerous_goods ? '#ef4444' : sub }}>{p.is_dangerous_goods ? '⚠️ DG' : '—'}</td>
+                  <tr><td colSpan={4} style={{ padding: 20, textAlign: 'center', color: sub }}>Loading…</td></tr>
+                ) : (detail.lines || []).length === 0 ? (
+                  <tr><td colSpan={4} style={{ padding: 20, textAlign: 'center', color: sub }}>No PO lines linked to this SCN.</td></tr>
+                ) : (detail.lines || []).map((l: any) => (
+                  <tr key={l.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
+                    <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#E84E0F' }}>L-{String(l.line_number || l.id).padStart(3,'0')}</td>
+                    <td style={{ padding: '8px 12px', color: col }}>{l.description || 'Line item'}</td>
+                    <td style={{ padding: '8px 12px', color: col, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{Number(l.qty)}</td>
+                    <td style={{ padding: '8px 12px', color: sub }}>{l.uom || 'EA'}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
             <div style={{ background: dark ? '#162032' : '#f0f9ff', border: bd, borderRadius: 8, padding: '10px 14px', marginTop: 12, display: 'flex', gap: 16, fontSize: 12, color: sub }}>
-              <span>{(detail?.packages || []).length} packages</span>
+              <span>{(detail?.lines || []).length} line items</span>
               <span>{scn.total_weight_kg ? `${scn.total_weight_kg} t total` : '—'}</span>
               {scn.eta && <span>ETA {fmt(scn.eta)}</span>}
             </div>
@@ -388,9 +409,11 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
 
         {/* ── STEP 2 ── Physical check + inline discrepancy flow ── */}
         {step === 2 && (() => {
-          const packages = detail?.packages || []
-          const allMatch = packages.every((p: any) => (actuals[p.id] ?? (p.gross_weight_kg || 1)) === (p.gross_weight_kg || 1))
-          const anyMismatch = packages.some((p: any) => (actuals[p.id] ?? (p.gross_weight_kg || 1)) !== (p.gross_weight_kg || 1))
+          // Phase 1: physical check is per real PO line — expected = po_line.qty.
+          const lines = detail?.lines || []
+          const expOf = (l: any) => Number(l.qty) || 0
+          const allMatch = lines.length > 0 && lines.every((l: any) => (actuals[l.id] ?? expOf(l)) === expOf(l))
+          const anyMismatch = lines.some((l: any) => (actuals[l.id] ?? expOf(l)) !== expOf(l))
           const discrepancyReady = discrepancyMode && discrepancyNotes.trim().length > 0
           const DISC_TYPES = ['Short delivery','Over delivery','Damaged','Missing','Other']
 
@@ -410,25 +433,28 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, background: cardBg, border: bd, borderRadius: 8 }}>
                 <thead>
                   <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
-                    {['PACKAGE','DESCRIPTION','EXPECTED','ACTUAL','MATCH', ...(discrepancyMode ? ['DISCREPANCY TYPE'] : [])].map(h => (
+                    {['LINE','DESCRIPTION','EXPECTED','UOM','ACTUAL','MATCH', ...(discrepancyMode ? ['DISCREPANCY TYPE'] : [])].map(h => (
                       <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {packages.map((p: any) => {
-                    const expected = p.gross_weight_kg || 1
-                    const actual = actuals[p.id] ?? expected
+                  {lines.length === 0 ? (
+                    <tr><td colSpan={discrepancyMode ? 7 : 6} style={{ padding: 20, textAlign: 'center', color: sub }}>No PO lines linked to this SCN — nothing to receive against.</td></tr>
+                  ) : lines.map((l: any) => {
+                    const expected = expOf(l)
+                    const actual = actuals[l.id] ?? expected
                     const match = actual === expected
                     const rowHighlight = discrepancyMode && !match ? (dark ? 'rgba(245,158,11,0.06)' : 'rgba(245,158,11,0.05)') : undefined
                     return (
-                      <tr key={p.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, background: rowHighlight }}>
-                        <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#E84E0F' }}>PKG-{String(p.package_number || p.id).padStart(3,'0')}</td>
-                        <td style={{ padding: '8px 12px', color: col }}>{p.description || 'Package'}</td>
+                      <tr key={l.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, background: rowHighlight }}>
+                        <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#E84E0F' }}>L-{String(l.line_number || l.id).padStart(3,'0')}</td>
+                        <td style={{ padding: '8px 12px', color: col }}>{l.description || 'Line item'}</td>
                         <td style={{ padding: '8px 12px', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{expected}</td>
+                        <td style={{ padding: '8px 12px', color: sub }}>{l.uom || 'EA'}</td>
                         <td style={{ padding: '8px 12px' }}>
                           <input type="number" value={actual} min={0}
-                            onChange={e => setActuals(prev => ({ ...prev, [p.id]: Number(e.target.value) }))}
+                            onChange={e => setActuals(prev => ({ ...prev, [l.id]: Number(e.target.value) }))}
                             style={{ ...inputSt, width: 80, textAlign: 'center', borderColor: !match ? '#f59e0b' : undefined }} />
                         </td>
                         <td style={{ padding: '8px 12px' }}>
@@ -436,8 +462,8 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                         </td>
                         {discrepancyMode && (
                           <td style={{ padding: '8px 12px' }}>
-                            <select value={discrepancyTypes[p.id] || ''}
-                              onChange={e => setDiscrepancyTypes(prev => ({ ...prev, [p.id]: e.target.value }))}
+                            <select value={discrepancyTypes[l.id] || ''}
+                              onChange={e => setDiscrepancyTypes(prev => ({ ...prev, [l.id]: e.target.value }))}
                               style={{ ...inputSt, width: 160, padding: '5px 8px' }}
                               disabled={match}>
                               <option value="">{match ? '— no issue' : 'Select type…'}</option>
@@ -553,10 +579,10 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
 
             {/* Actual packages received */}
             <div style={{ background: cardBg, border: bd, borderRadius: 8, padding: 16, marginBottom: 16 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: col, marginBottom: 8 }}>Actual packages received</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: col, marginBottom: 8 }}>Line items received</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <div style={{ fontSize: 28, fontWeight: 700, color: col }}>{Object.keys(actuals).length}</div>
-                <div style={{ fontSize: 12, color: sub }}>Expected: {(detail?.packages || []).length} packages</div>
+                <div style={{ fontSize: 12, color: sub }}>Expected: {(detail?.lines || []).length} line items</div>
               </div>
             </div>
 
@@ -644,8 +670,8 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
               <div style={{ textAlign: 'left', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '12px 16px', marginBottom: 24 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: '#d97706', marginBottom: 6 }}>⚠ Discrepancy flagged — QC review required</div>
                 <div style={{ fontSize: 12, color: col }}>{discrepancyNotes}</div>
-                {Object.entries(discrepancyTypes).filter(([,v]) => v).map(([pkgId, type]) => (
-                  <div key={pkgId} style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>PKG-{pkgId}: {type}</div>
+                {Object.entries(discrepancyTypes).filter(([,v]) => v).map(([lineId, type]) => (
+                  <div key={lineId} style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>Line {lineId}: {type}</div>
                 ))}
               </div>
             )}
