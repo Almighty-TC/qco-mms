@@ -166,7 +166,7 @@ export const ExpPODrawer: React.FC<Props> = ({
                 }}>
                   Milestones
                 </div>
-                <MilestoneTimeline milestones={po.milestones || []} size="sm" />
+                <MilestoneTimeline milestones={po.milestones || []} size="sm" dark={dark} />
               </div>
 
               {/* LINE ITEMS */}

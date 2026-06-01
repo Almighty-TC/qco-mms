@@ -240,7 +240,7 @@ export const ExpPODetailPanel = ({ projectId, poId, dark, token, onClose }: Prop
             <>
               {/* ── MILESTONES ── */}
               <Section label="Milestones" dark={dark}>
-                <MilestoneTimeline milestones={po.milestones} size="md" />
+                <MilestoneTimeline milestones={po.milestones} size="md" dark={dark} />
                 <div style={{ marginTop:12 }}>
                   {po.milestones.map(m => {
                     const pill = STATUS_PILL_COLORS[m.status] || STATUS_PILL_COLORS.not_started

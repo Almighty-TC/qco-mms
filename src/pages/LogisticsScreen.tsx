@@ -5,6 +5,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
+import { MilestoneLegend } from '../components/MilestoneLegend'
 
 const API = 'http://localhost:3001/api'
 
@@ -269,7 +270,7 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
 
         {/* ── TABLE ─────────────────────────────────────────── */}
         <div style={{ background: cardBg, border: bd, borderRadius: 8 }}>
-          <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 260px)' }}>
+          <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 320px)' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                 <tr style={{ borderBottom: bd }}>
@@ -335,6 +336,8 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
               </tbody>
             </table>
           </div>
+          {/* ── MILESTONE LEGEND ──────────────────────────────── */}
+          <MilestoneLegend dark={dark} />
         </div>
       </div>
 

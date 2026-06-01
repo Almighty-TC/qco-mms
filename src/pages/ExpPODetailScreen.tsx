@@ -424,7 +424,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
 
           {/* Milestone timeline summary — no "Milestone progress:" prefix (wastes space) */}
           <div style={{ width: '100%' }}>
-            <MilestoneTimeline milestones={po.milestones} size="lg" showDates={true} />
+            <MilestoneTimeline milestones={po.milestones} size="lg" showDates={true} dark={dark} />
           </div>
         </div>
 
@@ -577,7 +577,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
           {activeTab === 'milestones' && (
             <div style={{ padding: 20 }}>
               <div style={{ marginBottom: 24, display: 'flex', alignItems: 'center', gap: 12 }}>
-                <MilestoneTimeline milestones={po.milestones} size="lg" showDates={true} />
+                <MilestoneTimeline milestones={po.milestones} size="lg" showDates={true} dark={dark} />
               </div>
               {po.milestones.map((m, idx) => {
                 const msColor = MS_COLORS[m.status] || '#94a3b8'

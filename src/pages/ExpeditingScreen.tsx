@@ -7,6 +7,7 @@ import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { HelpButton } from '../components/HelpDrawer'
 import { MilestoneTimeline } from '../components/MilestoneTimeline'
+import { MilestoneLegend } from '../components/MilestoneLegend'
 import { EXPEDITING_HELP, VDRL_REGISTER_HELP } from '../helpContent'
 import { ExpPODrawer } from '../components/ExpPODrawer'
 import { CreateSCNWizard } from '../components/CreateSCNWizard'
@@ -751,29 +752,7 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
           )}
 
           {/* ── MILESTONE LEGEND ─────────────────────────────── */}
-          <div style={{
-            display: 'flex', gap: 20, alignItems: 'center',
-            padding: '8px 12px', borderTop: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`,
-            flexWrap: 'wrap',
-          }}>
-            {[
-              { label: 'Complete',    color: '#22c55e', hollow: false },
-              { label: 'In Progress', color: '#f59e0b', hollow: false },
-              { label: 'Breached',    color: '#ef4444', hollow: false },
-              { label: 'Not Started', color: '#94a3b8', hollow: true  },
-              { label: 'Future',      color: '#2563eb', hollow: false },
-            ].map(({ label, color, hollow }) => (
-              <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                <div style={{
-                  width: 8, height: 8, borderRadius: '50%',
-                  background:  hollow ? 'transparent' : color,
-                  border:      hollow ? `2px solid ${color}` : 'none',
-                  flexShrink: 0,
-                }} />
-                <span style={{ fontSize: 11, color: '#94a3b8' }}>{label}</span>
-              </div>
-            ))}
-          </div>
+          <MilestoneLegend dark={dark} />
         </div>
       )}
 
