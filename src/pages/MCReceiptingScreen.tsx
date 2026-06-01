@@ -247,8 +247,10 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
   const [step, setStep]         = useState<WizardStep>(1)
   const [detail, setDetail]     = useState<any>(null)
   const [actuals, setActuals]   = useState<Record<number, number>>({})
-  // Discrepancy state — preserved across back/forward navigation
-  const [discrepancyMode, setDiscrepancyMode] = useState(false)
+  // Discrepancy state — DERIVED live (Phase 2): no latched "mode" flag.
+  // damaged[lineId] is independent of the qty match; a line is a
+  // discrepancy when received != expected OR damaged > 0.
+  const [damaged, setDamaged] = useState<Record<number, number>>({})
   const [discrepancyTypes, setDiscrepancyTypes] = useState<Record<number, string>>({})
   const [discrepancyNotes, setDiscrepancyNotes] = useState('')
   const [hasDiscrepancy, setHasDiscrepancy] = useState(false)
@@ -279,6 +281,24 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
       .catch(() => setDetail({ packages: [], lines: [] }))
   }, [scn.id, projectId]) // eslint-disable-line
 
+  // ─── Live discrepancy reconciliation (Phase 2 — Bug 1) ────────
+  // Whenever quantities/damaged change so that NO line has an issue,
+  // drop any leftover per-line discrepancy types + shared notes so the
+  // step returns to a genuine clean-match state (nothing latched).
+  useEffect(() => {
+    const ls = detail?.lines || []
+    const anyIssue = ls.some((l: any) => {
+      const exp = Number(l.qty) || 0
+      const act = actuals[l.id] ?? exp
+      const dmg = damaged[l.id] ?? 0
+      return act !== exp || dmg > 0
+    })
+    if (!anyIssue) {
+      if (Object.keys(discrepancyTypes).length) setDiscrepancyTypes({})
+      if (discrepancyNotes) setDiscrepancyNotes('')
+    }
+  }, [actuals, damaged, detail]) // eslint-disable-line
+
   const SUGGESTED_LOCS = ['WH-A · A-04-03', 'WH-B · B-02-05', 'WH-C · C-01-03']
 
   const completeReceipt = async () => {
@@ -291,19 +311,22 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
       const lines = (detail?.lines || []).map((l: any) => {
         const expected = Number(l.qty) || 0
         const received = actuals[l.id] ?? expected
-        const mismatch = received !== expected
+        const dmg = damaged[l.id] ?? 0
+        // Phase 2 discrepancy rule: qty mismatch OR any damaged units.
+        const issue = received !== expected || dmg > 0
         return {
           po_line_id: l.id,
           line_number: l.line_number,
           description: l.description,
           expected_qty: expected,
           received_qty: received,
+          damaged_qty: dmg,
           uom: l.uom || 'EA',
           wbs_code: l.wbs_code_snapshot || null,
           item_code: l.tag_number || l.equipment_tag || null,
-          discrepancy_type: discrepancyTypes[l.id] || null,
+          discrepancy_type: issue ? (discrepancyTypes[l.id] || null) : null,
           // Single shared notes field applies to whichever lines diverge.
-          discrepancy_notes: (mismatch || discrepancyTypes[l.id]) ? (discrepancyNotes.trim() || null) : null,
+          discrepancy_notes: issue ? (discrepancyNotes.trim() || null) : null,
         }
       })
       await axios.post(`${API}/mc/${projectId}/receipting/${scn.id}/complete`, {
@@ -409,22 +432,31 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
 
         {/* ── STEP 2 ── Physical check + inline discrepancy flow ── */}
         {step === 2 && (() => {
-          // Phase 1: physical check is per real PO line — expected = po_line.qty.
+          // Phase 2: ALL discrepancy state derived live from current values —
+          // nothing latched. Re-evaluated on every render/change.
           const lines = detail?.lines || []
           const expOf = (l: any) => Number(l.qty) || 0
-          const allMatch = lines.length > 0 && lines.every((l: any) => (actuals[l.id] ?? expOf(l)) === expOf(l))
-          const anyMismatch = lines.some((l: any) => (actuals[l.id] ?? expOf(l)) !== expOf(l))
-          const discrepancyReady = discrepancyMode && discrepancyNotes.trim().length > 0
+          const recOf = (l: any) => actuals[l.id] ?? expOf(l)
+          const dmgOf = (l: any) => damaged[l.id] ?? 0
+          // A line is a discrepancy when received != expected OR damaged > 0.
+          const issueOf = (l: any) => recOf(l) !== expOf(l) || dmgOf(l) > 0
+          const issueLines = lines.filter(issueOf)
+          const anyIssue = issueLines.length > 0
+          const allClean = lines.length > 0 && !anyIssue
+          // To proceed WITH a discrepancy: every issue line needs a type + shared notes.
+          const typesComplete = issueLines.every((l: any) => (discrepancyTypes[l.id] || '').length > 0)
+          const discrepancyReady = anyIssue && discrepancyNotes.trim().length > 0 && typesComplete
           const DISC_TYPES = ['Short delivery','Over delivery','Damaged','Missing','Other']
 
-          const handleFlagDiscrepancy = () => {
-            setDiscrepancyMode(true)
-            setHasDiscrepancy(true)
-          }
-
-          const handleProceed = (withDiscrepancy: boolean) => {
+          const proceed = (withDiscrepancy: boolean) => {
             setHasDiscrepancy(withDiscrepancy)
             setStep(3)
+          }
+          // Drop a line's stale discrepancy type the moment it returns to clean.
+          const clearIfClean = (l: any, rec: number, dmg: number) => {
+            if (rec === expOf(l) && dmg === 0) {
+              setDiscrepancyTypes(prev => { const n = { ...prev }; delete n[l.id]; return n })
+            }
           }
 
           return (
@@ -433,19 +465,21 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, background: cardBg, border: bd, borderRadius: 8 }}>
                 <thead>
                   <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
-                    {['LINE','DESCRIPTION','EXPECTED','UOM','ACTUAL','MATCH', ...(discrepancyMode ? ['DISCREPANCY TYPE'] : [])].map(h => (
+                    {['LINE','DESCRIPTION','EXPECTED','UOM','ACTUAL','DAMAGED','MATCH', ...(anyIssue ? ['DISCREPANCY TYPE'] : [])].map(h => (
                       <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {lines.length === 0 ? (
-                    <tr><td colSpan={discrepancyMode ? 7 : 6} style={{ padding: 20, textAlign: 'center', color: sub }}>No PO lines linked to this SCN — nothing to receive against.</td></tr>
+                    <tr><td colSpan={anyIssue ? 8 : 7} style={{ padding: 20, textAlign: 'center', color: sub }}>No PO lines linked to this SCN — nothing to receive against.</td></tr>
                   ) : lines.map((l: any) => {
                     const expected = expOf(l)
                     const actual = actuals[l.id] ?? expected
-                    const match = actual === expected
-                    const rowHighlight = discrepancyMode && !match ? (dark ? 'rgba(245,158,11,0.06)' : 'rgba(245,158,11,0.05)') : undefined
+                    const dmg = dmgOf(l)
+                    const issue = actual !== expected || dmg > 0   // live: qty mismatch OR damaged
+                    const clean = !issue
+                    const rowHighlight = issue ? (dark ? 'rgba(245,158,11,0.06)' : 'rgba(245,158,11,0.05)') : undefined
                     return (
                       <tr key={l.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, background: rowHighlight }}>
                         <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#E84E0F' }}>L-{String(l.line_number || l.id).padStart(3,'0')}</td>
@@ -454,19 +488,37 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                         <td style={{ padding: '8px 12px', color: sub }}>{l.uom || 'EA'}</td>
                         <td style={{ padding: '8px 12px' }}>
                           <input type="number" value={actual} min={0}
-                            onChange={e => setActuals(prev => ({ ...prev, [l.id]: Number(e.target.value) }))}
-                            style={{ ...inputSt, width: 80, textAlign: 'center', borderColor: !match ? '#f59e0b' : undefined }} />
+                            onChange={e => {
+                              const v = Number(e.target.value)
+                              setActuals(prev => ({ ...prev, [l.id]: v }))
+                              // damaged can't exceed received — clamp if needed
+                              if (dmg > v) setDamaged(prev => ({ ...prev, [l.id]: v }))
+                              clearIfClean(l, v, Math.min(dmg, v))
+                            }}
+                            style={{ ...inputSt, width: 80, textAlign: 'center', borderColor: actual !== expected ? '#f59e0b' : undefined }} />
                         </td>
                         <td style={{ padding: '8px 12px' }}>
-                          <span style={{ color: match ? '#22c55e' : '#f59e0b', fontSize: 16 }}>{match ? '✓' : '⚠'}</span>
+                          <input type="number" value={dmg} min={0} max={actual}
+                            onChange={e => {
+                              let v = Number(e.target.value)
+                              if (!(v >= 0)) v = 0
+                              if (v > actual) v = actual   // client validation: damaged ≤ received
+                              setDamaged(prev => ({ ...prev, [l.id]: v }))
+                              clearIfClean(l, actual, v)
+                            }}
+                            style={{ ...inputSt, width: 80, textAlign: 'center', borderColor: dmg > 0 ? '#f59e0b' : undefined }} />
                         </td>
-                        {discrepancyMode && (
+                        <td style={{ padding: '8px 12px' }}>
+                          <span title={clean ? 'Match' : (dmg > 0 ? 'Damaged units' : 'Qty mismatch')}
+                            style={{ color: clean ? '#22c55e' : '#f59e0b', fontSize: 16 }}>{clean ? '✓' : '⚠'}</span>
+                        </td>
+                        {anyIssue && (
                           <td style={{ padding: '8px 12px' }}>
                             <select value={discrepancyTypes[l.id] || ''}
                               onChange={e => setDiscrepancyTypes(prev => ({ ...prev, [l.id]: e.target.value }))}
                               style={{ ...inputSt, width: 160, padding: '5px 8px' }}
-                              disabled={match}>
-                              <option value="">{match ? '— no issue' : 'Select type…'}</option>
+                              disabled={clean}>
+                              <option value="">{clean ? '— no issue' : 'Select type…'}</option>
                               {DISC_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                             </select>
                           </td>
@@ -477,11 +529,11 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                 </tbody>
               </table>
 
-              {/* Discrepancy notes — shown when discrepancy mode active */}
-              {discrepancyMode && (
+              {/* Discrepancy notes — shown live whenever any line has an issue */}
+              {anyIssue && (
                 <div style={{ marginTop: 14, background: dark ? '#1e1a0a' : '#fffbeb', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '14px 16px' }}>
                   <label style={{ fontSize: 12, fontWeight: 600, color: '#d97706', display: 'block', marginBottom: 6 }}>
-                    ⚠ Discrepancy notes * — required before proceeding
+                    ⚠ Discrepancy notes * — required (with a type on each flagged line) before proceeding
                   </label>
                   <textarea value={discrepancyNotes} onChange={e => setDiscrepancyNotes(e.target.value)}
                     rows={3} placeholder="Describe the discrepancy — this will appear on the GRN"
@@ -496,20 +548,15 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                   ← Back
                 </button>
                 <div style={{ flex: 1 }} />
-                {/* Right-side action buttons */}
-                {!discrepancyMode ? (
-                  <>
-                    <button onClick={() => handleProceed(false)} disabled={!allMatch}
-                      style={{ padding: '8px 20px', borderRadius: 6, border: 'none', background: allMatch ? '#22c55e' : '#94a3b8', color: '#fff', cursor: allMatch ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
-                      ✓ All match — proceed
-                    </button>
-                    <button onClick={handleFlagDiscrepancy}
-                      style={{ padding: '8px 20px', borderRadius: 6, border: '1px solid #f59e0b', background: 'none', color: '#d97706', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
-                      ⚠ Flag discrepancy
-                    </button>
-                  </>
+                {/* Right-side action — derived live from current values (no latch).
+                    Clean → green proceed; any issue → amber proceed gated on type+notes. */}
+                {!anyIssue ? (
+                  <button onClick={() => proceed(false)} disabled={!allClean}
+                    style={{ padding: '8px 20px', borderRadius: 6, border: 'none', background: allClean ? '#22c55e' : '#94a3b8', color: '#fff', cursor: allClean ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
+                    ✓ All match — proceed
+                  </button>
                 ) : (
-                  <button onClick={() => handleProceed(true)} disabled={!discrepancyReady}
+                  <button onClick={() => proceed(true)} disabled={!discrepancyReady}
                     style={{ padding: '8px 20px', borderRadius: 6, border: 'none', background: discrepancyReady ? '#f59e0b' : '#94a3b8', color: '#fff', cursor: discrepancyReady ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
                     Proceed with discrepancy noted →
                   </button>

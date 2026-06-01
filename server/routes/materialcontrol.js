@@ -212,20 +212,33 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
       // Persist each line to receipt_lines, then create stock from the
       // RECEIVED qty (not package weight). All received qty goes to
       // available stock for now — good/quarantine split is Phase 3.
+      // Server-side validation: damaged units cannot exceed received qty.
+      for (const ln of lines) {
+        const rq = Number(ln.received_qty)
+        const dq = Number(ln.damaged_qty || 0)
+        if (rq >= 0 && dq > rq) {
+          return res.status(422).json({ error: `Line ${ln.line_number || ln.po_line_id}: damaged qty (${dq}) cannot exceed received qty (${rq})` })
+        }
+      }
       for (const ln of lines) {
         const receivedQty = Number(ln.received_qty)
         if (!(receivedQty >= 0)) continue
         const expectedQty = ln.expected_qty != null ? Number(ln.expected_qty) : null
+        const damagedQty = Number(ln.damaged_qty || 0)
         const uom = ln.uom || 'EA'
 
         await db.query(
           `INSERT INTO receipt_lines
-             (project_id, scn_id, scn_ref, po_line_id, description, expected_qty, received_qty, uom,
+             (project_id, scn_id, scn_ref, po_line_id, description, expected_qty, received_qty, damaged_qty, uom,
               discrepancy_type, discrepancy_notes, received_by, received_date)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,CURDATE())`,
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,CURDATE())`,
           [pid, scnId, scn.scn_ref, ln.po_line_id || null, ln.description || null,
-           expectedQty, receivedQty, uom,
+           expectedQty, receivedQty, damagedQty, uom,
            ln.discrepancy_type || null, ln.discrepancy_notes || null, userId])
+
+        // TODO(phase-3): split good vs damaged — route damaged_qty to a
+        // quarantine/hold location and reduce qty_available accordingly.
+        // Phase 2 leaves all received_qty as available (unchanged behaviour).
 
         // Stock row sourced from the received quantity + real line identity.
         if (receivedQty > 0) {
