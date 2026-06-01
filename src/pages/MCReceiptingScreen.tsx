@@ -232,6 +232,7 @@ const MCReceiptingInner = ({ dark, projectId, projectName, onBack }: {
 
 // ─── RECEIPTING WIZARD ────────────────────────────────────────
 // 5-step wizard: Review expected → Physical check → Assign location → TCCC sign-off → Complete
+// State is preserved when navigating back — no resets on step change.
 const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast }: {
   dark: boolean; scn: SCNRow; projectId: number
   onClose: () => void; onComplete: () => void
@@ -240,10 +241,18 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
   const [step, setStep]         = useState<WizardStep>(1)
   const [detail, setDetail]     = useState<any>(null)
   const [actuals, setActuals]   = useState<Record<number, number>>({})
+  // Discrepancy state — preserved across back/forward navigation
+  const [discrepancyMode, setDiscrepancyMode] = useState(false)
+  const [discrepancyTypes, setDiscrepancyTypes] = useState<Record<number, string>>({})
+  const [discrepancyNotes, setDiscrepancyNotes] = useState('')
+  const [hasDiscrepancy, setHasDiscrepancy] = useState(false)
   const [location, setLocation] = useState('')
   const [cargoCondition, setCargo] = useState('')
   const [notes, setNotes]       = useState('')
   const [saving, setSaving]     = useState(false)
+
+  // ─── Step-nav helpers (preserve all state) ────────────────
+  const goBack = () => setStep(s => (s > 1 ? (s - 1) as WizardStep : s))
 
   const col    = dark ? '#f1f5f9' : '#0f172a'
   const cardBg = dark ? '#1e293b' : '#fff'
@@ -361,6 +370,7 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
               <span>{scn.total_weight_kg ? `${scn.total_weight_kg} t total` : '—'}</span>
               {scn.eta && <span>ETA {fmt(scn.eta)}</span>}
             </div>
+            {/* Step 1 footer — no Back (first step) */}
             <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end' }}>
               <button onClick={() => setStep(2)}
                 style={{ padding: '8px 20px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
@@ -370,55 +380,114 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
           </div>
         )}
 
-        {/* ── STEP 2 ── */}
-        {step === 2 && (
-          <div>
-            <p style={{ color: sub, fontSize: 13, marginBottom: 16 }}>Enter actual quantities received for each package. Flag any discrepancies.</p>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, background: cardBg, border: bd, borderRadius: 8 }}>
-              <thead>
-                <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
-                  {['PACKAGE','DESCRIPTION','EXPECTED','ACTUAL','MATCH'].map(h => (
-                    <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {(detail?.packages || []).map((p: any) => {
-                  const expected = p.gross_weight_kg || 1
-                  const actual = actuals[p.id] ?? expected
-                  const match = actual === expected
-                  return (
-                    <tr key={p.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
-                      <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#E84E0F' }}>PKG-{String(p.package_number || p.id).padStart(3,'0')}</td>
-                      <td style={{ padding: '8px 12px', color: col }}>{p.description || 'Package'}</td>
-                      <td style={{ padding: '8px 12px', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{expected}</td>
-                      <td style={{ padding: '8px 12px' }}>
-                        <input type="number" value={actual} min={0}
-                          onChange={e => setActuals(prev => ({ ...prev, [p.id]: Number(e.target.value) }))}
-                          style={{ ...inputSt, width: 80, textAlign: 'center' }} />
-                      </td>
-                      <td style={{ padding: '8px 12px' }}>
-                        <span style={{ color: match ? '#22c55e' : '#ef4444', fontSize: 16 }}>{match ? '✓' : '✗'}</span>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-            <div style={{ marginTop: 20, display: 'flex', gap: 10 }}>
-              <button onClick={() => setStep(3)}
-                style={{ padding: '8px 20px', borderRadius: 6, border: 'none', background: '#22c55e', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600, flex: 1 }}>
-                ✓ All match — proceed
-              </button>
-              <button onClick={() => setStep(3)}
-                style={{ padding: '8px 20px', borderRadius: 6, border: '1px solid #ef4444', background: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 13, fontWeight: 600, flex: 1 }}>
-                ⚠ Flag discrepancy
-              </button>
-            </div>
-          </div>
-        )}
+        {/* ── STEP 2 ── Physical check + inline discrepancy flow ── */}
+        {step === 2 && (() => {
+          const packages = detail?.packages || []
+          const allMatch = packages.every((p: any) => (actuals[p.id] ?? (p.gross_weight_kg || 1)) === (p.gross_weight_kg || 1))
+          const anyMismatch = packages.some((p: any) => (actuals[p.id] ?? (p.gross_weight_kg || 1)) !== (p.gross_weight_kg || 1))
+          const discrepancyReady = discrepancyMode && discrepancyNotes.trim().length > 0
+          const DISC_TYPES = ['Short delivery','Over delivery','Damaged','Missing','Other']
 
-        {/* ── STEP 3 ── */}
+          const handleFlagDiscrepancy = () => {
+            setDiscrepancyMode(true)
+            setHasDiscrepancy(true)
+          }
+
+          const handleProceed = (withDiscrepancy: boolean) => {
+            setHasDiscrepancy(withDiscrepancy)
+            setStep(3)
+          }
+
+          return (
+            <div>
+              <p style={{ color: sub, fontSize: 13, marginBottom: 16 }}>Enter actual quantities received for each package. Flag any discrepancies.</p>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, background: cardBg, border: bd, borderRadius: 8 }}>
+                <thead>
+                  <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
+                    {['PACKAGE','DESCRIPTION','EXPECTED','ACTUAL','MATCH', ...(discrepancyMode ? ['DISCREPANCY TYPE'] : [])].map(h => (
+                      <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {packages.map((p: any) => {
+                    const expected = p.gross_weight_kg || 1
+                    const actual = actuals[p.id] ?? expected
+                    const match = actual === expected
+                    const rowHighlight = discrepancyMode && !match ? (dark ? 'rgba(245,158,11,0.06)' : 'rgba(245,158,11,0.05)') : undefined
+                    return (
+                      <tr key={p.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, background: rowHighlight }}>
+                        <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#E84E0F' }}>PKG-{String(p.package_number || p.id).padStart(3,'0')}</td>
+                        <td style={{ padding: '8px 12px', color: col }}>{p.description || 'Package'}</td>
+                        <td style={{ padding: '8px 12px', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{expected}</td>
+                        <td style={{ padding: '8px 12px' }}>
+                          <input type="number" value={actual} min={0}
+                            onChange={e => setActuals(prev => ({ ...prev, [p.id]: Number(e.target.value) }))}
+                            style={{ ...inputSt, width: 80, textAlign: 'center', borderColor: !match ? '#f59e0b' : undefined }} />
+                        </td>
+                        <td style={{ padding: '8px 12px' }}>
+                          <span style={{ color: match ? '#22c55e' : '#f59e0b', fontSize: 16 }}>{match ? '✓' : '⚠'}</span>
+                        </td>
+                        {discrepancyMode && (
+                          <td style={{ padding: '8px 12px' }}>
+                            <select value={discrepancyTypes[p.id] || ''}
+                              onChange={e => setDiscrepancyTypes(prev => ({ ...prev, [p.id]: e.target.value }))}
+                              style={{ ...inputSt, width: 160, padding: '5px 8px' }}
+                              disabled={match}>
+                              <option value="">{match ? '— no issue' : 'Select type…'}</option>
+                              {DISC_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                            </select>
+                          </td>
+                        )}
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+
+              {/* Discrepancy notes — shown when discrepancy mode active */}
+              {discrepancyMode && (
+                <div style={{ marginTop: 14, background: dark ? '#1e1a0a' : '#fffbeb', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '14px 16px' }}>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: '#d97706', display: 'block', marginBottom: 6 }}>
+                    ⚠ Discrepancy notes * — required before proceeding
+                  </label>
+                  <textarea value={discrepancyNotes} onChange={e => setDiscrepancyNotes(e.target.value)}
+                    rows={3} placeholder="Describe the discrepancy — this will appear on the GRN"
+                    style={{ ...inputSt, resize: 'vertical', borderColor: 'rgba(245,158,11,0.5)' }} />
+                </div>
+              )}
+
+              <div style={{ marginTop: 16, display: 'flex', gap: 10, alignItems: 'center' }}>
+                {/* ← Back (left) */}
+                <button onClick={goBack}
+                  style={{ padding: '8px 18px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 13 }}>
+                  ← Back
+                </button>
+                <div style={{ flex: 1 }} />
+                {/* Right-side action buttons */}
+                {!discrepancyMode ? (
+                  <>
+                    <button onClick={() => handleProceed(false)} disabled={!allMatch}
+                      style={{ padding: '8px 20px', borderRadius: 6, border: 'none', background: allMatch ? '#22c55e' : '#94a3b8', color: '#fff', cursor: allMatch ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
+                      ✓ All match — proceed
+                    </button>
+                    <button onClick={handleFlagDiscrepancy}
+                      style={{ padding: '8px 20px', borderRadius: 6, border: '1px solid #f59e0b', background: 'none', color: '#d97706', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+                      ⚠ Flag discrepancy
+                    </button>
+                  </>
+                ) : (
+                  <button onClick={() => handleProceed(true)} disabled={!discrepancyReady}
+                    style={{ padding: '8px 20px', borderRadius: 6, border: 'none', background: discrepancyReady ? '#f59e0b' : '#94a3b8', color: '#fff', cursor: discrepancyReady ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
+                    Proceed with discrepancy noted →
+                  </button>
+                )}
+              </div>
+            </div>
+          )
+        })()}
+
+        {/* ── STEP 3 ── Assign location + Back button ── */}
         {step === 3 && (
           <div>
             <p style={{ color: sub, fontSize: 13, marginBottom: 16 }}>Assign a warehouse grid location for the received items.</p>
@@ -430,15 +499,22 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
               <div style={{ fontSize: 11, color: sub, marginTop: 4 }}>Format: WH-[code] · [row]-[bay]-[level]</div>
               <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                 {SUGGESTED_LOCS.map(l => (
-                  <button key={l} onClick={() => setLocation(l)}
+                  <button key={l}
+                    onClick={() => setLocation(l)}
                     style={{ padding: '5px 12px', borderRadius: 6, border: bd, background: location === l ? 'rgba(37,99,235,0.08)' : 'none', color: location === l ? '#2563eb' : col, cursor: 'pointer', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}>
                     {l}
                   </button>
                 ))}
               </div>
             </div>
-            <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end' }}>
-              <button onClick={() => location.trim() && setStep(4)} disabled={!location.trim()}
+            <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 10 }}>
+              {/* ← Back (left, preserves actuals + discrepancy data) */}
+              <button onClick={goBack}
+                style={{ padding: '8px 18px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 13 }}>
+                ← Back
+              </button>
+              <div style={{ flex: 1 }} />
+              <button onClick={() => setStep(4)} disabled={!location.trim()}
                 style={{ padding: '8px 20px', borderRadius: 6, border: 'none', background: location.trim() ? '#2563eb' : '#94a3b8', color: '#fff', cursor: location.trim() ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
                 Next → TCCC sign-off →
               </button>
@@ -539,21 +615,38 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
             </div>
 
             <div style={{ fontSize: 11, color: sub, marginBottom: 12 }}>Timestamp set by server — device time is not used</div>
-            <button onClick={completeReceipt} disabled={saving || !cargoCondition}
-              title="TCCC — Transfer of Custody, Care & Control"
-              style={{ width: '100%', padding: '12px', borderRadius: 8, border: 'none', background: cargoCondition ? '#2563eb' : '#94a3b8', color: '#fff', cursor: cargoCondition ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700 }}>
-              {saving ? 'Processing…' : 'Complete TCCC sign-off'}
-            </button>
+            {/* Step 4: Back (left) + Complete TCCC (right) */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <button onClick={goBack}
+                style={{ padding: '10px 20px', borderRadius: 8, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 13 }}>
+                ← Back
+              </button>
+              <button onClick={completeReceipt} disabled={saving || !cargoCondition}
+                title="TCCC — Transfer of Custody, Care & Control"
+                style={{ flex: 1, padding: '12px', borderRadius: 8, border: 'none', background: cargoCondition ? '#2563eb' : '#94a3b8', color: '#fff', cursor: cargoCondition ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700 }}>
+                {saving ? 'Processing…' : 'Complete TCCC sign-off'}
+              </button>
+            </div>
           </div>
         )}
 
-        {/* ── STEP 5 ── */}
+        {/* ── STEP 5 — Complete (no Back — receipt is final) ── */}
         {step === 5 && (
           <div style={{ textAlign: 'center', padding: '48px 24px' }}>
+            {/* Discrepancy banner if flagged */}
+            {hasDiscrepancy && (
+              <div style={{ textAlign: 'left', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '12px 16px', marginBottom: 24 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#d97706', marginBottom: 6 }}>⚠ Discrepancy flagged — QC review required</div>
+                <div style={{ fontSize: 12, color: col }}>{discrepancyNotes}</div>
+                {Object.entries(discrepancyTypes).filter(([,v]) => v).map(([pkgId, type]) => (
+                  <div key={pkgId} style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>PKG-{pkgId}: {type}</div>
+                ))}
+              </div>
+            )}
             <div style={{ fontSize: 56, marginBottom: 16 }}>✅</div>
             <h2 style={{ color: col, marginBottom: 8 }}>Receipt complete</h2>
-            <p style={{ color: sub, marginBottom: 8 }}>Stock has been created in the warehouse register.</p>
-            <p style={{ color: sub, fontSize: 12, marginBottom: 32 }}>
+            <p style={{ color: col === '#f1f5f9' ? '#94a3b8' : '#64748b', marginBottom: 8 }}>Stock has been created in the warehouse register.</p>
+            <p style={{ color: '#94a3b8', fontSize: 12, marginBottom: 32 }}>
               SCN <span style={{ fontFamily: 'JetBrains Mono, monospace', color: col }}>{scn.scn_ref}</span> is now closed. Location: <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#22c55e' }}>{location}</span>
             </p>
             <button onClick={onComplete}
