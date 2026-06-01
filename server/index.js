@@ -47,6 +47,10 @@ app.use('/api/expediting', require('./routes/expediting'))
 // Material Take-Off register, line items, revisions and diff.
 app.use('/api/mto', require('./routes/mto'))
 
+// ─── LOGISTICS ROUTES ────────────────────────────────────────
+// SCN Register, status transitions, packages, documents, timeline.
+app.use('/api/logistics', require('./routes/logistics'))
+
 // ─── START SERVER ───────────────────────────────────────────
 const PORT = process.env.PORT || 3001
 app.listen(PORT, () => {

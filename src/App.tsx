@@ -16,6 +16,7 @@ import { ExpeditingScreen } from './pages/ExpeditingScreen'
 import { ExpPODetailScreen } from './pages/ExpPODetailScreen'
 import { MTOListScreen } from './pages/MTOListScreen'
 import { MTODetailScreen } from './pages/MTODetailScreen'
+import { LogisticsScreen } from './pages/LogisticsScreen'
 import { ForcePasswordChange } from './components/ForcePasswordChange'
 import { ChangePasswordModal } from './components/ChangePasswordModal'
 import './App.css'
@@ -25,7 +26,7 @@ import './App.css'
 // 'admin' enforces role === 'admin'; 'procurement' is project-scoped.
 // ─── ROUTING — state-based, no router library ─────────────────────────────────
 // 'po-detail' is Phase 3 PO Detail Screen — full dedicated screen.
-type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail'
+type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics'
 
 // ─── PROJECT TYPE ───────────────────────────────────────────
 // Mirrors the API response shape. Snake_case DB columns (total_pos, at_risk)
@@ -417,7 +418,7 @@ const Nav = ({
             </div>
           )}
         </div>
-        {navItem('Logistics', '🚚')}
+        {navItem('Logistics', '🚚', 'logistics')}
         {navItem('Material Control', '📦')}
         {navItem('Traceability', '🔗')}
         {navItem('Document Inbox', '📥')}
@@ -701,6 +702,7 @@ function App() {
         'mto-list': 'mto-list',
         'mto-detail': 'mto-detail',
         admin: 'admin',
+        logistics: 'logistics',
       }
       if (map[seg]) return map[seg]
     }
@@ -1164,6 +1166,13 @@ function App() {
             <ExpPODetailScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
               poId={selectedExpPOId} userRole={user?.role ?? ''}
               onBack={() => setPage('expediting')} />
+          )}
+
+          {/* ─── LOGISTICS ───────────────────────────────────────
+              SCN Register — pipeline view, status management. */}
+          {page === 'logistics' && selectedProjectId && (
+            <LogisticsScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
+              onBack={() => setPage('dashboard')} />
           )}
 
           {/* ─── MTO REGISTER ────────────────────────────────────
