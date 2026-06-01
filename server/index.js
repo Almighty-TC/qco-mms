@@ -56,6 +56,10 @@ app.use('/api/mc', require('./routes/materialcontrol'))
 // VDRL register, cert approvals, trace chain, holds.
 app.use('/api/traceability', require('./routes/traceability'))
 
+// ─── DOCUMENTS ROUTES ────────────────────────────────────────
+// Read-only, project-wide aggregated document register (no own table).
+app.use('/api/documents', require('./routes/documents'))
+
 // ─── START SERVER ───────────────────────────────────────────
 const PORT = process.env.PORT || 3001
 app.listen(PORT, () => {

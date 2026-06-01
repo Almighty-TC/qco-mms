@@ -22,6 +22,7 @@ import { MCStockRegisterScreen } from './pages/MCStockRegisterScreen'
 import { MCFMRScreen } from './pages/MCFMRScreen'
 import { MCTransferScreen } from './pages/MCTransferScreen'
 import { TraceabilityScreen } from './pages/TraceabilityScreen'
+import { DocumentsScreen } from './pages/DocumentsScreen'
 import { ForcePasswordChange } from './components/ForcePasswordChange'
 import { ChangePasswordModal } from './components/ChangePasswordModal'
 import './App.css'
@@ -31,7 +32,7 @@ import './App.css'
 // 'admin' enforces role === 'admin'; 'procurement' is project-scoped.
 // ─── ROUTING — state-based, no router library ─────────────────────────────────
 // 'po-detail' is Phase 3 PO Detail Screen — full dedicated screen.
-type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers' | 'traceability'
+type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers' | 'traceability' | 'documents'
 
 // ─── DEEP-LINK PARSING ───────────────────────────────────────
 // Maps a URL path segment (/project/:id/<segment>) to an internal Page,
@@ -42,7 +43,7 @@ const PAGE_SEGMENTS: Record<string, Page> = {
   procurement: 'procurement', 'po-detail': 'po-detail',
   expediting: 'expediting', 'expediting-po-detail': 'expediting-po-detail',
   'mto-list': 'mto-list', 'mto-detail': 'mto-detail',
-  logistics: 'logistics', traceability: 'traceability',
+  logistics: 'logistics', traceability: 'traceability', documents: 'documents',
   'mc-receipting': 'mc-receipting', 'mc-stock': 'mc-stock', 'mc-fmr': 'mc-fmr', 'mc-transfers': 'mc-transfers',
   'foundational-wbs': 'foundational-wbs', 'foundational-commodities': 'foundational-commodities', 'foundational-equipment': 'foundational-equipment',
   // friendly aliases
@@ -477,7 +478,7 @@ const Nav = ({
 
         {userRole !== 'subcontractor' && userRole !== 'freight_forwarder' && <>
           {navItem('Traceability', '🔗', 'traceability')}
-          {navItem('Document Inbox', '📥')}
+          {navItem('Document Inbox', '📥', 'documents')}
         </>}
         {navItem('Audit', '🔍')}
       </div>
@@ -985,6 +986,7 @@ function App() {
               : page === 'mto-list'   ? `MTO Register · ${selectedProjectName}`
               : page === 'mto-detail' ? `MTO Detail · ${selectedProjectName}`
               : page === 'traceability' ? `Traceability · ${selectedProjectName}`
+              : page === 'documents' ? `Document Inbox · ${selectedProjectName}`
               : 'Dashboard'}
             </span>
           </div>
@@ -1276,6 +1278,13 @@ function App() {
               VDRL register, cert approvals, trace chain, holds. */}
           {page === 'traceability' && selectedProjectId && (
             <TraceabilityScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
+              onBack={() => setPage('dashboard')} />
+          )}
+
+          {/* ─── DOCUMENT INBOX ──────────────────────────────────
+              Project-wide aggregated, read-only document register. */}
+          {page === 'documents' && selectedProjectId && (
+            <DocumentsScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
               onBack={() => setPage('dashboard')} />
           )}
 

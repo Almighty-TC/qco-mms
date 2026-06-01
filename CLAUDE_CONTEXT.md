@@ -815,6 +815,18 @@ Central intake for any uploaded/received file before it's filed to a module.
 - Filters: search + module filter
 - DocClassifyModal: classify file (type, target module, link to PO/SCN/WBS/equipment, rev, notes) → routes to right register
 
+**BUILT — aggregate, read-only register (DocumentsScreen, route `documents`).** This module owns
+NO documents and has NO table; `server/routes/documents.js` (`/api/documents`) UNIONs every module's
+existing doc tables into one normalised, searchable view and links each row back to its source via a
+deep-link URL (works now that BUG-09 is fixed). Sources: traceability_certs, vdrl_documents (Expediting/VDRL),
+scn_documents (Logistics), po_documents (Procurement), foundational_certificates, mto_revisions. Status
+normalised to Verified | Available | Under review | Missing; "Missing" rows come from requirement tables
+(VDRL Not-submitted/Overdue, traceability pending/overdue). 5 KPIs, module pills, status/date/search/mine
+filters, group-by (module/source/type/uploader), CSV export, row-preview, jump-to-source.
+**Gap:** Material Control has no document table (FMR dockets / receipt PODs aren't stored) → contributes
+0 rows and upload there is "not yet supported". Upload dropzone routes to the chosen module's own endpoint;
+wired for Logistics + Procurement; other modules upload on their own screens.
+
 ---
 
 ## MODULE 11: AUDIT

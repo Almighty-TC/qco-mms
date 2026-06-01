@@ -49,3 +49,6 @@ Desktop.ini
 
 # Catch nested .env files (e.g. server/.env)
 **/.env
+
+# Runtime-uploaded files (owned by modules, not source)
+server/uploads/
