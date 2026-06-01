@@ -50,42 +50,49 @@ const RAGTable = () => (
 // ═══════════════════════════════════════════════════════════════
 // WBS HELP
 // ═══════════════════════════════════════════════════════════════
+// ─── Work Breakdown Structure (WBS) ─────────────────────────
+// Updated per User Manual v1.0 to match documented behaviour.
 export const WBS_HELP: HelpSection[] = [
   {
-    title: 'What is WBS?',
+    title: 'What is this?',
     content: <>
-      {P(<>The <strong>Work Breakdown Structure</strong> is the hierarchical breakdown of your project into packages of work. Every PO, MTO line, and piece of equipment is tagged to a WBS node — this is how the system tracks what each material purchase belongs to.</>)}
+      {P(<>The <strong>WBS</strong> is the backbone of the entire project. Every PO, MTO line, and equipment item is linked to a WBS code. The tree can go up to 12 levels deep.</>)}
       {Tip('Think of WBS like a folder tree — top-level nodes are major work areas, and deeper nodes are specific work packages.')}
     </>,
   },
   {
-    title: 'Reading the tree',
+    title: 'RAG colours',
     content: <>
-      {P(<><strong>Indentation</strong> — Each depth level is indented 20px. The more dots in the code, the deeper the node (e.g. {Code('01.01.01')} is 3 levels deep).</>)}
-      {P(<><strong>▸ / ▾</strong> — Parent nodes show a chevron. {Code('▸')} = collapsed, {Code('▾')} = expanded. Leaf nodes show {Code('·')}.</>)}
-      {P(<><strong>RAG dot</strong> — Coloured dot beside the code shows node status:</>)}
+      {P(<>Each node shows a coloured dot:</>)}
       <RAGTable />
-      {P(<><strong>ROS date</strong> — Required On Site date, colour-coded by RAG status.</>)}
-      {P(<><strong>Suffix hint</strong> — e.g. {Code('01.xx')} shows the code prefix for child nodes of that parent.</>)}
-    </>,
-  },
-  {
-    title: 'Expanding & collapsing',
-    content: <>
-      {Steps([
-        <><strong>Click any parent row</strong> to expand or collapse its children.</>,
-        <><strong>⊞ Expand all</strong> — expands every node in the tree at once.</>,
-        <><strong>⊟ Collapse all</strong> — collapses everything back to top-level only.</>,
-      ])}
-      {Tip('On load, the first two top-level nodes are expanded by default.')}
+      {P(<>The RAG status reflects the worst RAG status of all POs linked to that node.</>)}
     </>,
   },
   {
     title: 'Focus mode',
     content: <>
-      {P(<>Click <strong>⛶ Focus</strong> to enter full-screen mode — the sidebar and top bar are hidden and the WBS tree fills the entire screen.</>)}
-      {P(<>Click <strong>✕ Exit focus</strong> (top-right) to return to normal view.</>)}
+      {P(<>Click any node to enter <strong>Focus Mode</strong> — the tree zooms to show only that node and its children. Click <strong>← Back</strong> to exit.</>)}
       {Tip('Focus mode is useful for large trees. All interactions (expand, add node, notes) work normally in focus mode.')}
+    </>,
+  },
+  {
+    title: 'Materials Status',
+    content: <>
+      {P(<>Switch to <strong>Materials Status</strong> view to see procurement progress per node: how many lines have POs raised, in expediting, and delivered.</>)}
+    </>,
+  },
+  {
+    title: 'Bulk operations',
+    content: <>
+      {P(<>Select multiple nodes with the checkboxes to reassign owner, update status, or export.</>)}
+    </>,
+  },
+  {
+    title: 'Reading the tree',
+    content: <>
+      {P(<><strong>Indentation</strong> — Each depth level is indented. The more dots in the code, the deeper the node (e.g. {Code('01.01.01')} is 3 levels deep).</>)}
+      {P(<><strong>▸ / ▾</strong> — Parent nodes show a chevron. Click to expand or collapse.</>)}
+      {P(<><strong>ROS date</strong> — Required On Site date, colour-coded by RAG status.</>)}
     </>,
   },
   {
@@ -103,71 +110,27 @@ export const WBS_HELP: HelpSection[] = [
     </>,
   },
   {
-    title: 'Editing a node note',
-    content: <>
-      {P(<>Click any <strong>Notes cell</strong> (shows note text, or <em>+ Add note</em> if empty).</>)}
-      {Steps([
-        <>Update the <strong>ROS Date</strong> if needed. An amber warning shows if the date is in the past.</>,
-        <>Set the <strong>RAG Status</strong>.</>,
-        <>Enter your <strong>Notes / Scope</strong> (required, max 500 characters).</>,
-        <><strong>Save changes</strong> is disabled until the notes field has content.</>,
-        <>Click <strong>✓ Save changes</strong>.</>,
-      ])}
-      {Tip('Character count is shown below the text area as you type.')}
-    </>,
-  },
-  {
-    title: 'Deleting a node (3-step wizard)',
-    content: <>
-      {Warning('Deletion is permanent and cannot be undone.')}
-      {P(<>Hover over a row and click the <strong>🗑</strong> icon (appears on hover).</>)}
-      {P(<><strong>Step 1 — Impact:</strong> Shows how many children, POs, and line items reference this node. If nothing references it, it is safe to delete immediately.</>)}
-      {P(<><strong>Step 2 — Reallocate:</strong> Only shown if PO lines reference this node. Every affected line must be reassigned to a new WBS node before you can continue. If the target node already has allocations, a warning shows the existing quantity.</>)}
-      {P(<><strong>Step 3 — Confirm:</strong> Tick the acknowledgement checkbox and click <strong>🗑 Delete permanently</strong>.</>)}
-    </>,
-  },
-  {
     title: 'Uploading WBS from file',
     content: <>
       {Steps([
         <>Click <strong>↓ Template</strong> to download the XLSX template.</>,
-        <>Fill in the <strong>WBS Template</strong> sheet: {Code('code')}, {Code('description')}, {Code('parent_string')}, {Code('ros')}.</>,
-        <>Parents must appear <em>before</em> their children in the file.</>,
+        <>Fill in the columns: {Code('code')}, {Code('description')}, {Code('parent_string')}, {Code('ros')}. Parents must appear before their children.</>,
         <>Click <strong>↑ Upload XER/Excel</strong> and select your file.</>,
-        <>The validation preview table shows ✅ / ⚠️ / ❌ per row.</>,
-        <>Fix any ❌ errors and re-upload. Click <strong>↑ Import</strong> for ✅ or acknowledged ⚠️ rows.</>,
+        <>The validation preview shows ✅ / ⚠️ / ❌ per row. Fix any ❌ errors and re-upload.</>,
+        <>Click <strong>↑ Import</strong> to confirm.</>
       ])}
-      {Tip('See the Instructions sheet in the downloaded template for a description of every column.')}
-    </>,
-  },
-  {
-    title: 'Node hover tooltip',
-    content: <>
-      {P(<>Hover over any WBS row and hold for 300ms to see:</>)}
-      <ul style={{ margin: '0 0 10px', paddingLeft: 18, fontSize: 13 }}>
-        <li>WBS code and full node name</li>
-        <li>ROS date (RAG-coloured) and RAG status label</li>
-        <li>All commodities linked to this node</li>
-        <li>All equipment tagged to this node</li>
-      </ul>
-      {Tip("The tooltip flips position automatically to avoid overflowing the screen edge.")}
     </>,
   },
   {
     title: 'Gantt view',
     content: <>
-      {P(<>Switch between <strong>Tree</strong> and <strong>📊 Gantt</strong> views using the toggle buttons in the WBS toolbar. All other features (search, RAG filter, add node) are unchanged.</>)}
-      {P(<><strong>What the bars mean:</strong></>)}
+      {P(<>Switch between <strong>Tree</strong> and <strong>📊 Gantt</strong> views using the toggle buttons in the WBS toolbar.</>)}
       <ul style={{ margin: '0 0 10px', paddingLeft: 18, fontSize: 13 }}>
-        <li><span style={{ color: '#85B7EB', fontWeight: 600 }}>Blue bar</span> — <strong>Planned</strong> baseline schedule. Never changes once set.</li>
-        <li><span style={{ color: '#EF9F27', fontWeight: 600 }}>Amber bar</span> — <strong>Forecast</strong> current best estimate. Updates as the project progresses. Only shown when different from planned.</li>
-        <li><span style={{ color: '#97C459', fontWeight: 600 }}>Green bar</span> — <strong>Actual</strong> dates achieved. Solid end = complete; extends to today = work in progress.</li>
+        <li><span style={{ color: '#85B7EB', fontWeight: 600 }}>Blue bar</span> — Planned baseline (never changes)</li>
+        <li><span style={{ color: '#EF9F27', fontWeight: 600 }}>Amber bar</span> — Forecast current estimate</li>
+        <li><span style={{ color: '#97C459', fontWeight: 600 }}>Green bar</span> — Actual dates achieved</li>
       </ul>
-      {P(<>The <strong style={{ color: '#E84E0F' }}>orange diamond ◆</strong> at any date marks the <strong>ROS milestone</strong> (Required On Site).</>)}
-      {P(<>The <strong style={{ color: '#E84E0F' }}>orange vertical line</strong> is <strong>today's date</strong>.</>)}
-      {P(<><strong>Zoom:</strong> Click <strong>Quarters</strong> for an overview or <strong>Months</strong> for detail. This changes column width.</>)}
-      {P(<><strong>Depth:</strong> <strong>L1</strong> shows only top-level nodes, <strong>L1–L2</strong> adds their children, <strong>L1–L3</strong> adds grandchildren. Clicking a parent row in Gantt expands/collapses its children.</>)}
-      {Tip('Clicking a bar row in Gantt view opens the note editor for that node — same as clicking Notes in tree view.')}
+      {P(<>The <strong style={{ color: '#E84E0F' }}>orange vertical line</strong> is today's date. The <strong style={{ color: '#E84E0F' }}>orange diamond ◆</strong> marks the ROS milestone.</>)}
     </>,
   },
 ]
@@ -177,10 +140,41 @@ export const WBS_HELP: HelpSection[] = [
 // ═══════════════════════════════════════════════════════════════
 export const COMMODITY_HELP: HelpSection[] = [
   {
-    title: 'About the Commodity Library',
+    title: 'What is this?',
     content: <>
-      {P(<>The Commodity Library holds all materials used on this project, with trace levels, preservation requirements, and preferred vendors.</>)}
-      {P(<>Every commodity is linked to a WBS node. Commodities feed into MTO lines, PO line items, and the Expediting module.</>)}
+      {P(<>The <strong>Commodity Library</strong> is the catalogue of all standard material types used on this project. Every MTO line and PO line is linked to a commodity code.</>)}
+      {P(<>Commodities feed into MTO lines, PO line items, and the Expediting module.</>)}
+    </>,
+  },
+  {
+    title: 'Trace levels',
+    content: <>
+      {P(<>The <strong>Trace Level</strong> column shows what traceability is required:</>)}
+      <ul style={{ margin: '0 0 10px', paddingLeft: 18, fontSize: 13 }}>
+        <li><strong>none</strong> — no tracking needed</li>
+        <li><strong>lot</strong> — lot number required</li>
+        <li><strong>heat_number</strong> — individual heat numbers required (structural steel, pipe)</li>
+        <li><strong>drum_number</strong> — drum/reel number required (cable)</li>
+        <li><strong>serial_number</strong> — unique serial per item</li>
+      </ul>
+    </>,
+  },
+  {
+    title: 'Adding commodities',
+    content: <>
+      {P(<>Click <strong>+ Add commodity</strong> to manually add a new commodity. Fill in the code, name, UOM, WBS, trace level, and preserve type.</>)}
+      {Steps([
+        <>Enter the commodity <strong>Code</strong> and <strong>Name</strong> (both required).</>,
+        <>Select the <strong>WBS</strong> node (required).</>,
+        <>Set <strong>Trace level</strong> and <strong>Preservation</strong> requirements.</>,
+        <>Click <strong>✓ Add commodity</strong>.</>,
+      ])}
+    </>,
+  },
+  {
+    title: 'Template & Upload',
+    content: <>
+      {P(<>Use <strong>↓ Template</strong> to download the Excel upload template. Fill it in and use <strong>↑ Upload</strong> to bulk-import multiple items.</>)}
     </>,
   },
   {
@@ -189,18 +183,6 @@ export const COMMODITY_HELP: HelpSection[] = [
       {P(<>Use the <strong>search bar</strong> to find commodities by code, name, WBS, or vendor.</>)}
       {P(<><strong>Group by</strong> lets you organise the table by WBS or Vendor.</>)}
       {P(<><strong>Tabs</strong> — All items / Active / Inactive — filter by status.</>)}
-    </>,
-  },
-  {
-    title: 'Adding a commodity',
-    content: <>
-      {Steps([
-        <>Click <strong>+ Add commodity</strong>.</>,
-        <>Enter the commodity <strong>Code</strong> and <strong>Name</strong> (both required).</>,
-        <>Select the <strong>WBS</strong> node (required).</>,
-        <>Set <strong>Trace level</strong> (Heat number, Mill cert, etc.) and <strong>Preservation</strong> requirements.</>,
-        <>Click <strong>✓ Add commodity</strong>.</>,
-      ])}
     </>,
   },
   {
@@ -217,30 +199,46 @@ export const COMMODITY_HELP: HelpSection[] = [
 // ═══════════════════════════════════════════════════════════════
 export const EQUIPMENT_HELP: HelpSection[] = [
   {
-    title: 'About the Equipment List',
+    title: 'What is this?',
     content: <>
-      {P(<>The Equipment List holds all tagged equipment for this project, with criticality ratings, specifications, and WBS references.</>)}
+      {P(<>The <strong>Equipment List</strong> tracks all individually tagged equipment items for this project. Each item has a unique tag number (e.g. {Code('P-101')}, {Code('V-301')}) and is linked to a WBS code.</>)}
       {P(<>Equipment tags are unique per project and link to POs, ITP requirements, and the Traceability module.</>)}
     </>,
   },
   {
-    title: 'Searching and filtering',
+    title: 'Tabs',
     content: <>
-      {P(<>Use the <strong>search bar</strong> to find equipment by tag, description, WBS, or vendor.</>)}
-      {P(<><strong>Tabs</strong> — All / PO raised / RFQ / Not started — filter by procurement status.</>)}
-      {P(<><strong>Group by</strong> — Organise by WBS or Vendor. Items with no vendor show under "Unassigned".</>)}
+      {P(<>Filter by status using the tabs at the top:</>)}
+      <ul style={{ margin: '0 0 10px', paddingLeft: 18, fontSize: 13 }}>
+        <li><strong>All</strong> — shows everything</li>
+        <li><strong>PO raised</strong> — a PO has been created for this item</li>
+        <li><strong>RFQ</strong> — request for quote issued</li>
+        <li><strong>Not started</strong> — no procurement action yet</li>
+      </ul>
     </>,
   },
   {
     title: 'Adding equipment',
     content: <>
+      {P(<>Click <strong>+ Add equipment</strong> to manually add a new item. Fill in the tag, description, WBS code, and traceability level.</>)}
       {Steps([
-        <>Click <strong>+ Add equipment</strong>.</>,
         <>Enter the <strong>Equipment tag</strong> (e.g. {Code('P-101A')}) and <strong>Description</strong>.</>,
         <>Select the <strong>WBS</strong> node and <strong>Equipment type</strong>.</>,
         <>Set <strong>Criticality</strong> (A-Critical / B-Major / C-Standard), <strong>Spec</strong>, and <strong>Trace class</strong>.</>,
         <>Click <strong>✓ Add equipment</strong>.</>,
       ])}
+    </>,
+  },
+  {
+    title: 'Template & Upload',
+    content: <>
+      {P(<>Use <strong>↓ Template</strong> to download the Excel upload template. Fill it in and use <strong>↑ Upload</strong> to bulk-import multiple items.</>)}
+    </>,
+  },
+  {
+    title: 'Search & Group',
+    content: <>
+      {P(<>Use the <strong>search bar</strong> to find items by tag, description, WBS, or vendor. Use <strong>Group by</strong> to group by WBS, vendor, or status.</>)}
     </>,
   },
   {
@@ -256,43 +254,56 @@ export const EQUIPMENT_HELP: HelpSection[] = [
 // ═══════════════════════════════════════════════════════════════
 export const PO_REGISTER_HELP: HelpSection[] = [
   {
-    title: 'Reading the register',
+    title: 'Stat cards',
     content: <>
-      {P(<>The PO Register shows all Purchase Orders for this project. Each row is one PO.</>)}
-      {P(<><strong>Left-edge stripe</strong> — Coloured bar shows the overall RAG status of that PO.</>)}
-      <RAGTable />
-      {P(<><strong>PO REF</strong> — Blue mono link. Click to open the full PO Detail screen.</>)}
-      {P(<><strong>★ star</strong> — Critical path toggle. Click to mark/unmark (requires a reason).</>)}
-    </>,
-  },
-  {
-    title: 'Summary cards',
-    content: <>
-      {P(<>The five cards at the top of the screen filter the table when clicked:</>)}
+      {P(<>The eight cards at the top summarise the project:</>)}
       <ul style={{ margin: '0 0 10px', paddingLeft: 18, fontSize: 13 }}>
         <li><strong>Total POs</strong> — clears all filters, shows all</li>
-        <li><strong>Ongoing</strong> — active/pending POs</li>
+        <li><strong>Committed Value</strong> — total value of all POs</li>
+        <li><strong>Approved & Locked</strong> — value of locked POs</li>
+        <li><strong>Pending Approval</strong> — count of POs awaiting approval</li>
+        <li><strong>Ongoing</strong> — active/in-progress POs</li>
         <li><strong>Complete</strong> — completed POs</li>
-        <li><strong>Breached</strong> — CDD past today (red)</li>
+        <li><strong>Breached</strong> — CDD has passed (red)</li>
         <li><strong>At Risk</strong> — CDD within the at-risk threshold (amber)</li>
       </ul>
       {Tip('An orange border shows which card is active. Click the active card again to clear the filter.')}
     </>,
   },
   {
-    title: 'Searching & filtering',
+    title: 'RAG stripe',
     content: <>
-      {P(<>Use the <strong>search bar</strong> to search by PO ref, description, or vendor.</>)}
-      {P(<>Use the <strong>CDD date range</strong> pickers to filter by Contract Delivery Date.</>)}
-      {P(<>Toggle <strong>★ Critical path only</strong> to show only critical path POs.</>)}
-      {P(<>The <strong>N of N POs</strong> counter shows how many rows match the current filter.</>)}
+      {P(<>The coloured stripe on the left of each row shows RAG status:</>)}
+      <RAGTable />
     </>,
   },
   {
-    title: 'Side drawer (quick view)',
+    title: 'Opening a PO',
     content: <>
-      {P(<>Click anywhere on a row (not the PO ref link) to open the <strong>side drawer</strong> with a quick summary: PO details, milestones, documents, and owner/expeditor assignment.</>)}
-      {P(<>Click the <strong>PO reference link</strong> in the drawer header to open the full PO Detail screen.</>)}
+      {P(<>Click a <strong>PO reference link</strong> to open the full PO detail screen.</>)}
+    </>,
+  },
+  {
+    title: 'Filtering',
+    content: <>
+      {P(<>Use the <strong>search bar</strong> for PO ref, name, or vendor. Filter by CDD date range. Use the <strong>Group by</strong> dropdown to group by vendor, WBS, or status.</>)}
+      {P(<>Toggle <strong>★ Critical path only</strong> to show only critical path POs.</>)}
+    </>,
+  },
+  {
+    title: 'New PO',
+    content: <>
+      {P(<>Click <strong>+ New PO</strong> to open the 3-step wizard: Header details → Line items → Review & create.</>)}
+      {P(<><strong>Step 1:</strong> PO Header — fill in PO Ref, WBS, vendor, currency, incoterms.</>)}
+      {P(<><strong>Step 2:</strong> Line items — add lines, optionally link commodity/tag.</>)}
+      {P(<><strong>Step 3:</strong> Key dates and review — check totals then click <strong>✓ Create PO</strong>.</>)}
+    </>,
+  },
+  {
+    title: 'Approve & Lock',
+    content: <>
+      {P(<>POs in <strong>Pending Approval</strong> status show an <strong>Approve</strong> button on the right. Click it to open the approval wizard.</>)}
+      {Warning('Once locked, a PO cannot be unlocked. Changes after approval require a Variation Request.')}
     </>,
   },
   {
@@ -300,16 +311,6 @@ export const PO_REGISTER_HELP: HelpSection[] = [
     content: <>
       {P(<>Click <strong>— Assign</strong> in the Owner/Expeditor column on any row.</>)}
       {Steps([<>Select the expeditor from the dropdown.</>, <>Click <strong>Assign</strong>.</>])}
-      {Tip('Expeditor assignment is done here — not inside the PO creation wizard — because expeditors are typically assigned weeks or months after the PO is created.')}
-    </>,
-  },
-  {
-    title: 'Creating a new PO',
-    content: <>
-      {P(<>Click <strong>+ New PO</strong>. Choose <strong>Upload PO document</strong> (auto-extracts fields) or <strong>Create manually</strong>.</>)}
-      {P(<><strong>Step 1:</strong> PO Header — fill in PO Ref, WBS, vendor, currency, incoterms. ROS date is optional at creation.</>)}
-      {P(<><strong>Step 2:</strong> Line items — add lines, optionally link commodity/tag (improves Expediting visibility).</>)}
-      {P(<><strong>Step 3:</strong> Key dates and review — check totals, then click <strong>✓ Create PO</strong>.</>)}
     </>,
   },
 ]
@@ -319,71 +320,62 @@ export const PO_REGISTER_HELP: HelpSection[] = [
 // ═══════════════════════════════════════════════════════════════
 export const PO_DETAIL_HELP: HelpSection[] = [
   {
-    title: 'Status banners',
+    title: 'Header',
     content: <>
+      {P(<>Shows the PO number, status badge (<strong>Active</strong> or <strong>Approved & Locked</strong>), vendor, and total value. The <strong>Approve & Lock PO</strong> button appears here for pending POs.</>)}
       <ul style={{ margin: '0 0 10px', paddingLeft: 18, fontSize: 13 }}>
-        <li><span style={{ color: '#15803d', fontWeight: 600 }}>Green</span> — Approved & Locked. No edits possible without a Variation Request.</li>
+        <li><span style={{ color: '#15803d', fontWeight: 600 }}>Green</span> — Approved & Locked. Changes require a Variation Request.</li>
         <li><span style={{ color: '#b45309', fontWeight: 600 }}>Amber</span> — Pending approval. Click ✎ Edit to amend, or Approve & Lock when ready.</li>
-        <li><span style={{ color: '#1d4ed8', fontWeight: 600 }}>Blue</span> — In edit mode. Totals recalculate on save.</li>
       </ul>
-    </>,
-  },
-  {
-    title: 'Meta grid (top section)',
-    content: <>
-      {P(<>The meta grid is always visible regardless of which tab is active. It shows Currency, Total Value, Incoterms, WBS, Vendor, Owner, Expeditor, Group, ROS, PO Placed, FAT Date, and Est. Arrival.</>)}
     </>,
   },
   {
     title: 'Line Items tab',
     content: <>
-      {P(<>Lists all PO line items. Columns: Line #, Description, Qty, UOM, Unit Value, Total Value, WBS, CDD, ROS, Heat No.</>)}
-      {P(<>On <strong>pending POs</strong>: click <strong>✎ Edit line items</strong> to enter edit mode. Add lines, delete lines, change quantities. Click <strong>✓ Save</strong>.</>)}
+      {P(<>All line items with qty, unit value, total value, WBS, CDD, and ROS. Grand Total appears at the bottom.</>)}
+      {P(<>On <strong>pending POs</strong>: click <strong>✎ Edit line items</strong> to add, delete, or change lines. Click <strong>✓ Save</strong>.</>)}
       {P(<>On <strong>approved POs</strong>: read-only. Raise a Variation Request to change line items.</>)}
     </>,
   },
   {
     title: 'Key Dates tab',
     content: <>
-      {P(<>Shows each key date with its full change history. Click <strong>"Changed N times"</strong> to see all previous values with reasons.</>)}
+      {P(<>All important dates for this PO. Click <strong>"Changed N times"</strong> to see all previous values with reasons.</>)}
       {Warning('Every date change requires a mandatory reason. This creates an auditable history of all date movements.')}
     </>,
   },
   {
     title: 'ITP tab',
     content: <>
-      {P(<>ITP (Inspection & Test Plan) — lists all inspection requirements for this PO.</>)}
-      {P(<>Items marked <strong>Before delivery</strong> must be completed before a Shipment Control Note can be raised for the linked line item.</>)}
+      {P(<>Inspection and Test Plan requirements attached to this PO. Items marked <strong>Before delivery</strong> must be completed before a Shipment Control Note can be raised.</>)}
     </>,
   },
   {
     title: 'Documents tab',
     content: <>
-      {P(<>Upload and download documents attached to this PO. Click <strong>Upload Signed PO</strong> to attach the signed contract document.</>)}
+      {P(<>Uploaded PO documents. All uploads and downloads are logged. Click <strong>Upload Signed PO</strong> to attach the signed contract document.</>)}
     </>,
   },
   {
     title: 'Action Notes tab',
     content: <>
-      {P(<>A chronological thread of expeditor work notes, visible to all authorised users. Type in the text area and click <strong>Post</strong> to add a note.</>)}
+      {P(<>Log expediting calls, vendor communications, and escalations here. Each note is timestamped and attributed to you.</>)}
     </>,
   },
   {
     title: 'Variations tab',
     content: <>
-      {P(<>Lists all Variation Requests raised after PO approval. Click <strong>Raise variation</strong> to request a change.</>)}
-      {P(<>Each variation shows its status: pending, approved, or rejected.</>)}
+      {P(<>Change orders and scope variations against the original PO. Click <strong>Raise variation</strong> to request a change. Each variation shows its status: pending, approved, or rejected.</>)}
     </>,
   },
   {
     title: 'Audit Trail tab',
     content: <>
-      {P(<>Complete change history for this PO. Every field change recorded: who, what field, old value, new value, when.</>)}
-      {P(<>Filter by field name, user, or date range to narrow down the history.</>)}
+      {P(<>Every change ever made to this PO — who, what, when, and before/after values. Filter by field name, user, or date range to narrow down the history.</>)}
     </>,
   },
   {
-    title: 'Approving & locking',
+    title: 'Approve & Lock',
     content: <>
       {Steps([
         <>Click <strong>🔒 Approve & Lock PO</strong>.</>,
@@ -391,7 +383,7 @@ export const PO_DETAIL_HELP: HelpSection[] = [
         <>Optionally add a note for the expediting team.</>,
         <>Click <strong>🔒 Approve & lock PO</strong> (enabled only when all boxes are ticked).</>,
       ])}
-      {Warning('This cannot be undone. After approval, the PO is locked and passed to Expediting. Changes require a Variation Request.')}
+      {Warning('This cannot be undone. After approval the PO is passed to Expediting. Changes require a Variation Request.')}
     </>,
   },
 ]
@@ -445,169 +437,238 @@ export const COMING_SOON_HELP: HelpSection[] = [
 // ═══════════════════════════════════════════════════════════════
 export const MTO_REGISTER_HELP: HelpSection[] = [
   {
-    title: 'What is the MTO Register?',
+    title: 'What is this?',
     content: <>
-      {P(<>The <strong>Material Take-Off (MTO) Register</strong> is the master list of all material and equipment requirements for the project. Each MTO document covers a discipline area (e.g. Mechanical & Piping, Structural Steel).</>)}
-      {P(<>MTOs progress through revisions as the design matures. Procurement uses the current MTO revision to raise RFQs and Purchase Orders.</>)}
-      {Tip('Superseded MTOs are shown at reduced opacity and cannot be viewed in detail. They remain for auditability.')}
+      {P(<>The <strong>MTO (Material Take-Off) Register</strong> contains all engineering take-off documents for this project. Each MTO is a versioned list of materials required.</>)}
+      {P(<>MTOs progress through revisions as the design matures. Procurement uses the current revision to raise RFQs and Purchase Orders.</>)}
     </>,
   },
   {
-    title: 'Reading the line items table',
+    title: 'Superseded MTOs',
     content: <>
-      {P(<>Each row represents a single material item. Key columns:</>)}
-      {Steps([
-        <><strong>LINE</strong> — unique identifier within this MTO (e.g. L-001). Displayed in JetBrains Mono.</>,
-        <><strong>WBS</strong> — the WBS code this item is charged to.</>,
-        <><strong>QTY / UOM</strong> — required quantity and unit of measure.</>,
-        <><strong>ROS</strong> — Required On Site date.</>,
-        <><strong>INSP</strong> — Inspection Class (I, II, or III).</>,
-        <><strong>VDRL</strong> — ticked when a Vendor Data Requirements List submission is required.</>,
-        <><strong>PO REF</strong> — filled once a Purchase Order is raised against this line.</>,
-      ])}
+      {P(<>Superseded MTOs appear at reduced opacity. They are read-only and kept for audit history.</>)}
     </>,
   },
   {
-    title: 'Line status and locking',
+    title: 'Opening an MTO',
     content: <>
-      {P(<>Each line has one of three statuses:</>)}
-      {Steps([
-        <><strong>Not started</strong> (grey) — no procurement action yet.</>,
-        <><strong>RFQ</strong> (blue) — a Request for Quotation has been issued.</>,
-        <><strong>PO Raised</strong> (green) — a Purchase Order exists. The line is locked.</>,
-      ])}
-      {Warning('Lines with status PO Raised are locked. Only the ROS date and VDRL flag can be edited. All other fields are read-only to protect the committed scope.')}
+      {P(<>Click <strong>View →</strong> to open the full detail screen with line items, version history, and revision diff.</>)}
     </>,
   },
   {
-    title: 'Revisions and version history',
+    title: 'New MTO',
     content: <>
-      {P(<>Each MTO has a current revision (A, B, C…). The <strong>Version History</strong> tab shows all revisions with the upload date, uploader, line count and revision notes.</>)}
-      {P(<>When a new revision is uploaded, the previous revision is retained in the database. All line items for past revisions remain queryable via the Lines tab revision selector.</>)}
-    </>,
-  },
-  {
-    title: 'Comparing revisions (Rev Diff)',
-    content: <>
-      {P(<>The <strong>Rev Diff</strong> tab lets you compare any two revisions side-by-side.</>)}
-      {Steps([
-        <>Select the <strong>From</strong> revision (older).</>,
-        <>Select the <strong>To</strong> revision (newer).</>,
-        <>The table shows Added, Modified, and Deleted lines with before/after values highlighted.</>,
-      ])}
-      {Tip('Use Rev Diff to understand exactly what changed between revisions before issuing a Variation Request.')}
-    </>,
-  },
-  {
-    title: 'Creating a new MTO',
-    content: <>
-      {P(<>Click <strong>+ New MTO</strong> in the register list view.</>)}
+      {P(<>Click <strong>+ New MTO</strong> to create a new register. You will be prompted for the name, reference, owner, and revision letter before adding line items.</>)}
       {Steps([
         <>Step 1: choose <strong>Create manually</strong> or <strong>Upload file</strong>.</>,
-        <>Step 2: enter the MTO name, reference (e.g. MTO-PIL-004), revision letter, owner and description.</>,
+        <>Step 2: enter the MTO name, reference (e.g. {Code('MTO-PIL-004')}), revision letter, owner and description.</>,
         <>Step 3 (manual): add at least one line item. Each line needs a description.</>,
         <>Click <strong>Create MTO</strong> to save.</>,
       ])}
     </>,
   },
   {
-    title: 'Uploading a new revision',
+    title: 'Template & Upload',
     content: <>
-      {P(<>From the MTO detail screen, click <strong>Upload Rev {'{next}'}</strong> in the top-right corner.</>)}
-      {P(<>The file must be XLSX or CSV with columns: <strong>line_number, wbs_code, description, quantity, uom, ros_date, inspection_class, vdrl_required, po_ref, status</strong>.</>)}
-      {Warning('Uploading a new revision does not delete previous revisions. Lines from older revisions remain in the database and are accessible via the Version History tab.')}
+      {P(<>Use <strong>↓ Template</strong> to download the upload template. Use <strong>↑ Upload MTO</strong> to submit a new revision from Excel.</>)}
+      {Warning('Uploading a new revision does not delete previous revisions — they remain accessible via the Version History tab.')}
+    </>,
+  },
+  {
+    title: 'Line status and locking',
+    content: <>
+      {P(<>Each line has one of three statuses:</>)}
+      <ul style={{ margin: '0 0 10px', paddingLeft: 18, fontSize: 13 }}>
+        <li><strong>Not started</strong> (grey) — no procurement action yet</li>
+        <li><strong>RFQ</strong> (blue) — a Request for Quotation has been issued</li>
+        <li><strong>PO Raised</strong> (green) — a Purchase Order exists. The line is locked.</li>
+      </ul>
+      {Warning('Lines with PO Raised status are locked. Only ROS date and VDRL flag can be edited.')}
     </>,
   },
 ]
 
 // ─── MTO DETAIL HELP ─────────────────────────────────────────
-export const MTO_DETAIL_HELP: HelpSection[] = MTO_REGISTER_HELP
-
-// ─── EXPEDITING PO DETAIL HELP ───────────────────────────────
-// Help sections for the ExpPODetailScreen dedicated screen.
-export const EXPEDITING_PO_DETAIL_HELP: HelpSection[] = [
+// ─── Updated per User Manual v1.0 with per-tab descriptions. ─
+export const MTO_DETAIL_HELP: HelpSection[] = [
   {
-    title: 'PO Header',
+    title: 'Line Items tab',
     content: <>
-      {P(<>The PO header shows key metadata — vendor, owner, RAG status and the milestone timeline summary at a glance. The 5 key date boxes show the scheduled dates for each major milestone.</>)}
+      {P(<>Shows all lines in the current revision. Lines with a lock icon are linked to a locked PO and cannot be edited. Filter by status using the tabs: <strong>All</strong>, <strong>PO Raised</strong>, <strong>RFQ</strong>, <strong>Not started</strong>.</>)}
     </>,
   },
   {
-    title: 'Line Items & SCNs',
+    title: 'Version History tab',
     content: <>
-      {P(<>Each PO line can be expanded to view quantities, child items and heat number fields. Lines with <strong>heat_number_required</strong> show an editable heat number input.</>)}
+      {P(<>All uploaded revisions in reverse date order. Click any revision to view its lines as they were at that point.</>)}
+    </>,
+  },
+  {
+    title: 'Rev Diff tab',
+    content: <>
+      {P(<>Select two revisions to compare them side by side. <span style={{ color: '#15803d' }}>Green</span> = added, <span style={{ color: '#dc2626' }}>Red</span> = removed, <span style={{ color: '#b45309' }}>Amber</span> = changed.</>)}
+      {Steps([
+        <>Select the <strong>From</strong> revision (older).</>,
+        <>Select the <strong>To</strong> revision (newer).</>,
+        <>The table shows Added, Modified, and Deleted lines with before/after values highlighted.</>,
+      ])}
+    </>,
+  },
+  {
+    title: 'Upload revision',
+    content: <>
+      {P(<>Click <strong>↑ Upload Rev [letter]</strong> to submit a new revision. Duplicate revision letters are blocked. Conflicts with locked lines are flagged before upload.</>)}
+      {Warning('Uploading a new revision does not delete previous revisions. All past revision lines remain accessible via Version History.')}
+    </>,
+  },
+]
+
+// ─── EXPEDITING PO DETAIL HELP ───────────────────────────────
+// ─── Updated per User Manual v1.0. ───────────────────────────
+export const EXPEDITING_PO_DETAIL_HELP: HelpSection[] = [
+  {
+    title: 'Line Items & SCNs tab',
+    content: <>
+      {P(<>Shows all PO lines with total qty, qty assigned to SCNs, and available qty. Existing SCNs for this PO are listed under each line.</>)}
       {Tip('Click the line header to expand / collapse. Add child items using the + Add button.')}
     </>,
   },
   {
     title: 'Milestones tab',
     content: <>
-      {P(<>Edit forecast dates by clicking the pencil icon next to <strong>FORECAST</strong>. A reason is mandatory. Click <strong>Changed N×</strong> to see the full change history for that milestone.</>)}
+      {P(<>Record completion dates for each milestone step. Every date change requires a mandatory reason.</>)}
+      {P(<>Click <strong>Changed N×</strong> to see the full change history for that milestone.</>)}
       {Warning('A forecast date in the past will immediately show as Breached (red).')}
+    </>,
+  },
+  {
+    title: 'ITP tab',
+    content: <>
+      {P(<>Inspection and Test Plan requirements for this PO. Items marked <strong>Before delivery</strong> must be completed before a Shipment Control Note can be raised.</>)}
     </>,
   },
   {
     title: 'VDRL tab',
     content: <>
-      {P(<>The VDRL tab shows all vendor documents required for this PO. Statuses: <strong>Approved</strong>, <strong>Under review</strong>, <strong>Overdue</strong>, <strong>Not submitted</strong>, <strong>Resubmit</strong>.</>)}
+      {P(<>Required vendor documents for this PO. <span style={{ color: '#dc2626' }}>Red required dates</span> = overdue. Click a document row to update status or upload the document.</>)}
+      {P(<>Statuses: <strong>Approved</strong>, <strong>Under review</strong>, <strong>Overdue</strong>, <strong>Not submitted</strong>, <strong>Resubmit</strong>.</>)}
     </>,
   },
   {
-    title: 'Action Notes',
+    title: 'Action Notes tab',
     content: <>
-      {P(<>Post free-text action notes against the PO. Notes are visible to all team members and are timestamped. Use them to record vendor calls, inspection results, or expediting actions taken.</>)}
+      {P(<>Log notes specific to this PO. All notes appear in the cross-PO <strong>Action Log</strong> on the main Expediting screen. Each note is timestamped and attributed to you.</>)}
     </>,
   },
   {
-    title: 'Audit Trail',
+    title: 'Audit Trail tab',
     content: <>
-      {P(<>The Audit Trail tab shows every forecast or actual date change recorded — who made it, when, what changed and why.</>)}
+      {P(<>Full immutable log of every change to this PO. Filter by <strong>Milestone changes</strong> or <strong>Notes</strong>.</>)}
+    </>,
+  },
+  {
+    title: 'Create SCN',
+    content: <>
+      {P(<>Click <strong>+ Create SCN</strong> in the top right to start the 5-step Shipment Control Note wizard:</>)}
+      {Steps([
+        <><strong>Select lines</strong> — choose which PO lines are in this shipment.</>,
+        <><strong>Shipment details</strong> — transport mode, forwarder, ETD/ETA, incoterms.</>,
+        <><strong>Packages</strong> — add package dimensions and weights.</>,
+        <><strong>Documents</strong> — attach packing lists, certificates.</>,
+        <><strong>Confirm</strong> — review and submit.</>,
+      ])}
     </>,
   },
 ]
 
 // ─── EXPEDITING HELP ─────────────────────────────────────────
-// Help sections shown in the Expediting Register screen.
+// ─── Updated per User Manual v1.0. ───────────────────────────
 export const EXPEDITING_HELP: HelpSection[] = [
   {
-    title: 'Overview',
+    title: 'What is this?',
     content: <>
-      {P(<>The <strong>Expediting Register</strong> shows all locked &amp; approved POs being actively tracked. Each PO has a 5-step milestone chain with RAG (Red/Amber/Green) status computed from forecast and planned dates.</>)}
+      {P(<>The <strong>Expediting Register</strong> shows all Approved &amp; Locked POs under active expedition. POs appear here automatically once they are locked in Procurement.</>)}
       {Tip('Only locked POs appear here. To lock a PO, approve it in the Procurement module.')}
     </>,
   },
   {
     title: 'Milestone dots',
     content: <>
-      {P(<>Each row shows a chain of 5 coloured dots representing the PO milestone chain:</>)}
+      {P(<>Each row shows a row of coloured dots — one per milestone:</>)}
       {RAGTable()}
-      {P(<>Dots: <strong>PO Award → FAT / Inspection → Ready for Shipment → ETD / Ship → ROS / ETA</strong>.</>)}
+      {P(<>Milestones: <strong>PO Award → FAT / Inspection → Ready for Shipment → ETD / Ship → ROS / ETA</strong>.</>)}
+    </>,
+  },
+  {
+    title: 'View → drawer',
+    content: <>
+      {P(<>Click <strong>View →</strong> to slide open the quick-access drawer on the right. The register stays visible behind it. Use the drawer for quick checks and SCN creation.</>)}
+    </>,
+  },
+  {
+    title: 'PO ref link',
+    content: <>
+      {P(<>Click the <strong>PO reference text</strong> to navigate to the full dedicated PO detail screen with all 6 tabs.</>)}
+    </>,
+  },
+  {
+    title: 'Filters',
+    content: <>
+      {P(<>Use the status filter pills (<strong>On Track</strong> / <strong>At Risk</strong> / <strong>Breached</strong> / <strong>Not Started</strong> / <strong>Complete</strong>), date range, and <strong>Critical only</strong> toggle to narrow the list.</>)}
+    </>,
+  },
+  {
+    title: 'Critical path',
+    content: <>
+      {P(<>Click the <strong>★ star</strong> on any row to flag it as critical path. Filled orange = critical.</>)}
     </>,
   },
   {
     title: 'Forecast dates',
     content: <>
-      {P(<>Open a PO detail panel and click a forecast date (or <em>Set forecast</em>) to update it. A <strong>reason is required</strong> every time a forecast is changed — this creates an audit trail.</>)}
-      {P(<>The "Changed N×" link shows full forecast history for that milestone.</>)}
+      {P(<>Open a PO detail panel and click a forecast date to update it. A <strong>reason is required</strong> every time a forecast is changed — this creates an audit trail.</>)}
       {Warning('Changing a forecast to a past date will immediately mark the milestone as Breached (red).')}
     </>,
   },
+]
+
+// ─── VDRL REGISTER HELP ──────────────────────────────────────
+// ─── Help for the VDRL Register tab in ExpeditingScreen. ─────
+export const VDRL_REGISTER_HELP: HelpSection[] = [
   {
-    title: 'Line items',
+    title: 'What is this?',
     content: <>
-      {P(<>Each PO line is shown in the detail panel. Lines with <strong>Heat Number Required</strong> show a heat number field. Lines without a commodity or equipment tag linked show an amber warning.</>)}
+      {P(<>The <strong>VDRL Register</strong> shows all Vendor Document Requirements Lists across the project. One row per PO. Click <strong>View →</strong> to drill into the documents for that PO's package.</>)}
     </>,
   },
   {
-    title: 'Child items',
+    title: 'KPI cards',
     content: <>
-      {P(<>Sub-items can be added to any line using <strong>+ Add child item</strong>. Child items represent partial deliveries, inspections or sub-assemblies tracked under a parent line.</>)}
+      <ul style={{ margin: '0 0 10px', paddingLeft: 18, fontSize: 13 }}>
+        <li><strong>Total Packages</strong> — VDRL packages across all POs</li>
+        <li><strong>Total Docs</strong> — total document requirements</li>
+        <li><strong>Submitted</strong> — docs submitted by vendors</li>
+        <li><strong>Overdue</strong> — docs past their required date</li>
+        <li><strong>ABF Cleared</strong> — approved by forwarder</li>
+      </ul>
     </>,
   },
   {
-    title: 'VDRL tab',
+    title: 'Drill-in view',
     content: <>
-      {P(<>The VDRL Register tab will show all vendor document requirements across active POs. Per-PO VDRL documents are accessible from the PO detail panel via the Documents button (coming soon).</>)}
+      {P(<>After clicking <strong>View →</strong> you see the document list for that PO's package. The context bar shows: PO number (prominent, left) · PO name · Vendor · Package name (right).</>)}
+    </>,
+  },
+  {
+    title: 'Back navigation',
+    content: <>
+      {P(<>Click <strong>← Back to VDRL Register</strong> to return to the PO list.</>)}
+    </>,
+  },
+  {
+    title: 'Template & Upload',
+    content: <>
+      {P(<>Use <strong>↓ Template</strong> to download the VDRL Excel template. Use <strong>↑ Upload VDRL</strong> to bulk-upload document requirements via the 3-step upload modal.</>)}
     </>,
   },
 ]

@@ -6,7 +6,7 @@ import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { HelpButton } from '../components/HelpDrawer'
 import { MilestoneTimeline } from '../components/MilestoneTimeline'
-import { EXPEDITING_HELP } from '../helpContent'
+import { EXPEDITING_PO_DETAIL_HELP } from '../helpContent'
 import { CreateSCNWizard } from '../components/CreateSCNWizard'
 import { ToastProvider, useToast } from '../hooks/useToast'
 
@@ -296,7 +296,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack }: 
         >
           + Create SCN
         </button>
-        <HelpButton screenName="Expediting PO Detail" sections={EXPEDITING_HELP} dark={dark} />
+        <HelpButton screenName="Expediting PO Detail" sections={EXPEDITING_PO_DETAIL_HELP} dark={dark} />
       </div>
 
       <div style={{ padding: '24px 24px 40px' }}>

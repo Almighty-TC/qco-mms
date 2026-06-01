@@ -7,7 +7,7 @@ import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { HelpButton } from '../components/HelpDrawer'
 import { MilestoneTimeline } from '../components/MilestoneTimeline'
-import { EXPEDITING_HELP } from '../helpContent'
+import { EXPEDITING_HELP, VDRL_REGISTER_HELP } from '../helpContent'
 import { ExpPODrawer } from '../components/ExpPODrawer'
 import { CreateSCNWizard } from '../components/CreateSCNWizard'
 import { ToastProvider, useToast } from '../hooks/useToast'
@@ -764,7 +764,8 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
                 {/* Header row */}
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
                   <div style={{fontSize:16,fontWeight:600,color:col}}>VDRL Register</div>
-                  <div style={{display:'flex',gap:8}}>
+                  <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                    <HelpButton screenName="VDRL Register" sections={VDRL_REGISTER_HELP} dark={dark} />
                     <button onClick={downloadVdrlTemplate} style={secBtn}>↓ Template</button>
                     <button onClick={()=>setShowVdrlUpload(true)} style={{...secBtn,color:'#2563eb',borderColor:'#2563eb'}}>↑ Upload VDRL</button>
                   </div>
