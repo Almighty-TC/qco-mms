@@ -439,6 +439,7 @@ const LineItemsTab = ({
       {loading ? (
         <div style={{ padding: 32, textAlign: 'center', color: sub, fontSize: 13 }}>Loading…</div>
       ) : (
+        <>
         <div style={{ overflowX: 'auto', border: bd, borderRadius: 8, background: dark ? '#111827' : '#fff' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -490,6 +491,7 @@ const LineItemsTab = ({
           </table>
         </div>
         <MilestoneLegend dark={dark} />
+        </>
       )}
 
       {editTarget && (
