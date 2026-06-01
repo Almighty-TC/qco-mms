@@ -6,6 +6,8 @@ import React, { useState, useEffect } from 'react'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
+import { useCurrentUser } from '../hooks/useCurrentUser'
+import { ScopeBanner } from '../components/ScopeBanner'
 
 const API = 'http://localhost:3001/api'
 type View = 'mc' | 'contractor'
@@ -39,6 +41,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
   dark: boolean; projectId: number; projectName: string; onBack: () => void; userRole?: string
 }) => {
   const { addToast } = useToast()
+  const { isSubcontractor } = useCurrentUser()
   const col    = dark ? '#f1f5f9' : '#0f172a'
   const cardBg = dark ? '#1e293b' : '#fff'
   const bg     = dark ? '#0f172a' : '#f4f7fb'
@@ -46,7 +49,8 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
   const sub    = '#94a3b8'
   const theadBg = dark ? '#162032' : '#f8fafc'
 
-  const [view, setView]           = useState<View>('mc')
+  // Subcontractors always in contractor view; can't switch to MC view
+  const [view, setView]           = useState<View>(isSubcontractor ? 'contractor' : 'mc')
   const [fmrs, setFmrs]           = useState<FMRRow[]>([])
   const [counts, setCounts]       = useState<FMRCounts | null>(null)
   const [loading, setLoading]     = useState(true)
@@ -91,29 +95,33 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
           <div style={{ fontSize: 11, color: sub }}>Dashboard › {projectName} › Material Control › <strong style={{ color: col }}>FMR Register</strong></div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {/* MC / Contractor view toggle */}
-          <button onClick={() => setView('mc')}
-            style={{ padding: '5px 14px', borderRadius: '6px 0 0 6px', border: bd, background: view === 'mc' ? 'none' : 'none', color: view === 'mc' ? col : sub, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', fontWeight: view === 'mc' ? 600 : 400 }}>
-            MC view
-          </button>
-          <button onClick={() => setView('contractor')}
-            style={{ padding: '5px 14px', borderRadius: '0 6px 6px 0', border: bd, borderLeft: 'none', background: 'none', color: view === 'contractor' ? col : sub, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', fontWeight: view === 'contractor' ? 600 : 400 }}>
-            Contractor view
-          </button>
+          {/* MC / Contractor view toggle — hidden for subcontractors */}
+          {!isSubcontractor && <>
+            <button onClick={() => setView('mc')}
+              style={{ padding: '5px 14px', borderRadius: '6px 0 0 6px', border: bd, background: 'none', color: view === 'mc' ? col : sub, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', fontWeight: view === 'mc' ? 600 : 400 }}>
+              MC view
+            </button>
+            <button onClick={() => setView('contractor')}
+              style={{ padding: '5px 14px', borderRadius: '0 6px 6px 0', border: bd, borderLeft: 'none', background: 'none', color: view === 'contractor' ? col : sub, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', fontWeight: view === 'contractor' ? 600 : 400 }}>
+              Contractor view
+            </button>
+          </>}
           <button onClick={() => setRaiseFmr(true)}
             style={{ padding: '6px 14px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
             + Raise FMR
           </button>
-          <button style={{ padding: '6px 14px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>↓ Export</button>
+          {!isSubcontractor && <button style={{ padding: '6px 14px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>↓ Export</button>}
         </div>
       </div>
 
       <div style={{ padding: 24 }}>
+        {/* ScopeBanner for subcontractors */}
+        {isSubcontractor && <ScopeBanner role="subcontractor" wbsScopes={['03.01','03.02','04.01']} />}
         <h1 style={{ margin: '0 0 4px', fontSize: 20, fontWeight: 700, color: col }}>FMR Register</h1>
         <div style={{ fontSize: 12, color: sub, marginBottom: 16 }}>Field Material Requests — {projectName}</div>
 
-        {/* Contractor scope banner */}
-        {view === 'contractor' && (
+        {/* Contractor scope banner (for internal team in contractor view) */}
+        {view === 'contractor' && !isSubcontractor && (
           <div style={{ background: dark ? '#162032' : '#eff6ff', border: `1px solid ${dark ? '#334155' : '#bfdbfe'}`, borderRadius: 8, padding: '8px 14px', marginBottom: 16, fontSize: 12, color: col, display: 'flex', gap: 8, alignItems: 'center' }}>
             <span style={{ color: '#2563eb' }}>ℹ</span>
             Showing materials for your assigned WBS scope:

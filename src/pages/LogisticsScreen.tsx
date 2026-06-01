@@ -6,6 +6,8 @@ import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { MilestoneLegend } from '../components/MilestoneLegend'
+import { useCurrentUser } from '../hooks/useCurrentUser'
+import { ScopeBanner } from '../components/ScopeBanner'
 
 const API = 'http://localhost:3001/api'
 
@@ -94,6 +96,7 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
   dark: boolean; projectId: number; projectName: string; onBack: () => void
 }) => {
   const { addToast } = useToast()
+  const { isForwarder } = useCurrentUser()
 
   const col    = dark ? '#f1f5f9' : '#0f172a'
   const cardBg = dark ? '#1e293b' : '#fff'
@@ -203,11 +206,15 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
           <BackButton onClick={onBack} dark={dark} />
           <div style={{ fontSize: 11, color: sub }}>Dashboard › {projectName} › <strong style={{ color: col }}>Logistics</strong></div>
         </div>
-        <button onClick={exportCSV} style={{ ...inputSt, cursor: 'pointer', width: 'auto' }}>↓ Export</button>
+        {!isForwarder && <button onClick={exportCSV} style={{ ...inputSt, cursor: 'pointer', width: 'auto' }}>↓ Export</button>}
       </div>
 
       <div style={{ padding: 24 }}>
         {/* Title + count */}
+        {/* ScopeBanner for freight forwarders */}
+        {isForwarder && (
+          <ScopeBanner role="freight_forwarder" scnCount={scns.length} />
+        )}
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 20 }}>
           <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: col }}>
             Logistics — SCN Register · <span style={{ fontWeight: 400 }}>{projectName}</span>

@@ -8,6 +8,17 @@ const { authenticateToken } = require('../middleware/auth')
 
 router.use(authenticateToken)
 
+// ─── ROLE GUARDS ──────────────────────────────────────────────
+const RECEIPTING_ALLOWED = new Set(['admin','ceo','director','project_director','project_manager','procurement_manager','procurement_officer','expediting_manager','expeditor','logistics_manager','warehouse','materials_controller','quality_engineer'])
+const APPROVAL_ALLOWED   = new Set(['admin','ceo','director','project_director','project_manager','materials_controller'])
+
+// Subcontractors and freight_forwarders cannot access receipting or transfers
+function rejectExternal(req, res, next) {
+  const r = req.user?.role
+  if (r === 'subcontractor' || r === 'freight_forwarder') return res.status(403).json({ error: 'Access denied for this role' })
+  next()
+}
+
 // ─── AUDIT HELPER ─────────────────────────────────────────────
 async function writeAudit(userId, action, entity, id, before, after, resource) {
   try {
@@ -25,9 +36,8 @@ async function writeAudit(userId, action, entity, id, before, after, resource) {
 // RECEIPTING
 // ═══════════════════════════════════════════════════════════════
 
-// GET /api/mc/:projectId/receipting
-// Returns pending receipt register: SCNs with arrived/in-transit/customs status
-router.get('/:projectId/receipting', async (req, res) => {
+// GET /api/mc/:projectId/receipting — subcontractors/forwarders blocked
+router.get('/:projectId/receipting', rejectExternal, async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
     const { tab, search, destination } = req.query
@@ -143,7 +153,7 @@ router.get('/:projectId/receipting', async (req, res) => {
 })
 
 // GET /api/mc/:projectId/receipting/:scnId — full detail for wizard step 1
-router.get('/:projectId/receipting/:scnId', async (req, res) => {
+router.get('/:projectId/receipting/:scnId', rejectExternal, async (req, res) => {
   try {
     const scnId = Number(req.params.scnId)
     const [[scn]] = await db.query(
@@ -169,7 +179,7 @@ router.get('/:projectId/receipting/:scnId', async (req, res) => {
 })
 
 // POST /api/mc/:projectId/receipting/:scnId/complete — complete receipt (creates stock)
-router.post('/:projectId/receipting/:scnId/complete', async (req, res) => {
+router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req, res) => {
   try {
     const scnId = Number(req.params.scnId)
     const pid   = Number(req.params.projectId)
@@ -222,27 +232,51 @@ router.post('/:projectId/receipting/:scnId/complete', async (req, res) => {
 // GET /api/mc/:projectId/stock
 router.get('/:projectId/stock', async (req, res) => {
   try {
-    const pid = Number(req.params.projectId)
-    const { search, warehouse_id, wbs_code, show_holds, group_by } = req.query
+    const pid   = Number(req.params.projectId)
+    const role  = req.user?.role
+    const uid   = req.user?.id
+    const { search, warehouse_id, wbs_code, show_holds } = req.query
 
     let conditions = ['s.project_id = ?']
     let params = [pid]
-    if (warehouse_id && warehouse_id !== 'all') { conditions.push('s.warehouse_id = ?'); params.push(warehouse_id) }
-    if (wbs_code && wbs_code !== 'all') { conditions.push('s.wbs_code LIKE ?'); params.push(`${wbs_code}%`) }
-    if (show_holds === 'true') { conditions.push('(s.trace_hold=1 OR s.condition_status != ?)'); params.push('good') }
-    if (search) {
-      const q = `%${search}%`
-      conditions.push('(s.item_code LIKE ? OR s.description LIKE ? OR s.wbs_code LIKE ? OR s.vendor_name LIKE ? OR s.location_code LIKE ?)')
-      params.push(q, q, q, q, q)
+
+    // ─── SUBCONTRACTOR: scope to their WBS codes, hide location ──
+    let isSubcontractor = role === 'subcontractor'
+    let subWbsCodes = []
+    if (isSubcontractor) {
+      const [wbsRows] = await db.query(
+        'SELECT wbs_code FROM user_wbs_access WHERE user_id=? AND project_id=?', [uid, pid]
+      )
+      subWbsCodes = wbsRows.map(r => r.wbs_code).filter(c => c !== 'ALL')
+      if (subWbsCodes.length > 0) {
+        const placeholders = subWbsCodes.map(() => 'LIKE ?').join(' OR ')
+        conditions.push(`(s.wbs_code IS NULL OR ${subWbsCodes.map(() => 's.wbs_code LIKE ?').join(' OR ')})`)
+        subWbsCodes.forEach(c => params.push(`${c}%`))
+      }
     }
 
-    const [stock] = await db.query(
+    if (warehouse_id && warehouse_id !== 'all') { conditions.push('s.warehouse_id = ?'); params.push(warehouse_id) }
+    if (wbs_code && wbs_code !== 'all') { conditions.push('s.wbs_code LIKE ?'); params.push(`${wbs_code}%`) }
+    if (show_holds === 'true' && !isSubcontractor) { conditions.push('(s.trace_hold=1 OR s.condition_status != ?)'); params.push('good') }
+    if (search) {
+      const q = `%${search}%`
+      conditions.push('(s.item_code LIKE ? OR s.description LIKE ? OR s.wbs_code LIKE ? OR s.vendor_name LIKE ?)')
+      params.push(q, q, q, q)
+    }
+
+    const [stockRaw] = await db.query(
       `SELECT s.*, w.name AS warehouse_name, w.code AS warehouse_code
        FROM warehouse_stock s
        JOIN warehouses w ON s.warehouse_id = w.id
        WHERE ${conditions.join(' AND ')}
        ORDER BY w.name, s.location_code`,
       params
+    )
+
+    // Subcontractors: strip grid location and hold reason
+    const stock = stockRaw.map(row => isSubcontractor
+      ? { ...row, location_code: null, hold_reason: undefined }
+      : row
     )
 
     const [[totals]] = await db.query(
@@ -254,7 +288,7 @@ router.get('/:projectId/stock', async (req, res) => {
       [pid]
     )
 
-    res.json({ data: stock, totals })
+    res.json({ data: stock, totals, wbs_scopes: subWbsCodes })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
@@ -373,8 +407,9 @@ router.post('/:projectId/fmr', async (req, res) => {
   }
 })
 
-// PUT /api/mc/:projectId/fmr/:fmrId/approve — MC approves/rejects
+// PUT /api/mc/:projectId/fmr/:fmrId/approve — MC approves/rejects (subcontractor = 403)
 router.put('/:projectId/fmr/:fmrId/approve', async (req, res) => {
+  if (!APPROVAL_ALLOWED.has(req.user?.role)) return res.status(403).json({ error: 'Only Materials Controllers and Managers can approve FMRs' })
   try {
     const { fmrId } = req.params
     const { decision, approved_qty, rejection_reason } = req.body
@@ -417,8 +452,8 @@ router.put('/:projectId/fmr/:fmrId/approve', async (req, res) => {
 // WAREHOUSE TRANSFERS
 // ═══════════════════════════════════════════════════════════════
 
-// GET /api/mc/:projectId/transfers
-router.get('/:projectId/transfers', async (req, res) => {
+// GET /api/mc/:projectId/transfers — external users blocked
+router.get('/:projectId/transfers', rejectExternal, async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
     const { search, status } = req.query
@@ -459,8 +494,7 @@ router.get('/:projectId/transfers', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
-// POST /api/mc/:projectId/transfers — create new transfer
-router.post('/:projectId/transfers', async (req, res) => {
+router.post('/:projectId/transfers', rejectExternal, async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
     const { item_code, description, wbs_code, qty, uom, from_warehouse_id, from_location, to_warehouse_id, to_location, requested_by_name, requested_by_company, est_pickup_date, notes } = req.body

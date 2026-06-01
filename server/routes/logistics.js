@@ -12,6 +12,15 @@ const fs      = require('fs')
 
 router.use(authenticateToken)
 
+// ─── ROLE HELPERS ─────────────────────────────────────────────
+// Freight forwarder can update status/dates on their SCNs, nothing else.
+// Packages, documents: internal team only.
+function requireInternalLogistics(req, res, next) {
+  const r = req.user?.role
+  if (r === 'freight_forwarder') return res.status(403).json({ error: 'Freight forwarders cannot perform this action' })
+  next()
+}
+
 // ─── STATUS HELPERS ───────────────────────────────────────────
 // Map DB enum values → logical display status used in the pipeline.
 // DB: draft, pending, in-transit, customs_review, arrived, received, closed
@@ -101,13 +110,21 @@ const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } })
 // Returns paginated SCN list with pipeline counts.
 router.get('/register/:projectId', async (req, res) => {
   try {
-    const pid = Number(req.params.projectId)
+    const pid  = Number(req.params.projectId)
+    const role = req.user?.role
+    const uid  = req.user?.id
     const { status, search, critical_only, page = 1, limit = 50 } = req.query
     const offset = (Number(page) - 1) * Number(limit)
 
     // Build WHERE clause
     const conditions = ['s.project_id = ?']
     const params = [pid]
+
+    // ─── FREIGHT FORWARDER: only see their assigned SCNs ─────
+    if (role === 'freight_forwarder') {
+      conditions.push('s.forwarder_user_id = ?')
+      params.push(uid)
+    }
 
     // Status filter — match against both DB value and display mapping
     if (status) {
@@ -453,7 +470,7 @@ router.get('/scn/:scnId/packages', async (req, res) => {
 })
 
 // POST /api/logistics/scn/:scnId/packages
-router.post('/scn/:scnId/packages', async (req, res) => {
+router.post('/scn/:scnId/packages', requireInternalLogistics, async (req, res) => {
   try {
     const scnId = Number(req.params.scnId)
     const { description, length_mm, width_mm, height_mm, gross_weight_kg, net_weight_kg,
@@ -547,7 +564,7 @@ router.delete('/scn/:scnId/packages/:packageId', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 
 // POST /api/logistics/scn/:scnId/documents
-router.post('/scn/:scnId/documents', upload.single('file'), async (req, res) => {
+router.post('/scn/:scnId/documents', requireInternalLogistics, upload.single('file'), async (req, res) => {
   try {
     const scnId = Number(req.params.scnId)
     const { document_type, notes } = req.body

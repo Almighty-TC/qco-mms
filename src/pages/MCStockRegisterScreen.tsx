@@ -5,6 +5,8 @@ import React, { useState, useEffect } from 'react'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
+import { useCurrentUser } from '../hooks/useCurrentUser'
+import { ScopeBanner } from '../components/ScopeBanner'
 
 const API = 'http://localhost:3001/api'
 
@@ -28,6 +30,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
   dark: boolean; projectId: number; projectName: string; onBack: () => void
 }) => {
   const { addToast } = useToast()
+  const { isSubcontractor } = useCurrentUser()
   const col    = dark ? '#f1f5f9' : '#0f172a'
   const cardBg = dark ? '#1e293b' : '#fff'
   const bg     = dark ? '#0f172a' : '#f4f7fb'
@@ -37,6 +40,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
 
   const [stock, setStock]     = useState<StockItem[]>([])
   const [totals, setTotals]   = useState<any>(null)
+  const [wbsScopes, setWbsScopes] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch]   = useState('')
   const [groupBy, setGroupBy] = useState<GroupBy>('warehouse')
@@ -53,6 +57,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
       })
       setStock(data.data || [])
       setTotals(data.totals)
+      if (data.wbs_scopes) setWbsScopes(data.wbs_scopes)
     } catch (e: any) {
       addToast('error', e.response?.data?.error || 'Failed to load stock register')
     } finally { setLoading(false) }
@@ -85,15 +90,24 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
           <div style={{ fontSize: 11, color: sub }}>Dashboard › {projectName} › Material Control › <strong style={{ color: col }}>Stock Register</strong></div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={() => setShowStockTake(true)}
-            style={{ padding: '6px 14px', borderRadius: 6, border: 'none', background: '#22c55e', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
-            📋 Stock take
-          </button>
-          <button style={{ padding: '6px 14px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>↓ Export</button>
+          {/* Subcontractors cannot stock take or export */}
+          {!isSubcontractor && (
+            <button onClick={() => setShowStockTake(true)}
+              style={{ padding: '6px 14px', borderRadius: 6, border: 'none', background: '#22c55e', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+              📋 Stock take
+            </button>
+          )}
+          {!isSubcontractor && (
+            <button style={{ padding: '6px 14px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>↓ Export</button>
+          )}
         </div>
       </div>
 
       <div style={{ padding: 24 }}>
+        {/* ScopeBanner for subcontractors */}
+        {isSubcontractor && wbsScopes.length > 0 && (
+          <ScopeBanner role="subcontractor" wbsScopes={wbsScopes} />
+        )}
         <h1 style={{ margin: '0 0 4px', fontSize: 20, fontWeight: 700, color: col }}>Stock Register</h1>
         <div style={{ fontSize: 12, color: sub, marginBottom: 20 }}>
           {totals?.total_items ?? '…'} of {totals?.total_items ?? '…'} items · {totals?.warehouse_count ?? '…'} warehouses
@@ -127,10 +141,13 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
           <select style={{ ...inputSt }}>
             <option>All WBS</option>
           </select>
-          <button onClick={() => setShowHolds(v => !v)}
-            style={{ ...inputSt, cursor: 'pointer', color: showHolds ? '#ef4444' : sub, borderColor: showHolds ? '#ef4444' : undefined }}>
-            {showHolds ? '✕ Hide holds' : '⊕ Show holds'}
-          </button>
+          {/* Subcontractors cannot see hold details */}
+          {!isSubcontractor && (
+            <button onClick={() => setShowHolds(v => !v)}
+              style={{ ...inputSt, cursor: 'pointer', color: showHolds ? '#ef4444' : sub, borderColor: showHolds ? '#ef4444' : undefined }}>
+              {showHolds ? '✕ Hide holds' : '⊕ Show holds'}
+            </button>
+          )}
           <div style={{ display: 'flex', gap: 0, border: bd, borderRadius: 6, overflow: 'hidden' }}>
             {(['Warehouse','WBS','Item'] as const).map(g => {
               const val = g.toLowerCase() as GroupBy
@@ -162,7 +179,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                     <tr style={{ borderBottom: bd }}>
-                      {['LOCATION','ITEM/TAG','DESCRIPTION','WBS','QTY','UOM','CONDITION','VENDOR','HOLD',''].map(h => (
+                      {(isSubcontractor ? ['ITEM/TAG','DESCRIPTION','WBS','QTY','UOM','CONDITION','VENDOR'] : ['LOCATION','ITEM/TAG','DESCRIPTION','WBS','QTY','UOM','CONDITION','VENDOR','HOLD','']).map(h => (
                         <th key={h} style={{ padding: '7px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
                       ))}
                     </tr>
@@ -172,7 +189,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                       const cond = condPill(item.condition_status)
                       return (
                         <tr key={item.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
-                          <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{item.location_code || '—'}</td>
+                          {!isSubcontractor && <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{item.location_code || '—'}</td>}
                           <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600 }}>{item.item_code}</td>
                           <td style={{ padding: '8px 12px', color: col, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.description}>{item.description}</td>
                           <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{item.wbs_code || '—'}</td>
@@ -185,14 +202,17 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                           <td style={{ padding: '8px 12px' }}>
                             {item.trace_hold ? <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: 'rgba(239,68,68,0.1)', color: '#ef4444', fontWeight: 600 }}>hold</span> : <span style={{ color: sub }}>—</span>}
                           </td>
-                          <td style={{ padding: '8px 12px' }}>
-                            <div style={{ display: 'flex', gap: 6 }}>
-                              <button onClick={() => setDocsItem(item)}
-                                style={{ padding: '4px 10px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>📎 Docs</button>
-                              <button onClick={() => setMoveItem(item)}
-                                style={{ padding: '4px 10px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>→ Move</button>
-                            </div>
-                          </td>
+                          {/* Subcontractors: no Docs or Move buttons */}
+                          {!isSubcontractor && (
+                            <td style={{ padding: '8px 12px' }}>
+                              <div style={{ display: 'flex', gap: 6 }}>
+                                <button onClick={() => setDocsItem(item)}
+                                  style={{ padding: '4px 10px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>📎 Docs</button>
+                                <button onClick={() => setMoveItem(item)}
+                                  style={{ padding: '4px 10px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>→ Move</button>
+                              </div>
+                            </td>
+                          )}
                         </tr>
                       )
                     })}

@@ -333,7 +333,7 @@ const Nav = ({
             Only shown when a project is selected. Three sub-items:
             WBS · Commodity Library · Equipment List.
             Routes are not yet built — items shown as stubs with visual hierarchy. */}
-        {selectedProjectId && (
+        {selectedProjectId && userRole !== 'subcontractor' && userRole !== 'freight_forwarder' && (
           <div style={{ marginBottom: 1 }}>
             {/* ── Parent toggle button ─────────────────────────────────────── */}
             <div
@@ -391,51 +391,65 @@ const Nav = ({
           </div>
         )}
 
-        {navItem('MTO Register', '📋', 'mto-list')}
-        {/* ─── PROCUREMENT — project-scoped module ───────────── */}
-        {navItem('Procurement', '🧾', 'procurement')}
-        {/* ─── EXPEDITING — VDRL now lives inside Expediting ────
-            Compound badge: red = overdue milestones, amber = overdue
-            vendor docs. Shown as two stacked badges when both non-zero. */}
-        <div
-          key="expediting"
-          onClick={() => onNavigate('expediting')}
-          title={collapsed ? 'Expediting' : undefined}
-          style={{
-            display: 'flex', alignItems: 'center', gap: collapsed ? 0 : 9,
-            padding: collapsed ? '6px 0' : '6px 8px',
-            justifyContent: collapsed ? 'center' : 'flex-start',
-            borderRadius: 6, fontSize: 13, marginBottom: 1, userSelect: 'none',
-            cursor: 'pointer', transition: 'all 150ms ease',
-            background: activePage === 'expediting' ? 'rgba(232,78,15,0.12)' : 'transparent',
-            border: `1px solid ${activePage === 'expediting' ? 'rgba(232,78,15,0.28)' : 'transparent'}`,
-            color: activePage === 'expediting' ? '#E84E0F' : '#94a3b8',
-          }}
-          onMouseEnter={e => { if (activePage !== 'expediting') { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = '#e2e8f0' } }}
-          onMouseLeave={e => { if (activePage !== 'expediting') { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#94a3b8' } }}>
-          <span style={{ width: collapsed ? 20 : 15, textAlign: 'center', fontSize: collapsed ? 16 : 12, opacity: 0.65, flexShrink: 0 }}>🚨</span>
-          {!collapsed && <span style={{ flex: 1 }}>Expediting</span>}
-          {!collapsed && (
-            <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
-              <span style={{ background: '#ef4444', color: '#fff', fontSize: 10, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', padding: '1px 5px', borderRadius: 9999, minWidth: 18, textAlign: 'center' }}>8</span>
-              <span style={{ background: '#f59e0b', color: '#fff', fontSize: 10, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', padding: '1px 5px', borderRadius: 9999, minWidth: 18, textAlign: 'center' }}>3</span>
+        {/* ─── ROLE-BASED NAV ────────────────────────────────────
+            Subcontractor: only Material Control (Stock + FMR)
+            Freight Forwarder: only Logistics
+            QCO team: full nav */}
+        {userRole !== 'subcontractor' && userRole !== 'freight_forwarder' && <>
+          {navItem('MTO Register', '📋', 'mto-list')}
+          {navItem('Procurement', '🧾', 'procurement')}
+          <div
+            key="expediting"
+            onClick={() => onNavigate('expediting')}
+            title={collapsed ? 'Expediting' : undefined}
+            style={{
+              display: 'flex', alignItems: 'center', gap: collapsed ? 0 : 9,
+              padding: collapsed ? '6px 0' : '6px 8px',
+              justifyContent: collapsed ? 'center' : 'flex-start',
+              borderRadius: 6, fontSize: 13, marginBottom: 1, userSelect: 'none',
+              cursor: 'pointer', transition: 'all 150ms ease',
+              background: activePage === 'expediting' ? 'rgba(232,78,15,0.12)' : 'transparent',
+              border: `1px solid ${activePage === 'expediting' ? 'rgba(232,78,15,0.28)' : 'transparent'}`,
+              color: activePage === 'expediting' ? '#E84E0F' : '#94a3b8',
+            }}
+            onMouseEnter={e => { if (activePage !== 'expediting') { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = '#e2e8f0' } }}
+            onMouseLeave={e => { if (activePage !== 'expediting') { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#94a3b8' } }}>
+            <span style={{ width: collapsed ? 20 : 15, textAlign: 'center', fontSize: collapsed ? 16 : 12, opacity: 0.65, flexShrink: 0 }}>🚨</span>
+            {!collapsed && <span style={{ flex: 1 }}>Expediting</span>}
+            {!collapsed && (
+              <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+                <span style={{ background: '#ef4444', color: '#fff', fontSize: 10, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', padding: '1px 5px', borderRadius: 9999, minWidth: 18, textAlign: 'center' }}>8</span>
+                <span style={{ background: '#f59e0b', color: '#fff', fontSize: 10, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', padding: '1px 5px', borderRadius: 9999, minWidth: 18, textAlign: 'center' }}>3</span>
+              </div>
+            )}
+          </div>
+        </>}
+
+        {/* Logistics — visible to all except subcontractor */}
+        {userRole !== 'subcontractor' && navItem('Logistics', '🚚', 'logistics')}
+
+        {/* Material Control — subcontractor sees only Stock + FMR; others see all */}
+        {userRole !== 'freight_forwarder' && <>
+          {navItem('Material Control', '📦', 'mc-receipting')}
+          {selectedProjectId && ['mc-receipting','mc-stock','mc-fmr','mc-transfers'].includes(activePage) && (
+            <div style={{ paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {(userRole === 'subcontractor'
+                ? [['Stock Register','mc-stock'],['FMR Register','mc-fmr']]
+                : [['Receipting','mc-receipting'],['Stock Register','mc-stock'],['FMR Register','mc-fmr'],['Transfers','mc-transfers']]
+              ).map(([label, pg]) => (
+                <button key={pg} onClick={() => onNavigate(pg as Page)}
+                  style={{ padding: '5px 12px', textAlign: 'left', background: activePage === pg ? 'rgba(232,78,15,0.12)' : 'transparent', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, color: activePage === pg ? '#E84E0F' : '#94a3b8', fontFamily: 'inherit' }}>
+                  {label}
+                </button>
+              ))}
             </div>
           )}
-        </div>
-        {navItem('Logistics', '🚚', 'logistics')}
-        {navItem('Material Control', '📦', 'mc-receipting')}
-        {selectedProjectId && ['mc-receipting','mc-stock','mc-fmr','mc-transfers'].includes(activePage) && (
-          <div style={{ paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 1 }}>
-            {[['Receipting','mc-receipting'],['Stock Register','mc-stock'],['FMR Register','mc-fmr'],['Transfers','mc-transfers']].map(([label, pg]) => (
-              <button key={pg} onClick={() => onNavigate(pg as Page)}
-                style={{ padding: '5px 12px', textAlign: 'left', background: activePage === pg ? 'rgba(232,78,15,0.12)' : 'transparent', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, color: activePage === pg ? '#E84E0F' : '#94a3b8', fontFamily: 'inherit' }}>
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
-        {navItem('Traceability', '🔗')}
-        {navItem('Document Inbox', '📥')}
+        </>}
+
+        {userRole !== 'subcontractor' && userRole !== 'freight_forwarder' && <>
+          {navItem('Traceability', '🔗')}
+          {navItem('Document Inbox', '📥')}
+        </>}
         {navItem('Audit', '🔍')}
       </div>
 
