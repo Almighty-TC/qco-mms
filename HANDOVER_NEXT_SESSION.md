@@ -199,6 +199,24 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
   normal flow. Root cause: React state not refreshed before modal uses `scn.display_status` for
   transition validation. Fix: call `refreshDetail()` before opening StatusUpdateModal.
 
+- **🟡 MTO REV DIFF — logic problem (logged 02 Jun, NOT yet diagnosed; MEDIUM).** Reported by Thomas
+  via screenshots; no investigation done beyond the observation. Revisit AFTER the A3 WBS delete work.
+  - **Observed on MTO-PIL-001 (Mechanical & Piping), Rev Diff tab:** A→B = 7 Modified / 8 Unchanged;
+    A→C = 7 Modified / 8 Unchanged (**identical to A→B**); B→C = 0 Modified / 15 Unchanged ("all 15 identical").
+  - **The contradiction:** if B→C shows zero changes, B and C are identical — which makes A→B == A→C
+    consistent, BUT then why was Rev C allowed to upload at all (a no-op revision)? If B and C are
+    NOT actually identical, then B→C is wrong (falsely "all identical") and A→B == A→C is suspicious
+    (diff may compare the wrong revs / mis-key lines). Either way the revision/diff logic has a problem:
+    (a) upload allowed a content-identical no-op revision (upload-guard gap; diff may be correct), or
+    (b) the diff computation is broken (wrong revs compared / changes missed).
+  - **When revisited — diagnose first (no build):** (1) raw-compare stored line items for Rev A/B/C of
+    MTO-PIL-001 — are B and C genuinely byte-identical or do they differ? (2) upload flow — is there any
+    guard against uploading a revision whose CONTENT is identical to the previous (manual mentions a
+    duplicate-revision-LETTER 409 guard, but content-identical?)? (3) Rev Diff logic — does it compare
+    the correct two revisions' line sets, or could it compare the wrong rev / mis-key lines so changes
+    are missed/mis-attributed? Verify A→B, A→C, B→C each compute against the right data. (4) Root cause →
+    (a) no-op revision wrongly allowed, (b) diff logic broken, or (c) other → propose fix.
+
 ---
 
 ## 6. NEXT SESSION PRIORITIES (in order)
