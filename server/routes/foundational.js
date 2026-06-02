@@ -25,13 +25,21 @@ const certStorage = multer.diskStorage({
 const uploadCert = multer({ storage: certStorage, limits: { fileSize: 25 * 1024 * 1024 } })
 
 // ─── HELPER: audit ───────────────────────────────────────────────────────────
+// Writes an audit_log row. Fire-and-forget (NOT awaited) so an audit failure can
+// never 500 a real user action — but failures are logged, never swallowed silently.
+// `entity` is a "type/id" string (e.g. "wbs_nodes/123"): split into entity_type/
+// entity_id for structured filtering. `resource` (NOT NULL) is the request path
+// (query string stripped), matching the path-only convention of existing rows.
 function audit(req, action, entity, before, after) {
+  // path-only, no /api mount prefix — matches the existing audit_log convention
+  const resource = (req.originalUrl || req.url || '').split('?')[0].replace(/^\/api(?=\/)/, '')
   db.query(
-    `INSERT INTO audit_log (user_id, action, entity_type, entity_id, before_state, after_state, ip_address)
-     VALUES (?,?,?,?,?,?,?)`,
+    `INSERT INTO audit_log (user_id, action, entity_type, entity_id, before_value, after_value, resource, ip)
+     VALUES (?,?,?,?,?,?,?,?)`,
     [req.user.id, action, entity.split('/')[0], entity.split('/')[1] || null,
-     JSON.stringify(before), JSON.stringify(after), req.ip]
-  ).catch(() => {})
+     JSON.stringify(before), JSON.stringify(after),
+     resource, req.ip]
+  ).catch(e => console.error('[audit] insert failed:', e.message))
 }
 
 // ═══════════════════════════════════════════════════════════════
