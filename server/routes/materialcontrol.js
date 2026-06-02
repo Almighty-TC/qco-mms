@@ -892,28 +892,65 @@ router.get('/:projectId/transfers', rejectExternal, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// GET selectable transfer SOURCE holdings — clean good stock only.
+// Quarantine + trace_hold are excluded from the picker (they route through the
+// approval path, not free selection).
+router.get('/:projectId/transfers/stock-options', rejectExternal, async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const { warehouse_id } = req.query
+    const conds = ['s.project_id = ?', 's.qty_available > 0', "s.condition_status = 'good'", 's.trace_hold = 0']
+    const params = [pid]
+    if (warehouse_id) { conds.push('s.warehouse_id = ?'); params.push(Number(warehouse_id)) }
+    const [rows] = await db.query(
+      `SELECT s.id, s.item_code, s.description, s.location_code, s.qty_available, s.uom, s.wbs_code,
+              s.condition_status, s.warehouse_id, w.name AS warehouse_name, w.code AS warehouse_code
+       FROM warehouse_stock s LEFT JOIN warehouses w ON w.id = s.warehouse_id
+       WHERE ${conds.join(' AND ')} ORDER BY s.item_code, s.location_code`, params)
+    res.json({ data: rows })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// POST create — STOCK-LINKED. Source is a real warehouse_stock holding (stock_id);
+// item/uom/wbs/from-location are derived from it. The actual stock MOVE fires later
+// at completion (not now). Quarantine/trace_hold source → pending_approval.
 router.post('/:projectId/transfers', rejectExternal, async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
-    const { item_code, description, wbs_code, qty, uom, from_warehouse_id, from_location, to_warehouse_id, to_location, requested_by_name, requested_by_company, est_pickup_date, notes } = req.body
+    const { stock_id, qty, to_warehouse_id, to_location, requested_by_name, requested_by_company, est_pickup_date, notes } = req.body
     const userId = req.user?.id || 1
 
-    if (!from_warehouse_id) return res.status(400).json({ error: 'Source warehouse is required' })
-    if (!to_warehouse_id) return res.status(400).json({ error: 'Destination warehouse is required' })
-    if (!description?.trim()) return res.status(400).json({ error: 'Description is required' })
-    if (!qty || qty <= 0) return res.status(400).json({ error: 'Quantity must be greater than 0' })
+    if (!stock_id) return res.status(422).json({ error: 'A source stock holding is required' })
+    if (!to_warehouse_id) return res.status(422).json({ error: 'Destination warehouse is required' })
+    const moveQty = Number(qty)
+    if (!(moveQty > 0)) return res.status(422).json({ error: 'Quantity must be greater than 0' })
+
+    const [[src]] = await db.query('SELECT * FROM warehouse_stock WHERE id=? AND project_id=?', [stock_id, pid])
+    if (!src) return res.status(404).json({ error: 'Source stock holding not found' })
+    // Clean stock moves against qty_available; quarantine (qty_available=0 by design)
+    // moves against its physical qty — and stays non-issuable at the destination.
+    const movable = src.condition_status === 'quarantine' ? Number(src.qty) : Number(src.qty_available)
+    if (moveQty > movable) return res.status(422).json({ error: `Quantity exceeds available (${movable} ${src.uom})` })
+    const [[dw]] = await db.query('SELECT id FROM warehouses WHERE id=?', [to_warehouse_id])
+    if (!dw) return res.status(422).json({ error: 'Destination warehouse not found' })
+
+    // Quarantine / trace-hold stock requires MC approval; clean good stock is frictionless.
+    const needsApproval = src.condition_status === 'quarantine' || src.trace_hold === 1
+    const status = needsApproval ? 'pending_approval' : 'requested'
 
     const year = new Date().getFullYear()
     const [[{ maxId }]] = await db.query("SELECT COALESCE(MAX(id),0) AS maxId FROM warehouse_transfers WHERE project_id=?", [pid])
     const ref = `TRF-${year}-${String((maxId || 0) + 1).padStart(4,'0')}`
 
     const [result] = await db.query(
-      `INSERT INTO warehouse_transfers (project_id,transfer_ref,item_code,description,wbs_code,qty,uom,from_warehouse_id,from_location,to_warehouse_id,to_location,requested_by_name,requested_by_company,status,est_pickup_date,notes)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'requested',?,?)`,
-      [pid, ref, item_code||null, description.trim(), wbs_code||null, qty, uom||'EA',
-       from_warehouse_id, from_location||null, to_warehouse_id, to_location||null,
-       requested_by_name||null, requested_by_company||null, est_pickup_date||null, notes||null]
-    )
+      `INSERT INTO warehouse_transfers (project_id,transfer_ref,stock_id,item_code,description,wbs_code,qty,uom,from_warehouse_id,from_location,to_warehouse_id,to_location,requested_by_name,requested_by_company,requested_by_user,status,est_pickup_date,notes)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [pid, ref, src.id, src.item_code, src.description, src.wbs_code, moveQty, src.uom,
+       src.warehouse_id, src.location_code, to_warehouse_id, to_location || null,
+       requested_by_name || null, requested_by_company || null, userId, status, est_pickup_date || null, notes || null])
+    await writeAudit(userId, 'transfer_create', 'warehouse_transfer', result.insertId, null,
+      { transfer_ref: ref, stock_id: src.id, qty: moveQty, status }, `/mc/${pid}/transfers`)
+
     const [[tr]] = await db.query('SELECT t.*, fw.name AS from_warehouse_name, tw.name AS to_warehouse_name FROM warehouse_transfers t LEFT JOIN warehouses fw ON t.from_warehouse_id=fw.id LEFT JOIN warehouses tw ON t.to_warehouse_id=tw.id WHERE t.id=?', [result.insertId])
     res.status(201).json(tr)
   } catch (e) {
@@ -922,9 +959,12 @@ router.post('/:projectId/transfers', rejectExternal, async (req, res) => {
   }
 })
 
-// PUT /api/mc/:projectId/transfers/:transferId/status — advance status
-router.put('/:projectId/transfers/:transferId/status', async (req, res) => {
+// PUT /api/mc/:projectId/transfers/:transferId/status — advance status.
+// GATE: a 'pending_approval' transfer cannot be advanced here (must be approved
+// first via /approve). The atomic stock MOVE fires once, on first completion.
+router.put('/:projectId/transfers/:transferId/status', rejectExternal, async (req, res) => {
   try {
+    const pid = Number(req.params.projectId)
     const { transferId } = req.params
     const { status } = req.body
     const userId = req.user?.id || 1
@@ -932,18 +972,85 @@ router.put('/:projectId/transfers/:transferId/status', async (req, res) => {
     const VALID_STATUSES = ['requested','in_transit','picked_up','delivered','complete']
     if (!VALID_STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status' })
 
-    const [[tr]] = await db.query('SELECT * FROM warehouse_transfers WHERE id=?', [transferId])
+    const [[tr]] = await db.query('SELECT * FROM warehouse_transfers WHERE id=? AND project_id=?', [transferId, pid])
     if (!tr) return res.status(404).json({ error: 'Transfer not found' })
+
+    // Both halves of the real gate:
+    if (tr.status === 'pending_approval') return res.status(403).json({ error: 'Transfer is pending approval — it must be approved before it can proceed' })
+    if (tr.status === 'rejected')         return res.status(422).json({ error: 'Transfer was rejected and cannot be advanced' })
+
+    const doneStates = ['delivered','complete']
+    const firstCompletion = doneStates.includes(status) && !doneStates.includes(tr.status)
+
+    // ── Atomic stock MOVE on first completion (stock-linked transfers only) ──
+    // Split-holding: decrement source qty + qty_available; create a NEW DISTINCT
+    // destination holding carrying identity + condition (never pooled). Conserves totals.
+    if (firstCompletion && tr.stock_id) {
+      const conn = await db.getConnection()
+      try {
+        await conn.beginTransaction()
+        const [[src]] = await conn.query('SELECT * FROM warehouse_stock WHERE id=? FOR UPDATE', [tr.stock_id])
+        if (!src) throw new Error('source holding no longer exists')
+        const isQuar = src.condition_status === 'quarantine'
+        const srcMovable = isQuar ? Number(src.qty) : Number(src.qty_available)
+        if (Number(tr.qty) > srcMovable) throw new Error(`source no longer has ${tr.qty} available`)
+        // Decrement source: qty always; qty_available too unless quarantine (already 0, non-issuable).
+        const newQty   = Number(src.qty) - Number(tr.qty)
+        const newAvail = isQuar ? 0 : Number(src.qty_available) - Number(tr.qty)
+        if (newQty <= 0) await conn.query('DELETE FROM warehouse_stock WHERE id=?', [src.id])           // whole-holding move → row removed
+        else await conn.query('UPDATE warehouse_stock SET qty=?, qty_available=? WHERE id=?', [newQty, newAvail, src.id])
+        // Destination: distinct holding; quarantine stays non-issuable (qty_available 0).
+        const destAvail = isQuar ? 0 : Number(tr.qty)
+        await conn.query(
+          `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,commodity_id,equipment_tag,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,received_date,received_by,notes)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [pid, tr.to_warehouse_id, src.scn_id, src.po_line_id, src.commodity_id, src.equipment_tag,
+           src.item_code, src.description, src.wbs_code, Number(tr.qty), destAvail, src.uom,
+           tr.to_location || src.location_code, src.condition_status, src.trace_hold, src.vendor_name,
+           src.received_date, userId, `Transferred via ${tr.transfer_ref} from ${src.location_code || '—'}`])
+        await conn.commit()
+      } catch (mErr) { await conn.rollback(); conn.release(); return res.status(422).json({ error: 'Stock move failed: ' + mErr.message }) }
+      conn.release()
+    }
 
     const dateField = status === 'picked_up' ? ', actual_pickup_date=CURDATE()' : status === 'delivered' ? ', delivered_date=CURDATE()' : ''
     await db.query(`UPDATE warehouse_transfers SET status=? ${dateField} WHERE id=?`, [status, transferId])
     await writeAudit(userId, 'transfer_status', 'warehouse_transfer', transferId,
-      { status: tr.status }, { status },
-      `/mc/${req.params.projectId}/transfers/${transferId}/status`)
+      { status: tr.status }, { status, stock_moved: firstCompletion && !!tr.stock_id },
+      `/mc/${pid}/transfers/${transferId}/status`)
 
     const [[updated]] = await db.query('SELECT t.*, fw.name AS from_warehouse_name, tw.name AS to_warehouse_name FROM warehouse_transfers t LEFT JOIN warehouses fw ON t.from_warehouse_id=fw.id LEFT JOIN warehouses tw ON t.to_warehouse_id=tw.id WHERE t.id=?', [transferId])
     res.json({ success: true, transfer: updated })
   } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// POST /api/mc/:projectId/transfers/:transferId/approve — role-guarded (FMR pattern).
+// Approve → re-enters the normal lifecycle as 'requested' (no 'approved' enum state;
+// approval recorded via approved_by/at). Reject → terminal 'rejected' (never moves stock).
+router.post('/:projectId/transfers/:transferId/approve', async (req, res) => {
+  if (!APPROVAL_ALLOWED.has(req.user?.role)) return res.status(403).json({ error: 'Only Materials Controllers and Managers can approve transfers' })
+  try {
+    const pid = Number(req.params.projectId)
+    const { transferId } = req.params
+    const { decision, reason } = req.body || {}
+    const userId = req.user?.id || 1
+    if (!['approve','reject'].includes(decision)) return res.status(422).json({ error: "decision must be 'approve' or 'reject'" })
+
+    const [[tr]] = await db.query('SELECT * FROM warehouse_transfers WHERE id=? AND project_id=?', [transferId, pid])
+    if (!tr) return res.status(404).json({ error: 'Transfer not found' })
+    if (tr.status !== 'pending_approval') return res.status(422).json({ error: 'Only transfers pending approval can be approved or rejected' })
+    if (decision === 'reject' && (!reason || !reason.trim())) return res.status(422).json({ error: 'A reason is required to reject' })
+
+    const newStatus = decision === 'approve' ? 'requested' : 'rejected'
+    await db.query('UPDATE warehouse_transfers SET status=?, approved_by=?, approved_at=NOW(), approval_reason=? WHERE id=?',
+      [newStatus, userId, reason ? reason.trim() : null, transferId])
+    await writeAudit(userId, decision === 'approve' ? 'transfer_approved' : 'transfer_rejected', 'warehouse_transfer', transferId,
+      { status: 'pending_approval' }, { status: newStatus, reason: reason ? reason.trim() : null },
+      `/mc/${pid}/transfers/${transferId}/approve`)
+
+    const [[updated]] = await db.query('SELECT t.*, fw.name AS from_warehouse_name, tw.name AS to_warehouse_name FROM warehouse_transfers t LEFT JOIN warehouses fw ON t.from_warehouse_id=fw.id LEFT JOIN warehouses tw ON t.to_warehouse_id=tw.id WHERE t.id=?', [transferId])
+    res.json({ success: true, transfer: updated })
+  } catch (e) { console.error('[mc:transfer-approve]', e.message); res.status(500).json({ error: e.message }) }
 })
 
 // GET /api/mc/:projectId/warehouses — list available warehouses
