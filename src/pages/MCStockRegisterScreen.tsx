@@ -16,10 +16,10 @@ import { useAutoTitle } from '../hooks/useAutoTitle'
 // line up. A matching minWidth on the table means columns never collapse on a
 // narrow window (the wrapper scrolls horizontally instead). Two sets: the
 // standard 10-col layout and the subcontractor 7-col variant.
-const STOCK_COLS      = ['80px','90px','240px','90px','70px','55px','110px','130px','60px','150px'] // LOCATION,ITEM,DESC,WBS,QTY,UOM,COND,VENDOR,HOLD,actions
-const STOCK_COLS_SUB  = ['110px','300px','100px','80px','60px','120px','150px']                       // ITEM,DESC,WBS,QTY,UOM,COND,VENDOR
-const STOCK_MINW      = 1075 // Σ STOCK_COLS
-const STOCK_MINW_SUB  = 920  // Σ STOCK_COLS_SUB
+const STOCK_COLS      = ['80px','90px','210px','90px','90px','70px','55px','110px','130px','60px','150px'] // LOCATION,ITEM,DESC,HEAT,WBS,QTY,UOM,COND,VENDOR,HOLD,actions
+const STOCK_COLS_SUB  = ['110px','280px','90px','100px','80px','60px','120px','150px']                       // ITEM,DESC,HEAT,WBS,QTY,UOM,COND,VENDOR
+const STOCK_MINW      = 1135 // Σ STOCK_COLS
+const STOCK_MINW_SUB  = 990  // Σ STOCK_COLS_SUB
 const ellipsisCell: React.CSSProperties = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
 
 const API = 'http://localhost:3001/api'
@@ -30,6 +30,7 @@ interface StockItem {
   id: number; item_code: string; description: string; wbs_code?: string | null
   qty: number; qty_available: number; uom: string; location_code?: string | null
   condition_status: string; trace_hold: number; vendor_name?: string | null
+  heat_number?: string | null
   warehouse_id: number; warehouse_name: string; warehouse_code: string
 }
 
@@ -201,7 +202,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                   </colgroup>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                     <tr style={{ borderBottom: bd }}>
-                      {(isSubcontractor ? ['ITEM/TAG','DESCRIPTION','WBS','QTY','UOM','CONDITION','VENDOR'] : ['LOCATION','ITEM/TAG','DESCRIPTION','WBS','QTY','UOM','CONDITION','VENDOR','HOLD','']).map(h => (
+                      {(isSubcontractor ? ['ITEM/TAG','DESCRIPTION','HEAT','WBS','QTY','UOM','CONDITION','VENDOR'] : ['LOCATION','ITEM/TAG','DESCRIPTION','HEAT','WBS','QTY','UOM','CONDITION','VENDOR','HOLD','']).map(h => (
                         <th key={h} style={{ padding: '7px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
                       ))}
                     </tr>
@@ -214,6 +215,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                           {!isSubcontractor && <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, ...ellipsisCell }}>{item.location_code || '—'}</td>}
                           <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600, ...ellipsisCell }}>{item.item_code}</td>
                           <td style={{ padding: '8px 12px', color: col, ...ellipsisCell }} title={item.description}>{item.description}</td>
+                          <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: item.heat_number ? col : sub, ...ellipsisCell }}>{item.heat_number || '—'}</td>
                           <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, ...ellipsisCell }}>{item.wbs_code || '—'}</td>
                           <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col, fontWeight: 600, ...ellipsisCell }}>{Number(item.qty).toLocaleString()}</td>
                           <td style={{ padding: '8px 12px', color: sub, ...ellipsisCell }}>{item.uom}</td>
@@ -382,8 +384,11 @@ const StockTakeModal = ({ dark, stock, onClose }: { dark: boolean; stock: StockI
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
-      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 28, width: maximized ? '96vw' : 700, maxWidth: maximized ? '96vw' : '95vw', height: maximized ? '92vh' : undefined, maxHeight: maximized ? '92vh' : '85vh', overflow: 'auto', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+      {/* Flex column: header + KPI + footer are pinned (flexShrink 0); only the
+          table area scrolls (both axes). The modal itself never scrolls, so the
+          footer button can't be pushed off-screen in either state. */}
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 28, width: maximized ? '96vw' : 700, maxWidth: maximized ? '96vw' : '95vw', height: maximized ? '92vh' : undefined, maxHeight: maximized ? '92vh' : '85vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexShrink: 0 }}>
           <div>
             <div style={{ fontSize: 15, fontWeight: 700, color: col }}>📋 Stock take · Physical count</div>
             <div style={{ fontSize: 12, color: sub, marginTop: 2 }}>Cycle count or full count — variances generate adjustment proposals</div>
@@ -396,7 +401,7 @@ const StockTakeModal = ({ dark, stock, onClose }: { dark: boolean; stock: StockI
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 16, flexShrink: 0 }}>
           {[
             ['SCOPE',    `${stock.length} lines`],
             ['COUNTED',  `${countedN} / ${stock.length}`],
@@ -410,11 +415,11 @@ const StockTakeModal = ({ dark, stock, onClose }: { dark: boolean; stock: StockI
           ))}
         </div>
 
-        <div ref={takeRef} style={{ overflowY: 'auto', maxHeight: maximized ? 'calc(92vh - 260px)' : 340 }}>
+        <div ref={takeRef} style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', overflowX: 'auto', maxHeight: maximized ? undefined : 340 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
-                {['GRID','ITEM','DESCRIPTION','UOM','SYSTEM','COUNTED','VARIANCE','NOTE'].map(h => (
+                {['GRID','ITEM','DESCRIPTION','HEAT','UOM','SYSTEM','COUNTED','VARIANCE','NOTE'].map(h => (
                   <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
                 ))}
               </tr>
@@ -428,6 +433,7 @@ const StockTakeModal = ({ dark, stock, onClose }: { dark: boolean; stock: StockI
                     <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{item.location_code}</td>
                     <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb' }}>{item.item_code}</td>
                     <td style={{ padding: '7px 10px', color: col, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.description}</td>
+                    <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: item.heat_number ? col : sub }}>{item.heat_number || '—'}</td>
                     <td style={{ padding: '7px 10px', color: sub }}>{item.uom}</td>
                     <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col }}>{item.qty}</td>
                     <td style={{ padding: '7px 10px' }}>
@@ -446,7 +452,7 @@ const StockTakeModal = ({ dark, stock, onClose }: { dark: boolean; stock: StockI
           </table>
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16, flexShrink: 0 }}>
           <button onClick={onClose}
             style={{ padding: '8px 20px', borderRadius: 6, border: 'none', background: countedN > 0 ? '#2563eb' : '#94a3b8', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
             Review summary →
