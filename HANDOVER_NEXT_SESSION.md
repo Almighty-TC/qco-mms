@@ -217,6 +217,19 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
     are missed/mis-attributed? Verify A→B, A→C, B→C each compute against the right data. (4) Root cause →
     (a) no-op revision wrongly allowed, (b) diff logic broken, or (c) other → propose fix.
 
+- **🔴 GLOBAL `audit()` HELPER BROKEN (HIGH — silent; logged 02 Jun, discovered during A3 Phase 1).**
+  The shared `audit()` helper (in `server/routes/foundational.js`, reused widely) writes **wrong column
+  names** — `before_state`/`after_state`/`ip_address` vs the real `audit_log` columns
+  `before_value`/`after_value`/`ip` — **omits the NOT NULL `resource` column**, and its `.catch(()=>{})`
+  **swallows the failure**. Net effect: `audit_log` has **silently recorded NOTHING** for every route
+  using the helper (`wbs_created`/`wbs_updated` and likely all others). The user manual advertises an
+  **immutable audit trail** — it has been a **no-op**.
+  - **Partial mitigation already shipped:** the hardened WBS delete (commit `5ea7abd`, A3 Phase 1) writes
+    a **correct** audit row to the real schema inside its transaction. **All other `audit()` calls remain broken.**
+  - **FIX (separate item, not yet done):** correct the helper's column names, add `resource`, and **remove
+    the silent `.catch`** so failures surface; then spot-check a few routes to confirm rows now write.
+    Consider backfilling/expectations — past actions were never logged and cannot be recovered.
+
 ---
 
 ## 6. NEXT SESSION PRIORITIES (in order)
