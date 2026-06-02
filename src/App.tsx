@@ -23,6 +23,7 @@ import { MCFMRScreen } from './pages/MCFMRScreen'
 import { MCTransferScreen } from './pages/MCTransferScreen'
 import { TraceabilityScreen } from './pages/TraceabilityScreen'
 import { DocumentsScreen } from './pages/DocumentsScreen'
+import { ConfirmerQueueScreen } from './pages/ConfirmerQueueScreen'
 import { ForcePasswordChange } from './components/ForcePasswordChange'
 import { ChangePasswordModal } from './components/ChangePasswordModal'
 import './App.css'
@@ -32,7 +33,7 @@ import './App.css'
 // 'admin' enforces role === 'admin'; 'procurement' is project-scoped.
 // ─── ROUTING — state-based, no router library ─────────────────────────────────
 // 'po-detail' is Phase 3 PO Detail Screen — full dedicated screen.
-type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers' | 'traceability' | 'documents'
+type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers' | 'traceability' | 'documents' | 'pending-changes'
 
 // ─── DEEP-LINK PARSING ───────────────────────────────────────
 // Maps a URL path segment (/project/:id/<segment>) to an internal Page,
@@ -480,6 +481,8 @@ const Nav = ({
           {navItem('Traceability', '🔗', 'traceability')}
           {navItem('Document Inbox', '📥', 'documents')}
         </>}
+        {/* C-c confirmer queue — visible to roles that may confirm pending changes */}
+        {['admin', 'project_controls_manager', 'engineering_lead', 'project_manager'].includes(userRole) && navItem('Pending Changes', '✔', 'pending-changes')}
         {navItem('Audit', '🔍')}
       </div>
 
@@ -1285,6 +1288,13 @@ function App() {
               Project-wide aggregated, read-only document register. */}
           {page === 'documents' && selectedProjectId && (
             <DocumentsScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
+              onBack={() => setPage('dashboard')} />
+          )}
+
+          {/* ─── PENDING CHANGES (C-c confirmer queue) ────────────
+              Approval queue for staged foundational/MTO create+delete. */}
+          {page === 'pending-changes' && selectedProjectId && (
+            <ConfirmerQueueScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
               onBack={() => setPage('dashboard')} />
           )}
 
