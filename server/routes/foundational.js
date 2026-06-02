@@ -10,6 +10,7 @@ const fs      = require('fs')
 const XLSX    = require('xlsx')
 
 router.use(authenticateToken)
+router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
 
 // Multer for certificate uploads
 const certStorage = multer.diskStorage({

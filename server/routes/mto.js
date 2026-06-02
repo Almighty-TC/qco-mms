@@ -13,6 +13,7 @@ const XLSX    = require('xlsx')
 
 // ─── AUTH MIDDLEWARE ──────────────────────────────────────────────────────────
 router.use(authenticateToken)
+router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
 
 // ─── FILE UPLOAD CONFIG ───────────────────────────────────────────────────────
 // New-revision files accepted in memory buffer — parsed then discarded.

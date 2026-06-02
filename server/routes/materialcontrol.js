@@ -7,6 +7,7 @@ const db      = require('../db')
 const { authenticateToken } = require('../middleware/auth')
 
 router.use(authenticateToken)
+router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
 
 // ─── QUARANTINE LOCATION (Phase 3) ────────────────────────────
 // Damaged stock is held at this designated location_code (a "place"),

@@ -11,6 +11,7 @@ const db      = require('../db')
 const { authenticateToken } = require('../middleware/auth')
 
 router.use(authenticateToken)
+router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
 
 // ─── UPLOAD STORAGE ───────────────────────────────────────────
 // Cert files land in uploads/traceability. 25 MB cap matches the

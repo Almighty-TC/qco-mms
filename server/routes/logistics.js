@@ -11,6 +11,7 @@ const path    = require('path')
 const fs      = require('fs')
 
 router.use(authenticateToken)
+router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
 
 // ─── ROLE HELPERS ─────────────────────────────────────────────
 // Freight forwarder can update status/dates on their SCNs, nothing else.

@@ -6,6 +6,7 @@
 // Auditability: every mutating action writes to audit_log with before/after.
 const express = require('express')
 const router  = express.Router()
+router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes (auth applied at mount)
 const db      = require('../db')       // connection pool — never createConnection
 const path    = require('path')
 const fs      = require('fs')

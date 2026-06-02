@@ -87,6 +87,26 @@ function requirePermission(module, action = 'can_view') {
   }
 }
 
+// ─── DENY READ-ONLY ROLES (C-a interim floor) ────────────────
+// Blanket floor: roles that may NEVER perform operational writes are blocked
+// on every write method (POST/PUT/PATCH/DELETE). Closes the demonstrated gap
+// (a viewer/auditor token creating records) immediately, independent of the
+// per-module matrix, with zero over-block risk for operational roles.
+//
+// SCOPE: `viewer` and `auditor` only. `subcontractor` / `site_contractor` are
+// deliberately NOT here — they have a legitimate write (raising field FMRs,
+// POST /mc/:projectId/fmr). Barring them needs a per-route FMR exemption;
+// pending Thomas's call (flagged in the C-a report). When `audit_review` write
+// routes exist, exempt `auditor` there (gate with requirePermission, not this floor).
+const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+const WRITE_DENY_ROLES = new Set(['viewer', 'auditor'])
+function denyReadOnly(req, res, next) {
+  if (WRITE_METHODS.has(req.method) && WRITE_DENY_ROLES.has(req.user?.role)) {
+    return res.status(403).json({ error: 'Your role is read-only and cannot perform this action' })
+  }
+  next()
+}
+
 // ─── REQUIRE ADMIN ──────────────────────────────────────────
 // Lightweight shortcut for routes that require the admin role.
 // Equivalent to requirePermission('admin', 'can_view') but cheaper —
@@ -98,4 +118,4 @@ function requireAdmin(req, res, next) {
   next()
 }
 
-module.exports = { requirePermission, requireAdmin }
+module.exports = { requirePermission, requireAdmin, denyReadOnly }

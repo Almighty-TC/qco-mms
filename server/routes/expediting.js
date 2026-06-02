@@ -8,6 +8,7 @@ const db      = require('../db')
 const { authenticateToken } = require('../middleware/auth')
 
 router.use(authenticateToken)
+router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
 
 // ─── ACCESS CONTROL ───────────────────────────────────────────
 // Roles that can see all POs; others see only their assigned ones.
