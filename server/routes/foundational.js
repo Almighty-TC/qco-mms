@@ -12,6 +12,7 @@ const XLSX    = require('xlsx')
 router.use(authenticateToken)
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
 router.use(require('../middleware/permissions').enforce(p => p.includes('/certificate') ? null : p.includes('/commodit') ? 'commodity' : p.includes('/equipment') ? 'equipment' : 'wbs')) // C-b2: wbs/commodity/equipment per path; certificates→deny-floor residual
+router.use(require('../middleware/permissions').queueGate(/\/foundational\/\d+\/(wbs|commodities|equipment)$/, /\/foundational\/\d+\/(wbs|commodities|equipment)\/\d+$/)) // C-c D1: proposers (project_control) must use approval queue for create/delete; admin direct
 
 // Multer for certificate uploads
 const certStorage = multer.diskStorage({

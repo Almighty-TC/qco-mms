@@ -131,6 +131,27 @@ function enforce(moduleFor) {
   }
 }
 
+// ─── QUEUE GATE (C-c Decision 1: force proposers through confirmation) ────────
+// Proposer roles (project_control for wbs; engineering_lead for commodity/
+// equipment/mto) may NOT create/delete records directly — they must submit to
+// the pending_changes approval queue. Admin keeps direct access (override, still
+// audited). All other roles pass (enforce() already restricts who reaches here).
+// Apply per router AFTER enforce(), with regexes matching the record create/delete
+// paths only (so validate/import/bulk/edit routes are unaffected).
+const PROPOSER_ROLES = new Set(['project_control', 'engineering_lead'])
+function queueGate(createRe, deleteRe) {
+  return (req, res, next) => {
+    if (req.user?.role === 'admin') return next()          // admin override → direct
+    if (!PROPOSER_ROLES.has(req.user?.role)) return next() // non-proposers unaffected
+    const p = (req.originalUrl || req.url || '').split('?')[0]
+    const isRecordWrite = (req.method === 'POST' && createRe.test(p)) || (req.method === 'DELETE' && deleteRe.test(p))
+    if (isRecordWrite) {
+      return res.status(409).json({ error: 'This change requires Project confirmation — submit it to the approval queue (Pending Changes).' })
+    }
+    return next()
+  }
+}
+
 // ─── REQUIRE ADMIN ──────────────────────────────────────────
 // Lightweight shortcut for routes that require the admin role.
 // Equivalent to requirePermission('admin', 'can_view') but cheaper —
@@ -142,4 +163,4 @@ function requireAdmin(req, res, next) {
   next()
 }
 
-module.exports = { requirePermission, requireAdmin, denyReadOnly, enforce }
+module.exports = { requirePermission, requireAdmin, denyReadOnly, enforce, queueGate }
