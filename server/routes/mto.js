@@ -14,6 +14,7 @@ const XLSX    = require('xlsx')
 // ─── AUTH MIDDLEWARE ──────────────────────────────────────────────────────────
 router.use(authenticateToken)
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
+router.use(require('../middleware/permissions').enforce('mto')) // C-b2: matrix gate (engineering_lead/admin write; PM confirm)
 
 // ─── FILE UPLOAD CONFIG ───────────────────────────────────────────────────────
 // New-revision files accepted in memory buffer — parsed then discarded.

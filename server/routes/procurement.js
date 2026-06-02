@@ -7,6 +7,7 @@
 const express = require('express')
 const router  = express.Router()
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes (auth applied at mount)
+router.use(require('../middleware/permissions').enforce(p => /\/pos\/\d+\/expeditor$/.test(p) ? 'expediting' : 'procurement')) // C-b2: expeditor-assign→expediting (module-move), else procurement
 const db      = require('../db')       // connection pool — never createConnection
 const path    = require('path')
 const fs      = require('fs')

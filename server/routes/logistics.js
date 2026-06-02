@@ -12,6 +12,7 @@ const fs      = require('fs')
 
 router.use(authenticateToken)
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
+router.use(require('../middleware/permissions').enforce('logistics')) // C-b2: matrix gate
 
 // ─── ROLE HELPERS ─────────────────────────────────────────────
 // Freight forwarder can update status/dates on their SCNs, nothing else.

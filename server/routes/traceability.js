@@ -12,6 +12,7 @@ const { authenticateToken } = require('../middleware/auth')
 
 router.use(authenticateToken)
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
+router.use(require('../middleware/permissions').enforce('traceability')) // C-b2: upload=supplier/expeditor (can_create); verify/reject=materials_engineer (can_approve)
 
 // ─── UPLOAD STORAGE ───────────────────────────────────────────
 // Cert files land in uploads/traceability. 25 MB cap matches the

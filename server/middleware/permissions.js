@@ -107,6 +107,30 @@ function denyReadOnly(req, res, next) {
   next()
 }
 
+// ─── ENFORCE (C-b2 per-route authorization) ──────────────────
+// One middleware per router (applied after denyReadOnly). Maps the HTTP verb to
+// a matrix action and delegates to requirePermission(module, action).
+//   verb→action: POST→can_create, PUT/PATCH→can_edit, DELETE→can_delete
+//   path /approve|reject|verify|issue|critical-path/ → can_approve
+//   GET → passes (C-b2 gates writes only; reads unchanged)
+// `moduleFor` is a module string OR a function(req)→module. If it returns a
+// falsy module, the route is left to the deny-floor alone (reported as residual).
+const APPROVE_RE = /\/(approve|reject|verify|issue|critical-path)(\/|$)/
+function enforce(moduleFor) {
+  return (req, res, next) => {
+    if (req.method === 'GET') return next()
+    const p = (req.originalUrl || req.url || '').split('?')[0] // full path; router-relative req.path is unreliable
+    const module = typeof moduleFor === 'function' ? moduleFor(p, req) : moduleFor
+    if (!module) return next() // deny-floor-only residual route
+    const action = APPROVE_RE.test(p)
+      ? 'can_approve'
+      : req.method === 'POST' ? 'can_create'
+      : req.method === 'DELETE' ? 'can_delete'
+      : 'can_edit'
+    return requirePermission(module, action)(req, res, next)
+  }
+}
+
 // ─── REQUIRE ADMIN ──────────────────────────────────────────
 // Lightweight shortcut for routes that require the admin role.
 // Equivalent to requirePermission('admin', 'can_view') but cheaper —
@@ -118,4 +142,4 @@ function requireAdmin(req, res, next) {
   next()
 }
 
-module.exports = { requirePermission, requireAdmin, denyReadOnly }
+module.exports = { requirePermission, requireAdmin, denyReadOnly, enforce }

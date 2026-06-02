@@ -30,6 +30,15 @@ add('project_manager','mto',1,0,0,1,0,0) // PM escalation/confirm on mto
 // audit_review: auditor writes (flag/comment/review)
 add('admin','audit_review',1,1,1,1,1,0); add('auditor','audit_review',1,1,1,0,0,0)
 
+// ── NARROW `fmr` module: grants ONLY FMR-raise (POST /mc/:projectId/fmr) ──
+// Closes the matrix-vs-behavior drift: contractors legitimately raise field FMRs
+// (MCFMRScreen "Contractor view: raise new FMRs against assigned WBS scope").
+// This is NOT material_control broadly — it does not allow transfers/receipts.
+// Contractors are wbs_scoped; internal ops who raise on-site are also granted.
+add('site_contractor','fmr',1,1,0,0,0,1); add('subcontractor','fmr',1,1,0,0,0,1)
+for (const r of ['admin','warehouse','logistics_manager','expeditor','expediting_manager','procurement_officer','procurement_manager','project_manager','project_director'])
+  add(r,'fmr',1,1,0,0,0,0)
+
 // ── CORRECTIONS to existing matrix (the C-a over-block fix; signed) ──
 // material_control: broad internal operational set may write
 for (const r of ['expeditor','expediting_manager','procurement_officer','procurement_manager','project_manager','project_director'])
@@ -53,7 +62,7 @@ async function main() {
     // delete prior rows for new roles (any module) + for the new modules (any role) + the specific corrections
     if (APPLY) {
       await conn.query(`DELETE FROM role_permissions WHERE role IN (${managedRoles.map(()=>'?').join(',')})`, managedRoles)
-      await conn.query(`DELETE FROM role_permissions WHERE module IN ('wbs','commodity','equipment','mto','audit_review')`)
+      await conn.query(`DELETE FROM role_permissions WHERE module IN ('wbs','commodity','equipment','mto','audit_review','fmr')`)
       // corrections: remove existing rows for the corrected (role,module) pairs so re-insert is clean
       for (const [role,module] of [['expeditor','material_control'],['expediting_manager','material_control'],['procurement_officer','material_control'],['procurement_manager','material_control'],['project_manager','material_control'],['project_director','material_control'],['vendor','traceability'],['expeditor','traceability'],['materials_engineer','traceability'],['project_manager','mto']])
         await conn.query('DELETE FROM role_permissions WHERE role=? AND module=?', [role, module])

@@ -12,6 +12,8 @@ const VALID_ROLES = new Set([
   'procurement_manager', 'procurement_officer',
   'expediting_manager', 'expeditor', 'logistics_manager',
   'warehouse', 'vendor', 'freight_forwarder', 'site_contractor', 'subcontractor', 'viewer',
+  // C-b2 new roles
+  'engineering_lead', 'project_control', 'project_controls_manager', 'auditor', 'materials_engineer',
 ])
 const VALID_MODULES = new Set([
   'dashboard', 'procurement', 'expediting', 'vdrl', 'logistics',

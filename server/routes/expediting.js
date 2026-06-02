@@ -9,6 +9,7 @@ const { authenticateToken } = require('../middleware/auth')
 
 router.use(authenticateToken)
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
+router.use(require('../middleware/permissions').enforce(p => p.includes('/vdrl') ? 'vdrl' : 'expediting')) // C-b2: vdrl routes→vdrl, else expediting
 
 // ─── ACCESS CONTROL ───────────────────────────────────────────
 // Roles that can see all POs; others see only their assigned ones.

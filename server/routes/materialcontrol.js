@@ -8,6 +8,7 @@ const { authenticateToken } = require('../middleware/auth')
 
 router.use(authenticateToken)
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
+router.use(require('../middleware/permissions').enforce((p, req) => (req.method === 'POST' && /\/fmr$/.test(p)) ? 'fmr' : 'material_control')) // C-b2: FMR-raise→fmr (contractors wbs-scoped); else material_control
 
 // ─── QUARANTINE LOCATION (Phase 3) ────────────────────────────
 // Damaged stock is held at this designated location_code (a "place"),

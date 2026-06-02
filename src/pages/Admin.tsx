@@ -28,6 +28,8 @@ const ALL_ROLES = [
   'procurement_manager', 'procurement_officer',
   'expediting_manager', 'expeditor', 'logistics_manager',
   'warehouse', 'vendor', 'freight_forwarder', 'site_contractor', 'subcontractor', 'viewer',
+  // C-b2 new roles
+  'engineering_lead', 'project_control', 'project_controls_manager', 'auditor', 'materials_engineer',
 ] as const
 type Role = typeof ALL_ROLES[number]
 
