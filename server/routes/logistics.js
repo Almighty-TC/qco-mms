@@ -81,17 +81,24 @@ function computeRAG(dbStatus, eta) {
 }
 
 // ─── AUDIT HELPER ─────────────────────────────────────────────
-async function writeAudit(userId, action, entityType, entityId, before, after, resource) {
+async function writeAudit(userId, action, entityType, entityId, before, after, resource, projectId = null) {
   try {
+    // project_id: explicit when supplied, else derived PROVABLY from the SCN id
+    // (scn id → join to shipment_control_notes.project_id); never a free-text guess.
+    let pid = Number(projectId) || null
+    if (pid == null && entityType === 'scn' && entityId) {
+      const [[scn]] = await db.query('SELECT project_id FROM shipment_control_notes WHERE id=?', [entityId])
+      pid = scn?.project_id ?? null
+    }
     await db.query(
-      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, before_value, after_value, resource)
-       VALUES (?,?,?,?,?,?,?)`,
-      [userId, action, entityType, entityId,
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, before_value, after_value, resource)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [userId, action, entityType, entityId, pid,
        before ? JSON.stringify(before) : null,
        after  ? JSON.stringify(after)  : null,
        resource]
     )
-  } catch (_) {} // audit failure is non-blocking
+  } catch (e) { console.error('[audit] insert failed:', e.message) } // non-blocking
 }
 
 // ─── FILE UPLOAD SETUP ────────────────────────────────────────
