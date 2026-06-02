@@ -1639,16 +1639,60 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
 
       {/* Gantt view — shown when wbsView==='gantt' */}
       {wbsView === 'gantt' && (
-        <WBSGanttView
-          nodes={nodes}
-          projectId={projectId}
-          dark={dark}
-          zoom={ganttZoom}
-          maxDepth={ganttDepth}
-          expanded={expanded}
-          onToggle={toggleExpand}
-          onNodeClick={node => { setEditNode(node) }}
-        />
+        <>
+          <WBSGanttView
+            nodes={nodes}
+            projectId={projectId}
+            dark={dark}
+            zoom={ganttZoom}
+            maxDepth={ganttDepth}
+            expanded={expanded}
+            onToggle={toggleExpand}
+            onNodeClick={node => { setEditNode(node) }}
+          />
+          {/* ── Gantt legend (bottom) — reflects what the chart ACTUALLY draws:
+              schedule bars (planned/forecast/actual), the ROS milestone diamond,
+              the Today line, and the left-pane RAG status dots. (The generic
+              MilestoneLegend used in Tree view does not match the Gantt, so the
+              Gantt gets this corrected legend.) ── */}
+          <div style={{ display: 'flex', gap: 18, alignItems: 'center', flexWrap: 'wrap', padding: '10px 14px', marginTop: 8, border: bd, borderRadius: 8, background: dark ? '#1e293b' : '#fff', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase' }}>Schedule</span>
+            {[
+              { label: 'Planned',  fill: '#B5D4F4', border: '#85B7EB' },
+              { label: 'Forecast', fill: '#FAC775', border: '#EF9F27' },
+              { label: 'Actual',   fill: '#C0DD97', border: '#97C459' },
+            ].map(b => (
+              <div key={b.label} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ width: 22, height: 9, borderRadius: 3, background: b.fill, border: `0.5px solid ${b.border}`, flexShrink: 0 }} />
+                <span style={{ fontSize: 11, color: '#94a3b8' }}>{b.label}</span>
+              </div>
+            ))}
+            {/* ROS milestone diamond */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ width: 10, height: 10, background: '#E84E0F', transform: 'rotate(45deg)', flexShrink: 0 }} />
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>ROS milestone</span>
+            </div>
+            {/* Today line */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <span style={{ width: 2, height: 12, background: '#E84E0F', flexShrink: 0 }} />
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>Today</span>
+            </div>
+            <span style={{ width: 1, height: 16, background: bd.includes('1px') ? (dark ? '#334155' : '#e8ecf2') : '#e8ecf2' }} />
+            <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase' }}>RAG status</span>
+            {[
+              { label: 'On track',    color: RAG_COLORS.green },
+              { label: 'At risk',     color: RAG_COLORS.amber },
+              { label: 'Breached',    color: RAG_COLORS.red },
+              { label: 'In progress', color: RAG_COLORS.blue },
+              { label: 'Not set',     color: '#c4cedf', hollow: true },
+            ].map(r => (
+              <div key={r.label} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: r.hollow ? 'transparent' : r.color, border: r.hollow ? `2px solid ${r.color}` : 'none', flexShrink: 0 }} />
+                <span style={{ fontSize: 11, color: '#94a3b8' }}>{r.label}</span>
+              </div>
+            ))}
+          </div>
+        </>
       )}
 
       {/* Table + panel flex container */}
