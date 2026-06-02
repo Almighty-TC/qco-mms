@@ -144,7 +144,7 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 2. **A1 WBS depth filter** (UI-only, NEXT): fix the cap/propagation decoupling → prove → commit.
 3. **The manual/help pass** (Ch8 Logistics · Ch9 Material Control · Ch10 Traceability · Ch11 Heat/Lot; fold in WBS Gantt controls + case-insensitive-heat note).
 4. **The resizable-tables rollout track** (its own multi-commit sequence).
-5. **Global `audit()` helper fix** (see §5 known-issues — silent, HIGH).
+5. ~~**Global `audit()` helper fix**~~ — ✅ DONE (foundational + mto helpers; see §5). Deferred: unify the four per-file helpers.
 
 ---
 
@@ -219,18 +219,27 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
     are missed/mis-attributed? Verify A→B, A→C, B→C each compute against the right data. (4) Root cause →
     (a) no-op revision wrongly allowed, (b) diff logic broken, or (c) other → propose fix.
 
-- **🔴 GLOBAL `audit()` HELPER BROKEN (HIGH — silent; logged 02 Jun, discovered during A3 Phase 1).**
-  The shared `audit()` helper (in `server/routes/foundational.js`, reused widely) writes **wrong column
-  names** — `before_state`/`after_state`/`ip_address` vs the real `audit_log` columns
-  `before_value`/`after_value`/`ip` — **omits the NOT NULL `resource` column**, and its `.catch(()=>{})`
-  **swallows the failure**. Net effect: `audit_log` has **silently recorded NOTHING** for every route
-  using the helper (`wbs_created`/`wbs_updated` and likely all others). The user manual advertises an
-  **immutable audit trail** — it has been a **no-op**.
-  - **Partial mitigation already shipped:** the hardened WBS delete (commit `5ea7abd`, A3 Phase 1) writes
-    a **correct** audit row to the real schema inside its transaction. **All other `audit()` calls remain broken.**
-  - **FIX (separate item, not yet done):** correct the helper's column names, add `resource`, and **remove
-    the silent `.catch`** so failures surface; then spot-check a few routes to confirm rows now write.
-    Consider backfilling/expectations — past actions were never logged and cannot be recovered.
+- **✅ AUDIT HELPERS — FIXED (was HIGH; the original handover claim was mis-scoped).** Read-first map
+  ([claude-code-audit-helper-readfirst.md], chat output) corrected the earlier claim: there is **NO single
+  shared helper** — there are **four independent `audit()` definitions** (one per route file) + inline
+  inserts; `audit_log` was **NOT empty** (97 rows; MC / procurement / traceability / expediting / admin /
+  logistics all wrote fine). The breakage was **localized to TWO files**:
+  - `foundational.js` — wrong cols (`before_state`/`after_state`/`ip_address`) + omitted NOT NULL `resource`
+    + silent `.catch(()=>{})` → every `wbs_*`/`commodity_*`/`equipment_*` audit failed silently.
+  - `mto.js` — correct col names but omitted NOT NULL `resource` → every `mto_*` audit failed (warned).
+  - **FIX SHIPPED:** both helpers corrected — proper columns, `resource` derived from `req.originalUrl`
+    **path-only with `/api` prefix stripped** (matches the existing 97 rows' convention), and silent/warn
+    catch → `console.error` log-and-continue (fire-and-forget; audit failure never 500s a user action).
+    Proven with rolled-back live-HTTP tests (foundational create+update, mto register create) — correct rows
+    with all NOT NULL cols populated, baseline restored 97→97, zero canonical mutation. Commits: foundational
+    + mto (one each). **WBS delete (`5ea7abd`) already wrote correct rows directly (bypasses the helper).**
+  - **Not done (deferred cleanup):** unify the four per-file helpers into one shared helper. Past actions
+    (pre-fix `wbs_*`/`commodity_*`/`equipment_*`/`mto_*`) were never logged and cannot be recovered.
+
+- **Backlog (no action, product-design question):** should the **Expediting PO Audit Trail tab**
+  (`expediting.js:595`) also surface `audit_log` events? Today it composes only from
+  `expediting_forecast_history` (milestone forecast changes) + `po_action_notes` — it does **not** read
+  `audit_log`. Not a defect; decide whether to fold the general audit stream in.
 
 ---
 
