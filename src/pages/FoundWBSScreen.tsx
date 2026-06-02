@@ -299,7 +299,7 @@ const DeleteWBSWizard = ({ node, projectId, dark, onClose, onDeleted }: {
   const [step, setStep] = useState(1)
   const [impact, setImpact] = useState<{
     childCount: number
-    affectedPOs: { id: number; po_number: string; wbs_code: string; status: string }[]
+    affectedPOs: { id: number; po_number: string; wbs_code: string; status: string; is_locked: number }[]
     affectedLines: { id: number; line_number: number; description: string; qty: number; uom: string; wbs_code_snapshot: string; po_number: string; po_id: number }[]
     codesCovered: string
   } | null>(null)
@@ -339,6 +339,19 @@ const DeleteWBSWizard = ({ node, projectId, dark, onClose, onDeleted }: {
 
   const safeToDelete = impact && impact.childCount === 0 && impact.affectedLines.length === 0
 
+  // ─── BLOCK REASON ────────────────────────────────────────────
+  // Mirrors the proven backend DELETE guard order (children → locked PO → orphan
+  // lines). A node with children, or with any affected line on a LOCKED PO, cannot
+  // be deleted here at all (reallocation can't fix either) — so we block at step 1
+  // rather than let the user do work and hit a 409. Affected lines (not blocked)
+  // route to the Reallocate step. The backend remains the source of truth.
+  const lockedPOs = impact?.affectedPOs?.filter(p => p.is_locked) ?? []
+  const blockReason: 'children' | 'locked' | null = !impact
+    ? null
+    : impact.childCount > 0 ? 'children'
+    : lockedPOs.length > 0 ? 'locked'
+    : null
+
   return createPortal(
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
       <div onClick={e => e.stopPropagation()} style={{ background: dark ? '#1e293b' : '#fff', borderRadius: 10, padding: 28, width: 620, maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 16px 48px rgba(0,0,0,0.5)', fontFamily: 'IBM Plex Sans, sans-serif', border: '2px solid rgba(239,68,68,0.3)' }}>
@@ -366,14 +379,73 @@ const DeleteWBSWizard = ({ node, projectId, dark, onClose, onDeleted }: {
                       </div>
                     ))}
                   </div>
-                  {safeToDelete && <div style={{ fontSize: 12, color: '#22c55e', fontWeight: 600 }}>✓ Safe to delete — no child nodes or POs reference this node.</div>}
+
+                  {/* Affected POs with per-PO lock status (is_locked from impact) */}
+                  {impact.affectedPOs.length > 0 && (
+                    <div style={{ marginBottom: 10 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>Affected POs</div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {impact.affectedPOs.map(po => (
+                          <span key={po.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontFamily: 'JetBrains Mono, monospace', color: col, background: dark ? '#0f172a' : '#fff', border: `1px solid ${po.is_locked ? '#ef4444' : (dark ? '#334155' : '#dde3ed')}`, borderRadius: 6, padding: '3px 8px' }}>
+                            {po.po_number}
+                            {po.is_locked
+                              ? <span style={{ fontSize: 9, fontWeight: 700, color: '#ef4444' }}>🔒 LOCKED</span>
+                              : <span style={{ fontSize: 9, color: '#94a3b8' }}>{po.status}</span>}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {blockReason === 'children' && (
+                    <div style={{ fontSize: 12, color: '#ef4444', fontWeight: 600, background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 6, padding: '8px 10px' }}>
+                      ⛔ Cannot delete a parent node — delete or move its {impact.childCount} child node{impact.childCount !== 1 ? 's' : ''} first.
+                    </div>
+                  )}
+                  {blockReason === 'locked' && (
+                    <div style={{ fontSize: 12, color: '#ef4444', fontWeight: 600, background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 6, padding: '8px 10px' }}>
+                      🔒 Cannot delete — affected PO{lockedPOs.length !== 1 ? 's' : ''} {lockedPOs.map(p => p.po_number).join(', ')} {lockedPOs.length !== 1 ? 'are' : 'is'} locked. Unlock or reallocate via an authorised process first.
+                    </div>
+                  )}
+                  {!blockReason && safeToDelete && <div style={{ fontSize: 12, color: '#22c55e', fontWeight: 600 }}>✓ Safe to delete — no child nodes or POs reference this node.</div>}
+                  {!blockReason && !safeToDelete && impact.affectedLines.length > 0 && <div style={{ fontSize: 12, color: '#94a3b8' }}>{impact.affectedLines.length} PO line item{impact.affectedLines.length !== 1 ? 's' : ''} must be re-allocated to another WBS node before this node can be deleted.</div>}
                 </>
               )}
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button onClick={onClose} style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
-              <button onClick={() => impact?.affectedLines?.length ? setStep(2) : setStep(3)} disabled={!impact}
-                style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: impact ? '#ef4444' : '#94a3b8', color: '#fff', fontSize: 12, fontWeight: 600, cursor: impact ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>
+              <button onClick={() => impact?.affectedLines?.length ? setStep(2) : setStep(3)} disabled={!impact || !!blockReason}
+                title={blockReason ? 'Resolve the blocker above before continuing' : undefined}
+                style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: (impact && !blockReason) ? '#ef4444' : '#94a3b8', color: '#fff', fontSize: 12, fontWeight: 600, cursor: (impact && !blockReason) ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>
+                Continue →
+              </button>
+            </div>
+          </>
+        )}
+
+        {step === 2 && impact && (
+          <>
+            <div style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 8, padding: '12px 14px', marginBottom: 16, fontSize: 12, color: '#ef4444' }}>
+              ⚠ Before deleting, re-assign all {impact.affectedLines.length} affected PO line item{impact.affectedLines.length !== 1 ? 's' : ''} to a different WBS node.
+            </div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+              {impact.affectedLines.filter(l => allocations[l.id]?.nodeId).length} of {impact.affectedLines.length} lines re-allocated
+            </div>
+            {impact.affectedLines.map(line => (
+              <ReallocateLineRow
+                key={line.id}
+                line={line}
+                projectId={projectId}
+                dark={dark}
+                excludeCode={node.code}
+                value={allocations[line.id]}
+                onChange={(nodeId, code) => setAllocations(prev => ({ ...prev, [line.id]: { nodeId, code } }))}
+              />
+            ))}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+              <button onClick={() => setStep(1)} style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>← Back</button>
+              <button onClick={() => setStep(3)} disabled={!allReallocated}
+                style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: allReallocated ? '#ef4444' : '#94a3b8', color: '#fff', fontSize: 12, fontWeight: 600, cursor: allReallocated ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>
                 Continue →
               </button>
             </div>
@@ -385,15 +457,28 @@ const DeleteWBSWizard = ({ node, projectId, dark, onClose, onDeleted }: {
             <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '14px 16px', marginBottom: 16 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: '#ef4444', marginBottom: 8 }}>🗑 Confirm permanent deletion</div>
               <div style={{ fontSize: 12, color: col }}>Delete WBS node <strong style={{ fontFamily: 'JetBrains Mono, monospace' }}>{node.code}</strong> — {node.description}?</div>
-              <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>This action cannot be undone. Any child nodes will also be removed.</div>
+              <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>This permanently deletes only this node and cannot be undone. (A node with child nodes can't be deleted — its children must be removed or moved first.)</div>
+              {impact.affectedLines.length > 0 && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: '#64748b', marginBottom: 4 }}>Re-allocation summary:</div>
+                  {impact.affectedLines.map(l => (
+                    <div key={l.id} style={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', color: '#94a3b8', marginBottom: 2 }}>
+                      {l.po_number} Line {l.line_number}: {l.wbs_code_snapshot} → {allocations[l.id]?.code ?? '—'}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: 16 }}>
               <input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} style={{ accentColor: '#ef4444' }} />
               <span style={{ fontSize: 12, color: col }}>I understand this deletion is permanent and cannot be undone.</span>
             </label>
-            {err && <div style={{ marginBottom: 12, fontSize: 12, color: '#ef4444' }}>{err}</div>}
+            {err && <div style={{ marginBottom: 12, fontSize: 12, color: '#ef4444', background: 'rgba(239,68,68,0.08)', borderRadius: 6, padding: '6px 10px' }}>{err}</div>}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button onClick={onClose} style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+              {impact.affectedLines.length > 0 && (
+                <button onClick={() => setStep(2)} style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>← Back</button>
+              )}
               <button onClick={doDelete} disabled={!confirmed || deleting}
                 style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: (confirmed && !deleting) ? '#ef4444' : '#94a3b8', color: '#fff', fontSize: 12, fontWeight: 600, cursor: (confirmed && !deleting) ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>
                 {deleting ? 'Deleting…' : '🗑 Delete permanently'}
