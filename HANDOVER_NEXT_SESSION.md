@@ -49,7 +49,7 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 | Login | ✅ Complete | |
 | Dashboard | ⏳ BUILD LAST | Reads from all modules |
 | Admin | ✅ Complete | Users, suppliers/AVL, settings; Subcontractor + Freight Forwarder roles in dropdown |
-| Foundational — WBS | ⚠️ Mostly complete | Tree, Gantt, tooltip, bulk ops, search, focus mode. **2 KNOWN BUGS (see §3c): delete-node flow broken (data-integrity, HIGH); Tree depth filter leaks (UI, MEDIUM).** |
+| Foundational — WBS | ⚠️ Mostly complete | Tree, Gantt, tooltip, bulk ops, search, focus mode. **Delete-node flow FIXED (A3: `5ea7abd`+`81392fe`).** Remaining bug (see §3c): Tree depth filter leaks (A1, UI, MEDIUM). |
 | Foundational — Commodity Library | ✅ Complete | Table, add/edit, certs, template download |
 | Foundational — Equipment List | ✅ Complete | Table, add/edit, certs, template download |
 | Procurement — PO Register | ✅ Complete | Register, stat cards, search, RAG |
@@ -111,15 +111,16 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 
 ## 3c. WBS AUDIT FINDINGS + GLOBAL TABLE STANDARD (logged 02 Jun — read-only diagnosis, nothing built)
 
-### 🔴 WBS DELETE-NODE FLOW — BROKEN (data-integrity; HIGH priority)
-- The 3-step delete wizard (**Impact → Reallocate → Confirm**) shipped **working in `d49ac74`**, then step-2 (Reallocate) was **INADVERTENTLY SEVERED in `ad5e6b0`** — the step-2 JSX was dropped, but the state (`allocations`, `allReallocated`), the `ReallocateLineRow` component (still ~line 411), and the backend `PATCH /wbs/:id/reallocate` were all LEFT IN PLACE. So it's a **regression, recoverable**.
+### ✅ WBS DELETE-NODE FLOW — FIXED (data-integrity; was HIGH) — backend `5ea7abd` + UI `81392fe`
+- **RESOLVED (A3, 02 Jun):** the 3-step delete flow is restored and the delete is hardened. **Backend `5ea7abd`** — transactional `DELETE` with guards (children → locked-PO → orphan-lines, all clean **409 + zero mutation**, proven 29/29 rolled-back), validated+scoped transactional `reallocate` (incl. locked-PO refusal), `is_locked` added to impact. **UI `81392fe`** — restored step-2 Reallocate + step-3 summary/Back, corrected routing (children/locked block, lines→reallocate), 🔒 locked-PO badges, fixed the false "child nodes will also be removed" copy. All browser proofs passed. (The delete now also writes a **correct** audit row — see the global `audit()` helper bug above, still open for other routes.)
+- **History (for context):** the 3-step wizard shipped **working in `d49ac74`**, then step-2 (Reallocate) was **INADVERTENTLY SEVERED in `ad5e6b0`** — the step-2 JSX was dropped, but the state (`allocations`, `allReallocated`), the `ReallocateLineRow` component (~line 411), and the backend `PATCH /wbs/:id/reallocate` were all LEFT IN PLACE (a recoverable regression, now recovered).
 - **LIVE SYMPTOM:** a node WITH affected PO lines → Continue sets step 2 → no step-2 JSX exists → modal body renders **blank (dead-end)**. A node with NO affected lines → goes to Confirm → deletes.
 - **DATA-INTEGRITY HOLES (proven via rolled-back tests, project 1):**
   - Backend `DELETE /wbs/:id` is a **bare `DELETE FROM wbs_nodes WHERE id=?`** — no child check, no lock check, no `po_lines` check.
   - PO↔WBS link is **string-only** via `po_lines.wbs_code_snapshot` (varchar, **no FK**; `wbs_id` NULL on all 90 project-1 lines, so the FK never fires). Deleting a leaf **SILENTLY ORPHANS** its PO lines (they keep a dead WBS code).
   - `purchase_orders.is_locked` **EXISTS but is NEVER checked** — a locked PO's lines can be silently detached.
   - Deleting a node WITH children: `parent_id` self-FK (NO ACTION) blocks it at the DB → backend try/catch returns a **raw HTTP 500** (not a clean error).
-- **FIX PLAN (not built):** restore step-2 verbatim from `d49ac74` (matches current `ReallocateLineRow`/`excludeCode`); fix Continue routing (affected lines → 2; else children>0 → block; else → 3); surface `is_locked` in the impact view; **HARDEN the backend DELETE** — transactional, verify no `po_lines` still reference the code + no children remain before delete, return clean **409 not 500**, refuse (or require override) when an affected PO is locked. Do **UI restore + backend guards together**. Needs read-first → confirm → build → prove (same discipline as the stock-integrity fixes).
+  - **All of the above are now fixed** by `5ea7abd` + `81392fe` (see the RESOLVED note at the top of this item).
 
 ### 🟡 WBS TREE DEPTH FILTER — LEAKS (UI bug; MEDIUM priority)
 - "Level 1 only" (`depthFilter`) still shows deeper nodes under an expanded parent. **Pre-existing, rooted in `ad5e6b0`** (NOT caused by the recent depth/legend work).
@@ -139,10 +140,11 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 - **APPROACH (not built):** standardise on `useColumnResize` + `AdminTable`. **Tier 1** — migrate straightforward grids to `AdminTable` (Commodity, Equipment, MTO list, Stock Register, Receipting, Logistics, Traceability) ≈0.5–1 day each. **Tier 2** — hook-only adoption for bespoke tables (WBS Tree chevron/indent rows, detail panels): wire `useColumnResize` + a ↺ reset button onto the existing `<table>` ≈0.5 day each. Sequence one-screen-per-commit with a verify each.
 
 ### ⏭ SUGGESTED ORDER WHEN RESUMING
-1. **A3 WBS delete flow** (data-integrity — highest priority): read-first → confirm → build (restore step-2 + backend hardening) → prove → commit.
-2. **A1 WBS depth filter** (UI-only): fix the cap/propagation decoupling → prove → commit.
+1. ~~**A3 WBS delete flow**~~ — ✅ DONE (`5ea7abd` backend + `81392fe` UI).
+2. **A1 WBS depth filter** (UI-only, NEXT): fix the cap/propagation decoupling → prove → commit.
 3. **The manual/help pass** (Ch8 Logistics · Ch9 Material Control · Ch10 Traceability · Ch11 Heat/Lot; fold in WBS Gantt controls + case-insensitive-heat note).
 4. **The resizable-tables rollout track** (its own multi-commit sequence).
+5. **Global `audit()` helper fix** (see §5 known-issues — silent, HIGH).
 
 ---
 
