@@ -689,6 +689,7 @@ router.post('/:projectId/scn', async (req, res) => {
     // GUARD (Commit 1): row-lock the line (FOR UPDATE — concurrency-safe) and reject any
     // allocation that would push qty_assigned over qty. Reject = rollback the whole txn
     // (the SCN insert + any prior line updates), never a partial write.
+    const assignments = [] // Commit 2: collect for the audit row
     for (const { po_line_id, qty_allocated } of selected_lines) {
       const add = Number(qty_allocated) || 0
       const [[ln]] = await conn.query(
@@ -705,6 +706,7 @@ router.post('/:projectId/scn', async (req, res) => {
         'UPDATE po_lines SET qty_assigned = COALESCE(qty_assigned,0) + ? WHERE id = ? AND po_id = ?',
         [add, po_line_id, po_id]
       )
+      assignments.push({ po_line_id, line_number: ln.line_number, qty_allocated: add, new_qty_assigned: Number(ln.qa) + add })
     }
 
     // Insert additional items (not on PO)
@@ -731,6 +733,15 @@ router.post('/:projectId/scn', async (req, res) => {
          h.po_line_id || null, req.user.id]
       )
     }
+
+    // Commit 2: project-scoped audit of the SCN creation + line assignments (in-txn).
+    await conn.query(
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, after_value, resource, ip)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [req.user.id, 'scn_created', 'scn', scnId, pid,
+       JSON.stringify({ scn_ref: scnRef, po_id, assignments, additional_items: (additional_items || []).length }),
+       (req.originalUrl || '').split('?')[0].replace(/^\/api(?=\/)/, ''), req.ip]
+    )
 
     await conn.commit()
     res.status(201).json({ id: scnId, scn_ref: scnRef, status: 'draft' })
