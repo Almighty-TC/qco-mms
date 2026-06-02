@@ -44,7 +44,7 @@ CREATE TABLE `purchase_orders` (
   `description` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `value` decimal(15,2) DEFAULT NULL,
   `currency` varchar(10) COLLATE utf8mb4_unicode_ci DEFAULT 'AUD',
-  `status` enum('rfq','loa','po-raised','active','closed','cancelled') COLLATE utf8mb4_unicode_ci DEFAULT 'rfq',
+  `status` enum('rfq','loa','po-raised','active','closed','cancelled','pending_approval','pending_director_approval') COLLATE utf8mb4_unicode_ci DEFAULT 'rfq',
   `rag` enum('red','amber','green','grey','blue') COLLATE utf8mb4_unicode_ci DEFAULT 'green',
   `incoterms` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `inco_term_id` int DEFAULT NULL,
