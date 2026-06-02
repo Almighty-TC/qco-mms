@@ -104,8 +104,7 @@ The left sidebar must contain these items in this order:
    - Procurement (🧾)
    - Expediting (🚨 — compound badge: red=overdue milestones, amber=overdue vendor docs)
      ↳ Contains two views: PO Register (expediting list) and VDRL Register
-     ↳ VDRL was previously a standalone sidebar item — now integrated into Expediting
-     ↳ Old route /project/:id/vdrl redirects to /project/:id/expediting?view=vdrl
+     ↳ VDRL is a sub-feature of Expediting (PO-Detail VDRL tab + register view), by design — not a standalone module. (Old route /project/:id/vdrl redirects to /project/:id/expediting?view=vdrl.)
    - Logistics (🚚)
    - Material Control (📦, collapsible): Receipting · Stock Register · FMR Register · Transfers
    - Traceability (🔗)
@@ -526,8 +525,8 @@ Currency · Total value (computed from lines) · Incoterms · Handover point · 
 ---
 
 ## MODULE 5: VDRL (Vendor Document Requirements List)
-**⚠ ARCHITECTURE CHANGE:** VDRL is no longer a standalone sidebar module.
-It now lives INSIDE Expediting in two places:
+**STATUS: ✅ EMBEDDED IN EXPEDITING (by design) — not a standalone module, not outstanding work.**
+VDRL is a sub-feature of Expediting; it lives INSIDE Expediting in two places:
 1. **VDRL Register tab** in the Expediting Register screen (all docs across all POs)
 2. **VDRL section** in the Expediting PO Detail Panel (docs for one PO)
 The old route /project/:projectId/vdrl now redirects to /project/:projectId/expediting?view=vdrl.
