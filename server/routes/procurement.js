@@ -72,16 +72,31 @@ function paginate(query) {
 
 // ─── AUDIT HELPER ─────────────────────────────────────────────────────────────
 // Writes to audit_log — non-blocking, errors logged to console only.
-function audit(req, action, resource, before = null, after = null, entityType = 'purchase_order') {
-  const userId = req.user?.id ?? null
-  const ip     = req.ip ?? null
-  db.query(
-    `INSERT INTO audit_log (user_id, action, entity_type, resource, ip, before_value, after_value)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [userId, action, entityType, resource, ip,
-     before ? JSON.stringify(before) : null,
-     after  ? JSON.stringify(after)  : null]
-  ).catch(e => console.error('[audit]', action, resource, e.message))
+// Fire-and-forget (callers do NOT await). project_id resolution:
+//   - use explicit `projectId` when a caller supplies it; else
+//   - derive it PROVABLY from a `purchase_orders/<id>` reference in `resource`
+//     (structured id → real join to purchase_orders.project_id; never a free-text guess);
+//   - otherwise NULL.
+async function audit(req, action, resource, before = null, after = null, entityType = 'purchase_order', projectId = null) {
+  try {
+    const userId = req.user?.id ?? null
+    const ip     = req.ip ?? null
+    let pid = Number(projectId) || null
+    if (pid == null) {
+      const m = /(?:^|\/)purchase_orders\/(\d+)/.exec(resource || '')
+      if (m) {
+        const [[po]] = await db.query('SELECT project_id FROM purchase_orders WHERE id=?', [Number(m[1])])
+        pid = po?.project_id ?? null
+      }
+    }
+    await db.query(
+      `INSERT INTO audit_log (user_id, action, entity_type, project_id, resource, ip, before_value, after_value)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [userId, action, entityType, pid, resource, ip,
+       before ? JSON.stringify(before) : null,
+       after  ? JSON.stringify(after)  : null]
+    )
+  } catch (e) { console.error('[audit]', action, resource, e.message) }
 }
 
 // ─── RAG COMPUTATION ──────────────────────────────────────────────────────────
@@ -1004,7 +1019,7 @@ router.post('/:projectId/pos/bulk-confirm', async (req, res) => {
             r.currency||'AUD', r.value||null, r.incoterms||null, r.wbs_code||null,
             r.ros_date||null, req.user.id])
         audit(req, 'po_created_bulk', `procurement/${pid}/pos`,
-          null, { po_number: r.po_number })
+          null, { po_number: r.po_number }, 'purchase_order', pid)
         created++
       } catch (e) {
         failed++
