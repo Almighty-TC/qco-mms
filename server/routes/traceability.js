@@ -27,16 +27,16 @@ const upload = multer({ storage, limits: { fileSize: 25 * 1024 * 1024 } })
 
 // ─── AUDIT HELPER ─────────────────────────────────────────────
 // Mirrors the writeAudit used across the other route files.
-async function writeAudit(userId, action, entity, id, before, after, resource) {
+async function writeAudit(userId, action, entity, id, before, after, resource, projectId = null) {
   try {
     await db.query(
-      `INSERT INTO audit_log (user_id,action,entity_type,entity_id,before_value,after_value,resource) VALUES (?,?,?,?,?,?,?)`,
-      [userId, action, entity, id,
+      `INSERT INTO audit_log (user_id,action,entity_type,entity_id,project_id,before_value,after_value,resource) VALUES (?,?,?,?,?,?,?,?)`,
+      [userId, action, entity, id, (Number(projectId) || null),
        before ? JSON.stringify(before) : null,
        after  ? JSON.stringify(after)  : null,
        resource]
     )
-  } catch (_) {}
+  } catch (e) { console.error('[audit] insert failed:', e.message) }
 }
 
 // ─── DATE-CHANGE LOG HELPER ───────────────────────────────────
@@ -186,7 +186,7 @@ router.post('/:projectId/cert', upload.single('file'), async (req, res) => {
         'Cert received via upload')
       await writeAudit(uid, 'cert_received', 'traceability_cert', certId, before,
         { status: 'received', heat_ref: heat_ref.trim(), file_name: fileName },
-        `VDRL ${reqRow.document_name} marked received`)
+        `VDRL ${reqRow.document_name} marked received`, Number(req.params.projectId) || null)
     } else {
       // ── Ad-hoc cert ───────────────────────────────────────────
       const [r] = await db.query(
@@ -201,7 +201,7 @@ router.post('/:projectId/cert', upload.single('file'), async (req, res) => {
       certId = r.insertId
       await writeAudit(uid, 'cert_uploaded', 'traceability_cert', certId, null,
         { document_name: document_name || 'Ad-hoc certificate', heat_ref: heat_ref.trim() },
-        `Ad-hoc cert uploaded`)
+        `Ad-hoc cert uploaded`, Number(req.params.projectId) || null)
     }
 
     // ── First version row ──────────────────────────────────────
@@ -243,7 +243,7 @@ router.post('/cert/:certId/version', upload.single('file'), async (req, res) => 
       [certId, rev, heat_ref.trim(), applies_to || null, req.file.originalname, req.file.size, uid])
 
     await writeAudit(uid, 'cert_version_added', 'traceability_cert', certId, null,
-      { rev, heat_ref: heat_ref.trim() }, `Version ${rev} added to ${cert.document_name}`)
+      { rev, heat_ref: heat_ref.trim() }, `Version ${rev} added to ${cert.document_name}`, Number(req.params.projectId) || null)
 
     res.status(201).json({ ok: true, rev })
   } catch (e) {
@@ -301,7 +301,7 @@ router.post('/cert/:certId/verify', async (req, res) => {
 
     await writeAudit(uid, 'cert_verified', 'traceability_cert', certId,
       { status: cert.status }, { status: 'verified', released_holds: released.affectedRows },
-      `Cert ${cert.file_name || cert.document_name} verified${released.affectedRows ? ` · ${released.affectedRows} hold(s) released` : ''}`)
+      `Cert ${cert.file_name || cert.document_name} verified${released.affectedRows ? ` · ${released.affectedRows} hold(s) released` : ''}`, Number(req.params.projectId) || null)
 
     res.json({ ok: true, holds_released: released.affectedRows })
   } catch (e) {
@@ -328,7 +328,7 @@ router.post('/cert/:certId/reject', async (req, res) => {
       [reason.trim(), certId])
     await writeAudit(uid, 'cert_rejected', 'traceability_cert', certId,
       { status: cert.status }, { status: 'rejected', reason: reason.trim() },
-      `Cert ${cert.file_name || cert.document_name} rejected`)
+      `Cert ${cert.file_name || cert.document_name} rejected`, Number(req.params.projectId) || null)
 
     res.json({ ok: true })
   } catch (e) {
@@ -411,7 +411,7 @@ router.post('/hold/:holdId/chase', async (req, res) => {
     await writeAudit(uid, send_email ? 'hold_chase_emailed' : 'hold_chase_logged',
       'traceability_hold', holdId, { chase_count: hold.chase_count },
       { chase_count: hold.chase_count + 1, recipient: recipient || hold.vendor_email },
-      `Chase #${hold.chase_count + 1} on hold ${hold.tag || hold.item}${send_email ? ' (email sent)' : ' (logged only)'}`)
+      `Chase #${hold.chase_count + 1} on hold ${hold.tag || hold.item}${send_email ? ' (email sent)' : ' (logged only)'}`, Number(req.params.projectId) || null)
 
     // Email queueing is mocked — no SMTP wired in this environment.
     res.json({ ok: true, chase_count: hold.chase_count + 1, emailed: !!send_email })
