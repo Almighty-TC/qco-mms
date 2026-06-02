@@ -381,13 +381,22 @@ const StockTakeModal = ({ dark, stock, onClose }: { dark: boolean; stock: StockI
   const under   = stock.filter(i => counted[i.id] !== undefined && Number(counted[i.id]) < Number(i.qty)).length
   const countedN = Object.keys(counted).length
 
+  // Maximized uses fixed PX INSETS, not 96vw/92vh. The app's large-font /
+  // accessibility setting puts a `zoom:1.15` ancestor above this modal, and
+  // viewport units (vw/vh) ignore ancestor zoom — so 96vw rendered ~15% too
+  // wide and the modal overflowed the viewport, clipping the footer button.
+  // Pinning all four edges in px is zoom-safe (width = viewport − insets).
+  const frame: React.CSSProperties = maximized
+    ? { top: 16, left: 16, right: 16, bottom: 16 }
+    : { top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: 700, maxWidth: '95vw', maxHeight: '85vh' }
+
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
       {/* Flex column: header + KPI + footer are pinned (flexShrink 0); only the
           table area scrolls (both axes). The modal itself never scrolls, so the
           footer button can't be pushed off-screen in either state. */}
-      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 28, width: maximized ? '96vw' : 700, maxWidth: maximized ? '96vw' : '95vw', height: maximized ? '92vh' : undefined, maxHeight: maximized ? '92vh' : '85vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+      <div style={{ position: 'fixed', ...frame, background: cardBg, border: bd, borderRadius: 12, padding: 28, overflow: 'hidden', display: 'flex', flexDirection: 'column', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexShrink: 0 }}>
           <div>
             <div style={{ fontSize: 15, fontWeight: 700, color: col }}>📋 Stock take · Physical count</div>
