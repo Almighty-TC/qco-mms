@@ -2,12 +2,13 @@
 // Field Material Request register. Two views: MC view / Contractor view.
 // MC view: approve/reject FMRs with WBS ceiling and stock availability checks.
 // Contractor view: raise new FMRs against assigned WBS scope.
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { useCurrentUser } from '../hooks/useCurrentUser'
 import { ScopeBanner } from '../components/ScopeBanner'
+import { useAutoTitle } from '../hooks/useAutoTitle'
 
 const API = 'http://localhost:3001/api'
 type View = 'mc' | 'contractor'
@@ -63,6 +64,9 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
   const [approveFmr, setApproveFmr] = useState<FMRRow | null>(null)
   const [viewFmr, setViewFmr]     = useState<FMRRow | null>(null)
   const [raiseFmr, setRaiseFmr]   = useState(false)
+  // Truncated cells get a hover tooltip; re-runs when the FMR list changes.
+  const tableRef = useRef<HTMLDivElement>(null)
+  useAutoTitle(tableRef, [fmrs])
 
   const fetchFMRs = async () => {
     setLoading(true)
@@ -196,7 +200,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
 
         {/* Table */}
         <div style={{ background: cardBg, border: bd, borderRadius: 8, overflow: 'hidden' }}>
-          <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 420px)' }}>
+          <div ref={tableRef} style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 420px)' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                 <tr style={{ borderBottom: bd }}>

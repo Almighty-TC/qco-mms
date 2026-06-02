@@ -2,11 +2,12 @@
 // Pending Receipt register — inbound SCNs awaiting goods-in.
 // 6 tabs: All · Arrived · In Transit · Customs · Shipments · Transfers
 // Click "Receipt →" on Arrived rows → 5-step Receipting Wizard.
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { useCurrentUser } from '../hooks/useCurrentUser'
+import { useAutoTitle } from '../hooks/useAutoTitle'
 
 const API = 'http://localhost:3001/api'
 
@@ -69,6 +70,9 @@ const MCReceiptingInner = ({ dark, projectId, projectName, onBack }: {
   const [loading, setLoading] = useState(true)
   const [search, setSearch]   = useState('')
   const [wizardScn, setWizardScn] = useState<SCNRow | null>(null)
+  // Truncated cells get a hover tooltip; re-runs when the register rows change.
+  const tableRef = useRef<HTMLDivElement>(null)
+  useAutoTitle(tableRef, [rows])
 
   const fetchData = async () => {
     setLoading(true)
@@ -161,7 +165,7 @@ const MCReceiptingInner = ({ dark, projectId, projectName, onBack }: {
 
         {/* Table */}
         <div style={{ background: cardBg, border: bd, borderTop: 'none', borderRadius: '0 0 8px 8px', overflow: 'hidden' }}>
-          <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 380px)' }}>
+          <div ref={tableRef} style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 380px)' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                 <tr style={{ borderBottom: bd }}>

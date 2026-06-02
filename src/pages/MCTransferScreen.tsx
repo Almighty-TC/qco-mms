@@ -2,10 +2,11 @@
 // Warehouse Transfer Register — inter-warehouse movements.
 // Pipeline: Requested → In transit → Picked up → Delivered → Complete
 // + New transfer wizard (2 steps). Transfer detail modal with lifecycle stepper.
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
+import { useAutoTitle } from '../hooks/useAutoTitle'
 
 const API = 'http://localhost:3001/api'
 
@@ -61,6 +62,9 @@ const MCTransferInner = ({ dark, projectId, projectName, onBack }: {
   const [viewTransfer, setViewTransfer] = useState<Transfer | null>(null)
   const [showNewTransfer, setShowNewTransfer] = useState(false)
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
+  // Truncated cells get a hover tooltip; re-runs when the transfer list changes.
+  const tableRef = useRef<HTMLDivElement>(null)
+  useAutoTitle(tableRef, [transfers])
 
   const fetchTransfers = async () => {
     setLoading(true)
@@ -126,7 +130,7 @@ const MCTransferInner = ({ dark, projectId, projectName, onBack }: {
 
         {/* Table */}
         <div style={{ background: cardBg, border: bd, borderRadius: 8, overflow: 'hidden' }}>
-          <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 360px)' }}>
+          <div ref={tableRef} style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 360px)' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                 <tr style={{ borderBottom: bd }}>

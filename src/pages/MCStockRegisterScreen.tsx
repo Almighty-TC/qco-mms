@@ -1,12 +1,26 @@
 // ─── MC STOCK REGISTER ────────────────────────────────────────
 // Searchable warehouse stock across warehouses.
 // Group by: Warehouse / WBS / Item. Stock take modal. Move modal.
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { useCurrentUser } from '../hooks/useCurrentUser'
 import { ScopeBanner } from '../components/ScopeBanner'
+import { useAutoTitle } from '../hooks/useAutoTitle'
+
+// ─── Stock Register column geometry ───────────────────────────
+// Each WBS/warehouse/item group renders its OWN <table>; without identical
+// widths the columns drift group-to-group. table-layout:fixed + a shared
+// colgroup of fixed px widths gives every group the same geometry so columns
+// line up. A matching minWidth on the table means columns never collapse on a
+// narrow window (the wrapper scrolls horizontally instead). Two sets: the
+// standard 10-col layout and the subcontractor 7-col variant.
+const STOCK_COLS      = ['80px','90px','240px','90px','70px','55px','110px','130px','60px','150px'] // LOCATION,ITEM,DESC,WBS,QTY,UOM,COND,VENDOR,HOLD,actions
+const STOCK_COLS_SUB  = ['110px','300px','100px','80px','60px','120px','150px']                       // ITEM,DESC,WBS,QTY,UOM,COND,VENDOR
+const STOCK_MINW      = 1075 // Σ STOCK_COLS
+const STOCK_MINW_SUB  = 920  // Σ STOCK_COLS_SUB
+const ellipsisCell: React.CSSProperties = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
 
 const API = 'http://localhost:3001/api'
 
@@ -81,6 +95,10 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
   }, {} as Record<string, StockItem[]>)
 
   const inputSt: React.CSSProperties = { fontSize: 12, padding: '7px 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontFamily: 'inherit' }
+
+  // Truncated cells get a hover tooltip; re-runs when rows/grouping change.
+  const tablesRef = useRef<HTMLDivElement>(null)
+  useAutoTitle(tablesRef, [stock, groupBy, showHolds, loading])
 
   return (
     <div style={{ background: bg, minHeight: '100vh', fontFamily: 'IBM Plex Sans, sans-serif' }}>
@@ -163,7 +181,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
         </div>
 
         {/* Table grouped */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div ref={tablesRef} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {loading ? (
             <div style={{ background: cardBg, border: bd, borderRadius: 8, padding: 40, textAlign: 'center', color: sub }}>Loading…</div>
           ) : Object.entries(grouped).map(([groupKey, items]) => (
@@ -177,7 +195,10 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                 )}
               </div>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <table style={{ width: '100%', minWidth: isSubcontractor ? STOCK_MINW_SUB : STOCK_MINW, borderCollapse: 'collapse', fontSize: 12, tableLayout: 'fixed' }}>
+                  <colgroup>
+                    {(isSubcontractor ? STOCK_COLS_SUB : STOCK_COLS).map((w, i) => <col key={i} style={{ width: w }} />)}
+                  </colgroup>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                     <tr style={{ borderBottom: bd }}>
                       {(isSubcontractor ? ['ITEM/TAG','DESCRIPTION','WBS','QTY','UOM','CONDITION','VENDOR'] : ['LOCATION','ITEM/TAG','DESCRIPTION','WBS','QTY','UOM','CONDITION','VENDOR','HOLD','']).map(h => (
@@ -190,16 +211,16 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                       const cond = condPill(item.condition_status)
                       return (
                         <tr key={item.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
-                          {!isSubcontractor && <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{item.location_code || '—'}</td>}
-                          <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600 }}>{item.item_code}</td>
-                          <td style={{ padding: '8px 12px', color: col, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.description}>{item.description}</td>
-                          <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{item.wbs_code || '—'}</td>
-                          <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col, fontWeight: 600 }}>{Number(item.qty).toLocaleString()}</td>
-                          <td style={{ padding: '8px 12px', color: sub }}>{item.uom}</td>
+                          {!isSubcontractor && <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, ...ellipsisCell }}>{item.location_code || '—'}</td>}
+                          <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600, ...ellipsisCell }}>{item.item_code}</td>
+                          <td style={{ padding: '8px 12px', color: col, ...ellipsisCell }} title={item.description}>{item.description}</td>
+                          <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, ...ellipsisCell }}>{item.wbs_code || '—'}</td>
+                          <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col, fontWeight: 600, ...ellipsisCell }}>{Number(item.qty).toLocaleString()}</td>
+                          <td style={{ padding: '8px 12px', color: sub, ...ellipsisCell }}>{item.uom}</td>
                           <td style={{ padding: '8px 12px' }}>
                             <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: cond.bg, color: cond.color, fontWeight: 600 }}>{cond.label}</span>
                           </td>
-                          <td style={{ padding: '8px 12px', color: sub, fontSize: 11 }}>{item.vendor_name || '—'}</td>
+                          <td style={{ padding: '8px 12px', color: sub, fontSize: 11, ...ellipsisCell }}>{item.vendor_name || '—'}</td>
                           <td style={{ padding: '8px 12px' }}>
                             {item.trace_hold ? <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: 'rgba(239,68,68,0.1)', color: '#ef4444', fontWeight: 600 }}>hold</span> : <span style={{ color: sub }}>—</span>}
                           </td>
@@ -210,13 +231,13 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                                 {item.condition_status === 'quarantine' ? (
                                   // Quarantined stock: resolve (release / reject) instead of move.
                                   <button onClick={() => setResolveItem(item)}
-                                    style={{ padding: '4px 10px', borderRadius: 5, border: 'none', background: '#f59e0b', color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>⚠ Resolve</button>
+                                    style={{ padding: '4px 10px', borderRadius: 5, border: 'none', background: '#f59e0b', color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}>⚠ Resolve</button>
                                 ) : (
                                   <>
                                     <button onClick={() => setDocsItem(item)}
-                                      style={{ padding: '4px 10px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>📎 Docs</button>
+                                      style={{ padding: '4px 10px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap' }}>📎 Docs</button>
                                     <button onClick={() => setMoveItem(item)}
-                                      style={{ padding: '4px 10px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>→ Move</button>
+                                      style={{ padding: '4px 10px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap' }}>→ Move</button>
                                   </>
                                 )}
                               </div>
@@ -349,6 +370,9 @@ const StockTakeModal = ({ dark, stock, onClose }: { dark: boolean; stock: StockI
   const bd     = `1px solid ${dark ? '#334155' : '#dde3ed'}`
   const sub    = '#94a3b8'
   const [counted, setCounted] = useState<Record<number, string>>({})
+  const [maximized, setMaximized] = useState(false)
+  const takeRef = useRef<HTMLDivElement>(null)
+  useAutoTitle(takeRef, [stock, maximized])
 
   const matched = stock.filter(i => counted[i.id] !== undefined && Number(counted[i.id]) === Number(i.qty)).length
   const over    = stock.filter(i => counted[i.id] !== undefined && Number(counted[i.id]) > Number(i.qty)).length
@@ -358,13 +382,18 @@ const StockTakeModal = ({ dark, stock, onClose }: { dark: boolean; stock: StockI
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
-      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 28, width: 700, maxWidth: '95vw', maxHeight: '85vh', overflow: 'auto', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 28, width: maximized ? '96vw' : 700, maxWidth: maximized ? '96vw' : '95vw', height: maximized ? '92vh' : undefined, maxHeight: maximized ? '92vh' : '85vh', overflow: 'auto', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
           <div>
             <div style={{ fontSize: 15, fontWeight: 700, color: col }}>📋 Stock take · Physical count</div>
             <div style={{ fontSize: 12, color: sub, marginTop: 2 }}>Cycle count or full count — variances generate adjustment proposals</div>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: sub, cursor: 'pointer' }}>✕</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            {/* Maximize / restore — grows the modal to near-full-screen and back */}
+            <button onClick={() => setMaximized(m => !m)} title={maximized ? 'Restore' : 'Maximize'}
+              style={{ background: 'none', border: 'none', fontSize: 16, color: sub, cursor: 'pointer' }}>{maximized ? '⤡' : '⤢'}</button>
+            <button onClick={onClose} title="Close" style={{ background: 'none', border: 'none', fontSize: 18, color: sub, cursor: 'pointer' }}>✕</button>
+          </div>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 16 }}>
@@ -381,7 +410,7 @@ const StockTakeModal = ({ dark, stock, onClose }: { dark: boolean; stock: StockI
           ))}
         </div>
 
-        <div style={{ overflowY: 'auto', maxHeight: 340 }}>
+        <div ref={takeRef} style={{ overflowY: 'auto', maxHeight: maximized ? 'calc(92vh - 260px)' : 340 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
