@@ -31,15 +31,21 @@ const upload = multer({
 
 // ─── AUDIT HELPER ────────────────────────────────────────────────────────────
 // Non-blocking — errors are logged to console only.
+// `resource` (NOT NULL) is the request path (query string stripped), matching the
+// path-only convention of existing rows; entity_type/entity_id stay as structured
+// filter fields.
 function audit(req, action, entityType, entityId, before = null, after = null) {
+  // path-only, no /api mount prefix — matches the existing audit_log convention
+  const resource = (req.originalUrl || req.url || '').split('?')[0].replace(/^\/api(?=\/)/, '')
   db.query(
-    `INSERT INTO audit_log (user_id, action, entity_type, entity_id, before_value, after_value, ip)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO audit_log (user_id, action, entity_type, entity_id, before_value, after_value, resource, ip)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [req.user?.id ?? null, action, entityType, entityId,
      before ? JSON.stringify(before) : null,
      after  ? JSON.stringify(after)  : null,
+     resource,
      req.ip ?? null]
-  ).catch(e => console.warn('audit_log insert failed:', e.message))
+  ).catch(e => console.error('[audit] insert failed:', e.message))
 }
 
 // ─── NEXT REVISION HELPER ────────────────────────────────────────────────────
