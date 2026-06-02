@@ -11,7 +11,13 @@ const XLSX    = require('xlsx')
 
 router.use(authenticateToken)
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
-router.use(require('../middleware/permissions').enforce(p => p.includes('/certificate') ? null : p.includes('/commodit') ? 'commodity' : p.includes('/equipment') ? 'equipment' : 'wbs')) // C-b2: wbs/commodity/equipment per path; certificates→deny-floor residual
+router.use(require('../middleware/permissions').enforce(p =>
+  p.includes('/certificates/equipment') ? 'equipment'        // C-d #2: cert POST gated by entity module
+  : p.includes('/certificates/commodity') ? 'commodity'
+  : p.includes('/certificate') ? null                        // bare /certificates/:id → certGate (DB lookup)
+  : p.includes('/commodit') ? 'commodity'
+  : p.includes('/equipment') ? 'equipment'
+  : 'wbs')) // C-b2: wbs/commodity/equipment per path
 router.use(require('../middleware/permissions').queueGate(/\/foundational\/\d+\/(wbs|commodities|equipment)$/, /\/foundational\/\d+\/(wbs|commodities|equipment)\/\d+$/)) // C-c D1: proposers (project_control) must use approval queue for create/delete; admin direct
 
 // Multer for certificate uploads
@@ -46,6 +52,21 @@ function audit(req, action, entity, before, after) {
      JSON.stringify(before), JSON.stringify(after),
      resource, req.ip]
   ).catch(e => console.error('[audit] insert failed:', e.message))
+}
+
+// ─── CERT GATE (C-d #2) ──────────────────────────────────────────────────────
+// Bare /certificates/:id routes (status PATCH, DELETE) carry no entityType in the
+// path, so gate by the cert's OWN entity_type (commodity/equipment) via a lookup,
+// then delegate to requirePermission. Admin bypasses.
+async function certGate(req, res, next) {
+  if (req.user?.role === 'admin') return next()
+  try {
+    const [[c]] = await db.query('SELECT entity_type FROM foundational_certificates WHERE id=?', [Number(req.params.id)])
+    if (!c) return res.status(404).json({ error: 'Certificate not found' })
+    const module = c.entity_type === 'equipment' ? 'equipment' : 'commodity'
+    const action = req.method === 'DELETE' ? 'can_delete' : 'can_edit'
+    return require('../middleware/permissions').requirePermission(module, action)(req, res, next)
+  } catch (e) { return res.status(500).json({ error: e.message }) }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1003,7 +1024,7 @@ router.post('/:projectId/certificates/:entityType/:entityId', uploadCert.single(
 })
 
 // PATCH /api/foundational/:projectId/certificates/:id/status
-router.patch('/:projectId/certificates/:id/status', async (req, res) => {
+router.patch('/:projectId/certificates/:id/status', certGate, async (req, res) => {
   try {
     const { status } = req.body
     await db.query('UPDATE foundational_certificates SET status=? WHERE id=?', [status, Number(req.params.id)])
@@ -1014,7 +1035,7 @@ router.patch('/:projectId/certificates/:id/status', async (req, res) => {
 })
 
 // DELETE /api/foundational/:projectId/certificates/:id
-router.delete('/:projectId/certificates/:id', async (req, res) => {
+router.delete('/:projectId/certificates/:id', certGate, async (req, res) => {
   try {
     const id = Number(req.params.id)
     const [[cert]] = await db.query('SELECT * FROM foundational_certificates WHERE id=?', [id])

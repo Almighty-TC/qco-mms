@@ -60,7 +60,8 @@ const uploadBulk = multer({
 })
 
 // ─── ALLOWED ROLES ────────────────────────────────────────────────────────────
-const EXPEDITOR_ASSIGN_ROLES  = new Set(['admin', 'procurement_manager', 'expediting_manager'])
+// C-d #1: expeditor-assign was module-moved to `expediting`; procurement_manager dropped (stale).
+const EXPEDITOR_ASSIGN_ROLES  = new Set(['admin', 'expediting_manager'])
 const CRITICAL_PATH_ROLES     = new Set(['admin', 'project_manager', 'procurement_manager'])
 const APPROVAL_ROLES          = new Set(['admin', 'procurement_manager', 'procurement_officer'])
 const DOC_UPLOAD_ROLES        = new Set(['admin', 'procurement_manager', 'procurement_officer'])

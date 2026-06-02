@@ -47,6 +47,8 @@ for (const r of ['expeditor','expediting_manager','procurement_officer','procure
 add('vendor','traceability',1,1,0,0,0,0)        // 'vendor' is the supplier role string in this system
 add('expeditor','traceability',1,1,0,0,0,0)
 add('materials_engineer','traceability',1,0,0,1,0,0) // technical review/approve/reject
+// procurement: officer may approve POs (C-d #3) — value-threshold ceiling still enforced inline
+add('procurement_officer','procurement',1,1,1,1,0,0)
 // procurement: expeditor-assignment handled by MODULE-MOVE at the route (gate that route with
 // requirePermission('expediting','can_edit')) — so NO procurement matrix change needed for it.
 // (Reported as the chosen option; nothing to insert here.)
@@ -64,7 +66,7 @@ async function main() {
       await conn.query(`DELETE FROM role_permissions WHERE role IN (${managedRoles.map(()=>'?').join(',')})`, managedRoles)
       await conn.query(`DELETE FROM role_permissions WHERE module IN ('wbs','commodity','equipment','mto','audit_review','fmr')`)
       // corrections: remove existing rows for the corrected (role,module) pairs so re-insert is clean
-      for (const [role,module] of [['expeditor','material_control'],['expediting_manager','material_control'],['procurement_officer','material_control'],['procurement_manager','material_control'],['project_manager','material_control'],['project_director','material_control'],['vendor','traceability'],['expeditor','traceability'],['materials_engineer','traceability'],['project_manager','mto']])
+      for (const [role,module] of [['expeditor','material_control'],['expediting_manager','material_control'],['procurement_officer','material_control'],['procurement_manager','material_control'],['project_manager','material_control'],['project_director','material_control'],['vendor','traceability'],['expeditor','traceability'],['materials_engineer','traceability'],['project_manager','mto'],['procurement_officer','procurement']])
         await conn.query('DELETE FROM role_permissions WHERE role=? AND module=?', [role, module])
     }
 
