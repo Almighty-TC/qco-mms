@@ -19,7 +19,7 @@ interface Props {
   onToast?: (message: string, type: 'success' | 'error') => void
 }
 
-type Step = 1 | 2 | 3 | 4 | 5
+type Step = 1 | 2 | 3 | 4 | 5 | 6
 
 interface SelectedLineVal { checked: boolean; qty: string }
 interface AdditionalItem  { desc: string; qty: string; uom: string }
@@ -28,9 +28,11 @@ interface PackageRow {
   length: string; width: string; height: string; weight: string
   is_dg: boolean
 }
+// Heat/Lot P1: one declared heat for the shipment (heat_number required; grade/cert optional).
+interface HeatRow { heat_number: string; grade: string; cert: string }
 
 // ─── CONSTANTS ────────────────────────────────────────────────
-const STEP_LABELS = ['Select lines', 'SCN details', 'Packages', 'Documents', 'Confirm']
+const STEP_LABELS = ['Select lines', 'SCN details', 'Packages', 'Heats', 'Documents', 'Confirm']
 
 const MODES = [
   { id: 'sea',     label: '🚢 Sea freight' },
@@ -100,7 +102,10 @@ export const CreateSCNWizard: React.FC<Props> = ({
   // ─── STEP 3: Packages ─────────────────────────────────────
   const [packages, setPackages] = useState<PackageRow[]>([])
 
-  // ─── STEP 4: Documents ────────────────────────────────────
+  // ─── STEP 4: Heats (Heat/Lot P1) ──────────────────────────
+  const [heats, setHeats] = useState<HeatRow[]>([])
+
+  // ─── STEP 5: Documents ────────────────────────────────────
   // Tracks uploaded file per doc name (stub — no actual upload)
   const [uploadedDocs, setUploadedDocs] = useState<Record<string, File | null>>({})
 
@@ -165,6 +170,14 @@ export const CreateSCNWizard: React.FC<Props> = ({
   const removePkg = (i: number) =>
     setPackages(prev => prev.filter((_, idx) => idx !== i))
 
+  // ─── HEATS (Heat/Lot P1) ──────────────────────────────────
+  const addHeat = () =>
+    setHeats(prev => [...prev, { heat_number: '', grade: '', cert: '' }])
+  const updateHeat = (i: number, field: keyof HeatRow, val: string) =>
+    setHeats(prev => prev.map((h, idx) => idx === i ? { ...h, [field]: val } : h))
+  const removeHeat = (i: number) =>
+    setHeats(prev => prev.filter((_, idx) => idx !== i))
+
   // ─── NAVIGATION GUARDS ────────────────────────────────────
   const canNext =
     step === 1 ? countSelected() > 0
@@ -194,6 +207,14 @@ export const CreateSCNWizard: React.FC<Props> = ({
         forwarder_name: forwarder || null,
         incoterms: incoterms || null,
         packages,
+        // Heat/Lot P1: declared heats for this shipment (optional — empty is fine).
+        heats: heats
+          .filter(h => h.heat_number.trim())
+          .map(h => ({
+            heat_number: h.heat_number.trim(),
+            material_grade: h.grade.trim() || null,
+            mill_cert_ref: h.cert.trim() || null,
+          })),
         notify_forwarder: notifyForwarder,
       }
       const { data } = await axios.post(`${API}/expediting/${projectId}/scn`, body)
@@ -592,7 +613,76 @@ export const CreateSCNWizard: React.FC<Props> = ({
     </div>
   )
 
-  // ─── STEP 4: DOCUMENTS ────────────────────────────────────
+  // ─── STEP 4: HEATS (Heat/Lot P1) ──────────────────────────
+  // Declare the shipment's heat numbers (mill-cert identities). Optional —
+  // a shipment may be created before heats are known. These become the source
+  // for the receipting heat dropdown (P2), scoped to this SCN.
+  const StepHeats = () => (
+    <div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>Heat numbers</div>
+      <div style={{ fontSize: 12, color: '#64748b', marginBottom: 16 }}>
+        Optional — declare the heats on this shipment's packing list / mill certs. They become
+        selectable at receipting. Leave empty if not yet known.
+      </div>
+
+      {heats.map((h, i) => (
+        <div key={i} style={{
+          border: '1px solid #dde3ed', borderRadius: 8, padding: '12px 14px', marginBottom: 8,
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>Heat {i + 1}</span>
+            <button onClick={() => removeHeat(i)}
+              style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 16, cursor: 'pointer' }}>×</button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+            <div>
+              <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>
+                Heat number <span style={{ color: '#ef4444' }}>*</span>
+              </label>
+              <input
+                value={h.heat_number}
+                onChange={e => updateHeat(i, 'heat_number', e.target.value)}
+                placeholder="e.g. H-48213"
+                style={{ ...inputStyle, width: '100%', fontFamily: 'JetBrains Mono, monospace' }}
+              />
+            </div>
+            <div>
+              <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Material grade</label>
+              <input
+                value={h.grade}
+                onChange={e => updateHeat(i, 'grade', e.target.value)}
+                placeholder="e.g. A516 Gr70"
+                style={{ ...inputStyle, width: '100%' }}
+              />
+            </div>
+            <div>
+              <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Mill cert ref</label>
+              <input
+                value={h.cert}
+                onChange={e => updateHeat(i, 'cert', e.target.value)}
+                placeholder="e.g. MTC-2026-0042"
+                style={{ ...inputStyle, width: '100%' }}
+              />
+            </div>
+          </div>
+        </div>
+      ))}
+
+      <button
+        onClick={addHeat}
+        style={{
+          width: '100%', padding: '10px',
+          border: '1px dashed #2563eb', borderRadius: 8,
+          background: 'none', color: '#2563eb',
+          cursor: 'pointer', fontFamily: 'inherit', fontSize: 12,
+        }}
+      >
+        + Add heat
+      </button>
+    </div>
+  )
+
+  // ─── STEP 5: DOCUMENTS ────────────────────────────────────
   // Shows required and optional doc rows with upload stubs.
   const Step4 = () => (
     <div>
@@ -652,7 +742,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
     </div>
   )
 
-  // ─── STEP 5: CONFIRM ──────────────────────────────────────
+  // ─── STEP 6: CONFIRM ──────────────────────────────────────
   // Summary of all entered data with notify toggle before final submit.
   const Step5 = () => {
     const selectedLinesList = (po?.po_lines || []).filter((l: any) => selectedLines[l.id]?.checked)
@@ -702,6 +792,9 @@ export const CreateSCNWizard: React.FC<Props> = ({
               <span style={{ color: '#94a3b8' }}>Incoterms</span><span>{incoterms || '—'}</span>
               {packages.length > 0 && (
                 <><span style={{ color: '#94a3b8' }}>Packages</span><span>{packages.length} package{packages.length !== 1 ? 's' : ''}</span></>
+              )}
+              {heats.filter(h => h.heat_number.trim()).length > 0 && (
+                <><span style={{ color: '#94a3b8' }}>Heats</span><span>{heats.filter(h => h.heat_number.trim()).length} heat{heats.filter(h => h.heat_number.trim()).length !== 1 ? 's' : ''}</span></>
               )}
             </div>
           </div>
@@ -753,8 +846,9 @@ export const CreateSCNWizard: React.FC<Props> = ({
               {step === 1 && <Step1 />}
               {step === 2 && <Step2 />}
               {step === 3 && <Step3 />}
-              {step === 4 && <Step4 />}
-              {step === 5 && <Step5 />}
+              {step === 4 && <StepHeats />}
+              {step === 5 && <Step4 />}
+              {step === 6 && <Step5 />}
             </>
           )}
         </div>
@@ -773,7 +867,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
                 ← Back
               </button>
             )}
-            {step < 5 ? (
+            {step < 6 ? (
               <button
                 onClick={() => {
                   if (step === 2 && !transportMode) {

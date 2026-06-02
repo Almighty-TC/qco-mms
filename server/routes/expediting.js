@@ -648,25 +648,31 @@ router.get('/:projectId/warehouses', async (req, res) => {
 
 // ─── CREATE SCN ───────────────────────────────────────────────
 // Creates a Shipment Control Note, updates qty_assigned on selected lines,
-// and inserts any additional items not on the PO.
+// inserts any additional items not on the PO, and (Heat/Lot P1) records the
+// shipment's declared heats. All writes run in one pooled transaction so a
+// later insert failure never leaves a half-created SCN.
 router.post('/:projectId/scn', async (req, res) => {
-  try {
-    const pid = Number(req.params.projectId)
-    const {
-      po_id, selected_lines = [], additional_items = [],
-      pickup_location, destination_warehouse_id, grid_bay,
-      cdd, etd, eta, transport_mode, forwarder_name, incoterms,
-      packages = [], notify_forwarder,
-    } = req.body
+  const pid = Number(req.params.projectId)
+  const {
+    po_id, selected_lines = [], additional_items = [],
+    pickup_location, destination_warehouse_id, grid_bay,
+    cdd, etd, eta, transport_mode, forwarder_name, incoterms,
+    packages = [], notify_forwarder,
+    heats = [],   // ── Heat/Lot P1: per-shipment declared heats (additive) ──
+  } = req.body
 
-    if (!po_id) return res.status(400).json({ error: 'po_id required' })
+  if (!po_id) return res.status(400).json({ error: 'po_id required' })
+
+  const conn = await db.getConnection()
+  try {
+    await conn.beginTransaction()
 
     // Generate SCN ref
-    const [[{ n }]] = await db.query('SELECT COUNT(*) AS n FROM shipment_control_notes')
+    const [[{ n }]] = await conn.query('SELECT COUNT(*) AS n FROM shipment_control_notes')
     const scnRef = `SCN-${new Date().getFullYear()}-${String(n + 1).padStart(4, '0')}`
 
     // Insert SCN
-    const [r] = await db.query(
+    const [r] = await conn.query(
       `INSERT INTO shipment_control_notes
         (scn_ref, po_id, project_id, origin_location, destination_warehouse_id,
          etd, eta, mode, forwarder_name, incoterms, status, notes, created_by)
@@ -679,7 +685,7 @@ router.post('/:projectId/scn', async (req, res) => {
 
     // Update po_lines qty_assigned for each selected line
     for (const { po_line_id, qty_allocated } of selected_lines) {
-      await db.query(
+      await conn.query(
         'UPDATE po_lines SET qty_assigned = COALESCE(qty_assigned,0) + ? WHERE id = ? AND po_id = ?',
         [Number(qty_allocated) || 0, po_line_id, po_id]
       )
@@ -688,16 +694,36 @@ router.post('/:projectId/scn', async (req, res) => {
     // Insert additional items (not on PO)
     for (const item of additional_items) {
       if (!item.description?.trim()) continue
-      await db.query(
+      await conn.query(
         'INSERT INTO scn_additional_items (scn_id, description, qty, uom, created_by) VALUES (?,?,?,?,?)',
         [scnId, item.description.trim(), item.qty || null, item.uom || 'EA', req.user.id]
       )
     }
 
+    // ── Heat/Lot P1: record the shipment's declared heats (additive) ──
+    // Optional — an empty list is fine (heats may be unknown at SCN creation).
+    // The receipting dropdown (P2) reads these scoped by scn_id. source='declared'.
+    for (const h of heats) {
+      const heatNo = (h.heat_number || '').trim()
+      if (!heatNo) continue
+      await conn.query(
+        `INSERT INTO scn_heats (scn_id, heat_number, material_grade, mill_cert_ref, source, po_line_id, created_by)
+         VALUES (?,?,?,?,'declared',?,?)`,
+        [scnId, heatNo,
+         (h.material_grade || '').trim() || null,
+         (h.mill_cert_ref || '').trim() || null,
+         h.po_line_id || null, req.user.id]
+      )
+    }
+
+    await conn.commit()
     res.status(201).json({ id: scnId, scn_ref: scnRef, status: 'draft' })
   } catch (e) {
+    await conn.rollback()
     console.error('[scn:create]', e.message)
     res.status(500).json({ error: e.message })
+  } finally {
+    conn.release()
   }
 })
 
