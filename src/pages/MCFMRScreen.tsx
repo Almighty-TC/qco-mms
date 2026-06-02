@@ -84,6 +84,23 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
   useEffect(() => { fetchFMRs() }, [projectId, pickup, critOnly]) // eslint-disable-line
   useEffect(() => { const t = setTimeout(fetchFMRs, 350); return () => clearTimeout(t) }, [search]) // eslint-disable-line
 
+  // Heat/Lot P4a-i — one-click issue of the approved qty (auto-FIFO consume).
+  const [issuingId, setIssuingId] = useState<number | null>(null)
+  const issueFmr = async (fmr: FMRRow) => {
+    if (issuingId) return
+    setIssuingId(fmr.id)
+    try {
+      const { data } = await axios.post(`${API}/mc/${projectId}/fmr/${fmr.id}/issue`, {})
+      const msg = data.short
+        ? `Issued ${data.total_issued} (stock short — line(s) partially issued)`
+        : `Issued ${data.total_issued} — ${data.header_status}`
+      addToast(data.short ? 'error' : 'success', msg)
+      fetchFMRs()
+    } catch (e: any) {
+      addToast('error', e.response?.data?.error || 'Failed to issue FMR')
+    } finally { setIssuingId(null) }
+  }
+
   const inputSt: React.CSSProperties = { fontSize: 12, padding: '7px 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontFamily: 'inherit' }
 
   const PICKUP_OPTS: { key: PickupWindow; label: string }[] = [
@@ -265,6 +282,15 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
                             style={{ padding: '4px 12px', borderRadius: 6, border: 'none', background: '#22c55e', color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>
                             Approve
                           </button>
+                        ) : view === 'mc' && ['approved', 'partially_approved', 'partial_issued'].includes(fmr.status) ? (
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button onClick={() => issueFmr(fmr)} disabled={issuingId === fmr.id}
+                              style={{ padding: '4px 12px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', cursor: issuingId === fmr.id ? 'wait' : 'pointer', fontSize: 11, fontWeight: 600 }}
+                              title="Issue the approved quantity (decrements stock, auto-FIFO)">
+                              {issuingId === fmr.id ? 'Issuing…' : 'Issue'}
+                            </button>
+                            <button onClick={() => setViewFmr(fmr)} style={{ padding: '4px 12px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>View</button>
+                          </div>
                         ) : (
                           <button onClick={() => setViewFmr(fmr)} style={{ padding: '4px 12px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>View</button>
                         )}
@@ -809,7 +835,7 @@ const FMRDetailModal = ({ dark, projectId, fmr, onClose, addToast }: {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
-                    {['ITEM','TYPE','DESCRIPTION','WBS','QTY REQ','ISSUED'].map(h => <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 9, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>)}
+                    {['ITEM','TYPE','DESCRIPTION','WBS','QTY REQ','APPROVED','ISSUED','STATUS'].map(h => <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 9, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>)}
                   </tr>
                 </thead>
                 <tbody>
@@ -822,7 +848,11 @@ const FMRDetailModal = ({ dark, projectId, fmr, onClose, addToast }: {
                       <td style={{ padding: '7px 10px', color: col, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.description}</td>
                       <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{l.wbs_code}</td>
                       <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col }}>{Number(l.qty_requested)} {l.uom}</td>
+                      <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: l.qty_approved != null && Number(l.qty_approved) > 0 ? col : sub }}>{l.qty_approved != null && Number(l.qty_approved) > 0 ? `${Number(l.qty_approved)} ${l.uom}` : '—'}</td>
                       <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: Number(l.qty_issued) > 0 ? '#2563eb' : sub }}>{Number(l.qty_issued) > 0 ? `${Number(l.qty_issued)} ${l.uom}` : '—'}</td>
+                      <td style={{ padding: '7px 10px' }}>
+                        <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 5, fontWeight: 600, background: l.line_status === 'issued' ? 'rgba(34,197,94,0.12)' : l.line_status === 'partial_issued' ? 'rgba(245,158,11,0.12)' : (dark ? '#334155' : '#eef2f7'), color: l.line_status === 'issued' ? '#16a34a' : l.line_status === 'partial_issued' ? '#d97706' : sub }}>{(l.line_status || '—').replace('_', ' ')}</span>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

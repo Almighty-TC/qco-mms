@@ -508,7 +508,7 @@ router.get('/:projectId/fmr', async (req, res) => {
          (SELECT COUNT(*) FROM fmr_lines WHERE fmr_id=f.id) AS line_count,
          (SELECT COALESCE(SUM(qty_requested),0) FROM fmr_lines WHERE fmr_id=f.id) AS total_qty_requested,
          -- Check stock availability (header item, legacy summary)
-         (SELECT COALESCE(SUM(qty_available),0) FROM warehouse_stock WHERE item_code=f.item_code AND project_id=f.project_id AND condition_status != 'quarantine') AS stock_on_hand
+         (SELECT COALESCE(SUM(qty_available),0) FROM warehouse_stock WHERE item_code=f.item_code AND project_id=f.project_id AND condition_status='good' AND trace_hold=0) AS stock_on_hand
        FROM fmr_requests f
        LEFT JOIN warehouses w ON w.id = f.warehouse_id
        WHERE ${conditions.join(' AND ')}
@@ -688,7 +688,7 @@ router.get('/:projectId/fmr/:fmrId/detail', async (req, res) => {
     if (!fmr) return res.status(404).json({ error: 'FMR not found' })
     const [lines] = await db.query(
       `SELECT id, item_id, item_code, item_type, description, wbs_code,
-              qty_requested, qty_issued, uom, line_status,
+              qty_requested, qty_approved, qty_issued, uom, line_status,
               DATE_FORMAT(ros_date, '%Y-%m-%d') AS ros_date
        FROM fmr_lines WHERE fmr_id=? ORDER BY id`, [fmrId])
     res.json({ fmr, lines })
@@ -708,7 +708,7 @@ router.get('/:projectId/fmr/:fmrId/detail', async (req, res) => {
 async function fmrLineAllocation(pid, warehouseId, itemCode, wbsCode) {
   const [[oh]] = await db.query(
     `SELECT COALESCE(SUM(qty_available),0) AS on_hand FROM warehouse_stock
-     WHERE project_id=? AND item_code=? AND wbs_code=? AND condition_status != 'quarantine'${warehouseId ? ' AND warehouse_id=?' : ''}`,
+     WHERE project_id=? AND item_code=? AND wbs_code=? AND condition_status='good' AND trace_hold=0${warehouseId ? ' AND warehouse_id=?' : ''}`,
     warehouseId ? [pid, itemCode, wbsCode, warehouseId] : [pid, itemCode, wbsCode])
   const [[iss]] = await db.query(
     `SELECT COALESCE(SUM(fl.qty_issued),0) AS issued
@@ -726,9 +726,19 @@ async function fmrLineAllocation(pid, warehouseId, itemCode, wbsCode) {
 }
 
 // ─── FMR HEADER ROLL-UP ───────────────────────────────────────
-// Derives the header status from the set of line statuses.
+// Derives the header status from the set of line statuses. Covers BOTH the
+// approval phase and (P4a-i) the issue phase: once any line is issued, the
+// header reflects issued / partial_issued (previously unreachable).
 function rollUpStatus(lineStatuses) {
   if (lineStatuses.some(s => s === 'pending')) return 'pending_approval'
+  // Issue phase — once consumption has begun on any line.
+  const anyIssued = lineStatuses.some(s => s === 'issued' || s === 'partial_issued')
+  if (anyIssued) {
+    const active = lineStatuses.filter(s => s !== 'rejected')
+    const allIssued = active.length > 0 && active.every(s => s === 'issued')
+    return allIssued ? 'issued' : 'partial_issued'
+  }
+  // Approval phase.
   const anyApproved = lineStatuses.some(s => s === 'approved' || s === 'partially_approved')
   const anyRejected = lineStatuses.some(s => s === 'rejected')
   if (anyApproved && anyRejected) return 'partially_approved'
@@ -859,6 +869,96 @@ router.put('/:projectId/fmr/:fmrId/approve', async (req, res) => {
   } catch (e) {
     console.error('[mc:fmr-approve]', e.message)
     res.status(500).json({ error: e.message })
+  }
+})
+
+// POST /api/mc/:projectId/fmr/:fmrId/issue — ISSUE the approved qty (Heat/Lot P4a-i).
+// The missing consumption step: decrement issuable holdings and record the issue.
+// One-click "issue approved qty"; auto-FIFO by received_date across issuable
+// holdings (good + trace_hold=0 + qty_available>0) in the FMR's warehouse, item+wbs.
+// Over-issue is impossible (each take is clamped to qty_available, holdings FOR
+// UPDATE); if stock is short the line becomes partial_issued. Whole consumption
+// in one pooled transaction. NO HEAT yet — fmr_issue_lines.heat_number is P4b.
+router.post('/:projectId/fmr/:fmrId/issue', async (req, res) => {
+  if (!APPROVAL_ALLOWED.has(req.user?.role)) return res.status(403).json({ error: 'Only Materials Controllers and Managers can issue FMRs' })
+  const pid = Number(req.params.projectId)
+  const fmrId = Number(req.params.fmrId)
+  const userId = req.user?.id || 1
+
+  const conn = await db.getConnection()
+  try {
+    await conn.beginTransaction()
+    const [[fmr]] = await conn.query('SELECT * FROM fmr_requests WHERE id=? AND project_id=? FOR UPDATE', [fmrId, pid])
+    if (!fmr) { await conn.rollback(); conn.release(); return res.status(404).json({ error: 'FMR not found' }) }
+    // Only an approved FMR can be issued (partial_issued allowed → top up after restock).
+    if (!['approved', 'partially_approved', 'partial_issued'].includes(fmr.status)) {
+      await conn.rollback(); conn.release()
+      return res.status(422).json({ error: `FMR must be approved before issuing (current status: ${fmr.status})` })
+    }
+
+    const [lines] = await conn.query('SELECT * FROM fmr_lines WHERE fmr_id=?', [fmrId])
+    let totalIssued = 0
+    let anyShort = false
+
+    for (const line of lines) {
+      const approved = Number(line.qty_approved || 0)
+      const already  = Number(line.qty_issued || 0)
+      let outstanding = approved - already
+      if (!(outstanding > 0)) continue   // rejected (approved=0) or already fully issued
+
+      // Issuable holdings — FIFO, locked. Quarantine AND trace_hold excluded.
+      const [holds] = await conn.query(
+        `SELECT id, qty, qty_available, location_code FROM warehouse_stock
+         WHERE project_id=? AND warehouse_id=? AND item_code=? AND wbs_code=?
+           AND condition_status='good' AND trace_hold=0 AND qty_available>0
+         ORDER BY received_date ASC, created_at ASC FOR UPDATE`,
+        [pid, fmr.warehouse_id, line.item_code, line.wbs_code])
+
+      let lineIssued = 0
+      for (const h of holds) {
+        if (outstanding <= 0) break
+        const take = Math.min(outstanding, Number(h.qty_available))   // clamp → never over-issue / negative
+        if (!(take > 0)) continue
+        const newQty   = Number(h.qty) - take
+        const newAvail = Number(h.qty_available) - take
+        if (newQty <= 0) await conn.query('DELETE FROM warehouse_stock WHERE id=?', [h.id])   // fully consumed → row removed (transfer pattern)
+        else await conn.query('UPDATE warehouse_stock SET qty=?, qty_available=? WHERE id=?', [newQty, newAvail, h.id])
+        await conn.query(
+          `INSERT INTO fmr_issue_lines (fmr_id, fmr_line_id, stock_id, qty, heat_number, location_code, item_code, wbs_code, issued_by)
+           VALUES (?,?,?,?,?,?,?,?,?)`,
+          [fmrId, line.id, h.id, take, null, h.location_code, line.item_code, line.wbs_code, userId])
+        lineIssued += take
+        outstanding -= take
+      }
+
+      if (lineIssued > 0) {
+        const newIssued = already + lineIssued
+        const lineStatus = newIssued >= approved ? 'issued' : 'partial_issued'
+        await conn.query('UPDATE fmr_lines SET qty_issued=?, line_status=? WHERE id=?', [newIssued, lineStatus, line.id])
+        totalIssued += lineIssued
+      }
+      if (outstanding > 0) anyShort = true   // stock short → this line stays partial
+    }
+
+    // Header roll-up (rollUpStatus now reaches issued / partial_issued).
+    const [allLines] = await conn.query('SELECT line_status FROM fmr_lines WHERE fmr_id=?', [fmrId])
+    const newStatus = rollUpStatus(allLines.map(l => l.line_status))
+    const [[iq]] = await conn.query('SELECT COALESCE(SUM(qty_issued),0) AS q FROM fmr_lines WHERE fmr_id=?', [fmrId])
+    await conn.query('UPDATE fmr_requests SET status=?, qty_issued=?, updated_at=NOW() WHERE id=?', [newStatus, iq.q, fmrId])
+
+    await conn.commit()
+    await writeAudit(userId, 'fmr_issue', 'fmr', fmrId,
+      { status: fmr.status }, { status: newStatus, total_issued: totalIssued, short: anyShort },
+      `/mc/${pid}/fmr/${fmrId}/issue`)
+
+    const [[updated]] = await db.query('SELECT * FROM fmr_requests WHERE id=?', [fmrId])
+    res.json({ success: true, total_issued: totalIssued, short: anyShort, header_status: newStatus, fmr: updated })
+  } catch (e) {
+    await conn.rollback()
+    console.error('[mc:fmr-issue]', e.message)
+    res.status(500).json({ error: e.message })
+  } finally {
+    conn.release()
   }
 })
 
