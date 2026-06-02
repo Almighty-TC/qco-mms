@@ -14,6 +14,12 @@ const API = 'http://localhost:3001/api'
 type Tab = 'all' | 'arrived' | 'in_transit' | 'customs' | 'shipments' | 'transfers'
 type WizardStep = 1 | 2 | 3 | 4 | 5
 
+// Heat/Lot P2b — one heat allocation within a split PO line.
+interface SubLine {
+  received_qty: number; damaged_qty: number
+  heat_number: string; heat_off_list: boolean; heat_off_list_reason: string
+}
+
 interface SCNRow {
   id: number; scn_ref: string; status: string; mode?: string; type: 'SHIPMENT' | 'TRANSFER'
   eta?: string | null; origin_location?: string | null; vendor_name?: string | null
@@ -272,6 +278,11 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
   const [heatReason, setHeatReason] = useState<Record<number, string>>({})
   const [selectedLines, setSelectedLines] = useState<Record<number, boolean>>({})
   const [bulkHeat, setBulkHeat]     = useState('')
+  // Heat/Lot P2b — split state. A line present in `splitLines` is split into N
+  // sub-lines, each its own received_qty + damaged_qty + heat. Absent = the P2a
+  // 1:1 path (unchanged). The line's ACTUAL (actuals[id]) is the reconcile target:
+  // a split is valid only when Σ sub.received_qty === that total.
+  const [splitLines, setSplitLines] = useState<Record<number, SubLine[]>>({})
   const [hasDiscrepancy, setHasDiscrepancy] = useState(false)
   const [location, setLocation] = useState('')
   const [cargoCondition, setCargo] = useState('')
@@ -327,13 +338,42 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
     try {
       // Phase 1: persist the per-line received quantities + discrepancy detail
       // the wizard collected. Built from the real PO lines.
-      const lines = (detail?.lines || []).map((l: any) => {
+      // Heat/Lot P2b — a SPLIT line fans out into N entries (same po_line_id, each
+      // its own received/damaged/heat); a non-split line stays the P2a 1:1 entry.
+      // The complete handler loops entries → N receipt_lines + holdings, and the
+      // received-to-date / remaining / status math is SUM-based, so totals match.
+      const lines = (detail?.lines || []).flatMap((l: any) => {
         const expected = lineExpected(l)   // remaining-to-receive for THIS receipt
-        const received = actuals[l.id] ?? expected
+        const subs = splitLines[l.id]
+        const lineTotal = actuals[l.id] ?? expected
+        const wbs = l.wbs_code_snapshot || null
+        const itemCode = l.tag_number || l.equipment_tag || null
+        if (Array.isArray(subs) && subs.length > 0) {
+          // SPLIT: one entry per heat allocation. Discrepancy (type/notes) keys off
+          // the line total vs expected (same rule), applied to every sub-entry.
+          const issue = lineTotal !== expected || subs.some(s => Number(s.damaged_qty || 0) > 0)
+          return subs.map((s) => ({
+            po_line_id: l.id,
+            line_number: l.line_number,
+            description: l.description,
+            expected_qty: null,                       // informational only; not used in the SUM math
+            received_qty: Number(s.received_qty) || 0,
+            damaged_qty: Number(s.damaged_qty) || 0,
+            uom: l.uom || 'EA',
+            wbs_code: wbs,
+            item_code: itemCode,
+            discrepancy_type: issue ? (discrepancyTypes[l.id] || null) : null,
+            discrepancy_notes: issue ? (discrepancyNotes.trim() || null) : null,
+            heat_number: (s.heat_number || '').trim() || null,
+            heat_off_list: s.heat_off_list ? 1 : 0,
+            heat_off_list_reason: s.heat_off_list ? ((s.heat_off_list_reason || '').trim() || null) : null,
+          }))
+        }
+        // 1:1 (P2a) path — unchanged.
+        const received = lineTotal
         const dmg = damaged[l.id] ?? 0
-        // Phase 2 discrepancy rule: qty mismatch OR any damaged units.
         const issue = received !== expected || dmg > 0
-        return {
+        return [{
           po_line_id: l.id,
           line_number: l.line_number,
           description: l.description,
@@ -341,17 +381,14 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
           received_qty: received,
           damaged_qty: dmg,
           uom: l.uom || 'EA',
-          wbs_code: l.wbs_code_snapshot || null,
-          item_code: l.tag_number || l.equipment_tag || null,
+          wbs_code: wbs,
+          item_code: itemCode,
           discrepancy_type: issue ? (discrepancyTypes[l.id] || null) : null,
-          // Single shared notes field applies to whichever lines diverge.
           discrepancy_notes: issue ? (discrepancyNotes.trim() || null) : null,
-          // Heat/Lot P2a — heat is additive; it changes no quantity. Off-list
-          // carries the flag + reason; declared heat is just the number.
           heat_number: (heat[l.id] || '').trim() || null,
           heat_off_list: heatOffList[l.id] ? 1 : 0,
           heat_off_list_reason: heatOffList[l.id] ? ((heatReason[l.id] || '').trim() || null) : null,
-        }
+        }]
       })
       await axios.post(`${API}/mc/${projectId}/receipting/${scn.id}/complete`, {
         location_code: location.trim(), cargo_condition: cargoCondition, notes,
@@ -464,9 +501,15 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
           // Phase 4: "expected" = remaining-to-receive (so a 2nd receipt takes the balance).
           const lines = detail?.lines || []
           const expOf = (l: any) => lineExpected(l)
-          const recOf = (l: any) => actuals[l.id] ?? expOf(l)
-          const dmgOf = (l: any) => damaged[l.id] ?? 0
-          // A line is a discrepancy when received != expected OR damaged > 0.
+          const recOf = (l: any) => actuals[l.id] ?? expOf(l)   // line total received (also the split reconcile target)
+          // ── Heat/Lot P2b split helpers (a split line has a SubLine[]; absent = 1:1) ──
+          const subsOf = (l: any): SubLine[] | undefined => splitLines[l.id]
+          const isSplit = (l: any) => Array.isArray(subsOf(l)) && (subsOf(l) as SubLine[]).length > 0
+          const subSum = (l: any) => (subsOf(l) || []).reduce((t, s) => t + (Number(s.received_qty) || 0), 0)
+          // damaged total: split → Σ sub.damaged, else the 1:1 value.
+          const dmgOf = (l: any) => isSplit(l) ? (subsOf(l) || []).reduce((t, s) => t + (Number(s.damaged_qty) || 0), 0) : (damaged[l.id] ?? 0)
+          const splitReconciled = (l: any) => !isSplit(l) || subSum(l) === recOf(l)
+          // A line is a discrepancy when received != expected OR damaged > 0. (received = the line total either way.)
           const issueOf = (l: any) => recOf(l) !== expOf(l) || dmgOf(l) > 0
           const issueLines = lines.filter(issueOf)
           const anyIssue = issueLines.length > 0
@@ -476,10 +519,30 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
           const discrepancyReady = anyIssue && discrepancyNotes.trim().length > 0 && typesComplete
           const DISC_TYPES = ['Short delivery','Over delivery','Damaged','Missing','Other']
 
-          // ── Heat/Lot P2a gating + bulk apply (still 1 row per PO line) ──
-          // Heat is optional, but an off-list heat needs a reason before proceeding.
+          // ── Heat/Lot P2b split gating + mutators ──
+          // Valid split: sub-lines reconcile to the line total AND each sub's damaged ≤ its received.
+          const splitReady = lines.every((l: any) => splitReconciled(l) &&
+            (!isSplit(l) || (subsOf(l) as SubLine[]).every(s => Number(s.damaged_qty || 0) <= Number(s.received_qty || 0))))
+          const startSplit = (l: any) => setSplitLines(p => ({ ...p, [l.id]: [
+            { received_qty: Number(recOf(l)) || 0, damaged_qty: Number(damaged[l.id] || 0), heat_number: heat[l.id] || '', heat_off_list: !!heatOffList[l.id], heat_off_list_reason: heatReason[l.id] || '' },
+            { received_qty: 0, damaged_qty: 0, heat_number: '', heat_off_list: false, heat_off_list_reason: '' },
+          ] }))
+          const endSplit = (id: number) => setSplitLines(p => { const n = { ...p }; delete n[id]; return n })
+          const addSub = (id: number) => setSplitLines(p => ({ ...p, [id]: [...(p[id] || []), { received_qty: 0, damaged_qty: 0, heat_number: '', heat_off_list: false, heat_off_list_reason: '' }] }))
+          const removeSub = (id: number, i: number) => setSplitLines(p => { const arr = (p[id] || []).filter((_, idx) => idx !== i); if (arr.length <= 1) { const n = { ...p }; delete n[id]; return n } return { ...p, [id]: arr } })
+          const updateSub = (id: number, i: number, field: keyof SubLine, val: any) => setSplitLines(p => ({ ...p, [id]: (p[id] || []).map((s, idx) => idx === i ? { ...s, [field]: val } : s) }))
+          const setSubHeat = (id: number, i: number, v: string) => setSplitLines(p => ({ ...p, [id]: (p[id] || []).map((s, idx) => {
+            if (idx !== i) return s
+            if (v === '__other__') return { ...s, heat_off_list: true, heat_number: '' }
+            return { ...s, heat_off_list: false, heat_number: v, heat_off_list_reason: '' }
+          }) }))
+
+          // ── Heat/Lot P2a gating + bulk apply ──
+          // Heat is optional, but an off-list heat needs a reason before proceeding (1:1 OR each split sub).
           const declaredHeats = detail?.heats || []
-          const heatReady = lines.every((l: any) => !heatOffList[l.id] || (heatReason[l.id] || '').trim().length > 0)
+          const heatReady = lines.every((l: any) => isSplit(l)
+            ? (subsOf(l) as SubLine[]).every(s => !s.heat_off_list || (s.heat_off_list_reason || '').trim().length > 0)
+            : (!heatOffList[l.id] || (heatReason[l.id] || '').trim().length > 0))
           const selectedIds = lines.filter((l: any) => selectedLines[l.id]).map((l: any) => l.id)
           const allSelected = lines.length > 0 && lines.every((l: any) => selectedLines[l.id])
           const toggleSel = (id: number) => setSelectedLines(prev => ({ ...prev, [id]: !prev[id] }))
@@ -554,8 +617,14 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                     const issue = actual !== expected || dmg > 0   // live: qty mismatch OR damaged
                     const clean = !issue
                     const rowHighlight = issue ? (dark ? 'rgba(245,158,11,0.06)' : 'rgba(245,158,11,0.05)') : undefined
+                    // Heat/Lot P2b — split view
+                    const split = isSplit(l)
+                    const subs = subsOf(l) || []
+                    const allocated = subSum(l)
+                    const reconciled = splitReconciled(l)
                     return (
-                      <tr key={l.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, background: rowHighlight }}>
+                      <React.Fragment key={l.id}>
+                      <tr style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, background: rowHighlight }}>
                         <td style={{ padding: '8px 12px', textAlign: 'center' }}>
                           <input type="checkbox" checked={!!selectedLines[l.id]} onChange={() => toggleSel(l.id)} style={{ accentColor: '#2563eb', cursor: 'pointer' }} />
                         </td>
@@ -571,46 +640,76 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                             onChange={e => {
                               const v = Number(e.target.value)
                               setActuals(prev => ({ ...prev, [l.id]: v }))
-                              // damaged can't exceed received — clamp if needed
-                              if (dmg > v) setDamaged(prev => ({ ...prev, [l.id]: v }))
-                              clearIfClean(l, v, Math.min(dmg, v))
+                              // damaged can't exceed received — clamp if needed (1:1 only)
+                              if (!split && dmg > v) setDamaged(prev => ({ ...prev, [l.id]: v }))
+                              clearIfClean(l, v, split ? dmg : Math.min(dmg, v))
                             }}
                             style={{ ...inputSt, width: 80, textAlign: 'center', borderColor: actual !== expected ? '#f59e0b' : undefined }} />
+                          {/* Split reconcile indicator */}
+                          {split && (
+                            <div style={{ fontSize: 10, marginTop: 3, color: reconciled ? '#22c55e' : '#ef4444', fontFamily: 'JetBrains Mono, monospace' }}
+                              title="Σ sub-line received must equal the line total">
+                              {reconciled ? `✓ allocated ${allocated}` : `allocated ${allocated} of ${actual}`}
+                            </div>
+                          )}
                         </td>
                         <td style={{ padding: '8px 12px' }}>
-                          <input type="number" value={dmg} min={0} max={actual}
-                            onChange={e => {
-                              let v = Number(e.target.value)
-                              if (!(v >= 0)) v = 0
-                              if (v > actual) v = actual   // client validation: damaged ≤ received
-                              setDamaged(prev => ({ ...prev, [l.id]: v }))
-                              clearIfClean(l, actual, v)
-                            }}
-                            style={{ ...inputSt, width: 80, textAlign: 'center', borderColor: dmg > 0 ? '#f59e0b' : undefined }} />
+                          {/* Split → damaged is the derived Σ of sub-lines (read-only). 1:1 → editable. */}
+                          {split ? (
+                            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: dmg > 0 ? '#f59e0b' : sub }} title="sum of sub-line damaged">{dmg}</span>
+                          ) : (
+                            <input type="number" value={dmg} min={0} max={actual}
+                              onChange={e => {
+                                let v = Number(e.target.value)
+                                if (!(v >= 0)) v = 0
+                                if (v > actual) v = actual   // client validation: damaged ≤ received
+                                setDamaged(prev => ({ ...prev, [l.id]: v }))
+                                clearIfClean(l, actual, v)
+                              }}
+                              style={{ ...inputSt, width: 80, textAlign: 'center', borderColor: dmg > 0 ? '#f59e0b' : undefined }} />
+                          )}
                         </td>
                         <td style={{ padding: '8px 12px' }}>
                           <span title={clean ? 'Match' : (dmg > 0 ? 'Damaged units' : 'Qty mismatch')}
                             style={{ color: clean ? '#22c55e' : '#f59e0b', fontSize: 16 }}>{clean ? '✓' : '⚠'}</span>
                         </td>
-                        {/* ── Heat/Lot P2a — declared-heat dropdown + "Other / not listed" (reason required) ── */}
+                        {/* ── Heat: 1:1 dropdown (P2a) OR split summary + controls (P2b) ── */}
                         <td style={{ padding: '8px 12px' }}>
-                          <select value={heatOffList[l.id] ? '__other__' : (heat[l.id] || '')}
-                            onChange={e => setLineHeat(l.id, e.target.value)}
-                            style={{ ...inputSt, width: 170, padding: '5px 8px' }}>
-                            <option value="">— No heat —</option>
-                            {declaredHeats.map((h: any) => (
-                              <option key={h.id} value={h.heat_number}>{h.heat_number}{h.material_grade ? ` · ${h.material_grade}` : ''}</option>
-                            ))}
-                            <option value="__other__">Other / not listed…</option>
-                          </select>
-                          {heatOffList[l.id] && (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
-                              <input value={heat[l.id] || ''} onChange={e => setHeat(p => ({ ...p, [l.id]: e.target.value }))}
-                                placeholder="Heat number"
-                                style={{ ...inputSt, width: 170, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }} />
-                              <input value={heatReason[l.id] || ''} onChange={e => setHeatReason(p => ({ ...p, [l.id]: e.target.value }))}
-                                placeholder="Reason (required) *"
-                                style={{ ...inputSt, width: 170, fontSize: 11, borderColor: (heatReason[l.id] || '').trim() ? undefined : '#ef4444' }} />
+                          {!split ? (
+                            <>
+                              <select value={heatOffList[l.id] ? '__other__' : (heat[l.id] || '')}
+                                onChange={e => setLineHeat(l.id, e.target.value)}
+                                style={{ ...inputSt, width: 170, padding: '5px 8px' }}>
+                                <option value="">— No heat —</option>
+                                {declaredHeats.map((h: any) => (
+                                  <option key={h.id} value={h.heat_number}>{h.heat_number}{h.material_grade ? ` · ${h.material_grade}` : ''}</option>
+                                ))}
+                                <option value="__other__">Other / not listed…</option>
+                              </select>
+                              {heatOffList[l.id] && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+                                  <input value={heat[l.id] || ''} onChange={e => setHeat(p => ({ ...p, [l.id]: e.target.value }))}
+                                    placeholder="Heat number"
+                                    style={{ ...inputSt, width: 170, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }} />
+                                  <input value={heatReason[l.id] || ''} onChange={e => setHeatReason(p => ({ ...p, [l.id]: e.target.value }))}
+                                    placeholder="Reason (required) *"
+                                    style={{ ...inputSt, width: 170, fontSize: 11, borderColor: (heatReason[l.id] || '').trim() ? undefined : '#ef4444' }} />
+                                </div>
+                              )}
+                              {Number(actual) > 0 && (
+                                <button onClick={() => startSplit(l)}
+                                  style={{ marginTop: 6, background: 'none', border: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 11, padding: 0, fontFamily: 'inherit' }}>
+                                  ⊕ Split across heats
+                                </button>
+                              )}
+                            </>
+                          ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                              <span style={{ fontSize: 11, color: sub }}>{subs.length} heat{subs.length !== 1 ? 's' : ''} (see below)</span>
+                              <button onClick={() => endSplit(l.id)}
+                                style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 11, padding: 0, fontFamily: 'inherit', textAlign: 'left' }}>
+                                ✕ Unsplit
+                              </button>
                             </div>
                           )}
                         </td>
@@ -626,6 +725,69 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                           </td>
                         )}
                       </tr>
+                      {/* ── Heat/Lot P2b — sub-line rows for a split PO line ── */}
+                      {split && subs.map((s, i) => {
+                        const subClean = Number(s.damaged_qty || 0) <= Number(s.received_qty || 0)
+                        return (
+                          <tr key={`${l.id}-sub-${i}`} style={{ background: dark ? '#0f1626' : '#fafbff', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
+                            <td style={{ padding: '6px 12px' }} />
+                            <td colSpan={4} style={{ padding: '6px 12px 6px 28px', color: sub, fontSize: 11 }}>↳ heat allocation {i + 1}</td>
+                            <td style={{ padding: '6px 12px' }}>
+                              <input type="number" min={0} value={s.received_qty}
+                                onChange={e => updateSub(l.id, i, 'received_qty', Number(e.target.value) || 0)}
+                                style={{ ...inputSt, width: 80, textAlign: 'center' }} />
+                            </td>
+                            <td style={{ padding: '6px 12px' }}>
+                              <input type="number" min={0} max={s.received_qty} value={s.damaged_qty}
+                                onChange={e => { let v = Number(e.target.value) || 0; if (v > Number(s.received_qty)) v = Number(s.received_qty); updateSub(l.id, i, 'damaged_qty', v) }}
+                                style={{ ...inputSt, width: 80, textAlign: 'center', borderColor: !subClean ? '#ef4444' : (Number(s.damaged_qty) > 0 ? '#f59e0b' : undefined) }} />
+                            </td>
+                            <td style={{ padding: '6px 12px' }}>
+                              <button onClick={() => removeSub(l.id, i)} title="Remove this heat allocation"
+                                style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 14 }}>×</button>
+                            </td>
+                            <td style={{ padding: '6px 12px' }}>
+                              <select value={s.heat_off_list ? '__other__' : (s.heat_number || '')}
+                                onChange={e => setSubHeat(l.id, i, e.target.value)}
+                                style={{ ...inputSt, width: 170, padding: '5px 8px' }}>
+                                <option value="">— No heat —</option>
+                                {declaredHeats.map((h: any) => (
+                                  <option key={h.id} value={h.heat_number}>{h.heat_number}{h.material_grade ? ` · ${h.material_grade}` : ''}</option>
+                                ))}
+                                <option value="__other__">Other / not listed…</option>
+                              </select>
+                              {s.heat_off_list && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+                                  <input value={s.heat_number} onChange={e => updateSub(l.id, i, 'heat_number', e.target.value)}
+                                    placeholder="Heat number"
+                                    style={{ ...inputSt, width: 170, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }} />
+                                  <input value={s.heat_off_list_reason} onChange={e => updateSub(l.id, i, 'heat_off_list_reason', e.target.value)}
+                                    placeholder="Reason (required) *"
+                                    style={{ ...inputSt, width: 170, fontSize: 11, borderColor: (s.heat_off_list_reason || '').trim() ? undefined : '#ef4444' }} />
+                                </div>
+                              )}
+                            </td>
+                            {anyIssue && <td />}
+                          </tr>
+                        )
+                      })}
+                      {split && (
+                        <tr key={`${l.id}-add`} style={{ background: dark ? '#0f1626' : '#fafbff', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
+                          <td />
+                          <td colSpan={anyIssue ? 9 : 8} style={{ padding: '4px 12px 8px 28px' }}>
+                            <button onClick={() => addSub(l.id)}
+                              style={{ background: 'none', border: `1px dashed ${dark ? '#334155' : '#cbd5e1'}`, borderRadius: 6, color: '#2563eb', cursor: 'pointer', fontSize: 11, padding: '4px 10px', fontFamily: 'inherit' }}>
+                              + Add heat allocation
+                            </button>
+                            {!reconciled && (
+                              <span style={{ marginLeft: 10, fontSize: 11, color: '#ef4444' }}>
+                                Sub-line quantities ({allocated}) must equal the line total ({actual}).
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                      </React.Fragment>
                     )
                   })}
                 </tbody>
@@ -655,14 +817,17 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                 {!heatReady && (
                   <span style={{ fontSize: 11, color: '#ef4444', alignSelf: 'center' }}>An off-list heat needs a reason</span>
                 )}
+                {heatReady && !splitReady && (
+                  <span style={{ fontSize: 11, color: '#ef4444', alignSelf: 'center' }}>A split line's heats must reconcile to its total</span>
+                )}
                 {!anyIssue ? (
-                  <button onClick={() => proceed(false)} disabled={!allClean || !heatReady}
-                    style={{ padding: '8px 20px', borderRadius: 6, border: 'none', background: (allClean && heatReady) ? '#22c55e' : '#94a3b8', color: '#fff', cursor: (allClean && heatReady) ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
+                  <button onClick={() => proceed(false)} disabled={!allClean || !heatReady || !splitReady}
+                    style={{ padding: '8px 20px', borderRadius: 6, border: 'none', background: (allClean && heatReady && splitReady) ? '#22c55e' : '#94a3b8', color: '#fff', cursor: (allClean && heatReady && splitReady) ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
                     ✓ All match — proceed
                   </button>
                 ) : (
-                  <button onClick={() => proceed(true)} disabled={!discrepancyReady || !heatReady}
-                    style={{ padding: '8px 20px', borderRadius: 6, border: 'none', background: (discrepancyReady && heatReady) ? '#f59e0b' : '#94a3b8', color: '#fff', cursor: (discrepancyReady && heatReady) ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
+                  <button onClick={() => proceed(true)} disabled={!discrepancyReady || !heatReady || !splitReady}
+                    style={{ padding: '8px 20px', borderRadius: 6, border: 'none', background: (discrepancyReady && heatReady && splitReady) ? '#f59e0b' : '#94a3b8', color: '#fff', cursor: (discrepancyReady && heatReady && splitReady) ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
                     Proceed with discrepancy noted →
                   </button>
                 )}
