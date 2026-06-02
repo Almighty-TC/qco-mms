@@ -33,10 +33,13 @@ const uploadCert = multer({ storage: certStorage, limits: { fileSize: 25 * 1024 
 function audit(req, action, entity, before, after) {
   // path-only, no /api mount prefix — matches the existing audit_log convention
   const resource = (req.originalUrl || req.url || '').split('?')[0].replace(/^\/api(?=\/)/, '')
+  // project_id from the route param (all foundational routes are /:projectId/...);
+  // provable-only → NULL if absent (never guessed).
+  const projectId = Number(req.params.projectId) || null
   db.query(
-    `INSERT INTO audit_log (user_id, action, entity_type, entity_id, before_value, after_value, resource, ip)
-     VALUES (?,?,?,?,?,?,?,?)`,
-    [req.user.id, action, entity.split('/')[0], entity.split('/')[1] || null,
+    `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, before_value, after_value, resource, ip)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+    [req.user.id, action, entity.split('/')[0], entity.split('/')[1] || null, projectId,
      JSON.stringify(before), JSON.stringify(after),
      resource, req.ip]
   ).catch(e => console.error('[audit] insert failed:', e.message))
@@ -322,13 +325,11 @@ router.delete('/:projectId/wbs/:id', async (req, res) => {
 
     await conn.query('DELETE FROM wbs_nodes WHERE id=?', [id])
     // Audit row written inside the same transaction (atomic with the delete).
-    // NOTE: uses the real audit_log schema (before_value/after_value/ip/resource).
-    // The shared audit() helper in this file writes wrong column names and is
-    // silently swallowed — flagged for a separate fix (out of A3 scope).
+    // Audit row written inside the same transaction (atomic with the delete).
     await conn.query(
-      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, resource, before_value, after_value, ip)
-       VALUES (?,?,?,?,?,?,?,?)`,
-      [req.user.id, 'wbs_deleted', 'wbs_nodes', id, `wbs_nodes/${id}`,
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, resource, before_value, after_value, ip)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+      [req.user.id, 'wbs_deleted', 'wbs_nodes', id, (Number(pid) || null), `wbs_nodes/${id}`,
        JSON.stringify(node), JSON.stringify({}), req.ip]
     )
 
