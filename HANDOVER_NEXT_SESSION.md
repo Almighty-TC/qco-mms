@@ -1,6 +1,6 @@
 # QCO MMS — HANDOVER: NEXT SESSION
 # Updated: 02 June 2026
-# Last commit: 1d1f775
+# Last commit: 9b605c0
 # ⭐ THIS FILE IS THE SINGLE CANONICAL MODULE-STATUS DOC. HANDOVER.md and
 #    CLAUDE_CONTEXT.md point here for status (their own status tables are retired).
 # Read every word before doing anything.
@@ -49,7 +49,7 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 | Login | ✅ Complete | |
 | Dashboard | ⏳ BUILD LAST | Reads from all modules |
 | Admin | ✅ Complete | Users, suppliers/AVL, settings; Subcontractor + Freight Forwarder roles in dropdown |
-| Foundational — WBS | ✅ Complete | Tree, Gantt, tooltip, bulk ops, search, focus mode |
+| Foundational — WBS | ⚠️ Mostly complete | Tree, Gantt, tooltip, bulk ops, search, focus mode. **2 KNOWN BUGS (see §3c): delete-node flow broken (data-integrity, HIGH); Tree depth filter leaks (UI, MEDIUM).** |
 | Foundational — Commodity Library | ✅ Complete | Table, add/edit, certs, template download |
 | Foundational — Equipment List | ✅ Complete | Table, add/edit, certs, template download |
 | Procurement — PO Register | ✅ Complete | Register, stat cards, search, RAG |
@@ -97,15 +97,52 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
   - **P5 (UNCOMMITTED — held for review)** traceability heat⇄cert linkage, both directions, via a **case-insensitive normalized join** `UPPER(TRIM(heat_number)) = UPPER(TRIM(heat_ref))` — Stock Register heat→cert badge + CertDetailModal "material carrying this heat". No schema change.
   - **STOCK LIFECYCLE COMPLETE:** stock **enters** (receipting), **moves** (transfers), and **leaves** (FMR-out issue) — all decrement/conserve correctly and all exclude `quarantine` + `trace_hold` from issuable.
 
-- **WBS fixes — ✅ DONE.**
-  - Gantt legend (09d0f5c) + Tree/Gantt legends moved to the bottom, corrected to the REAL colours (schedule bars Planned/Forecast/Actual + ROS diamond + Today line; RAG dots On track/At risk/Breached/In progress/Not set).
-  - **Gantt depth control (UNCOMMITTED — held for review)** now reveals levels beyond L3: dropdown **L1 / L1–L2 / L1–L3 / All** + numeric **1–15**, two editors of one `ganttDepth`. Finite = **force-show** that many levels; **All = follow tree expand-state** (Infinity). Dead "All levels" tree-dropdown hidden in Gantt view. Frontend-only.
+- **WBS fixes — ✅ DONE (legends + Gantt depth control).** See §3c for the WBS bugs still OPEN.
+  - Gantt legend (09d0f5c) + both legends moved to the bottom, corrected to the REAL colours (schedule bars Planned/Forecast/Actual + ROS diamond + Today line; RAG dots On track/At risk/Breached/In progress/Not set). **Tree legend now committed (9b605c0).**
+  - **Gantt depth control — committed (7e828ae).** Reveals levels beyond L3: dropdown **L1 / L1–L2 / L1–L3 / All** + numeric **1–15**, two editors of one `ganttDepth`. Finite = **force-show** that many levels; **All = follow tree expand-state** (Infinity). Dead "All levels" tree-dropdown hidden in Gantt view. Frontend-only.
 
 - 📖 **User manual:** rebuilt as a valid `.docx` (09d9a1c — old one was corrupt text-renamed-docx); in-app "View full manual" link repointed to `/docs/QCO_MMS_User_Manual.docx`; maintained per-phase. Old `docs/USER_MANUAL.md` (markdown) is unlinked — cleanup candidate.
 
 - ⏭ **NEXT UP — the manual / help pass.** ONE shared source of truth: the manual (full) + in-app help panels (condensed, via `src/helpContent.tsx` / `src/components/HelpDrawer.tsx`).
   - **Chapters to WRITE:** Ch8 Logistics · Ch9 Material Control (Receipting / Stock / Stock-take / FMR / Transfers) · Ch10 Traceability · Ch11 Heat/Lot.
   - **Fold in captured facts:** WBS Gantt controls — Quarters/Months = timeline-scale zoom; depth dropdown + numeric (finite force-show / All follow-expand); bars = planned/forecast/actual; ROS = orange diamond; Today = orange line. Heat matching is **CASE-INSENSITIVE** (normalized join). Stock lifecycle (enter/move/leave) + quarantine/trace_hold never issuable.
+
+---
+
+## 3c. WBS AUDIT FINDINGS + GLOBAL TABLE STANDARD (logged 02 Jun — read-only diagnosis, nothing built)
+
+### 🔴 WBS DELETE-NODE FLOW — BROKEN (data-integrity; HIGH priority)
+- The 3-step delete wizard (**Impact → Reallocate → Confirm**) shipped **working in `d49ac74`**, then step-2 (Reallocate) was **INADVERTENTLY SEVERED in `ad5e6b0`** — the step-2 JSX was dropped, but the state (`allocations`, `allReallocated`), the `ReallocateLineRow` component (still ~line 411), and the backend `PATCH /wbs/:id/reallocate` were all LEFT IN PLACE. So it's a **regression, recoverable**.
+- **LIVE SYMPTOM:** a node WITH affected PO lines → Continue sets step 2 → no step-2 JSX exists → modal body renders **blank (dead-end)**. A node with NO affected lines → goes to Confirm → deletes.
+- **DATA-INTEGRITY HOLES (proven via rolled-back tests, project 1):**
+  - Backend `DELETE /wbs/:id` is a **bare `DELETE FROM wbs_nodes WHERE id=?`** — no child check, no lock check, no `po_lines` check.
+  - PO↔WBS link is **string-only** via `po_lines.wbs_code_snapshot` (varchar, **no FK**; `wbs_id` NULL on all 90 project-1 lines, so the FK never fires). Deleting a leaf **SILENTLY ORPHANS** its PO lines (they keep a dead WBS code).
+  - `purchase_orders.is_locked` **EXISTS but is NEVER checked** — a locked PO's lines can be silently detached.
+  - Deleting a node WITH children: `parent_id` self-FK (NO ACTION) blocks it at the DB → backend try/catch returns a **raw HTTP 500** (not a clean error).
+- **FIX PLAN (not built):** restore step-2 verbatim from `d49ac74` (matches current `ReallocateLineRow`/`excludeCode`); fix Continue routing (affected lines → 2; else children>0 → block; else → 3); surface `is_locked` in the impact view; **HARDEN the backend DELETE** — transactional, verify no `po_lines` still reference the code + no children remain before delete, return clean **409 not 500**, refuse (or require override) when an affected PO is locked. Do **UI restore + backend guards together**. Needs read-first → confirm → build → prove (same discipline as the stock-integrity fixes).
+
+### 🟡 WBS TREE DEPTH FILTER — LEAKS (UI bug; MEDIUM priority)
+- "Level 1 only" (`depthFilter`) still shows deeper nodes under an expanded parent. **Pre-existing, rooted in `ad5e6b0`** (NOT caused by the recent depth/legend work).
+- **CAUSE (two compounding defects in `FoundWBSScreen.tsx`):** (1) `collectVisible` propagates visibility down the whole subtree — `walk(n.children, match || parentVisible)` — correct for SEARCH ("show a hit's subtree") but wrong for a depth cap; once an L1 node matches, all descendants land in `visibleIds`. (2) `WBSRow` renders children with `filterVisible={filterVisible}` (parent's value) gated only by `isExpanded` → child visibility follows manual expand-state, not the depth filter.
+- **FIX PLAN (not built):** make depth a true cap, decoupled from search propagation — stop descending past max level (don't pass `parentVisible` through a depth-exceeded boundary); gate `WBSRow` children on their OWN `visibleIds` membership, not the parent's; optionally clamp the shared `expanded` set for depth-filtered-out nodes. **CARE:** `collectVisible` is shared with search + RAG filters — the fix must NOT break "show subtree of a search hit." UI-only, low risk.
+
+### ✅ WBS items that are FINE (no action)
+- Tree expand/collapse works (the earlier "broken" report was a **stale Vite HMR bundle**).
+- Tree + Gantt legends now correct + at the bottom (Gantt `09d0f5c`; Tree `9b605c0`).
+- The shared `expanded` Set between Tree↔Gantt is **intentional** (persists expansion across the toggle).
+
+### 📐 GLOBAL STANDING RULE + ROLLOUT TRACK — RESIZABLE TABLES (its own track, ~1.5–2 wks)
+- **STANDING RULE (also added to §7):** EVERY table in the app MUST have (1) resizable columns and (2) a reset-to-default button. Any new table must meet this from the start.
+- **CURRENT STATE:** implemented only in **Procurement + Admin**. ~12–14 other tables are bare.
+- **INFRA EXISTS (no new component needed):** `useColumnResize(tableId, defaultWidths, minWidths)` hook (localStorage-persisted widths + drag + `resetWidths`) + `AdminTable` component (bakes in resize handles + reset button + scroll fades). A second, name-based system (`useTableResize` + `ResizableTable`/`HeaderCell`) is used only by the **Dashboard project table** (reset folded into the global "Reset preferences" topbar button).
+- **ROLLOUT SURFACE (lacking resize+reset):** WBS Tree, FoundCommodity, FoundEquipment, MTOList, MTODetail, MCStockRegister, MCReceipting, FMR tables, Logistics, Traceability register, PODetail, ExpPODetail/Panel.
+- **APPROACH (not built):** standardise on `useColumnResize` + `AdminTable`. **Tier 1** — migrate straightforward grids to `AdminTable` (Commodity, Equipment, MTO list, Stock Register, Receipting, Logistics, Traceability) ≈0.5–1 day each. **Tier 2** — hook-only adoption for bespoke tables (WBS Tree chevron/indent rows, detail panels): wire `useColumnResize` + a ↺ reset button onto the existing `<table>` ≈0.5 day each. Sequence one-screen-per-commit with a verify each.
+
+### ⏭ SUGGESTED ORDER WHEN RESUMING
+1. **A3 WBS delete flow** (data-integrity — highest priority): read-first → confirm → build (restore step-2 + backend hardening) → prove → commit.
+2. **A1 WBS depth filter** (UI-only): fix the cap/propagation decoupling → prove → commit.
+3. **The manual/help pass** (Ch8 Logistics · Ch9 Material Control · Ch10 Traceability · Ch11 Heat/Lot; fold in WBS Gantt controls + case-insensitive-heat note).
+4. **The resizable-tables rollout track** (its own multi-commit sequence).
 
 ---
 
@@ -187,7 +224,7 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 4. **Wireframe is the bible** — ~/Desktop/qmat/public/QMAT-prototype.html. Deviations require approval.
 5. **Sticky table headers** — overflow wrapper with maxHeight; `thead position:sticky top:0`
 6. **RAG stripes** — `boxShadow: 'inset 4px 0 0 COLOR'` — NEVER `borderLeft`
-7. **Resizable columns** — orange `#E84E0F` drag handles (3px on hover)
+7. **Resizable columns + reset on EVERY table** — orange `#E84E0F` drag handles (3px on hover) AND a reset-to-default (↺) button. NON-NEGOTIABLE for every table, new or existing. Use the shared `useColumnResize` hook + `AdminTable`. Currently only Procurement + Admin comply — see §3c for the rollout track.
 8. **Collapsible left sidebar** — 56px collapsed / 240px expanded; state in localStorage
 9. **Parameterised queries ONLY** — no SQL injection
 10. **JWT auth** on all protected routes
