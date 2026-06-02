@@ -115,7 +115,8 @@ function denyReadOnly(req, res, next) {
 //   GET → passes (C-b2 gates writes only; reads unchanged)
 // `moduleFor` is a module string OR a function(req)→module. If it returns a
 // falsy module, the route is left to the deny-floor alone (reported as residual).
-const APPROVE_RE = /\/(approve|reject|verify|issue|critical-path)(\/|$)/
+// NB: critical-path is a toggle (edit), NOT an approval — maps to can_edit (C-d fix).
+const APPROVE_RE = /\/(approve|reject|verify|issue)(\/|$)/
 function enforce(moduleFor) {
   return (req, res, next) => {
     if (req.method === 'GET') return next()
