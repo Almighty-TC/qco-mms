@@ -85,16 +85,27 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 
 ## 3b. BACKLOG / NOT STARTED
 
-- **Heat / lot tracking** — in progress as a phased mini-project. Spec [docs/HEAT_LOT_TRACKING_SPEC.md](docs/HEAT_LOT_TRACKING_SPEC.md); build plan [docs/HEAT_LOT_TRACKING_PHASING.md](docs/HEAT_LOT_TRACKING_PHASING.md).
-  - ✅ **P0 (7b45ba0) DONE** — `warehouse_stock.heat_number` column + Stock Register / stock-take read-through (blank until a source exists).
-  - ✅ **P1 (b7327ff) DONE** — `scn_heats` table + heat capture at SCN creation (wizard "Heats" step + additive transactional insert). The keystone: this is the source the receipting dropdown reads.
-  - ✅ **P2a (78e26b4) DONE** — receipting heat entry, 1:1: SCN-scoped declared-heat dropdown + off-list exception-with-reason + bulk apply; heat written to `receipt_lines` (new cols) + stamped on both good/quarantine holdings. Accounting provably unchanged.
-  - ✅ **P2b (2bfb0fe) DONE** — split a receipt line across N heats (sub-lines → N receipt_lines → N holdings); front-end only (backend already supported N-per-po_line). Proven: split (a+b) ≡ single (a+b) for received-to-date / remaining / status; conservation holds.
-  - ✅ **P3 (f4ed99c) DONE** — transfers carry heat: `heat_number` copied onto the destination holding in the split-move, shown in the stock-line picker (pre-move), and snapshotted onto the `warehouse_transfers` record (durable post-move, survives whole-holding moves). Additive; split/conservation/approval-gate untouched.
-  - ✅ **P4a-i (e365846) DONE** — FMR-out **issue + decrement** subsystem (the missing consumption step). One-click "Issue approved qty" → auto-FIFO consume across issuable holdings, atomic `FOR UPDATE`, over-issue impossible, `fmr_issue_lines` ledger (one row per holding), status roll-up reaches partial_issued/issued. Also fixed the on-hand queries to exclude `trace_hold` (decision 3). NO heat yet — `fmr_issue_lines.heat_number` NULL (P4b).
-  - **STOCK LIFECYCLE NOW COMPLETE:** stock **enters** (receipting), **moves** (transfers), and **leaves** (FMR-out issue) — all decrement/conserve correctly and all exclude `quarantine` + `trace_hold` from issuable.
-  - ⏭ **Next = P4b-i** — heat recorded on issue: write the consumed holding's `heat_number` into `fmr_issue_lines` (FIFO-record) + display issued heat(s) on the FMR record/view. Then **P4b-ii** (hybrid: optional user-pick-by-heat override on top of FIFO), then **P5** (traceability heat⇄cert linkage — the final phase).
-  - 📖 **User manual:** rebuilt as a valid `.docx` (09d9a1c — the old one was corrupt text-renamed-docx); the in-app "View full manual" link repointed to `/docs/QCO_MMS_User_Manual.docx`. Manual is now maintained per-phase. The old `docs/USER_MANUAL.md` (markdown) is unlinked, pending cleanup.
+- **Heat / lot tracking — ✅ COMPLETE (P0–P5).** Spec [docs/HEAT_LOT_TRACKING_SPEC.md](docs/HEAT_LOT_TRACKING_SPEC.md); build plan [docs/HEAT_LOT_TRACKING_PHASING.md](docs/HEAT_LOT_TRACKING_PHASING.md). Heat travels the FULL lifecycle:
+  - **P0 (7b45ba0)** `warehouse_stock.heat_number` + Stock Register / stock-take read-through.
+  - **P1 (b7327ff)** `scn_heats` + heat capture at SCN creation (the dropdown source).
+  - **P2a (78e26b4)** receipting heat entry (declared dropdown + off-list-with-reason + bulk), 1:1.
+  - **P2b (2bfb0fe)** split a receipt line across N heats (N holdings); split (a+b) ≡ single proven.
+  - **P3 (f4ed99c)** transfers carry heat to the destination holding + picker display + durable `warehouse_transfers.heat_number` snapshot.
+  - **P4a-i (e365846)** FMR-out **issue + decrement** subsystem (auto-FIFO, atomic, over-issue impossible, `fmr_issue_lines` ledger, status roll-up); also fixed on-hand queries to exclude `trace_hold`.
+  - **P4b-i (9241885)** record consumed heat on issue (FIFO) + issued-heat display.
+  - **P4b-ii (a: c6e7b2a backend / b: f4fe000 picker UI)** optional user-pick-by-heat override (FIFO default; guards proven 422+zero-mutation).
+  - **P5 (UNCOMMITTED — held for review)** traceability heat⇄cert linkage, both directions, via a **case-insensitive normalized join** `UPPER(TRIM(heat_number)) = UPPER(TRIM(heat_ref))` — Stock Register heat→cert badge + CertDetailModal "material carrying this heat". No schema change.
+  - **STOCK LIFECYCLE COMPLETE:** stock **enters** (receipting), **moves** (transfers), and **leaves** (FMR-out issue) — all decrement/conserve correctly and all exclude `quarantine` + `trace_hold` from issuable.
+
+- **WBS fixes — ✅ DONE.**
+  - Gantt legend (09d0f5c) + Tree/Gantt legends moved to the bottom, corrected to the REAL colours (schedule bars Planned/Forecast/Actual + ROS diamond + Today line; RAG dots On track/At risk/Breached/In progress/Not set).
+  - **Gantt depth control (UNCOMMITTED — held for review)** now reveals levels beyond L3: dropdown **L1 / L1–L2 / L1–L3 / All** + numeric **1–15**, two editors of one `ganttDepth`. Finite = **force-show** that many levels; **All = follow tree expand-state** (Infinity). Dead "All levels" tree-dropdown hidden in Gantt view. Frontend-only.
+
+- 📖 **User manual:** rebuilt as a valid `.docx` (09d9a1c — old one was corrupt text-renamed-docx); in-app "View full manual" link repointed to `/docs/QCO_MMS_User_Manual.docx`; maintained per-phase. Old `docs/USER_MANUAL.md` (markdown) is unlinked — cleanup candidate.
+
+- ⏭ **NEXT UP — the manual / help pass.** ONE shared source of truth: the manual (full) + in-app help panels (condensed, via `src/helpContent.tsx` / `src/components/HelpDrawer.tsx`).
+  - **Chapters to WRITE:** Ch8 Logistics · Ch9 Material Control (Receipting / Stock / Stock-take / FMR / Transfers) · Ch10 Traceability · Ch11 Heat/Lot.
+  - **Fold in captured facts:** WBS Gantt controls — Quarters/Months = timeline-scale zoom; depth dropdown + numeric (finite force-show / All follow-expand); bars = planned/forecast/actual; ROS = orange diamond; Today = orange line. Heat matching is **CASE-INSENSITIVE** (normalized join). Stock lifecycle (enter/move/leave) + quarantine/trace_hold never issuable.
 
 ---
 
