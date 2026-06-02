@@ -1066,9 +1066,9 @@ router.post('/:projectId/po/:poId/itp', async (req, res) => {
     )
     // Audit log
     await db.query(
-      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, after_value, resource)
-       VALUES (?,?,?,?,?,?)`,
-      [userId, 'create', 'itp_requirement', result.insertId,
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, after_value, resource)
+       VALUES (?,?,?,?,?,?,?)`,
+      [userId, 'create', 'itp_requirement', result.insertId, Number(req.params.projectId) || null,
        JSON.stringify({ description, inspection_type, timing }),
        `/expediting/${req.params.projectId}/po/${poId}/itp`]
     ).catch(() => {}) // audit failure is non-blocking
@@ -1154,9 +1154,9 @@ router.put('/:projectId/po/:poId/itp/:itemId', async (req, res) => {
 
     // Audit log
     await db.query(
-      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, before_value, after_value, resource)
-       VALUES (?,?,?,?,?,?,?)`,
-      [userId, 'update', 'itp_requirement', itemId,
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, before_value, after_value, resource)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [userId, 'update', 'itp_requirement', itemId, Number(req.params.projectId) || null,
        JSON.stringify({ description: existing.description, status: existing.status }),
        JSON.stringify({ description, status }),
        `/expediting/${req.params.projectId}/po/${poId}/itp/${itemId}`]
@@ -1188,9 +1188,9 @@ router.delete('/:projectId/po/:poId/itp/:itemId', async (req, res) => {
     const userId = req.user?.id || 1
     await db.query('UPDATE itp_requirements SET is_deleted=1 WHERE id=?', [itemId])
     await db.query(
-      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, resource)
-       VALUES (?,?,?,?,?)`,
-      [userId, 'delete', 'itp_requirement', itemId,
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, resource)
+       VALUES (?,?,?,?,?,?)`,
+      [userId, 'delete', 'itp_requirement', itemId, Number(req.params.projectId) || null,
        `/expediting/${req.params.projectId}/po/${poId}/itp/${itemId}`]
     ).catch(() => {})
 
