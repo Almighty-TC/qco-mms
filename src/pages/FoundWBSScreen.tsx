@@ -1591,12 +1591,33 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
                 </button>
               ))}
             </div>
-            <div style={{ display: 'flex', border: bd, borderRadius: 6, overflow: 'hidden' }}>
-              {[{label:'L1',val:0},{label:'L1–L2',val:1},{label:'L1–L3',val:2}].map((d,i) => (
-                <button key={d.val} onClick={() => setGanttDepth(d.val)} style={{ padding: '5px 10px', border: 'none', borderLeft: i>0 ? `1px solid ${dark?'#334155':'#dde3ed'}` : 'none', background: ganttDepth===d.val ? '#2563eb' : (dark?'#1e293b':'#f4f7fb'), color: ganttDepth===d.val ? '#fff' : '#64748b', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', fontWeight: ganttDepth===d.val ? 600 : 400 }}>
-                  {d.label}
-                </button>
-              ))}
+            {/* Depth control — dropdown (presets + All) + numeric picker; two
+                editors of ONE ganttDepth. Finite = force-show that many levels;
+                Infinity = "All" follows the tree's expand state. */}
+            <select value={ganttDepth === Infinity ? 'all' : [0, 1, 2].includes(ganttDepth) ? String(ganttDepth) : 'custom'}
+              onChange={e => { const v = e.target.value; setGanttDepth(v === 'all' ? Infinity : Number(v)) }}
+              style={{ height: 28, padding: '0 8px', borderRadius: 6, border: bd, background: dark ? '#1e293b' : '#f4f7fb', color: '#64748b', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', outline: 'none' }}>
+              <option value="0">L1</option>
+              <option value="1">L1–L2</option>
+              <option value="2">L1–L3</option>
+              <option value="all">All (expanded)</option>
+              {ganttDepth !== Infinity && ![0, 1, 2].includes(ganttDepth) && (
+                <option value="custom" disabled>Custom (L1–L{ganttDepth + 1})</option>
+              )}
+            </select>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ fontSize: 11, color: '#64748b' }}>Level</span>
+              <input type="number" min={1} max={15}
+                value={ganttDepth === Infinity ? '' : ganttDepth + 1}
+                placeholder="All"
+                onChange={e => {
+                  const raw = e.target.value
+                  if (raw === '') { setGanttDepth(Infinity); return }   // blank = All
+                  const c = Math.max(1, Math.min(15, Number(raw) || 1)) // clamp [1,15]
+                  setGanttDepth(c - 1)
+                }}
+                title="Jump to an exact depth (1–15)"
+                style={{ width: 50, height: 28, padding: '0 6px', borderRadius: 6, border: bd, background: dark ? '#1e293b' : '#fff', color: col, fontSize: 11, fontFamily: 'inherit', outline: 'none', textAlign: 'center' }} />
             </div>
           </>}
           <button onClick={() => { setFocusMode(f => !f); setFocusNode(null) }} style={{ ...secBtn, color: focusMode ? '#E84E0F' : '#64748b' }}>⛶ Focus</button>
@@ -1621,14 +1642,17 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
             </button>
           ))}
         </div>
-        {/* Depth filter */}
-        <select value={depthFilter} onChange={e => setDepthFilter(e.target.value)}
-          style={{ height: 32, padding: '0 8px', borderRadius: 6, border: bd, background: dark ? '#1e293b' : '#fff', color: col, fontSize: 12, fontFamily: 'inherit', outline: 'none' }}>
-          <option value="all">All levels</option>
-          <option value="level1">Level 1 only</option>
-          <option value="level1-2">Level 1-2</option>
-          <option value="level1-3">Level 1-3</option>
-        </select>
+        {/* Depth filter — Tree only (the Gantt has its own depth control; this
+            dropdown never affected the Gantt, so it's hidden in Gantt view). */}
+        {wbsView === 'tree' && (
+          <select value={depthFilter} onChange={e => setDepthFilter(e.target.value)}
+            style={{ height: 32, padding: '0 8px', borderRadius: 6, border: bd, background: dark ? '#1e293b' : '#fff', color: col, fontSize: 12, fontFamily: 'inherit', outline: 'none' }}>
+            <option value="all">All levels</option>
+            <option value="level1">Level 1 only</option>
+            <option value="level1-2">Level 1-2</option>
+            <option value="level1-3">Level 1-3</option>
+          </select>
+        )}
         {hasActiveFilter && (
           <button onClick={() => { setSearchQ(''); setRagFilter('all'); setDepthFilter('all') }}
             style={{ padding: '4px 10px', borderRadius: 6, border: `1px solid rgba(239,68,68,0.3)`, background: 'rgba(239,68,68,0.08)', color: '#ef4444', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>

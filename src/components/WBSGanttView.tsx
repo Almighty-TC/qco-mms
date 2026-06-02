@@ -66,15 +66,23 @@ const fmtDate = (d: Date | null) =>
 const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 
 // ─── BUILD VISIBLE ROWS ──────────────────────────────────────
+// Two depth modes (one `maxDepth` value, the single source of truth):
+//   • FINITE maxDepth → FORCE-SHOW: render every node down to that level
+//     regardless of expand-state (the depth control is authoritative). This is
+//     what unlocks levels 4–15 that the old cap-and-wait-for-expand could not.
+//   • Infinity ("All") → FOLLOW EXPAND-STATE: render only nodes whose ancestors
+//     are all expanded (the original behaviour) — avoids a forced 15-level giant.
 function buildRows(nodes: WBSNode[], expanded: Set<number>, maxDepth: number): { node: WBSNode; depth: number }[] {
   const rows: { node: WBSNode; depth: number }[] = []
+  const showAll = !isFinite(maxDepth)   // Infinity = "All / follow expand"
   function walk(list: WBSNode[], depth: number) {
     for (const n of list) {
       if (depth > maxDepth) continue
       rows.push({ node: n, depth })
-      if (n.children?.length && expanded.has(n.id)) {
-        walk(n.children, depth + 1)
-      }
+      if (!n.children?.length) continue
+      // Finite → force-reveal while still within the cap; All → only if expanded.
+      const recurse = showAll ? expanded.has(n.id) : (depth < maxDepth)
+      if (recurse) walk(n.children, depth + 1)
     }
   }
   walk(nodes, 0)
