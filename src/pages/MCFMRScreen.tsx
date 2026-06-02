@@ -86,6 +86,8 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
 
   // Heat/Lot P4a-i — one-click issue of the approved qty (auto-FIFO consume).
   const [issuingId, setIssuingId] = useState<number | null>(null)
+  // Heat/Lot P4b-ii-b — optional per-line heat-pick override modal.
+  const [pickFmr, setPickFmr] = useState<FMRRow | null>(null)
   const issueFmr = async (fmr: FMRRow) => {
     if (issuingId) return
     setIssuingId(fmr.id)
@@ -289,6 +291,9 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
                               title="Issue the approved quantity (decrements stock, auto-FIFO)">
                               {issuingId === fmr.id ? 'Issuing…' : 'Issue'}
                             </button>
+                            <button onClick={() => setPickFmr(fmr)}
+                              style={{ padding: '4px 10px', borderRadius: 6, border: bd, background: 'none', color: '#7c3aed', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}
+                              title="Choose which heats to issue (overrides FIFO per line)">⊕ Heats</button>
                             <button onClick={() => setViewFmr(fmr)} style={{ padding: '4px 12px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>View</button>
                           </div>
                         ) : (
@@ -329,6 +334,16 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
         <FMRDetailModal
           dark={dark} projectId={projectId} fmr={viewFmr}
           onClose={() => setViewFmr(null)}
+          addToast={addToast}
+        />
+      )}
+
+      {/* Heat/Lot P4b-ii-b — per-line heat-pick override modal */}
+      {pickFmr && (
+        <IssuePickerModal
+          dark={dark} projectId={projectId} fmr={pickFmr}
+          onClose={() => setPickFmr(null)}
+          onIssued={(msg, short) => { setPickFmr(null); fetchFMRs(); addToast(short ? 'error' : 'success', msg) }}
           addToast={addToast}
         />
       )}
@@ -872,6 +887,140 @@ const FMRDetailModal = ({ dark, projectId, fmr, onClose, addToast }: {
               </div>
             </>
           )}
+        </div>
+      </div>
+    </>
+  )
+}
+
+// ─── ISSUE PICKER MODAL (Heat/Lot P4b-ii-b) ───────────────────
+// Optional per-line heat-pick override on FMR issue. Reads GET /fmr/:id/issuable
+// for each outstanding line's issuable holdings, lets the user allocate a qty per
+// holding, and posts { allocations } to POST /fmr/:id/issue. Lines left untouched
+// are omitted → they fall back to FIFO server-side (per-line mix). The backend is
+// the source of truth for every guard; this UI only helps the user stay valid and
+// surfaces any 422 clearly.
+const IssuePickerModal = ({ dark, projectId, fmr, onClose, onIssued, addToast }: {
+  dark: boolean; projectId: number; fmr: any; onClose: () => void
+  onIssued: (msg: string, short: boolean) => void; addToast: (t: 'success' | 'error', m: string) => void
+}) => {
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const cardBg = dark ? '#1e293b' : '#fff'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const sub = '#94a3b8'
+  const inputSt: React.CSSProperties = { fontSize: 12, padding: '5px 8px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontFamily: 'JetBrains Mono, monospace', width: 80, textAlign: 'center', boxSizing: 'border-box' }
+  const [data, setData] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  // picks[fmr_line_id][stock_id] = qty string
+  const [picks, setPicks] = useState<Record<number, Record<number, string>>>({})
+
+  useEffect(() => {
+    axios.get(`${API}/mc/${projectId}/fmr/${fmr.id}/issuable`)
+      .then(({ data }) => setData(data))
+      .catch((e: any) => addToast('error', e.response?.data?.error || 'Failed to load issuable holdings'))
+      .finally(() => setLoading(false))
+  }, []) // eslint-disable-line
+
+  const lineAlloc = (lineId: number) => Object.values(picks[lineId] || {}).reduce((t, q) => t + (Number(q) || 0), 0)
+  const setPick = (lineId: number, stockId: number, qty: string) =>
+    setPicks(p => ({ ...p, [lineId]: { ...(p[lineId] || {}), [stockId]: qty } }))
+
+  const lines = data?.lines || []
+  // A line is over-allocated if its picked total exceeds outstanding (client guard; backend also blocks).
+  const anyOver = lines.some((l: any) => lineAlloc(l.fmr_line_id) > Number(l.outstanding) + 1e-9)
+  const anyPicked = lines.some((l: any) => lineAlloc(l.fmr_line_id) > 0)
+
+  const submit = async () => {
+    // Build allocations only for lines the user actually allocated; others FIFO.
+    const allocations: Record<number, { stock_id: number; qty: number }[]> = {}
+    for (const l of lines) {
+      const perHold = picks[l.fmr_line_id] || {}
+      const arr = Object.entries(perHold)
+        .map(([sid, q]) => ({ stock_id: Number(sid), qty: Number(q) || 0 }))
+        .filter(a => a.qty > 0)
+      if (arr.length) allocations[l.fmr_line_id] = arr
+    }
+    setSaving(true)
+    try {
+      const { data: res } = await axios.post(`${API}/mc/${projectId}/fmr/${fmr.id}/issue`,
+        Object.keys(allocations).length ? { allocations } : {})
+      onIssued(res.short ? `Issued ${res.total_issued} — ${res.header_status} (some lines short)` : `Issued ${res.total_issued} — ${res.header_status}`, !!res.short)
+    } catch (e: any) {
+      // Backend is the real guard — surface its 422 clearly.
+      addToast('error', e.response?.data?.error || 'Issue failed')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 24, width: 720, maxWidth: '95vw', maxHeight: '85vh', overflow: 'auto', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: col }}>Choose heats to issue · {fmr.fmr_ref}</div>
+            <div style={{ fontSize: 12, color: sub, marginTop: 2 }}>Allocate per heat. Leave a line blank to issue it auto-FIFO. Partial is allowed.</div>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: sub, cursor: 'pointer' }}>✕</button>
+        </div>
+
+        {loading ? (
+          <div style={{ padding: 30, textAlign: 'center', color: sub }}>Loading issuable holdings…</div>
+        ) : lines.length === 0 ? (
+          <div style={{ padding: 30, textAlign: 'center', color: sub }}>No outstanding approved lines to issue.</div>
+        ) : (
+          <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {lines.map((l: any) => {
+              const alloc = lineAlloc(l.fmr_line_id)
+              const over = alloc > Number(l.outstanding) + 1e-9
+              return (
+                <div key={l.fmr_line_id} style={{ border: bd, borderRadius: 8, padding: '10px 12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <div style={{ fontSize: 12, color: col }}>
+                      <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#2563eb', fontWeight: 600 }}>{l.item_code}</span>
+                      <span style={{ color: sub }}> · WBS {l.wbs_code} · outstanding {Number(l.outstanding)} {l.uom}</span>
+                    </div>
+                    <div style={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', color: over ? '#ef4444' : alloc > 0 ? '#16a34a' : sub }}>
+                      {alloc > 0 ? `allocated ${alloc} of ${Number(l.outstanding)}` : 'blank → FIFO'}
+                    </div>
+                  </div>
+                  {l.holdings.length === 0 ? (
+                    <div style={{ fontSize: 11, color: '#f59e0b' }}>No issuable holdings (good, not on hold) for this line.</div>
+                  ) : (
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                      <thead><tr style={{ color: sub }}>
+                        {['HEAT', 'LOCATION', 'AVAILABLE', 'ISSUE QTY'].map(h => <th key={h} style={{ textAlign: 'left', fontWeight: 600, padding: '2px 6px', fontSize: 9, textTransform: 'uppercase' }}>{h}</th>)}
+                      </tr></thead>
+                      <tbody>
+                        {l.holdings.map((h: any) => (
+                          <tr key={h.stock_id}>
+                            <td style={{ padding: '3px 6px', fontFamily: 'JetBrains Mono, monospace', color: '#7c3aed', fontWeight: 600 }}>{h.heat_number || '— no heat'}</td>
+                            <td style={{ padding: '3px 6px', fontFamily: 'JetBrains Mono, monospace', color: sub }}>{h.location_code || '—'}</td>
+                            <td style={{ padding: '3px 6px', fontFamily: 'JetBrains Mono, monospace', color: col }}>{Number(h.qty_available)} {l.uom}</td>
+                            <td style={{ padding: '3px 6px' }}>
+                              <input type="number" min={0} max={Number(h.qty_available)} value={picks[l.fmr_line_id]?.[h.stock_id] ?? ''}
+                                placeholder="0"
+                                onChange={e => { let v = Number(e.target.value); if (!(v >= 0)) v = 0; if (v > Number(h.qty_available)) v = Number(h.qty_available); setPick(l.fmr_line_id, h.stock_id, v ? String(v) : '') }}
+                                style={inputSt} />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                  {over && <div style={{ fontSize: 10, color: '#ef4444', marginTop: 4 }}>Allocated {alloc} exceeds outstanding {Number(l.outstanding)} — reduce before issuing.</div>}
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+          <button onClick={onClose} style={{ padding: '8px 16px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
+          <button onClick={submit} disabled={saving || anyOver || !anyPicked}
+            style={{ padding: '8px 18px', borderRadius: 6, border: 'none', background: (!saving && !anyOver && anyPicked) ? '#2563eb' : '#94a3b8', color: '#fff', cursor: (!saving && !anyOver && anyPicked) ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
+            {saving ? 'Issuing…' : 'Issue selected heats'}
+          </button>
         </div>
       </div>
     </>
