@@ -85,7 +85,7 @@ export const HelpDrawer = ({ screenName, sections, dark, onClose }: HelpDrawerPr
         {/* Footer */}
         <div style={{ padding: '12px 20px', borderTop: bd, flexShrink: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <a
-            href="http://localhost:3001/docs/USER_MANUAL.md"
+            href="http://localhost:3001/docs/QCO_MMS_User_Manual.docx"
             target="_blank"
             rel="noreferrer"
             style={{ fontSize: 12, color: '#2563eb', textDecoration: 'none' }}

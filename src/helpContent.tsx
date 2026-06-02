@@ -427,7 +427,7 @@ export const COMING_SOON_HELP: HelpSection[] = [
     title: 'Help coming soon',
     content: <>
       {P(<>This module's help content is being prepared and will be available when the module is fully built.</>)}
-      {P(<>For guidance on using this module, contact your system administrator or refer to the <a href="http://localhost:3001/docs/USER_MANUAL.md" target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>full user manual</a>.</>)}
+      {P(<>For guidance on using this module, contact your system administrator or refer to the <a href="http://localhost:3001/docs/QCO_MMS_User_Manual.docx" target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>full user manual</a>.</>)}
     </>,
   },
 ]
