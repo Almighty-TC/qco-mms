@@ -18,7 +18,9 @@ const QUARANTINE_LOCATION = 'QUARANTINE'
 
 // ─── ROLE GUARDS ──────────────────────────────────────────────
 const RECEIPTING_ALLOWED = new Set(['admin','ceo','director','project_director','project_manager','procurement_manager','procurement_officer','expediting_manager','expeditor','logistics_manager','warehouse','materials_controller','quality_engineer'])
-const APPROVAL_ALLOWED   = new Set(['admin','ceo','director','project_director','project_manager','materials_controller'])
+// C-d #4: FMR/transfer approval = Material Control function. 'warehouse' IS the Material-Control role
+// ('materials_controller' was referenced but never created). Aligned with matrix material_control.can_approve.
+const APPROVAL_ALLOWED   = new Set(['admin','warehouse'])
 
 // Subcontractors and freight_forwarders cannot access receipting or transfers
 function rejectExternal(req, res, next) {
