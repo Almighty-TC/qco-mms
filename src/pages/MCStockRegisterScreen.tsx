@@ -41,6 +41,18 @@ const condPill = (s: string) => {
   return { label: 'Quarantine', color: '#7c3aed', bg: 'rgba(124,58,237,0.1)' }
 }
 
+// Heat/Lot P5 — heat→cert status badge. `s` is undefined when the heat has no
+// declared cert (→ "no cert"). hold > rejected > pending > verified.
+const certBadge = (s?: string) => {
+  switch (s) {
+    case 'verified': return { label: '✓ cert',     color: '#16a34a', bg: 'rgba(34,197,94,0.12)' }
+    case 'pending':  return { label: 'cert pending',color: '#d97706', bg: 'rgba(245,158,11,0.12)' }
+    case 'rejected': return { label: 'cert reject', color: '#dc2626', bg: 'rgba(239,68,68,0.12)' }
+    case 'hold':     return { label: '⚠ hold',      color: '#7c3aed', bg: 'rgba(124,58,237,0.12)' }
+    default:         return { label: 'no cert',     color: '#94a3b8', bg: 'rgba(148,163,184,0.12)' }
+  }
+}
+
 const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
   dark: boolean; projectId: number; projectName: string; onBack: () => void
 }) => {
@@ -64,6 +76,10 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
   const [moveItem, setMoveItem] = useState<StockItem | null>(null)
   const [docsItem, setDocsItem] = useState<StockItem | null>(null)
   const [resolveItem, setResolveItem] = useState<StockItem | null>(null)
+  // Heat/Lot P5 — per-heat cert status (batch, one round-trip) + heat-link modal.
+  const [heatStatus, setHeatStatus] = useState<Record<string, { status: string; cert_count: number; has_hold: boolean }>>({})
+  const [heatLink, setHeatLink] = useState<string | null>(null)
+  const normHeat = (h?: string | null) => (h || '').trim().toUpperCase()
 
   const fetchStock = async () => {
     setLoading(true)
@@ -78,6 +94,13 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
       addToast('error', e.response?.data?.error || 'Failed to load stock register')
     } finally { setLoading(false) }
   }
+
+  // Heat/Lot P5 — load the per-heat cert-status map once (read-only join feed).
+  useEffect(() => {
+    axios.get(`${API}/traceability/${projectId}/heat-status`)
+      .then(({ data }) => setHeatStatus(data.data || {}))
+      .catch(() => setHeatStatus({}))
+  }, [projectId])
 
   useEffect(() => { fetchStock() }, [projectId, showHolds]) // eslint-disable-line
   useEffect(() => {
@@ -215,7 +238,19 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                           {!isSubcontractor && <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, ...ellipsisCell }}>{item.location_code || '—'}</td>}
                           <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600, ...ellipsisCell }}>{item.item_code}</td>
                           <td style={{ padding: '8px 12px', color: col, ...ellipsisCell }} title={item.description}>{item.description}</td>
-                          <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: item.heat_number ? col : sub, ...ellipsisCell }}>{item.heat_number || '—'}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 11 }}>
+                            {item.heat_number ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start' }}>
+                                <span style={{ fontFamily: 'JetBrains Mono, monospace', color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 86 }} title={item.heat_number}>{item.heat_number}</span>
+                                {(() => { const b = certBadge(heatStatus[normHeat(item.heat_number)]?.status)
+                                  return (
+                                    <span onClick={e => { e.stopPropagation(); setHeatLink(item.heat_number!) }}
+                                      title="View this heat's certificates"
+                                      style={{ fontSize: 9, fontWeight: 600, padding: '1px 6px', borderRadius: 6, background: b.bg, color: b.color, cursor: 'pointer', whiteSpace: 'nowrap' }}>{b.label}</span>
+                                  ) })()}
+                              </div>
+                            ) : <span style={{ color: sub }}>—</span>}
+                          </td>
                           <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, ...ellipsisCell }}>{item.wbs_code || '—'}</td>
                           <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col, fontWeight: 600, ...ellipsisCell }}>{Number(item.qty).toLocaleString()}</td>
                           <td style={{ padding: '8px 12px', color: sub, ...ellipsisCell }}>{item.uom}</td>
@@ -287,7 +322,67 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
           onSaved={(msg) => { setResolveItem(null); fetchStock(); addToast('success', msg) }}
           addToast={addToast} />
       )}
+
+      {/* Heat/Lot P5 — heat → certificate(s) + holds (holding→cert direction) */}
+      {heatLink && (
+        <HeatLinkModal dark={dark} heat={heatLink} projectId={projectId} onClose={() => setHeatLink(null)} />
+      )}
     </div>
+  )
+}
+
+// ─── HEAT → CERT LINK MODAL (Heat/Lot P5) ─────────────────────
+// From a stock holding's heat, show the certificate(s) carrying that heat
+// (normalised, case-insensitive match) + any holds. Read-only.
+const HeatLinkModal = ({ dark, heat, projectId, onClose }: {
+  dark: boolean; heat: string; projectId: number; onClose: () => void
+}) => {
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const cardBg = dark ? '#1e293b' : '#fff'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const sub = '#94a3b8'
+  const [data, setData] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    axios.get(`${API}/traceability/${projectId}/heat/${encodeURIComponent(heat)}`)
+      .then(({ data }) => setData(data)).catch(() => setData({ certs: [], holds: [] })).finally(() => setLoading(false))
+  }, [heat]) // eslint-disable-line
+  const certStatusColor: Record<string, string> = { verified: '#16a34a', pending: '#d97706', received: '#d97706', overdue: '#d97706', rejected: '#dc2626' }
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 24, width: 520, maxWidth: '95vw', maxHeight: '85vh', overflow: 'auto', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: col }}>Heat <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#7c3aed' }}>{heat}</span> · certificates</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: sub, cursor: 'pointer' }}>✕</button>
+        </div>
+        <div style={{ fontSize: 11, color: sub, marginBottom: 14 }}>Mill certs / MTRs matched to this heat (case-insensitive).</div>
+        {loading ? <div style={{ padding: 20, textAlign: 'center', color: sub }}>Loading…</div> : (
+          <>
+            {(data?.certs || []).length === 0 ? (
+              <div style={{ padding: '14px', textAlign: 'center', color: sub, border: bd, borderRadius: 8 }}>No certificate on file for this heat.</div>
+            ) : (data.certs).map((c: any) => (
+              <div key={c.cert_id} style={{ border: bd, borderRadius: 8, padding: '10px 12px', marginBottom: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                  <div style={{ fontSize: 13, color: col, fontWeight: 600 }}>{c.document_name}</div>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 9999, background: `${certStatusColor[c.status] || '#94a3b8'}20`, color: certStatusColor[c.status] || '#94a3b8' }}>{c.status}</span>
+                </div>
+                <div style={{ fontSize: 11, color: sub, marginTop: 3 }}>{c.cert_type || c.category} · {c.vendor_name || '—'}{c.po_ref ? ` · ${c.po_ref}` : ''}{c.tag ? ` · tag ${c.tag}` : ''}</div>
+                <div style={{ fontSize: 10, color: sub, marginTop: 2, fontFamily: 'JetBrains Mono, monospace' }}>heat_ref {c.heat_ref}{c.applies_to ? ` · ${c.applies_to}` : ''}</div>
+              </div>
+            ))}
+            {(data?.holds || []).filter((h: any) => h.status === 'active').length > 0 && (
+              <div style={{ marginTop: 8, border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '10px 12px', background: 'rgba(239,68,68,0.05)' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', marginBottom: 4 }}>⚠ Active hold(s) on this heat's cert</div>
+                {(data.holds).filter((h: any) => h.status === 'active').map((h: any) => (
+                  <div key={h.hold_id} style={{ fontSize: 11, color: col }}>{h.hold_reason} · {h.tag || h.item} · {h.age_days}d</div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </>
   )
 }
 

@@ -33,6 +33,8 @@ export const CertDetailModal: React.FC<Props> = ({ dark, projectId, certId, onCl
   const [versions, setVersions] = useState<Version[]>([])
   const [loading, setLoading] = useState(true)
   const [activeRev, setActiveRev] = useState<number | null>(null)
+  // Heat/Lot P5 — where this cert's heat now lives (stock / issued / transferred).
+  const [material, setMaterial] = useState<{ stock: any[]; issues: any[]; transfers: any[] } | null>(null)
 
   // Add-version inline form
   const [adding, setAdding] = useState(false)
@@ -53,6 +55,15 @@ export const CertDetailModal: React.FC<Props> = ({ dark, projectId, certId, onCl
     finally { setLoading(false) }
   }
   useEffect(() => { load() }, [certId]) // eslint-disable-line
+
+  // Heat/Lot P5 — fetch material carrying this cert's heat (normalised join).
+  useEffect(() => {
+    const h = cert?.heat_ref
+    if (!h || !h.trim()) { setMaterial(null); return }
+    axios.get(`${API}/traceability/${projectId}/heat/${encodeURIComponent(h.trim())}`)
+      .then(({ data }) => setMaterial({ stock: data.stock || [], issues: data.issues || [], transfers: data.transfers || [] }))
+      .catch(() => setMaterial(null))
+  }, [cert?.heat_ref, projectId])
 
   const addVersion = async () => {
     setVErr('')
@@ -158,6 +169,47 @@ export const CertDetailModal: React.FC<Props> = ({ dark, projectId, certId, onCl
                 <div style={{ fontSize: 12, marginTop: 8, fontFamily: 'JetBrains Mono, monospace' }}>{active?.file_name || cert?.file_name || '—'}</div>
                 <div style={{ fontSize: 11, marginTop: 4 }}>{fmtBytes(active?.file_size)} · PDF preview (mock)</div>
               </div>
+
+              {/* Heat/Lot P5 — where this heat's material is now (end-to-end trace) */}
+              {material && (cert?.heat_ref) && (
+                <div style={{ marginTop: 16, border: t.bd, borderRadius: 8, padding: '12px 14px' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: t.sub, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
+                    Material carrying heat <span style={{ color: '#7c3aed', fontFamily: 'JetBrains Mono, monospace' }}>{cert.heat_ref}</span>
+                  </div>
+                  {material.stock.length === 0 && material.issues.length === 0 && material.transfers.length === 0 ? (
+                    <div style={{ fontSize: 11, color: t.sub, fontStyle: 'italic' }}>No stock, issues, or transfers currently carry this heat.</div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 11, color: t.col }}>
+                      {material.stock.length > 0 && (
+                        <div>
+                          <div style={{ fontSize: 10, fontWeight: 600, color: t.sub, marginBottom: 3 }}>IN STOCK ({material.stock.length})</div>
+                          {material.stock.map((s: any) => (
+                            <div key={s.stock_id} style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>
+                              {s.item_code} · {Number(s.qty_available)}/{Number(s.qty)} {s.condition_status !== 'good' ? `· ${s.condition_status}` : ''} @ {s.location_code || '—'} ({s.warehouse_name || '—'})
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {material.issues.length > 0 && (
+                        <div>
+                          <div style={{ fontSize: 10, fontWeight: 600, color: t.sub, marginBottom: 3 }}>ISSUED ({material.issues.length})</div>
+                          {material.issues.map((i: any) => (
+                            <div key={i.id} style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{Number(i.qty)} → {i.fmr_ref} ({i.item_code}) · {i.issued_at}</div>
+                          ))}
+                        </div>
+                      )}
+                      {material.transfers.length > 0 && (
+                        <div>
+                          <div style={{ fontSize: 10, fontWeight: 600, color: t.sub, marginBottom: 3 }}>TRANSFERS ({material.transfers.length})</div>
+                          {material.transfers.map((tr: any) => (
+                            <div key={tr.id} style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{tr.transfer_ref} · {Number(tr.qty)} {tr.uom} · {tr.from_location || '—'} → {tr.to_location || '—'} · {tr.status}</div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}

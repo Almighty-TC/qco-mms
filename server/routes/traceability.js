@@ -420,4 +420,95 @@ router.post('/hold/:holdId/chase', async (req, res) => {
   }
 })
 
+// ═══════════════════════════════════════════════════════════════
+// HEAT ⇄ CERT LINKAGE (Heat/Lot P5) — read-only joins
+// ═══════════════════════════════════════════════════════════════
+// The join is NORMALISED and case-insensitive on purpose:
+//   UPPER(TRIM(heat_number)) = UPPER(TRIM(heat_ref))
+// so "a24-887 " on a holding still links to cert heat_ref "A24-887".
+// Pure reads — never mutates stock / receipts / transfers / issues.
+
+// GET /api/traceability/:projectId/heat/:heat — everything tied to one heat:
+// certs (+status), holds (via the matched certs), and where the material is now
+// (stock holdings, FMR issues, transfers). Lists ALL rows (no collapsing).
+router.get('/:projectId/heat/:heat', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const heat = req.params.heat
+    const norm = 'UPPER(TRIM(?))'
+
+    const [certs] = await db.query(
+      `SELECT id AS cert_id, category, po_ref, vendor_name, tag, document_name, cert_type,
+              heat_ref, applies_to, status, DATE_FORMAT(issue_date,'%Y-%m-%d') AS issue_date,
+              DATE_FORMAT(received_date,'%Y-%m-%d') AS received_date
+       FROM traceability_certs
+       WHERE project_id=? AND UPPER(TRIM(heat_ref)) = ${norm} ORDER BY id`, [pid, heat])
+
+    // Holds reached via the matched certs (holds have no heat column).
+    let holds = []
+    if (certs.length) {
+      const ids = certs.map(c => c.cert_id)
+      const [hrows] = await db.query(
+        `SELECT id AS hold_id, tag, item, hold_reason, status, related_cert_id,
+                DATE_FORMAT(since_date,'%Y-%m-%d') AS since_date, age_days
+         FROM traceability_holds
+         WHERE project_id=? AND related_cert_id IN (${ids.map(() => '?').join(',')}) ORDER BY id`,
+        [pid, ...ids])
+      holds = hrows
+    }
+
+    const [stock] = await db.query(
+      `SELECT s.id AS stock_id, s.item_code, s.description, s.heat_number, s.location_code,
+              s.qty, s.qty_available, s.condition_status, s.trace_hold, w.name AS warehouse_name
+       FROM warehouse_stock s LEFT JOIN warehouses w ON w.id=s.warehouse_id
+       WHERE s.project_id=? AND UPPER(TRIM(s.heat_number)) = ${norm} ORDER BY s.id`, [pid, heat])
+
+    const [issues] = await db.query(
+      `SELECT fil.id, fil.fmr_id, f.fmr_ref, fil.qty, fil.heat_number, fil.location_code, fil.item_code, fil.wbs_code,
+              DATE_FORMAT(fil.issued_at,'%Y-%m-%d') AS issued_at
+       FROM fmr_issue_lines fil JOIN fmr_requests f ON f.id=fil.fmr_id
+       WHERE f.project_id=? AND UPPER(TRIM(fil.heat_number)) = ${norm} ORDER BY fil.id`, [pid, heat])
+
+    const [transfers] = await db.query(
+      `SELECT id, transfer_ref, item_code, heat_number, qty, uom, status, from_location, to_location
+       FROM warehouse_transfers
+       WHERE project_id=? AND UPPER(TRIM(heat_number)) = ${norm} ORDER BY id`, [pid, heat])
+
+    res.json({ heat, certs, holds, stock, issues, transfers })
+  } catch (e) {
+    res.status(500).json({ error: 'Could not load heat linkage: ' + e.message })
+  }
+})
+
+// GET /api/traceability/:projectId/heat-status — batch: per declared cert-heat,
+// an aggregate cert status (+ active-hold flag) for the Stock Register to badge
+// holdings in ONE round-trip. Keyed by the NORMALISED heat (UPPER(TRIM)).
+router.get('/:projectId/heat-status', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const [rows] = await db.query(
+      `SELECT UPPER(TRIM(c.heat_ref)) AS heat_key,
+              SUM(c.status='verified') AS verified,
+              SUM(c.status='rejected') AS rejected,
+              SUM(c.status IN ('pending','received','overdue')) AS pending,
+              COUNT(*) AS cert_count,
+              SUM(EXISTS(SELECT 1 FROM traceability_holds h WHERE h.related_cert_id=c.id AND h.status='active')) AS active_holds
+       FROM traceability_certs c
+       WHERE c.project_id=? AND c.heat_ref IS NOT NULL AND TRIM(c.heat_ref)<>''
+       GROUP BY UPPER(TRIM(c.heat_ref))`, [pid])
+    // Aggregate to one badge status per heat: hold > rejected > pending > verified.
+    const map = {}
+    for (const r of rows) {
+      const status = Number(r.active_holds) > 0 ? 'hold'
+        : Number(r.rejected) > 0 ? 'rejected'
+        : Number(r.pending) > 0 ? 'pending'
+        : Number(r.verified) > 0 ? 'verified' : 'none'
+      map[r.heat_key] = { status, cert_count: Number(r.cert_count), has_hold: Number(r.active_holds) > 0 }
+    }
+    res.json({ data: map })
+  } catch (e) {
+    res.status(500).json({ error: 'Could not load heat status: ' + e.message })
+  }
+})
+
 module.exports = router
