@@ -88,7 +88,10 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 - **Heat / lot tracking** — in progress as a phased mini-project. Spec [docs/HEAT_LOT_TRACKING_SPEC.md](docs/HEAT_LOT_TRACKING_SPEC.md); build plan [docs/HEAT_LOT_TRACKING_PHASING.md](docs/HEAT_LOT_TRACKING_PHASING.md).
   - ✅ **P0 (7b45ba0) DONE** — `warehouse_stock.heat_number` column + Stock Register / stock-take read-through (blank until a source exists).
   - ✅ **P1 (b7327ff) DONE** — `scn_heats` table + heat capture at SCN creation (wizard "Heats" step + additive transactional insert). The keystone: this is the source the receipting dropdown reads.
-  - ⏭ **Next = P2** — receipting heat entry: bulk (one heat for many lines) + split (one line → N sub-line holdings), SCN-scoped dropdown, off-list exception-with-reason. Then P3 transfers carry, P4a/b FMR-out, P5 traceability linkage.
+  - ✅ **P2a (78e26b4) DONE** — receipting heat entry, 1:1: SCN-scoped declared-heat dropdown + off-list exception-with-reason + bulk apply; heat written to `receipt_lines` (new cols) + stamped on both good/quarantine holdings. Accounting provably unchanged.
+  - ✅ **P2b (2bfb0fe) DONE** — split a receipt line across N heats (sub-lines → N receipt_lines → N holdings); front-end only (backend already supported N-per-po_line). Proven: split (a+b) ≡ single (a+b) for received-to-date / remaining / status; conservation holds.
+  - **Receipting-heat story (P0–P2b) is COMPLETE.**
+  - ⏭ **Next = P3** — transfers carry heat: copy `heat_number` onto the destination holding in the split-move + show heat in the stock-line picker/detail. Then **P4a** (FMR-out issue + decrement — builds the missing issue subsystem; a real stock-integrity gap, no consumption exists today), **P4b** (heat selection on issue), **P5** (traceability heat⇄cert linkage).
 
 ---
 
