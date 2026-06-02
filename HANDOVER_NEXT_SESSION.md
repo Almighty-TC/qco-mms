@@ -85,7 +85,10 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 
 ## 3b. BACKLOG / NOT STARTED
 
-- **Heat / lot tracking** — spec captured, not built; scheduled after receipting Phases 1–4 as its own read-first-led mini-project. See [docs/HEAT_LOT_TRACKING_SPEC.md](docs/HEAT_LOT_TRACKING_SPEC.md).
+- **Heat / lot tracking** — in progress as a phased mini-project. Spec [docs/HEAT_LOT_TRACKING_SPEC.md](docs/HEAT_LOT_TRACKING_SPEC.md); build plan [docs/HEAT_LOT_TRACKING_PHASING.md](docs/HEAT_LOT_TRACKING_PHASING.md).
+  - ✅ **P0 (7b45ba0) DONE** — `warehouse_stock.heat_number` column + Stock Register / stock-take read-through (blank until a source exists).
+  - ✅ **P1 (b7327ff) DONE** — `scn_heats` table + heat capture at SCN creation (wizard "Heats" step + additive transactional insert). The keystone: this is the source the receipting dropdown reads.
+  - ⏭ **Next = P2** — receipting heat entry: bulk (one heat for many lines) + split (one line → N sub-line holdings), SCN-scoped dropdown, off-list exception-with-reason. Then P3 transfers carry, P4a/b FMR-out, P5 traceability linkage.
 
 ---
 
@@ -237,6 +240,7 @@ Schema dump: ~/Desktop/qmat/qmat_schema.sql
 - DB status values for SCNs map to display statuses: `pending`/`draft` → pending_pickup, `in-transit` → in_transit, `arrived` → pending_delivery, `received`/`closed` → delivered
 - JWT secret: qmat_jwt_secret_2024
 - MySQL connection pooling ONLY — never createConnection
+- **GOTCHA — font-zoom vs viewport units:** the font-size control (Small/Med/Large) applies an ancestor `zoom` (0.85 / 1.0 / 1.15). Any `vw`/`vh`-based sizing mis-scales under it — use **px insets, not viewport units**, for modals/overlays. (Caused the stock-take maximized-modal clip; fixed in `dad8b99` by pinning the modal with px insets.)
 - **Role-based access (added this session):**
   - Same URL for all roles — role-based rendering, NOT separate routes
   - `subcontractor` = scoped stock (own WBS only, location_code stripped) + scoped FMR (own FMRs only). Cannot access Receipting or Transfers (403).
