@@ -691,6 +691,12 @@ router.get('/:projectId/fmr/:fmrId/detail', async (req, res) => {
               qty_requested, qty_approved, qty_issued, uom, line_status,
               DATE_FORMAT(ros_date, '%Y-%m-%d') AS ros_date
        FROM fmr_lines WHERE fmr_id=? ORDER BY id`, [fmrId])
+    // Heat/Lot P4b-i: per-line issued-heat breakdown from the issue ledger, so the
+    // View modal can show "issued 20 of H-A + 10 of H-B" (one row per line+heat).
+    const [issuedHeats] = await db.query(
+      `SELECT fmr_line_id, heat_number, SUM(qty) AS qty FROM fmr_issue_lines
+       WHERE fmr_id=? GROUP BY fmr_line_id, heat_number ORDER BY fmr_line_id, heat_number`, [fmrId])
+    for (const l of lines) l.issued_heats = issuedHeats.filter(h => h.fmr_line_id === l.id)
     res.json({ fmr, lines })
   } catch (e) {
     console.error('[mc:fmr-detail]', e.message)
@@ -907,8 +913,9 @@ router.post('/:projectId/fmr/:fmrId/issue', async (req, res) => {
       if (!(outstanding > 0)) continue   // rejected (approved=0) or already fully issued
 
       // Issuable holdings — FIFO, locked. Quarantine AND trace_hold excluded.
+      // heat_number (P4b-i) is recorded onto each ledger row below.
       const [holds] = await conn.query(
-        `SELECT id, qty, qty_available, location_code FROM warehouse_stock
+        `SELECT id, qty, qty_available, location_code, heat_number FROM warehouse_stock
          WHERE project_id=? AND warehouse_id=? AND item_code=? AND wbs_code=?
            AND condition_status='good' AND trace_hold=0 AND qty_available>0
          ORDER BY received_date ASC, created_at ASC FOR UPDATE`,
@@ -926,7 +933,7 @@ router.post('/:projectId/fmr/:fmrId/issue', async (req, res) => {
         await conn.query(
           `INSERT INTO fmr_issue_lines (fmr_id, fmr_line_id, stock_id, qty, heat_number, location_code, item_code, wbs_code, issued_by)
            VALUES (?,?,?,?,?,?,?,?,?)`,
-          [fmrId, line.id, h.id, take, null, h.location_code, line.item_code, line.wbs_code, userId])
+          [fmrId, line.id, h.id, take, h.heat_number || null, h.location_code, line.item_code, line.wbs_code, userId])
         lineIssued += take
         outstanding -= take
       }

@@ -849,7 +849,17 @@ const FMRDetailModal = ({ dark, projectId, fmr, onClose, addToast }: {
                       <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{l.wbs_code}</td>
                       <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col }}>{Number(l.qty_requested)} {l.uom}</td>
                       <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: l.qty_approved != null && Number(l.qty_approved) > 0 ? col : sub }}>{l.qty_approved != null && Number(l.qty_approved) > 0 ? `${Number(l.qty_approved)} ${l.uom}` : '—'}</td>
-                      <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: Number(l.qty_issued) > 0 ? '#2563eb' : sub }}>{Number(l.qty_issued) > 0 ? `${Number(l.qty_issued)} ${l.uom}` : '—'}</td>
+                      <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: Number(l.qty_issued) > 0 ? '#2563eb' : sub }}>
+                        {Number(l.qty_issued) > 0 ? `${Number(l.qty_issued)} ${l.uom}` : '—'}
+                        {/* Heat/Lot P4b-i — issued-heat breakdown (multiple rows when FIFO crossed heats) */}
+                        {Array.isArray(l.issued_heats) && l.issued_heats.length > 0 && (
+                          <div style={{ marginTop: 3, fontSize: 10, color: sub }}>
+                            {l.issued_heats.map((h: any, i: number) => (
+                              <div key={i}>{Number(h.qty)} of <span style={{ color: '#7c3aed', fontWeight: 600 }}>{h.heat_number || '— no heat'}</span></div>
+                            ))}
+                          </div>
+                        )}
+                      </td>
                       <td style={{ padding: '7px 10px' }}>
                         <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 5, fontWeight: 600, background: l.line_status === 'issued' ? 'rgba(34,197,94,0.12)' : l.line_status === 'partial_issued' ? 'rgba(245,158,11,0.12)' : (dark ? '#334155' : '#eef2f7'), color: l.line_status === 'issued' ? '#16a34a' : l.line_status === 'partial_issued' ? '#d97706' : sub }}>{(l.line_status || '—').replace('_', ' ')}</span>
                       </td>
