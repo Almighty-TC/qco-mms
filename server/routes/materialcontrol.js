@@ -920,7 +920,7 @@ router.get('/:projectId/transfers/stock-options', rejectExternal, async (req, re
     if (warehouse_id) { conds.push('s.warehouse_id = ?'); params.push(Number(warehouse_id)) }
     const [rows] = await db.query(
       `SELECT s.id, s.item_code, s.description, s.location_code, s.qty_available, s.uom, s.wbs_code,
-              s.condition_status, s.warehouse_id, w.name AS warehouse_name, w.code AS warehouse_code
+              s.condition_status, s.heat_number, s.warehouse_id, w.name AS warehouse_name, w.code AS warehouse_code
        FROM warehouse_stock s LEFT JOIN warehouses w ON w.id = s.warehouse_id
        WHERE ${conds.join(' AND ')} ORDER BY s.item_code, s.location_code`, params)
     res.json({ data: rows })
@@ -959,9 +959,9 @@ router.post('/:projectId/transfers', rejectExternal, async (req, res) => {
     const ref = `TRF-${year}-${String((maxId || 0) + 1).padStart(4,'0')}`
 
     const [result] = await db.query(
-      `INSERT INTO warehouse_transfers (project_id,transfer_ref,stock_id,item_code,description,wbs_code,qty,uom,from_warehouse_id,from_location,to_warehouse_id,to_location,requested_by_name,requested_by_company,requested_by_user,status,est_pickup_date,notes)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [pid, ref, src.id, src.item_code, src.description, src.wbs_code, moveQty, src.uom,
+      `INSERT INTO warehouse_transfers (project_id,transfer_ref,stock_id,item_code,description,wbs_code,heat_number,qty,uom,from_warehouse_id,from_location,to_warehouse_id,to_location,requested_by_name,requested_by_company,requested_by_user,status,est_pickup_date,notes)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [pid, ref, src.id, src.item_code, src.description, src.wbs_code, src.heat_number, moveQty, src.uom,
        src.warehouse_id, src.location_code, to_warehouse_id, to_location || null,
        requested_by_name || null, requested_by_company || null, userId, status, est_pickup_date || null, notes || null])
     await writeAudit(userId, 'transfer_create', 'warehouse_transfer', result.insertId, null,
@@ -1018,12 +1018,12 @@ router.put('/:projectId/transfers/:transferId/status', rejectExternal, async (re
         // Destination: distinct holding; quarantine stays non-issuable (qty_available 0).
         const destAvail = isQuar ? 0 : Number(tr.qty)
         await conn.query(
-          `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,commodity_id,equipment_tag,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,received_date,received_by,notes)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,commodity_id,equipment_tag,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by,notes)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           [pid, tr.to_warehouse_id, src.scn_id, src.po_line_id, src.commodity_id, src.equipment_tag,
            src.item_code, src.description, src.wbs_code, Number(tr.qty), destAvail, src.uom,
            tr.to_location || src.location_code, src.condition_status, src.trace_hold, src.vendor_name,
-           src.received_date, userId, `Transferred via ${tr.transfer_ref} from ${src.location_code || '—'}`])
+           src.heat_number, src.received_date, userId, `Transferred via ${tr.transfer_ref} from ${src.location_code || '—'}`])
         await conn.commit()
       } catch (mErr) { await conn.rollback(); conn.release(); return res.status(422).json({ error: 'Stock move failed: ' + mErr.message }) }
       conn.release()

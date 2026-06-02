@@ -12,7 +12,7 @@ const API = 'http://localhost:3001/api'
 
 interface Transfer {
   id: number; transfer_ref: string; item_code?: string | null; description: string
-  wbs_code?: string | null; qty: number; uom: string
+  wbs_code?: string | null; heat_number?: string | null; qty: number; uom: string
   from_warehouse_id?: number | null; from_location?: string | null
   from_warehouse_name?: string | null; from_warehouse_code?: string | null
   to_warehouse_id?: number | null; to_location?: string | null
@@ -258,6 +258,7 @@ const TransferDetailModal = ({ dark, transfer, projectId, onClose, onStatusUpdat
               ['ITEM', transfer.description],
               ['QTY', `${transfer.qty} ${transfer.uom}`],
               ['WBS', transfer.wbs_code || '—'],
+              ['HEAT', transfer.heat_number || '—'],
               ['FROM', `${transfer.from_warehouse_name} · ${transfer.from_location}`],
               ['TO', `${transfer.to_warehouse_name} · ${transfer.to_location}`],
               ['REQUESTED BY', `${transfer.requested_by_name}${transfer.requested_by_company ? ' · ' + transfer.requested_by_company : ''}`],
@@ -336,6 +337,7 @@ const TransferDetailModal = ({ dark, transfer, projectId, onClose, onStatusUpdat
 interface StockOption {
   id: number; item_code: string; description: string; location_code: string | null
   qty_available: number; uom: string; wbs_code: string | null; condition_status: string
+  heat_number?: string | null
 }
 const NewTransferWizard = ({ dark, projectId, warehouses, onClose, onSaved, addToast }: {
   dark: boolean; projectId: number; warehouses: Warehouse[]; onClose: () => void; onSaved: () => void
@@ -428,7 +430,7 @@ const NewTransferWizard = ({ dark, projectId, warehouses, onClose, onSaved, addT
                       style={{ padding: '9px 12px', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, cursor: 'pointer', background: stockId === h.id ? (dark ? '#162032' : '#eff6ff') : 'transparent', display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                       <div style={{ minWidth: 0 }}>
                         <div style={{ fontSize: 12, color: col }}><span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#2563eb', fontWeight: 600 }}>{h.item_code}</span> · {h.description}</div>
-                        <div style={{ fontSize: 10, color: sub, fontFamily: 'JetBrains Mono, monospace' }}>{h.location_code || '—'} · WBS {h.wbs_code || '—'} · {h.condition_status}</div>
+                        <div style={{ fontSize: 10, color: sub, fontFamily: 'JetBrains Mono, monospace' }}>{h.location_code || '—'} · WBS {h.wbs_code || '—'} · {h.condition_status} · Heat {h.heat_number || '—'}</div>
                       </div>
                       <div style={{ fontSize: 11, color: col, fontFamily: 'JetBrains Mono, monospace', whiteSpace: 'nowrap' }}>{Number(h.qty_available)} {h.uom}</div>
                     </div>
