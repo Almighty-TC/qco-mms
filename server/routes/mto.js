@@ -37,10 +37,12 @@ const upload = multer({
 function audit(req, action, entityType, entityId, before = null, after = null) {
   // path-only, no /api mount prefix — matches the existing audit_log convention
   const resource = (req.originalUrl || req.url || '').split('?')[0].replace(/^\/api(?=\/)/, '')
+  // project_id from the route param (all mto routes are /:projectId/...); NULL if absent.
+  const projectId = Number(req.params.projectId) || null
   db.query(
-    `INSERT INTO audit_log (user_id, action, entity_type, entity_id, before_value, after_value, resource, ip)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [req.user?.id ?? null, action, entityType, entityId,
+    `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, before_value, after_value, resource, ip)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [req.user?.id ?? null, action, entityType, entityId, projectId,
      before ? JSON.stringify(before) : null,
      after  ? JSON.stringify(after)  : null,
      resource,
