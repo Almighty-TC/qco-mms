@@ -685,11 +685,25 @@ router.post('/:projectId/scn', async (req, res) => {
     )
     const scnId = r.insertId
 
-    // Update po_lines qty_assigned for each selected line
+    // Update po_lines qty_assigned for each selected line.
+    // GUARD (Commit 1): row-lock the line (FOR UPDATE — concurrency-safe) and reject any
+    // allocation that would push qty_assigned over qty. Reject = rollback the whole txn
+    // (the SCN insert + any prior line updates), never a partial write.
     for (const { po_line_id, qty_allocated } of selected_lines) {
+      const add = Number(qty_allocated) || 0
+      const [[ln]] = await conn.query(
+        'SELECT line_number, qty, COALESCE(qty_assigned,0) AS qa FROM po_lines WHERE id = ? AND po_id = ? FOR UPDATE',
+        [po_line_id, po_id]
+      )
+      if (!ln) { await conn.rollback(); return res.status(404).json({ error: `PO line ${po_line_id} not found on PO ${po_id}` }) }
+      const remaining = Number(ln.qty) - Number(ln.qa)
+      if (add > remaining) {
+        await conn.rollback()
+        return res.status(422).json({ error: `Cannot assign ${add} to line ${ln.line_number}: only ${remaining} remaining (qty ${ln.qty}, already assigned ${ln.qa}).` })
+      }
       await conn.query(
         'UPDATE po_lines SET qty_assigned = COALESCE(qty_assigned,0) + ? WHERE id = ? AND po_id = ?',
-        [Number(qty_allocated) || 0, po_line_id, po_id]
+        [add, po_line_id, po_id]
       )
     }
 
