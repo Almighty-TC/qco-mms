@@ -26,16 +26,16 @@ function rejectExternal(req, res, next) {
 }
 
 // ─── AUDIT HELPER ─────────────────────────────────────────────
-async function writeAudit(userId, action, entity, id, before, after, resource) {
+async function writeAudit(userId, action, entity, id, before, after, resource, projectId = null) {
   try {
     await db.query(
-      `INSERT INTO audit_log (user_id,action,entity_type,entity_id,before_value,after_value,resource) VALUES (?,?,?,?,?,?,?)`,
-      [userId, action, entity, id,
+      `INSERT INTO audit_log (user_id,action,entity_type,entity_id,project_id,before_value,after_value,resource) VALUES (?,?,?,?,?,?,?,?)`,
+      [userId, action, entity, id, (Number(projectId) || null),
        before ? JSON.stringify(before) : null,
        after  ? JSON.stringify(after)  : null,
        resource]
     )
-  } catch (_) {}
+  } catch (e) { console.error('[audit] insert failed:', e.message) }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -326,7 +326,7 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
     await writeAudit(userId, 'receipt_complete', 'scn', scnId,
       { status: scn.status },
       { status: newStatus, location_code, cargo_condition, lines: Array.isArray(lines) ? lines.length : 0 },
-      `/mc/${pid}/receipting/${scnId}/complete`)
+      `/mc/${pid}/receipting/${scnId}/complete`, Number(req.params.projectId) || null)
 
     res.json({ success: true, stock_created: stockCreated, scn_status: newStatus })
   } catch (e) {
@@ -420,7 +420,7 @@ router.put('/:projectId/stock/:itemId/move', async (req, res) => {
     await writeAudit(userId, 'stock_move', 'warehouse_stock', itemId,
       { location_code: item.location_code, warehouse_id: item.warehouse_id },
       { location_code: new_location, warehouse_id: new_warehouse_id || item.warehouse_id },
-      `/mc/${req.params.projectId}/stock/${itemId}/move`)
+      `/mc/${req.params.projectId}/stock/${itemId}/move`, Number(req.params.projectId) || null)
 
     const [[updated]] = await db.query('SELECT * FROM warehouse_stock WHERE id=?', [itemId])
     res.json(updated)
@@ -455,13 +455,13 @@ router.post('/:projectId/stock/:itemId/resolve', rejectExternal, async (req, res
       await writeAudit(userId, 'quarantine_release', 'warehouse_stock', itemId,
         { condition_status: 'quarantine', location_code: item.location_code, qty_available: item.qty_available },
         { condition_status: 'good', location_code: to_location.trim(), qty_available: item.qty, reason: reason.trim() },
-        `/mc/${pid}/stock/${itemId}/resolve`)
+        `/mc/${pid}/stock/${itemId}/resolve`, Number(req.params.projectId) || null)
     } else {
       await db.query('DELETE FROM warehouse_stock WHERE id=?', [itemId])
       await writeAudit(userId, 'quarantine_reject', 'warehouse_stock', itemId,
         { condition_status: 'quarantine', qty: item.qty, item_code: item.item_code },
         { removed: true, reason: reason.trim() },
-        `/mc/${pid}/stock/${itemId}/resolve`)
+        `/mc/${pid}/stock/${itemId}/resolve`, Number(req.params.projectId) || null)
     }
     res.json({ success: true, action })
   } catch (e) {
@@ -666,7 +666,7 @@ router.post('/:projectId/fmr', async (req, res) => {
 
     await writeAudit(userId, 'fmr_raised', 'fmr', fmrId, null,
       { fmr_ref: ref, warehouse_id, line_count: lines.length, total_qty: totalQty },
-      `/mc/${pid}/fmr`)
+      `/mc/${pid}/fmr`, Number(req.params.projectId) || null)
 
     const [[fmr]] = await db.query('SELECT * FROM fmr_requests WHERE id=?', [fmrId])
     res.status(201).json({ ...fmr, line_count: lines.length })
@@ -856,7 +856,7 @@ router.put('/:projectId/fmr/:fmrId/approve', async (req, res) => {
       await writeAudit(userId, 'fmr_line_decision', 'fmr_line', p.line.id,
         { line_status: p.line.line_status },
         { line_status: p.status, qty_approved: p.qty, reason: p.reason },
-        `/mc/${pid}/fmr/${fmrId}/approve`)
+        `/mc/${pid}/fmr/${fmrId}/approve`, Number(req.params.projectId) || null)
     }
 
     // ── Recompute + persist header roll-up ─────────────────────
@@ -868,7 +868,7 @@ router.put('/:projectId/fmr/:fmrId/approve', async (req, res) => {
       [newStatus, userId, appQty.q, fmrId])
     await writeAudit(userId, 'fmr_decision', 'fmr', fmrId,
       { status: fmr.status }, { status: newStatus, lines_decided: planned.length },
-      `/mc/${pid}/fmr/${fmrId}/approve`)
+      `/mc/${pid}/fmr/${fmrId}/approve`, Number(req.params.projectId) || null)
 
     const [[updated]] = await db.query('SELECT * FROM fmr_requests WHERE id=?', [fmrId])
     res.json({ success: true, fmr: updated, header_status: newStatus })
@@ -998,7 +998,7 @@ router.post('/:projectId/fmr/:fmrId/issue', async (req, res) => {
     await conn.commit()
     await writeAudit(userId, 'fmr_issue', 'fmr', fmrId,
       { status: fmr.status }, { status: newStatus, total_issued: totalIssued, short: anyShort },
-      `/mc/${pid}/fmr/${fmrId}/issue`)
+      `/mc/${pid}/fmr/${fmrId}/issue`, Number(req.params.projectId) || null)
 
     const [[updated]] = await db.query('SELECT * FROM fmr_requests WHERE id=?', [fmrId])
     res.json({ success: true, total_issued: totalIssued, short: anyShort, header_status: newStatus, fmr: updated })
@@ -1145,7 +1145,7 @@ router.post('/:projectId/transfers', rejectExternal, async (req, res) => {
        src.warehouse_id, src.location_code, to_warehouse_id, to_location || null,
        requested_by_name || null, requested_by_company || null, userId, status, est_pickup_date || null, notes || null])
     await writeAudit(userId, 'transfer_create', 'warehouse_transfer', result.insertId, null,
-      { transfer_ref: ref, stock_id: src.id, qty: moveQty, status }, `/mc/${pid}/transfers`)
+      { transfer_ref: ref, stock_id: src.id, qty: moveQty, status }, `/mc/${pid}/transfers`, Number(req.params.projectId) || null)
 
     const [[tr]] = await db.query('SELECT t.*, fw.name AS from_warehouse_name, tw.name AS to_warehouse_name FROM warehouse_transfers t LEFT JOIN warehouses fw ON t.from_warehouse_id=fw.id LEFT JOIN warehouses tw ON t.to_warehouse_id=tw.id WHERE t.id=?', [result.insertId])
     res.status(201).json(tr)
@@ -1213,7 +1213,7 @@ router.put('/:projectId/transfers/:transferId/status', rejectExternal, async (re
     await db.query(`UPDATE warehouse_transfers SET status=? ${dateField} WHERE id=?`, [status, transferId])
     await writeAudit(userId, 'transfer_status', 'warehouse_transfer', transferId,
       { status: tr.status }, { status, stock_moved: firstCompletion && !!tr.stock_id },
-      `/mc/${pid}/transfers/${transferId}/status`)
+      `/mc/${pid}/transfers/${transferId}/status`, Number(req.params.projectId) || null)
 
     const [[updated]] = await db.query('SELECT t.*, fw.name AS from_warehouse_name, tw.name AS to_warehouse_name FROM warehouse_transfers t LEFT JOIN warehouses fw ON t.from_warehouse_id=fw.id LEFT JOIN warehouses tw ON t.to_warehouse_id=tw.id WHERE t.id=?', [transferId])
     res.json({ success: true, transfer: updated })
@@ -1242,7 +1242,7 @@ router.post('/:projectId/transfers/:transferId/approve', async (req, res) => {
       [newStatus, userId, reason ? reason.trim() : null, transferId])
     await writeAudit(userId, decision === 'approve' ? 'transfer_approved' : 'transfer_rejected', 'warehouse_transfer', transferId,
       { status: 'pending_approval' }, { status: newStatus, reason: reason ? reason.trim() : null },
-      `/mc/${pid}/transfers/${transferId}/approve`)
+      `/mc/${pid}/transfers/${transferId}/approve`, Number(req.params.projectId) || null)
 
     const [[updated]] = await db.query('SELECT t.*, fw.name AS from_warehouse_name, tw.name AS to_warehouse_name FROM warehouse_transfers t LEFT JOIN warehouses fw ON t.from_warehouse_id=fw.id LEFT JOIN warehouses tw ON t.to_warehouse_id=tw.id WHERE t.id=?', [transferId])
     res.json({ success: true, transfer: updated })
