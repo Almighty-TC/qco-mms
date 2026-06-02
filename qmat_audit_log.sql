@@ -28,6 +28,7 @@ CREATE TABLE `audit_log` (
   `action` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
   `entity_type` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `entity_id` int DEFAULT NULL,
+  `project_id` int DEFAULT NULL,
   `before_value` json DEFAULT NULL,
   `after_value` json DEFAULT NULL,
   `reason_category` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
@@ -39,7 +40,9 @@ CREATE TABLE `audit_log` (
   KEY `idx_user_id` (`user_id`),
   KEY `idx_action` (`action`),
   KEY `idx_created` (`created_at`),
-  CONSTRAINT `fk_audit_log_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
+  KEY `idx_audit_project` (`project_id`),
+  CONSTRAINT `fk_audit_log_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),
+  CONSTRAINT `fk_audit_project` FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=12 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
