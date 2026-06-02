@@ -735,6 +735,8 @@ DROP TABLE IF EXISTS `scn_additional_items`;
 CREATE TABLE `scn_additional_items` (
   `id` int NOT NULL AUTO_INCREMENT,
   `scn_id` int NOT NULL,
+  `parent_po_line_id` int DEFAULT NULL,
+  `is_variation` tinyint(1) NOT NULL DEFAULT '0',
   `description` varchar(500) COLLATE utf8mb4_unicode_ci NOT NULL,
   `qty` decimal(10,3) DEFAULT NULL,
   `uom` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
@@ -744,9 +746,11 @@ CREATE TABLE `scn_additional_items` (
   PRIMARY KEY (`id`),
   KEY `fk_scnai_created` (`created_by`),
   KEY `idx_scnai_scn` (`scn_id`),
+  KEY `fk_sai_parent` (`parent_po_line_id`),
   CONSTRAINT `fk_scnai_created` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`),
-  CONSTRAINT `fk_scnai_scn` FOREIGN KEY (`scn_id`) REFERENCES `shipment_control_notes` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Off-PO items added to an SCN (consumables, packaging materials, etc. not on original PO lines).';
+  CONSTRAINT `fk_scnai_scn` FOREIGN KEY (`scn_id`) REFERENCES `shipment_control_notes` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_sai_parent` FOREIGN KEY (`parent_po_line_id`) REFERENCES `po_lines` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Off-PO items added to an SCN. is_variation=1 + parent_po_line_id = a linked off-PO variation (e.g. crate for a pump line); never rolls into the parent line qty.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --

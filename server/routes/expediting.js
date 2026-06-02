@@ -754,6 +754,45 @@ router.post('/:projectId/scn', async (req, res) => {
   }
 })
 
+// ─── OFF-PO VARIATION (Commit 3) ──────────────────────────────
+// Records an off-PO item (e.g. a specialised crate) as a NEW line tied to a parent
+// PO line + description, flagged is_variation=1. Required link (parent_po_line_id).
+// Does NOT touch the parent line's qty_assigned/totals (off-PO never rolls into the PO).
+router.post('/:projectId/scn/:scnId/variation', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const scnId = Number(req.params.scnId)
+    const { parent_po_line_id, description, qty, uom, notes } = req.body
+    if (!parent_po_line_id) return res.status(422).json({ error: 'parent_po_line_id is required — every off-PO variation must name its parent PO line' })
+    if (!description || !description.trim()) return res.status(422).json({ error: 'description is required' })
+    // validate the SCN + parent line belong to this project
+    const [[scn]] = await db.query('SELECT id FROM shipment_control_notes WHERE id=? AND project_id=?', [scnId, pid])
+    if (!scn) return res.status(404).json({ error: 'SCN not found in this project' })
+    const [[pl]] = await db.query(
+      'SELECT pl.id FROM po_lines pl JOIN purchase_orders p ON p.id=pl.po_id WHERE pl.id=? AND p.project_id=?',
+      [Number(parent_po_line_id), pid]
+    )
+    if (!pl) return res.status(404).json({ error: 'parent PO line not found in this project' })
+    const [r] = await db.query(
+      `INSERT INTO scn_additional_items (scn_id, parent_po_line_id, is_variation, description, qty, uom, notes, created_by)
+       VALUES (?,?,1,?,?,?,?,?)`,
+      [scnId, Number(parent_po_line_id), description.trim(), qty || null, uom || 'EA', notes || null, req.user.id]
+    )
+    // project-scoped audit (does NOT modify the parent po_line)
+    db.query(
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, after_value, resource, ip)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [req.user.id, 'scn_variation_added', 'scn_additional_item', r.insertId, pid,
+       JSON.stringify({ scn_id: scnId, parent_po_line_id: Number(parent_po_line_id), description: description.trim(), is_variation: 1 }),
+       (req.originalUrl || '').split('?')[0].replace(/^\/api(?=\/)/, ''), req.ip]
+    ).catch(e => console.error('[audit] insert failed:', e.message))
+    res.status(201).json({ id: r.insertId, scn_id: scnId, parent_po_line_id: Number(parent_po_line_id), is_variation: 1 })
+  } catch (e) {
+    console.error('[scn:variation]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // ─── VDRL PO LIST ─────────────────────────────────────────────
 // Returns locked POs that have VDRL packages, with doc counts and progress.
 router.get('/:projectId/vdrl/po-list', async (req, res) => {
