@@ -176,6 +176,10 @@ router.get('/:projectId/receipting/:scnId', rejectExternal, async (req, res) => 
     if (!scn) return res.status(404).json({ error: 'SCN not found' })
 
     const [packages] = await db.query('SELECT * FROM scn_packages WHERE scn_id = ?', [scnId])
+    // Heat/Lot P2a: the SCN's declared heats (P1) — the dropdown source for the
+    // receipting heat picker, scoped to this shipment.
+    const [heats] = await db.query(
+      'SELECT id, heat_number, material_grade FROM scn_heats WHERE scn_id = ? ORDER BY heat_number', [scnId])
     // Phase 4: received-to-date is DERIVED from receipt_lines (single source of
     // truth — no qty_received/qty_assigned writes). remaining = ordered − received,
     // clamped ≥ 0 so over-receipt never shows a negative balance.
@@ -188,7 +192,7 @@ router.get('/:projectId/receipting/:scnId', rejectExternal, async (req, res) => 
       [scn.po_id || 0]
     )
 
-    res.json({ ...scn, packages, lines })
+    res.json({ ...scn, packages, lines, heats })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
@@ -230,6 +234,11 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
         if (rq >= 0 && dq > rq) {
           return res.status(422).json({ error: `Line ${ln.line_number || ln.po_line_id}: damaged qty (${dq}) cannot exceed received qty (${rq})` })
         }
+        // Heat/Lot P2a: an off-list heat is allowed but REQUIRES a reason. Heat
+        // itself stays optional (a line may be received with no heat at all).
+        if (ln.heat_off_list && !(ln.heat_off_list_reason || '').trim()) {
+          return res.status(422).json({ error: `Line ${ln.line_number || ln.po_line_id}: a reason is required for an off-list heat` })
+        }
       }
       for (const ln of lines) {
         const receivedQty = Number(ln.received_qty)
@@ -237,13 +246,20 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
         const expectedQty = ln.expected_qty != null ? Number(ln.expected_qty) : null
         const damagedQty = Number(ln.damaged_qty || 0)
         const uom = ln.uom || 'EA'
+        // Heat/Lot P2a: heat travels onto the receipt line + both holdings below.
+        // Optional (heatNo may be null); off-list carries a flag + mandatory reason.
+        const heatNo      = (ln.heat_number || '').trim() || null
+        const heatOffList = ln.heat_off_list ? 1 : 0
+        const heatReason  = heatOffList ? ((ln.heat_off_list_reason || '').trim() || null) : null
 
         await db.query(
           `INSERT INTO receipt_lines
-             (project_id, scn_id, scn_ref, po_line_id, description, expected_qty, received_qty, damaged_qty, uom,
+             (project_id, scn_id, scn_ref, po_line_id, heat_number, heat_off_list, heat_off_list_reason,
+              description, expected_qty, received_qty, damaged_qty, uom,
               discrepancy_type, discrepancy_notes, received_by, received_date)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,CURDATE())`,
-          [pid, scnId, scn.scn_ref, ln.po_line_id || null, ln.description || null,
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURDATE())`,
+          [pid, scnId, scn.scn_ref, ln.po_line_id || null, heatNo, heatOffList, heatReason,
+           ln.description || null,
            expectedQty, receivedQty, damagedQty, uom,
            ln.discrepancy_type || null, ln.discrepancy_notes || null, userId])
 
@@ -254,23 +270,23 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
         const descr      = ln.description || scn.notes || 'Received goods'
         const wbs        = ln.wbs_code || null
 
-        // Good qty → available at its normal grid location.
+        // Good qty → available at its normal grid location. Heat (P2a) travels onto it.
         if (goodQty > 0) {
           await db.query(
-            `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,received_date,received_by)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,CURDATE(),?)`,
+            `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,CURDATE(),?)`,
             [pid, whId, scnId, ln.po_line_id || null, itemCode, descr, wbs,
-             goodQty, goodQty, uom, location_code, (damagedQty > 0 ? 'good' : condition), scn.vendor_name, userId])
+             goodQty, goodQty, uom, location_code, (damagedQty > 0 ? 'good' : condition), scn.vendor_name, heatNo, userId])
           stockCreated++
         }
 
-        // Damaged qty → QUARANTINE location, NOT issuable (qty_available = 0).
+        // Damaged qty → QUARANTINE location, NOT issuable (qty_available = 0). Same heat travels.
         if (damagedQty > 0) {
           await db.query(
-            `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,received_date,received_by,notes)
-             VALUES (?,?,?,?,?,?,?,?,0,?,?,?,1,?,CURDATE(),?,?)`,
+            `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by,notes)
+             VALUES (?,?,?,?,?,?,?,?,0,?,?,?,1,?,?,CURDATE(),?,?)`,
             [pid, whId, scnId, ln.po_line_id || null, itemCode, descr, wbs,
-             damagedQty, uom, QUARANTINE_LOCATION, 'quarantine', scn.vendor_name, userId,
+             damagedQty, uom, QUARANTINE_LOCATION, 'quarantine', scn.vendor_name, heatNo, userId,
              `Damaged on receipt — ${ln.discrepancy_notes || 'pending QA review'}`])
           stockCreated++
         }

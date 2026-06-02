@@ -263,6 +263,15 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
   const [damaged, setDamaged] = useState<Record<number, number>>({})
   const [discrepancyTypes, setDiscrepancyTypes] = useState<Record<number, string>>({})
   const [discrepancyNotes, setDiscrepancyNotes] = useState('')
+  // Heat/Lot P2a — per-line heat, keyed by po_line.id (like actuals/damaged).
+  // `heat` holds the chosen/typed heat number; `heatOffList` flips a line to the
+  // free-text "Other / not listed" path (which requires a reason). Optional: a
+  // line may carry no heat. `selectedLines`/`bulkHeat` drive the bulk apply.
+  const [heat, setHeat]             = useState<Record<number, string>>({})
+  const [heatOffList, setHeatOffList] = useState<Record<number, boolean>>({})
+  const [heatReason, setHeatReason] = useState<Record<number, string>>({})
+  const [selectedLines, setSelectedLines] = useState<Record<number, boolean>>({})
+  const [bulkHeat, setBulkHeat]     = useState('')
   const [hasDiscrepancy, setHasDiscrepancy] = useState(false)
   const [location, setLocation] = useState('')
   const [cargoCondition, setCargo] = useState('')
@@ -337,6 +346,11 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
           discrepancy_type: issue ? (discrepancyTypes[l.id] || null) : null,
           // Single shared notes field applies to whichever lines diverge.
           discrepancy_notes: issue ? (discrepancyNotes.trim() || null) : null,
+          // Heat/Lot P2a — heat is additive; it changes no quantity. Off-list
+          // carries the flag + reason; declared heat is just the number.
+          heat_number: (heat[l.id] || '').trim() || null,
+          heat_off_list: heatOffList[l.id] ? 1 : 0,
+          heat_off_list_reason: heatOffList[l.id] ? ((heatReason[l.id] || '').trim() || null) : null,
         }
       })
       await axios.post(`${API}/mc/${projectId}/receipting/${scn.id}/complete`, {
@@ -462,6 +476,29 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
           const discrepancyReady = anyIssue && discrepancyNotes.trim().length > 0 && typesComplete
           const DISC_TYPES = ['Short delivery','Over delivery','Damaged','Missing','Other']
 
+          // ── Heat/Lot P2a gating + bulk apply (still 1 row per PO line) ──
+          // Heat is optional, but an off-list heat needs a reason before proceeding.
+          const declaredHeats = detail?.heats || []
+          const heatReady = lines.every((l: any) => !heatOffList[l.id] || (heatReason[l.id] || '').trim().length > 0)
+          const selectedIds = lines.filter((l: any) => selectedLines[l.id]).map((l: any) => l.id)
+          const allSelected = lines.length > 0 && lines.every((l: any) => selectedLines[l.id])
+          const toggleSel = (id: number) => setSelectedLines(prev => ({ ...prev, [id]: !prev[id] }))
+          const toggleSelAll = () => setSelectedLines(() => allSelected ? {} : Object.fromEntries(lines.map((l: any) => [l.id, true])))
+          const applyBulkHeat = () => {
+            if (!bulkHeat || selectedIds.length === 0) return
+            setHeat(prev => { const n = { ...prev }; selectedIds.forEach((id: number) => { n[id] = bulkHeat }); return n })
+            setHeatOffList(prev => { const n = { ...prev }; selectedIds.forEach((id: number) => { n[id] = false }); return n })
+            setHeatReason(prev => { const n = { ...prev }; selectedIds.forEach((id: number) => { delete n[id] }); return n })
+          }
+          const setLineHeat = (id: number, v: string) => {
+            if (v === '__other__') { setHeatOffList(p => ({ ...p, [id]: true })); setHeat(p => ({ ...p, [id]: '' })) }
+            else {
+              setHeatOffList(p => ({ ...p, [id]: false }))
+              setHeatReason(p => { const n = { ...p }; delete n[id]; return n })
+              setHeat(p => ({ ...p, [id]: v }))
+            }
+          }
+
           const proceed = (withDiscrepancy: boolean) => {
             setHasDiscrepancy(withDiscrepancy)
             setStep(3)
@@ -475,18 +512,41 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
 
           return (
             <div>
-              <p style={{ color: sub, fontSize: 13, marginBottom: 16 }}>Enter actual quantities received for each package. Flag any discrepancies.</p>
+              <p style={{ color: sub, fontSize: 13, marginBottom: 16 }}>Enter actual quantities received for each package. Flag any discrepancies. Heat numbers are optional.</p>
+
+              {/* ── Heat/Lot P2a — BULK apply: one heat for the selected lines ── */}
+              {lines.length > 0 && (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 11, color: sub }}>Bulk heat:</span>
+                  <select value={bulkHeat} onChange={e => setBulkHeat(e.target.value)}
+                    style={{ ...inputSt, width: 220, padding: '5px 8px' }}>
+                    <option value="">— Pick a declared heat —</option>
+                    {declaredHeats.map((h: any) => (
+                      <option key={h.id} value={h.heat_number}>{h.heat_number}{h.material_grade ? ` · ${h.material_grade}` : ''}</option>
+                    ))}
+                  </select>
+                  <button onClick={applyBulkHeat} disabled={!bulkHeat || selectedIds.length === 0}
+                    style={{ padding: '6px 12px', borderRadius: 6, border: 'none', background: (bulkHeat && selectedIds.length) ? '#2563eb' : '#94a3b8', color: '#fff', cursor: (bulkHeat && selectedIds.length) ? 'pointer' : 'not-allowed', fontSize: 12, fontWeight: 600 }}>
+                    Apply heat to selected ({selectedIds.length})
+                  </button>
+                  {declaredHeats.length === 0 && <span style={{ fontSize: 11, color: '#f59e0b' }}>No heats declared on this SCN — use "Other / not listed" per line.</span>}
+                </div>
+              )}
+
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, background: cardBg, border: bd, borderRadius: 8 }}>
                 <thead>
                   <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
-                    {['LINE','DESCRIPTION','EXPECTED','UOM','ACTUAL','DAMAGED','MATCH', ...(anyIssue ? ['DISCREPANCY TYPE'] : [])].map(h => (
+                    <th style={{ padding: '8px 12px', textAlign: 'center', width: 32 }}>
+                      <input type="checkbox" checked={allSelected} onChange={toggleSelAll} style={{ accentColor: '#2563eb', cursor: 'pointer' }} title="Select all (bulk heat)" />
+                    </th>
+                    {['LINE','DESCRIPTION','EXPECTED','UOM','ACTUAL','DAMAGED','MATCH','HEAT', ...(anyIssue ? ['DISCREPANCY TYPE'] : [])].map(h => (
                       <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {lines.length === 0 ? (
-                    <tr><td colSpan={anyIssue ? 8 : 7} style={{ padding: 20, textAlign: 'center', color: sub }}>No PO lines linked to this SCN — nothing to receive against.</td></tr>
+                    <tr><td colSpan={anyIssue ? 10 : 9} style={{ padding: 20, textAlign: 'center', color: sub }}>No PO lines linked to this SCN — nothing to receive against.</td></tr>
                   ) : lines.map((l: any) => {
                     const expected = expOf(l)
                     const actual = actuals[l.id] ?? expected
@@ -496,6 +556,9 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                     const rowHighlight = issue ? (dark ? 'rgba(245,158,11,0.06)' : 'rgba(245,158,11,0.05)') : undefined
                     return (
                       <tr key={l.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, background: rowHighlight }}>
+                        <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                          <input type="checkbox" checked={!!selectedLines[l.id]} onChange={() => toggleSel(l.id)} style={{ accentColor: '#2563eb', cursor: 'pointer' }} />
+                        </td>
                         <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#E84E0F' }}>L-{String(l.line_number || l.id).padStart(3,'0')}</td>
                         <td style={{ padding: '8px 12px', color: col }}>{l.description || 'Line item'}</td>
                         <td style={{ padding: '8px 12px', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>
@@ -528,6 +591,28 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                         <td style={{ padding: '8px 12px' }}>
                           <span title={clean ? 'Match' : (dmg > 0 ? 'Damaged units' : 'Qty mismatch')}
                             style={{ color: clean ? '#22c55e' : '#f59e0b', fontSize: 16 }}>{clean ? '✓' : '⚠'}</span>
+                        </td>
+                        {/* ── Heat/Lot P2a — declared-heat dropdown + "Other / not listed" (reason required) ── */}
+                        <td style={{ padding: '8px 12px' }}>
+                          <select value={heatOffList[l.id] ? '__other__' : (heat[l.id] || '')}
+                            onChange={e => setLineHeat(l.id, e.target.value)}
+                            style={{ ...inputSt, width: 170, padding: '5px 8px' }}>
+                            <option value="">— No heat —</option>
+                            {declaredHeats.map((h: any) => (
+                              <option key={h.id} value={h.heat_number}>{h.heat_number}{h.material_grade ? ` · ${h.material_grade}` : ''}</option>
+                            ))}
+                            <option value="__other__">Other / not listed…</option>
+                          </select>
+                          {heatOffList[l.id] && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+                              <input value={heat[l.id] || ''} onChange={e => setHeat(p => ({ ...p, [l.id]: e.target.value }))}
+                                placeholder="Heat number"
+                                style={{ ...inputSt, width: 170, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }} />
+                              <input value={heatReason[l.id] || ''} onChange={e => setHeatReason(p => ({ ...p, [l.id]: e.target.value }))}
+                                placeholder="Reason (required) *"
+                                style={{ ...inputSt, width: 170, fontSize: 11, borderColor: (heatReason[l.id] || '').trim() ? undefined : '#ef4444' }} />
+                            </div>
+                          )}
                         </td>
                         {anyIssue && (
                           <td style={{ padding: '8px 12px' }}>
@@ -567,14 +652,17 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                 <div style={{ flex: 1 }} />
                 {/* Right-side action — derived live from current values (no latch).
                     Clean → green proceed; any issue → amber proceed gated on type+notes. */}
+                {!heatReady && (
+                  <span style={{ fontSize: 11, color: '#ef4444', alignSelf: 'center' }}>An off-list heat needs a reason</span>
+                )}
                 {!anyIssue ? (
-                  <button onClick={() => proceed(false)} disabled={!allClean}
-                    style={{ padding: '8px 20px', borderRadius: 6, border: 'none', background: allClean ? '#22c55e' : '#94a3b8', color: '#fff', cursor: allClean ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
+                  <button onClick={() => proceed(false)} disabled={!allClean || !heatReady}
+                    style={{ padding: '8px 20px', borderRadius: 6, border: 'none', background: (allClean && heatReady) ? '#22c55e' : '#94a3b8', color: '#fff', cursor: (allClean && heatReady) ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
                     ✓ All match — proceed
                   </button>
                 ) : (
-                  <button onClick={() => proceed(true)} disabled={!discrepancyReady}
-                    style={{ padding: '8px 20px', borderRadius: 6, border: 'none', background: discrepancyReady ? '#f59e0b' : '#94a3b8', color: '#fff', cursor: discrepancyReady ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
+                  <button onClick={() => proceed(true)} disabled={!discrepancyReady || !heatReady}
+                    style={{ padding: '8px 20px', borderRadius: 6, border: 'none', background: (discrepancyReady && heatReady) ? '#f59e0b' : '#94a3b8', color: '#fff', cursor: (discrepancyReady && heatReady) ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
                     Proceed with discrepancy noted →
                   </button>
                 )}
