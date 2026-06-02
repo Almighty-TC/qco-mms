@@ -60,6 +60,10 @@ app.use('/api/traceability', require('./routes/traceability'))
 // Read-only, project-wide aggregated document register (no own table).
 app.use('/api/documents', require('./routes/documents'))
 
+// ─── PENDING CHANGES (C-c confirmation workflow) ─────────────
+// Stages create/delete for wbs/commodity/equipment/mto until a domain confirmer applies.
+app.use('/api/pending-changes', require('./routes/pendingChanges'))
+
 // ─── START SERVER ───────────────────────────────────────────
 const PORT = process.env.PORT || 3001
 app.listen(PORT, () => {
