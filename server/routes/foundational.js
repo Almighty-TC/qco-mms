@@ -170,6 +170,10 @@ router.post('/:projectId/wbs', async (req, res) => {
 })
 
 // PATCH /api/foundational/:projectId/wbs/:id — update node (notes, ros, rag, forecast/actual dates)
+// GOVERNANCE (baseline-major): structural WBS moves (re-parent / code change) are intentionally
+// NOT editable here — only notes/ros/rag/dates. This is a baseline-major governance control. If a
+// re-parent/code-change route is ever added, it MUST route through pending_changes confirmation
+// (action='edit', confirmer=project_manager) per the signed definition — never write direct.
 router.patch('/:projectId/wbs/:id', async (req, res) => {
   try {
     const id  = Number(req.params.id)

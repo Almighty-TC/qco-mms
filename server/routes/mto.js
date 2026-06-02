@@ -572,6 +572,10 @@ router.put('/:projectId/:mtoId/lines/:lineId', async (req, res) => {
 
     let sql, params
     if (locked) {
+      // GOVERNANCE (baseline-major): qty/rev changes on a PO-raised line are intentionally
+      // blocked here (only ros_date/vdrl_required editable). If this is ever unlocked, the
+      // qty/rev edit MUST route through pending_changes confirmation (action='edit',
+      // confirmer=project_manager) per the signed baseline-major definition — never write direct.
       sql = `UPDATE mto_lines SET ros_date = ?, vdrl_required = ? WHERE id = ?`
       params = [ros_date ?? line.ros_date, vdrl_required != null ? (vdrl_required ? 1 : 0) : line.vdrl_required, line.id]
     } else {

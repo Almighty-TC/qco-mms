@@ -241,6 +241,18 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
   `expediting_forecast_history` (milestone forecast changes) + `po_action_notes` — it does **not** read
   `audit_log`. Not a defect; decide whether to fold the general audit stream in.
 
+- **⏸ DEFERRED — edit-gating in `pending_changes` (C-c Decision 2).** The `ALTER TABLE pending_changes
+  MODIFY action ENUM('create','delete','edit')` was **not run**, and edit-staging was **not built**,
+  because the two signed baseline-major *edit* cases are currently **unreachable via the API**:
+  (1) **structural WBS move** (re-parent / code change) — the WBS update route only edits
+  notes/ros/rag/dates (code/parent_id immutable); (2) **MTO qty/rev on a PO-raised line** — the line
+  update route's locked branch allows only ros_date/vdrl_required when `status='po-raised'`.
+  Both protection points now carry a **GOVERNANCE comment** (foundational wbs PATCH; mto line-update
+  locked branch). **If either route is ever opened** (a re-parent/code-change route, or unlocking
+  po-raised qty edits), you MUST: add the ALTER (+'edit'), add an `applyChange` UPDATE branch in
+  `pendingChanges.js`, add edit-detection on that route, and gate per the signed baseline-major
+  definition (confirmer = project_manager/admin) — never write direct.
+
 ---
 
 ## 6. NEXT SESSION PRIORITIES (in order)
