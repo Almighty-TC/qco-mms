@@ -8,7 +8,6 @@ import { HelpButton } from '../components/HelpDrawer'
 import { WBS_HELP } from '../helpContent'
 import { WBSGanttView } from '../components/WBSGanttView'
 import { BackButton } from '../components/BackButton'
-import { MilestoneLegend } from '../components/MilestoneLegend'
 
 const API = 'http://localhost:3001/api'
 
@@ -1772,9 +1771,28 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
             onClose={() => setFocusNode(null)}
             onEditNode={n => setEditNode(n)} />
         )}
-        {/* WBS RAG Legend */}
-        <MilestoneLegend dark={dark} />
       </div>}  {/* end wbsView==='tree' */}
+
+      {/* WBS Tree RAG legend (bottom) — matches the Tree's left-pane status dots
+          (RAG_LABELS), not the old generic Complete/Future set. Same bottom
+          placement/style as the Gantt legend. */}
+      {wbsView === 'tree' && (
+        <div style={{ display: 'flex', gap: 18, alignItems: 'center', flexWrap: 'wrap', padding: '10px 14px', marginTop: 8, border: bd, borderRadius: 8, background: dark ? '#1e293b' : '#fff', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase' }}>RAG status</span>
+          {[
+            { label: 'On track',    color: RAG_COLORS.green },
+            { label: 'At risk',     color: RAG_COLORS.amber },
+            { label: 'Breached',    color: RAG_COLORS.red },
+            { label: 'In progress', color: RAG_COLORS.blue },
+            { label: 'Not set',     color: '#c4cedf', hollow: true },
+          ].map(r => (
+            <div key={r.label} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: r.hollow ? 'transparent' : r.color, border: r.hollow ? `2px solid ${r.color}` : 'none', flexShrink: 0 }} />
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>{r.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ── Modals ── */}
       {editNode && (
