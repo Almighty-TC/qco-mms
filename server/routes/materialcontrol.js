@@ -890,6 +890,12 @@ router.post('/:projectId/fmr/:fmrId/issue', async (req, res) => {
   const pid = Number(req.params.projectId)
   const fmrId = Number(req.params.fmrId)
   const userId = req.user?.id || 1
+  // Heat/Lot P4b-ii — OPTIONAL per-line user-pick override. Shape: { [fmr_line_id]:
+  // [{stock_id, qty}, ...] }. A line WITH an allocation consumes exactly those
+  // holdings (validated); a line WITHOUT falls back to FIFO (P4a-i/P4b-i unchanged).
+  const allocations = (req.body && typeof req.body.allocations === 'object' && req.body.allocations) || {}
+  // Guard violations throw with .http=422 → caught below, whole txn rolled back.
+  const bad = (msg) => { throw Object.assign(new Error(msg), { http: 422 }) }
 
   const conn = await db.getConnection()
   try {
@@ -909,23 +915,60 @@ router.post('/:projectId/fmr/:fmrId/issue', async (req, res) => {
     for (const line of lines) {
       const approved = Number(line.qty_approved || 0)
       const already  = Number(line.qty_issued || 0)
-      let outstanding = approved - already
+      const outstanding = approved - already
       if (!(outstanding > 0)) continue   // rejected (approved=0) or already fully issued
 
-      // Issuable holdings — FIFO, locked. Quarantine AND trace_hold excluded.
-      // heat_number (P4b-i) is recorded onto each ledger row below.
-      const [holds] = await conn.query(
-        `SELECT id, qty, qty_available, location_code, heat_number FROM warehouse_stock
-         WHERE project_id=? AND warehouse_id=? AND item_code=? AND wbs_code=?
-           AND condition_status='good' AND trace_hold=0 AND qty_available>0
-         ORDER BY received_date ASC, created_at ASC FOR UPDATE`,
-        [pid, fmr.warehouse_id, line.item_code, line.wbs_code])
+      const picks = allocations[line.id]   // user-pick override for this line, if any
 
+      // ── Build the list of {h, take} to consume — either user-pick or FIFO ──
+      // (The decrement / ledger / status code below is SHARED between both paths.)
+      let toConsume = []
+      if (Array.isArray(picks) && picks.length > 0) {
+        // USER-PICK. Sum duplicate stock_ids first (decision 4), then validate.
+        const summed = new Map()
+        for (const p of picks) {
+          const sid = Number(p?.stock_id), q = Number(p?.qty)
+          if (!(sid > 0)) bad(`Line ${line.item_code}: invalid stock_id in allocation`)
+          if (!(q > 0))   bad(`Line ${line.item_code}: allocation qty must be greater than 0`)
+          summed.set(sid, (summed.get(sid) || 0) + q)
+        }
+        // TOTAL ≤ OUTSTANDING (over-issue blocked).
+        const totalAlloc = [...summed.values()].reduce((a, b) => a + b, 0)
+        if (totalAlloc > outstanding)
+          bad(`Line ${line.item_code}: allocated ${totalAlloc} exceeds approved-outstanding ${outstanding}`)
+        // Each chosen holding must be ISSUABLE for this line + qty ≤ available (locked).
+        for (const [sid, q] of summed) {
+          const [[h]] = await conn.query(
+            `SELECT id, qty, qty_available, location_code, heat_number FROM warehouse_stock
+             WHERE id=? AND project_id=? AND warehouse_id=? AND item_code=? AND wbs_code=?
+               AND condition_status='good' AND trace_hold=0 AND qty_available>0 FOR UPDATE`,
+            [sid, pid, fmr.warehouse_id, line.item_code, line.wbs_code])
+          if (!h) bad(`Line ${line.item_code}: holding ${sid} is not issuable for this line (wrong item/WBS/warehouse, quarantine, trace-hold, or empty)`)
+          if (q > Number(h.qty_available))
+            bad(`Line ${line.item_code}: allocation ${q} exceeds available ${Number(h.qty_available)} on holding ${sid}`)
+          toConsume.push({ h, take: q })
+        }
+        // No auto-fill (decision 3): consume exactly the picks; short → partial.
+      } else {
+        // FIFO (P4a-i/P4b-i unchanged) — oldest first, clamp to available.
+        const [holds] = await conn.query(
+          `SELECT id, qty, qty_available, location_code, heat_number FROM warehouse_stock
+           WHERE project_id=? AND warehouse_id=? AND item_code=? AND wbs_code=?
+             AND condition_status='good' AND trace_hold=0 AND qty_available>0
+           ORDER BY received_date ASC, created_at ASC FOR UPDATE`,
+          [pid, fmr.warehouse_id, line.item_code, line.wbs_code])
+        let rem = outstanding
+        for (const h of holds) {
+          if (rem <= 0) break
+          const take = Math.min(rem, Number(h.qty_available))   // clamp → never over-issue / negative
+          if (!(take > 0)) continue
+          toConsume.push({ h, take }); rem -= take
+        }
+      }
+
+      // ── SHARED consume: decrement + ledger + accumulate (identical for both paths) ──
       let lineIssued = 0
-      for (const h of holds) {
-        if (outstanding <= 0) break
-        const take = Math.min(outstanding, Number(h.qty_available))   // clamp → never over-issue / negative
-        if (!(take > 0)) continue
+      for (const { h, take } of toConsume) {
         const newQty   = Number(h.qty) - take
         const newAvail = Number(h.qty_available) - take
         if (newQty <= 0) await conn.query('DELETE FROM warehouse_stock WHERE id=?', [h.id])   // fully consumed → row removed (transfer pattern)
@@ -935,7 +978,6 @@ router.post('/:projectId/fmr/:fmrId/issue', async (req, res) => {
            VALUES (?,?,?,?,?,?,?,?,?)`,
           [fmrId, line.id, h.id, take, h.heat_number || null, h.location_code, line.item_code, line.wbs_code, userId])
         lineIssued += take
-        outstanding -= take
       }
 
       if (lineIssued > 0) {
@@ -944,7 +986,7 @@ router.post('/:projectId/fmr/:fmrId/issue', async (req, res) => {
         await conn.query('UPDATE fmr_lines SET qty_issued=?, line_status=? WHERE id=?', [newIssued, lineStatus, line.id])
         totalIssued += lineIssued
       }
-      if (outstanding > 0) anyShort = true   // stock short → this line stays partial
+      if (outstanding - lineIssued > 0) anyShort = true   // short → line stays partial
     }
 
     // Header roll-up (rollUpStatus now reaches issued / partial_issued).
@@ -961,11 +1003,42 @@ router.post('/:projectId/fmr/:fmrId/issue', async (req, res) => {
     const [[updated]] = await db.query('SELECT * FROM fmr_requests WHERE id=?', [fmrId])
     res.json({ success: true, total_issued: totalIssued, short: anyShort, header_status: newStatus, fmr: updated })
   } catch (e) {
-    await conn.rollback()
+    await conn.rollback()   // any guard violation rolls back the WHOLE issue — zero partial mutation
     console.error('[mc:fmr-issue]', e.message)
-    res.status(500).json({ error: e.message })
+    res.status(e.http || 500).json({ error: e.message })
   } finally {
     conn.release()
+  }
+})
+
+// GET /api/mc/:projectId/fmr/:fmrId/issuable — per-line issuable holdings (Heat/Lot P4b-ii).
+// Read-only feed for the P4b-ii-b heat picker: the same issuable set the FIFO/pick
+// paths consume from (good, trace_hold=0, qty_available>0, matching item/wbs +
+// the FMR warehouse), per approvable line with outstanding qty.
+router.get('/:projectId/fmr/:fmrId/issuable', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const fmrId = Number(req.params.fmrId)
+    const [[fmr]] = await db.query('SELECT * FROM fmr_requests WHERE id=? AND project_id=?', [fmrId, pid])
+    if (!fmr) return res.status(404).json({ error: 'FMR not found' })
+    const [lines] = await db.query('SELECT id, item_code, wbs_code, uom, qty_approved, qty_issued FROM fmr_lines WHERE fmr_id=?', [fmrId])
+    const out = []
+    for (const line of lines) {
+      const outstanding = Number(line.qty_approved || 0) - Number(line.qty_issued || 0)
+      if (!(outstanding > 0)) continue
+      const [holds] = await db.query(
+        `SELECT id AS stock_id, heat_number, qty_available, location_code, received_date
+         FROM warehouse_stock
+         WHERE project_id=? AND warehouse_id=? AND item_code=? AND wbs_code=?
+           AND condition_status='good' AND trace_hold=0 AND qty_available>0
+         ORDER BY received_date ASC, created_at ASC`,
+        [pid, fmr.warehouse_id, line.item_code, line.wbs_code])
+      out.push({ fmr_line_id: line.id, item_code: line.item_code, wbs_code: line.wbs_code, uom: line.uom, outstanding, holdings: holds })
+    }
+    res.json({ warehouse_id: fmr.warehouse_id, lines: out })
+  } catch (e) {
+    console.error('[mc:fmr-issuable]', e.message)
+    res.status(500).json({ error: e.message })
   }
 })
 
