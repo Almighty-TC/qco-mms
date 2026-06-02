@@ -44,3 +44,26 @@ With the critical-path fix, each role does its job **except** the 4 held over-re
 1. HELD #4 (FMR approve) + HELD #3 (PO approve) — restore correct approver sets (align matrix `can_approve` + fix stale inline). These currently **over-restrict real approvers** — highest priority.
 2. HELD #1 (expeditor-assign) + HELD #2 (certificates) — lower-stakes routing decisions.
 Each, once decided, is a small matrix/inline edit + re-probe.
+
+---
+
+# RESOLUTION UPDATE (held decisions landed)
+
+- **#1 expeditor-assign — RESOLVED** (`d55deee`): dropped `procurement_manager` from `EXPEDITOR_ASSIGN_ROLES`. Proven: expediting_manager passes, procurement_manager 403, viewer 403.
+- **#2 certificates — RESOLVED** (`d55deee`): gated by entity module. POST `/certificates/:entityType/:entityId` via the enforce resolver (commodity/equipment); bare `/certificates/:id` PATCH/DELETE via `certGate` (looks up the cert's `entity_type`). Proven: entity-perm roles pass, others 403 (no longer floor-only).
+- **#3 PO approve officer — RESOLVED (capability)** (`d55deee`): granted `procurement_officer` procurement `can_approve`. Proven: officer now passes `enforce` (was 403), viewer 403. The value-threshold ceiling stays in the handler (officer finalizes within-threshold single-level; over-threshold routes to manager — see the enum bug below).
+
+## 🔴 NEW pre-existing finding (separate from RBAC) — multi-level PO approval is broken
+`purchase_orders.status` enum = `('rfq','loa','po-raised','active','closed','cancelled')` — it is **missing `pending_approval` and `pending_director_approval`**, which the approve handler writes for over-threshold POs. So **any PO that requires multi-level approval 500s ("Data truncated for column 'status'") for ALL approver roles**, not just officers — it's a schema/handler mismatch, unrelated to the C-d grant. (Manifests only when `approval_threshold_1/2` are configured; with null thresholds everything is single-level → `po-raised`, which works.)
+**Recommend fix (separate concern):** `ALTER TABLE purchase_orders MODIFY status ENUM('rfq','loa','po-raised','active','closed','cancelled','pending_approval','pending_director_approval')` — then re-prove the multi-level chain. **Hold / log as its own defect.**
+
+## 🟡 HELD #4 — FMR approval role set (report + proposal, awaiting confirmation)
+**What FMR approval does:** a contractor raises a Field Material Request against their WBS scope (`MCFMRScreen` "raise new FMRs"); a materials-control approver reviews **per line** (approve_full / approve_partial / reject) before the material is issued from warehouse stock. Route: `PUT /mc/:projectId/fmr/:fmrId/approve`; error text: *"Only Materials Controllers and Managers can approve FMRs."*
+
+**The bug:** inline `APPROVAL_ALLOWED = {admin, ceo, director, project_director, project_manager, materials_controller}` references **`materials_controller` — a non-existent role** — and omits `warehouse` (the actual materials-control role). Matrix material_control `can_approve = {admin, warehouse}`. Net (enforce ∩ inline) ≈ **admin only** (warehouse blocked by inline; PM/etc. blocked by matrix). So FMR approval is effectively admin-only today — a bug, not policy.
+
+**Proposed role set (FMR approver = the Materials Controller + their manager + admin):**
+- **`admin`, `warehouse`** (Materials Controller), **`logistics_manager`** (Materials/Warehouse Manager).
+- **Open question for Thomas:** should **`project_manager`** also approve FMRs? (The dead inline set listed PM; unclear if intended.)
+
+**Apply once confirmed:** set BOTH (a) inline `APPROVAL_ALLOWED` to the confirmed real roles, and (b) matrix material_control `can_approve` to the same set; then prove approved roles pass, others 403. **HOLD for Thomas's pick on the role set (incl. project_manager?).**
