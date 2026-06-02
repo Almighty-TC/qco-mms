@@ -78,9 +78,11 @@ router.get('/:projectId/wbs/impact/:id', async (req, res) => {
     // Get node's code to find all POs referencing it (and its children)
     const [[node]] = await db.query('SELECT code FROM wbs_nodes WHERE id=?', [nodeId])
 
-    // Affected POs (by wbs_code starting with this node's code)
+    // Affected POs (by wbs_code starting with this node's code).
+    // is_locked surfaced so the Impact/Reallocate UI (Phase 2) can flag locked
+    // POs — a locked PO hard-blocks deletion (see DELETE guard c).
     const [affectedPOs] = await db.query(
-      `SELECT id, po_number, wbs_code, status FROM purchase_orders
+      `SELECT id, po_number, wbs_code, status, is_locked FROM purchase_orders
        WHERE project_id=? AND wbs_code LIKE ?`,
       [pid, `${node.code}%`]
     )
@@ -192,37 +194,144 @@ router.patch('/:projectId/wbs/:id', async (req, res) => {
 })
 
 // PATCH /api/foundational/:projectId/wbs/:id/reallocate — move PO lines to new WBS
+// Step-2 "apply reallocations" call. Hardened (A3 Phase 1):
+//   - ONE pooled transaction: either every line moves or none does (no half-apply).
+//   - VALIDATE each target newWbsCode exists in this project (else reject the batch).
+//   - SCOPE: only move lines that are genuinely affected lines of the node being
+//     reallocated FROM — current snapshot = node.code OR LIKE node.code.'%' (precise,
+//     dotted-child match; NOT the loose prefix that would catch siblings like 02.011).
+//   - REFUSE moving a line whose PO is_locked=1 (consistent with the DELETE locked
+//     guard; otherwise reallocate could move a locked line and let a later delete
+//     bypass guard c). Hard refuse, no override.
+//   - Writes wbs_code_snapshot only (the real link); wbs_id stays as-is/NULL.
 router.patch('/:projectId/wbs/:id/reallocate', async (req, res) => {
+  const id  = Number(req.params.id)
+  const pid = Number(req.params.projectId)
+  const { reallocations } = req.body  // [{lineId, newWbsNodeId, newWbsCode}]
+  const conn = await db.getConnection()
   try {
-    const id  = Number(req.params.id)
-    const pid = Number(req.params.projectId)
-    const { reallocations } = req.body  // [{lineId, newWbsNodeId, newWbsCode}]
+    await conn.beginTransaction()
+
+    // The node we are reallocating FROM — defines which lines are in scope.
+    const [[node]] = await conn.query(
+      'SELECT code FROM wbs_nodes WHERE id=? AND project_id=?', [id, pid]
+    )
+    if (!node) { await conn.rollback(); return res.status(404).json({ error: 'WBS node not found' }) }
+
     for (const r of (reallocations || [])) {
-      await db.query(
-        'UPDATE po_lines SET wbs_code_snapshot=? WHERE id=?',
-        [r.newWbsCode, r.lineId]
+      // Target WBS must exist in this project.
+      const [[target]] = await conn.query(
+        'SELECT id FROM wbs_nodes WHERE project_id=? AND code=?', [pid, r.newWbsCode]
       )
+      if (!target) {
+        await conn.rollback()
+        return res.status(400).json({ error: `Target WBS code ${r.newWbsCode} does not exist in this project` })
+      }
+
+      // Line must be a genuine affected line of THIS node (project-scoped, precise match).
+      const [[ln]] = await conn.query(
+        `SELECT l.id, p.po_number, p.is_locked
+         FROM po_lines l JOIN purchase_orders p ON p.id = l.po_id
+         WHERE l.id=? AND p.project_id=?
+           AND (l.wbs_code_snapshot = ? OR l.wbs_code_snapshot LIKE CONCAT(?, '.%'))`,
+        [r.lineId, pid, node.code, node.code]
+      )
+      if (!ln) {
+        await conn.rollback()
+        return res.status(400).json({ error: `Line ${r.lineId} is not an affected line of WBS ${node.code} — cannot reallocate` })
+      }
+      if (ln.is_locked === 1) {
+        await conn.rollback()
+        return res.status(409).json({ error: `Cannot reallocate — line belongs to locked PO ${ln.po_number}.` })
+      }
+
+      await conn.query('UPDATE po_lines SET wbs_code_snapshot=? WHERE id=?', [r.newWbsCode, r.lineId])
     }
+
+    await conn.commit()
     res.json({ ok: true })
   } catch (e) {
+    await conn.rollback()
     res.status(500).json({ error: e.message })
+  } finally {
+    conn.release()
   }
 })
 
 // DELETE /api/foundational/:projectId/wbs/:id — delete node
+// Hardened (A3 Phase 1): a guarded, transactional delete so a node can NEVER be
+// removed in a way that orphans PO lines or detaches a locked PO's lines.
+// Guard order (most-actionable message first): a) children → c) locked PO → b) orphan lines.
+//   a) NO CHILDREN — refuse parent deletion (replaces the prior raw 500 from the
+//      parent_id self-FK). User must delete/move children first. No cascade (locked decision 2).
+//   c) LOCKED PO — if any affected line belongs to a locked PO, hard refuse (decision 1, no override).
+//   b) NO ORPHANED LINES — if any line still references this node (precise exact-or-dotted-child
+//      match, decision 3), refuse. Reallocation rewrites the snapshot to a non-matching code,
+//      so post-reallocate this guard passes.
+// All checks + the delete + audit run in ONE pooled transaction; any failure rolls back
+// with ZERO mutation. Pooled connection only — never createConnection().
 router.delete('/:projectId/wbs/:id', async (req, res) => {
+  const id  = Number(req.params.id)
+  const pid = Number(req.params.projectId)
+  const conn = await db.getConnection()
   try {
-    const id  = Number(req.params.id)
-    const pid = Number(req.params.projectId)
-    const [[node]] = await db.query('SELECT * FROM wbs_nodes WHERE id=? AND project_id=?', [id, pid])
-    if (!node) return res.status(404).json({ error: 'WBS node not found' })
+    await conn.beginTransaction()
 
-    await db.query('DELETE FROM wbs_nodes WHERE id=?', [id])
-    audit(req, 'wbs_deleted', `wbs_nodes/${id}`, node, {})
+    const [[node]] = await conn.query(
+      'SELECT * FROM wbs_nodes WHERE id=? AND project_id=? FOR UPDATE', [id, pid]
+    )
+    if (!node) { await conn.rollback(); return res.status(404).json({ error: 'WBS node not found' }) }
+
+    // GUARD a) NO CHILDREN
+    const [[kids]] = await conn.query(
+      'SELECT COUNT(*) AS cnt FROM wbs_nodes WHERE parent_id=? AND project_id=?', [id, pid]
+    )
+    if (kids.cnt > 0) {
+      await conn.rollback()
+      return res.status(409).json({ error: 'Cannot delete a parent node — delete or move its child nodes first.' })
+    }
+
+    // Affected PO lines of THIS node — precise exact-or-dotted-child match (NOT loose prefix).
+    const [affected] = await conn.query(
+      `SELECT l.id, p.po_number, p.is_locked
+       FROM po_lines l JOIN purchase_orders p ON p.id = l.po_id
+       WHERE p.project_id=? AND (l.wbs_code_snapshot = ? OR l.wbs_code_snapshot LIKE CONCAT(?, '.%'))`,
+      [pid, node.code, node.code]
+    )
+
+    // GUARD c) LOCKED PO
+    const locked = affected.find(r => r.is_locked === 1)
+    if (locked) {
+      await conn.rollback()
+      return res.status(409).json({ error: `Cannot delete — affected PO ${locked.po_number} is locked. Unlock or reallocate via an authorised process.` })
+    }
+
+    // GUARD b) NO ORPHANED LINES
+    if (affected.length > 0) {
+      await conn.rollback()
+      return res.status(409).json({ error: 'Reallocate all affected PO lines before deleting this node.' })
+    }
+
+    await conn.query('DELETE FROM wbs_nodes WHERE id=?', [id])
+    // Audit row written inside the same transaction (atomic with the delete).
+    // NOTE: uses the real audit_log schema (before_value/after_value/ip/resource).
+    // The shared audit() helper in this file writes wrong column names and is
+    // silently swallowed — flagged for a separate fix (out of A3 scope).
+    await conn.query(
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, resource, before_value, after_value, ip)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [req.user.id, 'wbs_deleted', 'wbs_nodes', id, `wbs_nodes/${id}`,
+       JSON.stringify(node), JSON.stringify({}), req.ip]
+    )
+
+    await conn.commit()
     res.json({ ok: true })
   } catch (e) {
+    await conn.rollback()
     console.error('[foundational:wbs:delete]', e.message)
     res.status(500).json({ error: e.message })
+  } finally {
+    conn.release()
   }
 })
 
