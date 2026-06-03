@@ -6,6 +6,7 @@
 // SINGLE source reused by the C2 trigger, the C3 backfill, and the C5 verify — any
 // drift between them silently breaks verification, so they are all generated here.
 const db = require('../server/db')
+const { rowHashExpr, TS_FIELD } = require('../server/lib/auditChain')
 
 async function c1(conn) {
   // ── add row_hash columns (nullable; populated by trigger going forward, backfilled in C3) ──
@@ -36,7 +37,26 @@ async function c1(conn) {
   console.log('C1 applied: row_hash columns + audit_checkpoint table')
 }
 
-const STEPS = { c1 }
+// ── C2: BEFORE INSERT triggers compute row_hash from the canonical expression ──
+// Centralised hashing → ZERO changes to any of the 17 audit writers; works for
+// fire-and-forget AND transactional inserts; written atomically in the insert
+// (no post-insert UPDATE → append-only-safe).
+async function c2(conn) {
+  for (const table of ['audit_log', 'audit_review']) {
+    const ts = TS_FIELD[table]
+    const expr = rowHashExpr(table, 'NEW.')
+    await conn.query(`DROP TRIGGER IF EXISTS ${table}_bi`)
+    await conn.query(
+      `CREATE TRIGGER ${table}_bi BEFORE INSERT ON ${table} FOR EACH ROW
+       BEGIN
+         IF NEW.${ts} IS NULL THEN SET NEW.${ts} = NOW(); END IF;
+         SET NEW.row_hash = ${expr};
+       END`)
+    console.log(`C2 applied: ${table}_bi BEFORE INSERT trigger (sets ${ts} if null, computes row_hash)`)
+  }
+}
+
+const STEPS = { c1, c2 }
 
 async function main() {
   const step = process.argv[2]
