@@ -3,9 +3,11 @@
 // Reuses the module token set, pill + table patterns. RAG colours per
 // CLAUDE_CONTEXT (green on-track / amber at-risk / red breached /
 // grey not-started / blue in-progress).
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
+import { Pager } from '../components/Pager'
+import { usePagedList } from '../hooks/usePagedList'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { API, tokens, fmtDate } from '../components/traceability/traceUtil'
 import { UploadCertModal, type VdrlRow } from '../components/traceability/UploadCertModal'
@@ -56,7 +58,6 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
 
   // Approvals + holds
   const [approvals, setApprovals] = useState<ApprovalCert[]>([])
-  const [holds, setHolds] = useState<HoldRow[]>([])
 
   // Trace
   const [tags, setTags] = useState<string[]>([])
@@ -89,10 +90,19 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
     try { const { data } = await axios.get(`${API}/traceability/${projectId}/approvals`); setApprovals(data.data || []) }
     catch (e: any) { addToast('error', e.response?.data?.error || 'Failed to load approvals') }
   }
-  const loadHolds = async () => {
-    try { const { data } = await axios.get(`${API}/traceability/${projectId}/holds`); setHolds(data.data || []) }
-    catch (e: any) { addToast('error', e.response?.data?.error || 'Failed to load holds') }
-  }
+  // ─── HOLDS (server-side paged) ───────────────────────────────
+  const holdsFetcher = useCallback(async ({ page, limit, sortCol, sortDir }: { page: number; limit: number; sortCol?: string; sortDir: 'asc' | 'desc' }) => {
+    const params: Record<string, string> = { page: String(page), limit: String(limit), sort_dir: sortDir }
+    if (sortCol) params.sort_col = sortCol
+    const { data } = await axios.get(`${API}/traceability/${projectId}/holds`, { params })
+    return { data: (data.data ?? []) as HoldRow[], total: (data.total ?? 0) as number }
+  }, [projectId])
+  const {
+    data: holds, total: holdsTotal, page: holdsPage, setPage: setHoldsPage,
+    pageSize: holdsPageSize, sortCol: holdsSortCol, sortDir: holdsSortDir,
+    toggleSort: toggleHoldsSort, reload: reloadHolds,
+  } = usePagedList<HoldRow>({ fetcher: holdsFetcher, deps: [projectId], pageSize: 50, initialSortCol: 'age_days', initialSortDir: 'desc' })
+  const holdsArrow = (k: string) => holdsSortCol === k ? (holdsSortDir === 'asc' ? ' ▲' : ' ▼') : ''
   const loadTags = async () => {
     try {
       const { data } = await axios.get(`${API}/traceability/${projectId}/tags`)
@@ -106,9 +116,9 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
     catch (e: any) { addToast('error', e.response?.data?.error || 'Failed to load trace chain') }
   }
 
-  const refreshAll = () => { loadSummary(); loadVdrl(); loadAllVdrl(); loadApprovals(); loadHolds() }
+  const refreshAll = () => { loadSummary(); loadVdrl(); loadAllVdrl(); loadApprovals(); reloadHolds() }
 
-  useEffect(() => { loadSummary(); loadAllVdrl(); loadApprovals(); loadHolds(); loadTags() }, [projectId]) // eslint-disable-line
+  useEffect(() => { loadSummary(); loadAllVdrl(); loadApprovals(); loadTags() }, [projectId]) // eslint-disable-line
   useEffect(() => { loadVdrl() }, [vdrlStatus, projectId]) // eslint-disable-line
   useEffect(() => { const id = setTimeout(loadVdrl, 300); return () => clearTimeout(id) }, [vdrlSearch]) // eslint-disable-line
   useEffect(() => { loadLifecycle(activeTag) }, [activeTag, projectId]) // eslint-disable-line
@@ -177,7 +187,7 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
           {tabBtn('vdrl', 'VDRL', allVdrl.length)}
           {tabBtn('approvals', 'Cert approvals', approvals.length, approvals.length ? '#f59e0b' : undefined)}
           {tabBtn('trace', 'Trace chain')}
-          {tabBtn('holds', 'Holds', holds.length, holds.length ? '#ef4444' : undefined)}
+          {tabBtn('holds', 'Holds', holdsTotal, holdsTotal ? '#ef4444' : undefined)}
         </div>
 
         {/* ═══ VDRL TAB ═══ */}
@@ -347,14 +357,17 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
         {tab === 'holds' && (
           <div>
             <div style={{ background: dark ? '#2a1414' : '#fef2f2', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: dark ? '#fca5a5' : '#991b1b' }}>
-              ⚠ {holds.length} active trace hold{holds.length !== 1 ? 's' : ''} — material cannot be released until certs are verified.
+              ⚠ {holdsTotal} active trace hold{holdsTotal !== 1 ? 's' : ''} — material cannot be released until certs are verified.
             </div>
             <div style={{ background: t.cardBg, border: t.bd, borderRadius: 8, overflow: 'hidden' }}>
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: t.theadBg }}>
                     <tr style={{ borderBottom: t.bd }}>
-                      {['TAG', 'ITEM', 'HOLD REASON', 'LOCATION', 'SINCE', 'AGE', 'ACTION'].map(h => <th key={h} style={thSt}>{h}</th>)}
+                      {([['TAG','tag'],['ITEM','item'],['HOLD REASON','hold_reason'],['LOCATION','location'],['SINCE','since_date'],['AGE','age_days'],['ACTION']] as [string,string?][]).map(([h,key]) => (
+                        <th key={h} onClick={key ? () => toggleHoldsSort(key) : undefined}
+                          style={{ ...thSt, cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>{h}{key ? holdsArrow(key) : ''}</th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
@@ -379,6 +392,7 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
                   </tbody>
                 </table>
               </div>
+              <Pager page={holdsPage} total={holdsTotal} pageSize={holdsPageSize} dark={dark} onPageChange={setHoldsPage} />
             </div>
           </div>
         )}
@@ -408,7 +422,7 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
       {chaseHold && (
         <ChaseCertModal dark={dark} hold={chaseHold}
           onClose={() => setChaseHold(null)}
-          onChased={msg => { setChaseHold(null); addToast('success', msg); loadHolds() }} />
+          onChased={msg => { setChaseHold(null); addToast('success', msg); reloadHolds() }} />
       )}
     </div>
   )

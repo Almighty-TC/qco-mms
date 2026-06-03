@@ -372,17 +372,35 @@ router.get('/:projectId/tags', async (req, res) => {
 // HOLDS
 // ═══════════════════════════════════════════════════════════════
 // GET /api/traceability/:projectId/holds
+// ─── SERVER-SIDE PAGINATION: active trace holds ───────────────────────────────
+// Returns { data, total, page, limit }. Whitelisted sort (+ unique id tiebreaker);
+// default age_days DESC (oldest/most-aged holds first).
 router.get('/:projectId/holds', async (req, res) => {
   try {
-    const pid = Number(req.params.projectId)
+    const pid    = Number(req.params.projectId)
+    const page   = Math.max(1, parseInt(req.query.page  || '1', 10))
+    const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)))
+    const offset = (page - 1) * limit
+
+    const SAFE_SORT = {
+      tag: 'tag', item: 'item', hold_reason: 'hold_reason',
+      location: 'location', since_date: 'since_date', age_days: 'age_days',
+    }
+    const orderBy  = SAFE_SORT[req.query.sort_col] || 'age_days'
+    const orderDir = String(req.query.sort_dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC' // default DESC
+
+    const [[{ total }]] = await db.query(
+      `SELECT COUNT(*) AS total FROM traceability_holds WHERE project_id=? AND status='active'`, [pid]
+    )
     const [rows] = await db.query(
       `SELECT id AS hold_id, tag, item, hold_reason, location,
               DATE_FORMAT(since_date, '%Y-%m-%d') AS since_date, age_days,
               chase_count, related_cert_id, vendor_name, vendor_email
        FROM traceability_holds
        WHERE project_id=? AND status='active'
-       ORDER BY age_days DESC`, [pid])
-    res.json({ data: rows })
+       ORDER BY ${orderBy} ${orderDir}, id ${orderDir}
+       LIMIT ? OFFSET ?`, [pid, limit, offset])
+    res.json({ data: rows, total, page, limit })
   } catch (e) {
     res.status(500).json({ error: 'Could not load holds: ' + e.message })
   }
