@@ -347,7 +347,120 @@ function RecordDrawer({ recordId, projectId, dark, userRole, userId, onClose, on
         ) : (
           <div style={{ fontSize: 13, color: col }}>{rec.link_type === 'project' ? 'Project-level' : `${rec.link_type.toUpperCase()} ${rec.link_label}`}</div>
         )}
+
+        {/* ── Meeting children (attendees + action items) ── */}
+        {rec.record_type === 'meeting' && (
+          <MeetingChildren recordId={recordId} projectId={projectId} dark={dark} userRole={userRole} userId={userId}
+            users={users} canManage={!isExternal} isAdmin={userRole === 'admin'} addToast={addToast} />
+        )}
       </div>
+    </div>
+  )
+}
+
+// ─── MEETING CHILDREN: attendees + action items (C5) ──────────
+const ACTION_TRANSITIONS: Record<string, string[]> = { open: ['in_progress', 'done', 'cancelled'], in_progress: ['done', 'cancelled'], done: [], cancelled: [] }
+const ACTION_LABELS: Record<string, string> = { in_progress: 'Start', done: 'Done', cancelled: 'Cancel' }
+const ACTION_STATUS_COLOR: Record<string, string> = { open: '#94a3b8', in_progress: '#2563eb', done: '#22c55e', cancelled: '#9ca3af' }
+interface Attendee { id: number; attendee_name: string; attendee_org: string | null; attended: number }
+interface ActionItem { id: number; seq: number; description: string; assigned_to: number | null; assigned_to_name: string | null; status: string; due_date: string | null }
+
+function MeetingChildren({ recordId, projectId, dark, userId, users, canManage, isAdmin, addToast }: {
+  recordId: number; projectId: number; dark: boolean; userRole: string; userId: number
+  users: { id: number; name: string }[]; canManage: boolean; isAdmin: boolean
+  addToast: (t: 'success' | 'error' | 'warning', m: string) => void
+}) {
+  const col = dark ? '#f1f5f9' : '#0f172a'; const sub = '#94a3b8'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const inp = { height: 30, padding: '0 8px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 12, fontFamily: 'inherit', outline: 'none' }
+  const secLabel = (t: string) => <div style={{ fontSize: 10, fontWeight: 700, color: sub, letterSpacing: '0.08em', textTransform: 'uppercase' as const, margin: '18px 0 8px' }}>{t}</div>
+
+  const [attendees, setAttendees] = useState<Attendee[]>([])
+  const [actions, setActions] = useState<ActionItem[]>([])
+  const [newAttName, setNewAttName] = useState(''); const [newAttOrg, setNewAttOrg] = useState('')
+  const [newActDesc, setNewActDesc] = useState(''); const [newActAssignee, setNewActAssignee] = useState(''); const [newActDue, setNewActDue] = useState('')
+  const base = `${API}/rfi-meeting/${projectId}/${recordId}`
+
+  const load = useCallback(() => {
+    axios.get(`${base}/attendees`).then(({ data }) => setAttendees(data)).catch(() => {})
+    axios.get(`${base}/actions`).then(({ data }) => setActions(data)).catch(() => {})
+  }, [base])
+  useEffect(() => { load() }, [load])
+
+  const addAttendee = async () => {
+    if (!newAttName.trim()) return
+    try { await axios.post(`${base}/attendees`, { attendee_name: newAttName.trim(), attendee_org: newAttOrg.trim() || null }); setNewAttName(''); setNewAttOrg(''); load() }
+    catch (e) { addToast('error', (e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'Could not add attendee') }
+  }
+  const removeAttendee = async (id: number) => {
+    try { await axios.delete(`${base}/attendees/${id}`); load() }
+    catch (e) { addToast('error', (e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'Could not remove') }
+  }
+  const addAction = async () => {
+    if (!newActDesc.trim()) return
+    try { await axios.post(`${base}/actions`, { description: newActDesc.trim(), assigned_to: newActAssignee ? Number(newActAssignee) : null, due_date: newActDue || null }); setNewActDesc(''); setNewActAssignee(''); setNewActDue(''); load() }
+    catch (e) { addToast('error', (e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'Could not add action') }
+  }
+  const moveAction = async (a: ActionItem, to: string) => {
+    try { await axios.patch(`${base}/actions/${a.id}`, { to }); load() }
+    catch (e) { addToast('error', (e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'Could not update action') }
+  }
+
+  return (
+    <div>
+      {/* Attendees */}
+      {secLabel(`Attendees (${attendees.length})`)}
+      {attendees.length === 0 && <div style={{ fontSize: 12, color: sub }}>No attendees recorded.</div>}
+      {attendees.map(a => (
+        <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: bd, fontSize: 13 }}>
+          <span style={{ color: col }}>{a.attendee_name}{a.attendee_org ? <span style={{ color: sub }}> · {a.attendee_org}</span> : null}</span>
+          {isAdmin && <button onClick={() => removeAttendee(a.id)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 14 }}>×</button>}
+        </div>
+      ))}
+      {canManage && (
+        <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+          <input placeholder="Name" value={newAttName} onChange={e => setNewAttName(e.target.value)} style={{ ...inp, flex: 1 }} />
+          <input placeholder="Org" value={newAttOrg} onChange={e => setNewAttOrg(e.target.value)} style={{ ...inp, width: 110 }} />
+          <button disabled={!newAttName.trim()} onClick={addAttendee} style={{ padding: '5px 12px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', opacity: newAttName.trim() ? 1 : 0.5 }}>Add</button>
+        </div>
+      )}
+
+      {/* Action items — each its own mini-workflow */}
+      {secLabel(`Action items (${actions.length})`)}
+      {actions.length === 0 && <div style={{ fontSize: 12, color: sub }}>No action items.</div>}
+      {actions.map(a => {
+        const canDo = canManage || a.assigned_to === userId
+        const next = ACTION_TRANSITIONS[a.status] || []
+        return (
+          <div key={a.id} style={{ padding: '7px 0', borderBottom: bd }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 13 }}>
+              <span style={{ color: col }}><span style={{ color: sub }}>#{a.seq}</span> {a.description}</span>
+              {pill(a.status.replace('_', ' '), ACTION_STATUS_COLOR[a.status] || '#94a3b8')}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+              <span style={{ fontSize: 11, color: sub }}>{a.assigned_to_name || 'Unassigned'}{a.due_date ? ` · due ${a.due_date}` : ''}</span>
+              {canDo && next.length > 0 && (
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {next.map(to => (
+                    <button key={to} onClick={() => moveAction(a, to)} style={{ padding: '3px 9px', borderRadius: 5, border: bd, background: 'none', color: to === 'done' ? '#22c55e' : to === 'cancelled' ? sub : '#2563eb', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>{ACTION_LABELS[to]}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      })}
+      {canManage && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+          <input placeholder="New action…" value={newActDesc} onChange={e => setNewActDesc(e.target.value)} style={{ ...inp, flex: '1 1 100%' }} />
+          <select value={newActAssignee} onChange={e => setNewActAssignee(e.target.value)} style={{ ...inp, flex: 1 }}>
+            <option value="">Assignee…</option>
+            {users.map(u => <option key={u.id} value={String(u.id)}>{u.name}</option>)}
+          </select>
+          <input type="date" value={newActDue} onChange={e => setNewActDue(e.target.value)} style={{ ...inp, width: 130 }} />
+          <button disabled={!newActDesc.trim()} onClick={addAction} style={{ padding: '5px 12px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', opacity: newActDesc.trim() ? 1 : 0.5 }}>Add</button>
+        </div>
+      )}
     </div>
   )
 }

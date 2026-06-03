@@ -277,4 +277,99 @@ router.patch('/:projectId/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// ═══ MEETING CHILDREN (C5: attendees + action items) ═══════════
+// Permission story: POST (add) = can_create → internal owners; PATCH (update) =
+// can_edit → internal + external assignees (row-restricted); DELETE = can_delete →
+// admin. The backend stays the enforcer; the UI presents accordingly.
+const ACTION_TRANSITIONS = { open: ['in_progress', 'done', 'cancelled'], in_progress: ['done', 'cancelled'], done: [], cancelled: [] }
+
+// Loads a meeting record scoped to project (404 if missing / not a meeting).
+async function loadMeeting(pid, id) {
+  const [[m]] = await db.query("SELECT id, record_type, assigned_to FROM rfi_meeting_records WHERE id=? AND project_id=?", [id, pid])
+  if (!m) return { err: [404, 'Meeting not found in this project'] }
+  if (m.record_type !== 'meeting') return { err: [400, 'Attendees and actions apply to meetings only'] }
+  return { m }
+}
+
+// ─── ATTENDEES ────────────────────────────────────────────────
+router.get('/:projectId/:id/attendees', requirePermission('rfi_meeting', 'can_view'), async (req, res) => {
+  try {
+    const [rows] = await db.query('SELECT id, user_id, attendee_name, attendee_org, attended FROM meeting_attendees WHERE record_id=? ORDER BY id', [Number(req.params.id)])
+    res.json(rows)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+router.post('/:projectId/:id/attendees', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId), id = Number(req.params.id), uid = req.user.id
+    const { m, err } = await loadMeeting(pid, id); if (err) return res.status(err[0]).json({ error: err[1] })
+    const { attendee_name, attendee_org, user_id, attended } = req.body
+    if (!attendee_name || !attendee_name.trim()) return res.status(422).json({ error: 'Attendee name is required' })
+    const [r] = await db.query('INSERT INTO meeting_attendees (record_id, user_id, attendee_name, attendee_org, attended) VALUES (?,?,?,?,?)',
+      [m.id, user_id || null, attendee_name.trim(), attendee_org || null, attended === false ? 0 : 1])
+    await writeAudit(uid, 'meeting_attendee_added', 'rfi_meeting_record', id, null, { attendee_name: attendee_name.trim() }, resourceOf(req), pid)
+    res.status(201).json({ id: r.insertId })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+router.delete('/:projectId/:id/attendees/:attendeeId', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId), id = Number(req.params.id)
+    const { err } = await loadMeeting(pid, id); if (err) return res.status(err[0]).json({ error: err[1] })
+    await db.query('DELETE FROM meeting_attendees WHERE id=? AND record_id=?', [Number(req.params.attendeeId), id])
+    await writeAudit(req.user.id, 'meeting_attendee_removed', 'rfi_meeting_record', id, null, { attendee_id: Number(req.params.attendeeId) }, resourceOf(req), pid)
+    res.json({ ok: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── ACTION ITEMS (each its own mini-workflow) ────────────────
+router.get('/:projectId/:id/actions', requirePermission('rfi_meeting', 'can_view'), async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT a.id, a.seq, a.description, a.assigned_to, u.full_name AS assigned_to_name, a.status,
+              DATE_FORMAT(a.due_date,'%Y-%m-%d') AS due_date, DATE_FORMAT(a.closed_date,'%Y-%m-%d') AS closed_date
+       FROM meeting_actions a LEFT JOIN users u ON u.id = a.assigned_to
+       WHERE a.record_id=? ORDER BY a.seq`, [Number(req.params.id)])
+    res.json(rows)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+router.post('/:projectId/:id/actions', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId), id = Number(req.params.id), uid = req.user.id
+    const { m, err } = await loadMeeting(pid, id); if (err) return res.status(err[0]).json({ error: err[1] })
+    const { description, assigned_to, due_date } = req.body
+    if (!description || !description.trim()) return res.status(422).json({ error: 'Action description is required' })
+    const [[{ mx }]] = await db.query('SELECT COALESCE(MAX(seq),0) AS mx FROM meeting_actions WHERE record_id=?', [m.id])
+    const [r] = await db.query('INSERT INTO meeting_actions (record_id, project_id, seq, description, assigned_to, due_date) VALUES (?,?,?,?,?,?)',
+      [m.id, pid, Number(mx) + 1, description.trim(), assigned_to || null, due_date || null])
+    await writeAudit(uid, 'meeting_action_added', 'rfi_meeting_record', id, null, { seq: Number(mx) + 1, description: description.trim() }, resourceOf(req), pid)
+    res.status(201).json({ id: r.insertId, seq: Number(mx) + 1 })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+router.patch('/:projectId/:id/actions/:actionId', async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId), id = Number(req.params.id), uid = req.user.id
+    const { err } = await loadMeeting(pid, id); if (err) return res.status(err[0]).json({ error: err[1] })
+    const [[act]] = await db.query('SELECT * FROM meeting_actions WHERE id=? AND record_id=?', [Number(req.params.actionId), id])
+    if (!act) return res.status(404).json({ error: 'Action not found' })
+    // external roles may only update actions assigned to them
+    if (isExternal(req) && act.assigned_to !== uid) return res.status(403).json({ error: 'You can only update actions assigned to you' })
+
+    const { to, description, assigned_to, due_date } = req.body
+    const sets = []; const vals = []; const after = {}
+    if (to !== undefined) {
+      if (!(ACTION_TRANSITIONS[act.status] || []).includes(to))
+        return res.status(409).json({ error: `Illegal action transition: ${act.status} → ${to}` })
+      sets.push('status=?'); vals.push(to); after.status = to
+      if (to === 'done') sets.push('closed_date=CURDATE()')
+    }
+    for (const [k, col] of [['description', 'description'], ['assigned_to', 'assigned_to'], ['due_date', 'due_date']]) {
+      if (req.body[k] !== undefined) { sets.push(`${col}=?`); vals.push(req.body[k] || null); after[k] = req.body[k] }
+    }
+    if (!sets.length) return res.status(400).json({ error: 'No changes supplied' })
+    vals.push(act.id)
+    await db.query(`UPDATE meeting_actions SET ${sets.join(', ')} WHERE id=?`, vals)
+    await writeAudit(uid, 'meeting_action_updated', 'rfi_meeting_record', id, { status: act.status }, after, resourceOf(req), pid)
+    res.json({ id: act.id, ...after })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 module.exports = router
