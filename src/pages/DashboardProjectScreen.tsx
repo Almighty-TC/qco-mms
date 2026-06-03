@@ -22,7 +22,7 @@ interface DashData {
   stats: { mto_lines: number | null; pos_awarded: number | null; at_risk: number | null; breached: number | null }
   mine: { approvals_pos: number; confirmer_queue: number; rfis_assigned: number; actions_assigned: number }
   attention: Record<string, number | null>
-  pipeline: { mto: number | null; po_raised: number | null; expedited: number | null; shipped: number | null; received: number | null; issued: number | null }
+  pipeline: { demand: number | null; po_raised: number | null; expedited: number | null; received: number | null; issued: number | null }
 }
 
 const MODULE_LABEL: Record<string, string> = { procurement: 'Procurement', expediting: 'Expediting', logistics: 'Logistics', materials: 'Mat. Control', traceability: 'Traceability' }
@@ -71,25 +71,37 @@ function DashboardInner({ dark, projectId, projectName, onBack, onNavigate }: {
     </div>
   )
 
-  // ── Pipeline funnel (centered SVG/CSS bars) ──
+  // ── Pipeline: an UPSTREAM demand bar (MTO — not chained, no FK to POs) above the
+  //    monotonic FK-traced procurement chain (raised ⊇ expedited ⊇ received ⊇ issued).
   const PipelineFunnel = ({ p }: { p: DashData['pipeline'] }) => {
-    const stages = [['MTO', p.mto], ['PO raised', p.po_raised], ['Expedited', p.expedited], ['Shipped', p.shipped], ['Received', p.received], ['Issued', p.issued]] as const
-    const max = Math.max(1, ...stages.map(([, v]) => v ?? 0))
+    const chain = [['PO raised', p.po_raised], ['Expedited', p.expedited], ['Received', p.received], ['Issued', p.issued]] as const
+    const max = Math.max(1, ...chain.map(([, v]) => v ?? 0))
+    const bar = (label: string, v: number | null, grad: string) => {
+      const w = v == null ? 0 : Math.max(4, (v / max) * 100)
+      return (
+        <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ width: 84, fontSize: 12, color: sub, textAlign: 'right', flexShrink: 0 }}>{label}</div>
+          <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
+            <div style={{ width: `${w}%`, height: 26, background: v == null ? (dark ? '#334155' : '#eef2f7') : grad, borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 40, transition: 'width .3s' }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: v == null ? sub : '#fff' }}>{fmt(v)}</span>
+            </div>
+          </div>
+        </div>
+      )
+    }
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {stages.map(([label, v]) => {
-          const w = v == null ? 0 : Math.max(4, (v / max) * 100)
-          return (
-            <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{ width: 80, fontSize: 12, color: sub, textAlign: 'right', flexShrink: 0 }}>{label}</div>
-              <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
-                <div style={{ width: `${w}%`, height: 26, background: v == null ? (dark ? '#334155' : '#eef2f7') : 'linear-gradient(90deg,#E84E0F,#f59e0b)', borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 40, transition: 'width .3s' }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: v == null ? sub : '#fff' }}>{fmt(v)}</span>
-                </div>
-              </div>
+        {/* upstream demand — deliberately separated from the chain */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ width: 84, fontSize: 12, color: sub, textAlign: 'right', flexShrink: 0 }}>MTO demand</div>
+          <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
+            <div style={{ width: '100%', height: 26, background: p.demand == null ? (dark ? '#334155' : '#eef2f7') : (dark ? '#334155' : '#cbd5e1'), borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: p.demand == null ? sub : col }}>{fmt(p.demand)}</span>
             </div>
-          )
-        })}
+          </div>
+        </div>
+        <div style={{ height: 1, background: bd, margin: '4px 0 4px 96px' }} />
+        {chain.map(([l, v]) => bar(l, v, 'linear-gradient(90deg,#E84E0F,#f59e0b)'))}
       </div>
     )
   }

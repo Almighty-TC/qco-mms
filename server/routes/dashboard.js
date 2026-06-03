@@ -72,9 +72,12 @@ router.get('/:projectId', requirePermission('dashboard', 'can_view'), async (req
       po_total:       db.query('SELECT COUNT(*) n FROM po_lines pl JOIN purchase_orders po ON po.id=pl.po_id WHERE po.project_id=?', [pid]),
       po_overdue:     db.query("SELECT COUNT(*) n FROM po_lines pl JOIN purchase_orders po ON po.id=pl.po_id WHERE po.project_id=? AND pl.ros_date < CURDATE() AND pl.status NOT IN ('received','closed')", [pid]),
       po_breached:    db.query("SELECT COUNT(*) n FROM po_lines pl JOIN purchase_orders po ON po.id=pl.po_id WHERE po.project_id=? AND pl.cdd < CURDATE() AND pl.status NOT IN ('received','closed')", [pid]),
-      po_raised:      db.query("SELECT COUNT(*) n FROM po_lines pl JOIN purchase_orders po ON po.id=pl.po_id WHERE po.project_id=? AND pl.status IN ('po-raised','in-production','received','closed')", [pid]),
-      po_expedited:   db.query("SELECT COUNT(*) n FROM po_lines pl JOIN purchase_orders po ON po.id=pl.po_id WHERE po.project_id=? AND pl.status IN ('in-production','received','closed')", [pid]),
-      po_received:    db.query("SELECT COUNT(*) n FROM po_lines pl JOIN purchase_orders po ON po.id=pl.po_id WHERE po.project_id=? AND pl.status IN ('received','closed')", [pid]),
+      po_raised:      db.query("SELECT COUNT(DISTINCT pl.id) n FROM po_lines pl JOIN purchase_orders po ON po.id=pl.po_id WHERE po.project_id=? AND pl.status IN ('po-raised','in-production','received','closed')", [pid]),
+      po_expedited:   db.query("SELECT COUNT(DISTINCT pl.id) n FROM po_lines pl JOIN purchase_orders po ON po.id=pl.po_id WHERE po.project_id=? AND pl.status IN ('in-production','received','closed')", [pid]),
+      // received/issued are FK-traced to the SAME po_line (not status-based) so the
+      // funnel is a real monotonic chain: raised ⊇ expedited ⊇ received ⊇ issued.
+      po_received:    db.query("SELECT COUNT(DISTINCT ws.po_line_id) n FROM warehouse_stock ws WHERE ws.project_id=? AND ws.po_line_id IS NOT NULL", [pid]),
+      po_issued:      db.query("SELECT COUNT(DISTINCT ws.po_line_id) n FROM warehouse_stock ws JOIN fmr_issue_lines fil ON fil.stock_id=ws.id WHERE ws.project_id=? AND ws.po_line_id IS NOT NULL", [pid]),
       po_pending_rcv: db.query("SELECT COUNT(*) n FROM po_lines pl JOIN purchase_orders po ON po.id=pl.po_id WHERE po.project_id=? AND pl.status='in-production'", [pid]),
       // expediting (VDRL)
       vdrl_total:     db.query('SELECT COUNT(*) n FROM vdrl_documents d JOIN vdrl_packages p ON p.id=d.package_id WHERE p.project_id=?', [pid]),
@@ -82,7 +85,6 @@ router.get('/:projectId', requirePermission('dashboard', 'can_view'), async (req
       // logistics (SCN)
       scn_total:      db.query('SELECT COUNT(*) n FROM shipment_control_notes WHERE project_id=?', [pid]),
       scn_holds:      db.query("SELECT COUNT(*) n FROM shipment_control_notes WHERE project_id=? AND status='customs_review'", [pid]),
-      scn_shipped:    db.query("SELECT COUNT(*) n FROM shipment_control_notes WHERE project_id=? AND status IN ('in-transit','arrived','received')", [pid]),
       // materials (stock)
       stock_total:    db.query('SELECT COUNT(*) n FROM warehouse_stock WHERE project_id=?', [pid]),
       stock_problem:  db.query('SELECT COUNT(*) n FROM warehouse_stock WHERE project_id=? AND (qty<=0 OR trace_hold=1)', [pid]),
@@ -93,7 +95,6 @@ router.get('/:projectId', requirePermission('dashboard', 'can_view'), async (req
       cert_problem:   db.query("SELECT COUNT(*) n FROM traceability_certs WHERE project_id=? AND status IN ('overdue','rejected')", [pid]),
       // FMR
       fmr_open:       db.query("SELECT COUNT(*) n FROM fmr_requests WHERE project_id=? AND status NOT IN ('issued','rejected')", [pid]),
-      fmr_issued:     db.query("SELECT COUNT(*) n FROM fmr_requests WHERE project_id=? AND status IN ('issued','partial_issued')", [pid]),
       // exceptions: RFIs / actions
       rfi_overdue:    db.query("SELECT COUNT(*) n FROM rfi_meeting_records WHERE project_id=? AND due_date < CURDATE() AND status NOT IN ('closed','cancelled','answered')", [pid]),
       act_overdue:    db.query("SELECT COUNT(*) n FROM meeting_actions WHERE project_id=? AND due_date < CURDATE() AND status IN ('open','in_progress')", [pid]),
@@ -166,13 +167,15 @@ router.get('/:projectId', requirePermission('dashboard', 'can_view'), async (req
         pending_receipts:   gate(seeProc, n('po_pending_rcv')),
         open_fmrs:          gate(seeFmr, n('fmr_open')),
       },
+      // Monotonic FK-traced chain (raised ⊇ expedited ⊇ received ⊇ issued). `demand`
+      // (MTO lines) is UPSTREAM and NOT chained — no FK links po_lines back to
+      // mto_lines, so it is shown separately, never as a funnel parent.
       pipeline: {
-        mto:       gate(seeMto, n('mto_lines')),
+        demand:    gate(seeMto, n('mto_lines')),
         po_raised: gate(seeProc, n('po_raised')),
         expedited: gate(seeProc, n('po_expedited')),
-        shipped:   gate(seeLog, n('scn_shipped')),
         received:  gate(seeProc, n('po_received')),
-        issued:    gate(seeFmr, n('fmr_issued')),
+        issued:    gate(seeProc, n('po_issued')),
       },
     })
   } catch (e) { res.status(500).json({ error: e.message }) }
