@@ -36,7 +36,7 @@ async function run() {
     await db.query(
       `INSERT INTO scn_documents (scn_id, document_type, file_name, file_path, uploaded_by, notes)
        VALUES (?,?,?,?,?,?)`,
-      [scn.id, type, file, file ? `uploads/scn_documents/${file}` : null, file ? uploader : null, note])
+      [scn.id, type, file, file ? `uploads/scn-documents/${file}` : null, file ? uploader : null, note])
   }
   console.log(`  ✓ scn_documents → ${scnDocs.length} rows on ${scn.scn_ref} (1 missing: MSDS)`)
 
