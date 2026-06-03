@@ -22,7 +22,7 @@ interface Props {
 type Step = 1 | 2 | 3 | 4 | 5 | 6
 
 interface SelectedLineVal { checked: boolean; qty: string }
-interface AdditionalItem  { desc: string; qty: string; uom: string }
+interface AdditionalItem  { desc: string; qty: string; uom: string; parentLineId: string } // parentLineId REQUIRED — off-PO variation must name its parent PO line
 interface PackageRow {
   type: string; qty: string
   length: string; width: string; height: string; weight: string
@@ -156,7 +156,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
 
   // ─── ADDITIONAL ITEMS ─────────────────────────────────────
   const addAdditional = () =>
-    setAdditionalItems(prev => [...prev, { desc: '', qty: '1', uom: 'EA' }])
+    setAdditionalItems(prev => [...prev, { desc: '', qty: '1', uom: 'EA', parentLineId: '' }])
   const updateAdditional = (i: number, field: keyof AdditionalItem, val: string) =>
     setAdditionalItems(prev => prev.map((it, idx) => idx === i ? { ...it, [field]: val } : it))
   const removeAdditional = (i: number) =>
@@ -187,6 +187,14 @@ export const CreateSCNWizard: React.FC<Props> = ({
   // ─── SUBMIT ───────────────────────────────────────────────
   // Posts SCN to backend; shows toast and calls parent callback.
   const handleCreate = async () => {
+    // Off-PO VARIATIONS (Commit 3 UI): each must name a parent PO line + description.
+    // Legacy unlinked additional_items path is retired — we no longer send additional_items
+    // in the create body; instead we POST each variation to /scn/:id/variation after the SCN exists.
+    const variations = additionalItems.filter(i => i.desc.trim() || i.parentLineId)
+    for (const v of variations) {
+      if (!v.parentLineId) { onToast?.('Each off-PO variation must select a parent PO line.', 'error'); return }
+      if (!v.desc.trim())  { onToast?.('Each off-PO variation needs a description.', 'error'); return }
+    }
     setCreating(true)
     try {
       const body = {
@@ -194,9 +202,6 @@ export const CreateSCNWizard: React.FC<Props> = ({
         selected_lines: Object.entries(selectedLines)
           .filter(([, v]) => v.checked)
           .map(([id, v]) => ({ po_line_id: Number(id), qty_allocated: Number(v.qty) || 1 })),
-        additional_items: additionalItems
-          .filter(i => i.desc.trim())
-          .map(i => ({ description: i.desc, qty: Number(i.qty) || 1, uom: i.uom })),
         pickup_location: pickupLocation || null,
         destination_warehouse_id: warehouseId || null,
         grid_bay: gridBay || null,
@@ -218,7 +223,14 @@ export const CreateSCNWizard: React.FC<Props> = ({
         notify_forwarder: notifyForwarder,
       }
       const { data } = await axios.post(`${API}/expediting/${projectId}/scn`, body)
-      onToast?.(`${data.scn_ref} created successfully`, 'success')
+      // Two-phase: create the SCN, then add each off-PO variation (linked + audited) to it.
+      for (const v of variations) {
+        await axios.post(`${API}/expediting/${projectId}/scn/${data.id}/variation`, {
+          parent_po_line_id: Number(v.parentLineId), description: v.desc.trim(),
+          qty: Number(v.qty) || 1, uom: v.uom,
+        })
+      }
+      onToast?.(`${data.scn_ref} created successfully${variations.length ? ` (+${variations.length} off-PO variation${variations.length > 1 ? 's' : ''})` : ''}`, 'success')
       onCreated(data)
     } catch (e: any) {
       onToast?.(e.response?.data?.error || 'Failed to create SCN', 'error')
@@ -345,7 +357,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: 11, fontWeight: 600, color: '#d97706', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-              Additional items · not on PO
+              ⚠ Off-PO variations · each must link to a parent PO line
             </span>
             <button
               onClick={() => setShowAdditional(v => !v)}
@@ -358,10 +370,21 @@ export const CreateSCNWizard: React.FC<Props> = ({
             <>
               {additionalItems.map((item, i) => (
                 <div key={i} style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+                  <select
+                    value={item.parentLineId}
+                    onChange={e => updateAdditional(i, 'parentLineId', e.target.value)}
+                    title="Parent PO line (required)"
+                    style={{ ...inputStyle, width: 200, borderColor: item.parentLineId ? undefined : '#f59e0b' }}
+                  >
+                    <option value="">— parent PO line (required) —</option>
+                    {(po?.po_lines || []).map((l: any) => (
+                      <option key={l.id} value={l.id}>{l.line_number} · {(l.description || '').slice(0, 40)}</option>
+                    ))}
+                  </select>
                   <input
                     value={item.desc}
                     onChange={e => updateAdditional(i, 'desc', e.target.value)}
-                    placeholder="Item description (e.g. spare gasket set)"
+                    placeholder="Variation description (e.g. specialised crate for P-101)"
                     style={{ ...inputStyle, flex: 1 }}
                   />
                   <input
@@ -769,12 +792,15 @@ export const CreateSCNWizard: React.FC<Props> = ({
                 </span>
               </div>
             ))}
-            {addItemsList.map((it, i) => (
+            {addItemsList.map((it, i) => {
+              const parent = (po?.po_lines || []).find((l: any) => String(l.id) === String(it.parentLineId))
+              return (
               <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#d97706', marginBottom: 4 }}>
-                <span>+ {it.desc}</span>
+                <span>⚠ Off-PO variation — {it.desc}{parent ? ` · for: Line ${parent.line_number} ${(parent.description || '').slice(0, 30)}` : ''}</span>
                 <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#94a3b8' }}>{it.qty} {it.uom}</span>
               </div>
-            ))}
+              )
+            })}
           </div>
 
           {/* Logistics */}
