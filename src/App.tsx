@@ -1169,6 +1169,7 @@ function App() {
             <DashboardProjectScreen
               dark={dark} projectId={selectedProjectId} projectName={selectedProjectName} userRole={user?.role ?? ''}
               onBack={() => { setSelectedProjectId(null); setSelectedProjectName('') }}
+              onNavigate={p => setPage(p as Page)}
             />
           )}
           {page === 'admin' && (

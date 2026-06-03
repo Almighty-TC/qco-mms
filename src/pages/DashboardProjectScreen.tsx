@@ -28,8 +28,24 @@ interface DashData {
 const MODULE_LABEL: Record<string, string> = { procurement: 'Procurement', expediting: 'Expediting', logistics: 'Logistics', materials: 'Mat. Control', traceability: 'Traceability' }
 const fmt = (n: number | null | undefined) => (n == null ? '—' : n.toLocaleString())
 
-function DashboardInner({ dark, projectId, projectName, onBack }: {
-  dark: boolean; projectId: number; projectName: string; userRole: string; onBack: () => void
+// ─── BAND ROW (Mine / Attention) — clickable, drills to a module ──
+function BandRow({ label, n, accent, dark, onClick }: { label: string; n: number; accent: string; dark: boolean; onClick: () => void }) {
+  const sub = '#94a3b8'; const col = dark ? '#f1f5f9' : '#0f172a'; const active = n > 0
+  return (
+    <button onClick={onClick}
+      onMouseEnter={e => (e.currentTarget.style.background = dark ? '#0f172a' : '#f8fafc')}
+      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+      style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
+        padding: '8px 6px', border: 'none', background: 'transparent', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+      <span style={{ fontSize: 13, color: active ? col : sub }}>{label}</span>
+      <span style={{ minWidth: 26, textAlign: 'center', padding: '1px 8px', borderRadius: 999, fontSize: 12, fontWeight: 700,
+        color: active ? '#fff' : sub, background: active ? accent : (dark ? '#334155' : '#eef2f7') }}>{n}</span>
+    </button>
+  )
+}
+
+function DashboardInner({ dark, projectId, projectName, onBack, onNavigate }: {
+  dark: boolean; projectId: number; projectName: string; userRole: string; onBack: () => void; onNavigate: (page: string) => void
 }) {
   const { addToast } = useToast()
   const col = dark ? '#f1f5f9' : '#0f172a'; const sub = '#94a3b8'
@@ -159,15 +175,36 @@ function DashboardInner({ dark, projectId, projectName, onBack }: {
             <PipelineFunnel p={data.pipeline} />
           </div>
 
-          {/* C3 placeholders */}
-          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-            <div style={{ ...card, flex: 1, minWidth: 280, opacity: 0.6 }}>
-              <div style={{ fontSize: 11, color: sub, textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>Mine</div>
-              <div style={{ fontSize: 12, color: sub, marginTop: 8 }}>Approvals & items assigned to you — arrives next.</div>
+          {/* Mine + Attention bands */}
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+            {/* Mine — per-user */}
+            <div style={{ ...card, flex: 1, minWidth: 300 }}>
+              <div style={{ fontSize: 11, color: sub, textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700, marginBottom: 4 }}>Mine</div>
+              {([
+                ['Approvals waiting on me', data.mine.approvals_pos, 'procurement'],
+                ['In my confirmer queue', data.mine.confirmer_queue, 'pending-changes'],
+                ['RFIs assigned to me', data.mine.rfis_assigned, 'rfi-meeting'],
+                ['Actions assigned to me', data.mine.actions_assigned, 'rfi-meeting'],
+              ] as const).map(([label, n, page]) => (
+                <BandRow key={label} label={label} n={n} accent="#E84E0F" dark={dark} onClick={() => onNavigate(page)} />
+              ))}
             </div>
-            <div style={{ ...card, flex: 1, minWidth: 280, opacity: 0.6 }}>
-              <div style={{ fontSize: 11, color: sub, textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>Attention</div>
-              <div style={{ fontSize: 12, color: sub, marginTop: 8 }}>Project-wide exceptions — arrives next.</div>
+            {/* Attention — project-wide exceptions (visible metrics only) */}
+            <div style={{ ...card, flex: 1, minWidth: 300 }}>
+              <div style={{ fontSize: 11, color: sub, textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700, marginBottom: 4 }}>Attention</div>
+              {([
+                ['Overdue POs', data.attention.overdue_pos, 'procurement'],
+                ['Breached milestones', data.attention.breached_milestones, 'procurement'],
+                ['At-risk deliveries', data.attention.at_risk_deliveries, 'expediting'],
+                ['Overdue RFIs', data.attention.overdue_rfis, 'rfi-meeting'],
+                ['Overdue actions', data.attention.overdue_actions, 'rfi-meeting'],
+                ['Stock-outs', data.attention.stockouts, 'mc-stock'],
+                ['Negative stock', data.attention.negative_stock, 'mc-stock'],
+                ['Pending receipts', data.attention.pending_receipts, 'mc-receipting'],
+                ['Open FMRs', data.attention.open_fmrs, 'mc-fmr'],
+              ] as const).filter(([, n]) => n != null).map(([label, n, page]) => (
+                <BandRow key={label} label={label} n={n as number} accent="#ef4444" dark={dark} onClick={() => onNavigate(page)} />
+              ))}
             </div>
           </div>
         </div>
@@ -176,7 +213,7 @@ function DashboardInner({ dark, projectId, projectName, onBack }: {
   )
 }
 
-export function DashboardProjectScreen(props: { dark: boolean; projectId: number; projectName: string; userRole: string; onBack: () => void }) {
+export function DashboardProjectScreen(props: { dark: boolean; projectId: number; projectName: string; userRole: string; onBack: () => void; onNavigate: (page: string) => void }) {
   return (
     <ToastProvider>
       <DashboardInner {...props} />
