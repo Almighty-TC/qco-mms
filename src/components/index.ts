@@ -16,6 +16,10 @@ export { SimpleConfirmModal }                         from './SimpleConfirmModal
 // ─── TABLE PRIMITIVES ────────────────────────────────────────
 export { HeaderCell, ResizeHandle } from './ResizableTable'
 
+// ─── PAGINATION ──────────────────────────────────────────────
+// Shared pager UI; pair with the usePagedList hook for server-side paging.
+export { Pager } from './Pager'
+
 // ─── HELP MODAL ──────────────────────────────────────────────
 export { HelpModal } from './HelpModal'
 export type { HelpSection } from './HelpModal'

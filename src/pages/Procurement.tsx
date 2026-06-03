@@ -11,6 +11,7 @@ import { useColumnResize } from '../hooks/useColumnResize'
 import { HelpButton } from '../components/HelpDrawer'
 import { PO_REGISTER_HELP } from '../helpContent'
 import { BackButton } from '../components/BackButton'
+import { Pager } from '../components/Pager'
 
 const API = 'http://localhost:3001/api'
 
@@ -1447,7 +1448,7 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
         axios.get(`${API}/procurement/${projectId}/pos`, { params }),
       ])
       setStats(statsRes.data)
-      setPOs(posRes.data.rows)
+      setPOs(posRes.data.data)
       setTotal(posRes.data.total)
     } catch (e: unknown) {
       const er = e as { response?: { data?: { error?: string } }; message?: string }
@@ -1825,22 +1826,9 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
         </span>
       </div>
 
-      {/* ── Pagination controls ─────────────────────────────────────────────────── */}
-      {totalPages > 1 && (
-        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, marginTop: 16 }}>
-          <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
-            style={{ padding: '5px 12px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: page === 1 ? '#64748b' : col, cursor: page === 1 ? 'default' : 'pointer', fontSize: 12, fontFamily: 'inherit' }}>
-            ← Prev
-          </button>
-          <span style={{ fontSize: 12, color: '#94a3b8' }}>
-            Page {page} of {totalPages} &nbsp;·&nbsp; {((page - 1) * PAGE_SIZE) + 1}–{Math.min(page * PAGE_SIZE, total)} of {total}
-          </span>
-          <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
-            style={{ padding: '5px 12px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: page === totalPages ? '#64748b' : col, cursor: page === totalPages ? 'default' : 'pointer', fontSize: 12, fontFamily: 'inherit' }}>
-            Next →
-          </button>
-        </div>
-      )}
+      {/* ── Pagination controls (shared Pager) ──────────────────────────────────── */}
+      <Pager page={page} total={total} pageSize={PAGE_SIZE} dark={dark}
+        onPageChange={p => setPage(Math.max(1, Math.min(totalPages, p)))} />
 
       {/* ── Modals & drawers ──────────────────────────────────────────────────── */}
 

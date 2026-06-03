@@ -417,7 +417,7 @@ router.get('/:projectId/pos', async (req, res) => {
         own.full_name, exp.full_name, s.name, w.id, w.description,
         po.milestone_po_date, po.milestone_fat_date, po.milestone_esd_date,
         po.milestone_eta_date, po.milestone_ros_date
-      ORDER BY ${orderBy} ${orderDir}
+      ORDER BY ${orderBy} ${orderDir}, po.id ${orderDir}
       LIMIT ? OFFSET ?
     `, [...params, limit, offset])
 
@@ -447,7 +447,8 @@ router.get('/:projectId/pos', async (req, res) => {
       }
     })
 
-    res.json({ rows: data, total: countRows[0].total, page, limit, atRiskDays })
+    // ─── ENVELOPE ─── standard { data, total, page, limit } across all paginated endpoints
+    res.json({ data, total: countRows[0].total, page, limit, atRiskDays })
   } catch (e) {
     console.error('[procurement:pos-list]', e.message)
     res.status(500).json({ error: e.message })
