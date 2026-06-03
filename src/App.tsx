@@ -23,6 +23,7 @@ import { MCFMRScreen } from './pages/MCFMRScreen'
 import { MCTransferScreen } from './pages/MCTransferScreen'
 import { TraceabilityScreen } from './pages/TraceabilityScreen'
 import { MeetingRFIScreen } from './pages/MeetingRFIScreen'
+import { DashboardProjectScreen } from './pages/DashboardProjectScreen'
 import { DocumentsScreen } from './pages/DocumentsScreen'
 import { ConfirmerQueueScreen } from './pages/ConfirmerQueueScreen'
 import { AuditViewerScreen } from './pages/AuditViewerScreen'
@@ -1155,11 +1156,19 @@ function App() {
               </button>
             </div>
           )}
-          {page === 'dashboard' && (
+          {/* Nav option (b): Dashboard = project picker (Home) when no project,
+              the project dashboard once one is selected. */}
+          {page === 'dashboard' && !selectedProjectId && (
             <DashboardHome
               projects={projects} loading={loading} error={error} dark={dark}
               containerRef={containerRef} startResize={startResize}
-              onSelectProject={p => { setSelectedProjectId(p.id); setSelectedProjectName(p.name); localStorage.setItem('qmat_last_project', JSON.stringify({ id: p.id, name: p.name })); setPage('procurement') }}
+              onSelectProject={p => { setSelectedProjectId(p.id); setSelectedProjectName(p.name); localStorage.setItem('qmat_last_project', JSON.stringify({ id: p.id, name: p.name })) }}
+            />
+          )}
+          {page === 'dashboard' && selectedProjectId && (
+            <DashboardProjectScreen
+              dark={dark} projectId={selectedProjectId} projectName={selectedProjectName} userRole={user?.role ?? ''}
+              onBack={() => { setSelectedProjectId(null); setSelectedProjectName('') }}
             />
           )}
           {page === 'admin' && (

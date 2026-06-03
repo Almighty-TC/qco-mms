@@ -711,3 +711,31 @@ export const RFI_MEETING_HELP: HelpSection[] = [
     </>,
   },
 ]
+
+// ─── PROJECT DASHBOARD ───────────────────────────────────────
+export const DASHBOARD_HELP: HelpSection[] = [
+  {
+    title: 'Health score',
+    content: <>
+      {P(<>A single {B('0–100')} score for the project, blended from each area's health using
+        configurable per-project {B('weights')}. Bands: {B('Excellent')} 85+, {B('Good')} 70+,
+        {B('At risk')} 50+, {B('Critical')} below 50.</>)}
+      {P(<>Each area's bar is computed from real records (overdue POs, overdue VDRL, customs holds,
+        stock issues, overdue certs) and {B('RAG-coloured')} — green healthy, amber at risk, red critical.</>)}
+    </>,
+  },
+  {
+    title: 'Materials pipeline',
+    content: <>
+      {P(<>The flow of work from demand to issue: {Code('MTO → PO raised → expedited → shipped → received → issued')}.
+        Each bar is the count of items at that stage — a narrowing funnel shows healthy throughput.</>)}
+    </>,
+  },
+  {
+    title: 'What you can see',
+    content: <>
+      {P(<>Figures respect your permissions — an area you can't open in its own module is omitted here
+        (shown as {Code('—')}), never a misleading zero. The score is blended over the areas you can see.</>)}
+    </>,
+  },
+]
