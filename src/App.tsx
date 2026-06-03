@@ -24,6 +24,7 @@ import { MCTransferScreen } from './pages/MCTransferScreen'
 import { TraceabilityScreen } from './pages/TraceabilityScreen'
 import { DocumentsScreen } from './pages/DocumentsScreen'
 import { ConfirmerQueueScreen } from './pages/ConfirmerQueueScreen'
+import { AuditViewerScreen } from './pages/AuditViewerScreen'
 import { ForcePasswordChange } from './components/ForcePasswordChange'
 import { ChangePasswordModal } from './components/ChangePasswordModal'
 import './App.css'
@@ -33,7 +34,7 @@ import './App.css'
 // 'admin' enforces role === 'admin'; 'procurement' is project-scoped.
 // ─── ROUTING — state-based, no router library ─────────────────────────────────
 // 'po-detail' is Phase 3 PO Detail Screen — full dedicated screen.
-type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers' | 'traceability' | 'documents' | 'pending-changes'
+type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers' | 'traceability' | 'documents' | 'pending-changes' | 'audit'
 
 // ─── DEEP-LINK PARSING ───────────────────────────────────────
 // Maps a URL path segment (/project/:id/<segment>) to an internal Page,
@@ -277,6 +278,9 @@ const ProjectRow = ({
 // shows a "View only" badge next to each module item so users
 // understand they are in a read-only context.
 const READ_ONLY_ROLES = new Set(['ceo', 'director', 'project_director', 'viewer'])
+// Roles with audit.can_view (matrix, viewer revoked) — gate the Audit Trail nav/screen.
+// Backend is source of truth (requirePermission('audit','can_view')); this just hides the nav.
+const AUDIT_VIEW_ROLES = new Set(['admin', 'auditor', 'ceo', 'director', 'expediting_manager', 'procurement_manager', 'project_director'])
 
 // Dark-gradient sidebar with logo, nav items, and user chip.
 // activePage and onNavigate enable state-based page routing without
@@ -483,7 +487,7 @@ const Nav = ({
         </>}
         {/* C-c confirmer queue — visible to roles that may confirm pending changes */}
         {['admin', 'project_controls_manager', 'engineering_lead', 'project_manager'].includes(userRole) && navItem('Pending Changes', '✔', 'pending-changes')}
-        {navItem('Audit', '🔍')}
+        {AUDIT_VIEW_ROLES.has(userRole) && navItem('Audit', '🔍', 'audit')}
       </div>
 
       {/* ─── SYSTEM SECTION ────────────────────────────────────
@@ -979,6 +983,7 @@ function App() {
             )}
             <span style={{ fontSize: 12, color: '#94a3b8' }}>
               {page === 'admin' ? 'Admin'
+              : page === 'audit' ? 'Audit Trail'
               : page === 'po-detail' ? `PO Detail · ${selectedProjectName}`
               : page === 'procurement' ? (selectedProjectName ? `Procurement · ${selectedProjectName}` : 'Procurement')
               : page === 'foundational-wbs' ? `Foundational · WBS · ${selectedProjectName}`
@@ -1296,6 +1301,12 @@ function App() {
           {page === 'pending-changes' && selectedProjectId && (
             <ConfirmerQueueScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
               onBack={() => setPage('dashboard')} />
+          )}
+
+          {/* ─── AUDIT TRAIL (global, read-only over audit_log) ───
+              Project is an in-screen filter; the page itself is global (no project gate). */}
+          {page === 'audit' && AUDIT_VIEW_ROLES.has(user?.role ?? '') && (
+            <AuditViewerScreen dark={dark} userRole={user?.role ?? ''} onBack={() => setPage('dashboard')} />
           )}
 
           {/* ─── MTO REGISTER ────────────────────────────────────
