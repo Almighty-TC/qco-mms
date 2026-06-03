@@ -76,20 +76,61 @@ router.get('/:projectId/stats', async (req, res) => {
 router.get('/:projectId/register', async (req, res) => {
   try {
     const { projectId } = req.params
-    const page  = parseInt(req.query.page  || '1', 10)
-    const limit = parseInt(req.query.limit || '50', 10)
+    const page   = Math.max(1, parseInt(req.query.page  || '1', 10))
+    const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)))
     const offset = (page - 1) * limit
 
-    let extraWhere = ''
-    const extraParams = []
-    if (!canSeeAllPOs(req.user?.role)) {
-      extraWhere = ' AND po.expeditor_id=?'
-      extraParams.push(req.user.id)
+    // ─── FILTERS (server-side, whole-set) ───
+    const filters = ['po.project_id=?', 'po.is_locked=1']
+    const params  = [projectId]
+    if (!canSeeAllPOs(req.user?.role)) { filters.push('po.expeditor_id=?'); params.push(req.user.id) }
+
+    const { search, critical_only, ros_from, ros_to, rag, sub_tab } = req.query
+    if (search) {
+      const q = `%${search}%`
+      filters.push('(po.po_number LIKE ? OR po.po_name LIKE ? OR po.vendor_name LIKE ? OR s.name LIKE ? OR po.wbs_code LIKE ? OR po.description LIKE ?)')
+      params.push(q, q, q, q, q, q)
     }
+    if (critical_only === 'true') filters.push('po.is_critical_path=1')
+    if (ros_from) { filters.push('po.ros_date >= ?'); params.push(ros_from) }
+    if (ros_to)   { filters.push('po.ros_date <= ?'); params.push(ros_to) }
+
+    // ─── RAG / sub-tab filters ───
+    // Milestone-derived RAG computed in SQL to match the JS computePORag() /
+    // computeMilestoneStatus() exactly (forecast_date, 14-day at-risk window).
+    const M          = `FROM po_milestones m WHERE m.po_id=po.id AND m.is_deleted=0`
+    const BREACHED   = `EXISTS(SELECT 1 ${M} AND m.actual_date IS NULL AND m.forecast_date IS NOT NULL AND m.forecast_date < CURDATE())`
+    const ATRISK     = `EXISTS(SELECT 1 ${M} AND m.actual_date IS NULL AND m.forecast_date IS NOT NULL AND m.forecast_date >= CURDATE() AND DATEDIFF(m.forecast_date, CURDATE()) <= 14)`
+    const HASOPEN    = `EXISTS(SELECT 1 ${M} AND m.actual_date IS NULL)`
+    const HASTOUCHED = `EXISTS(SELECT 1 ${M} AND (m.actual_date IS NOT NULL OR m.forecast_date IS NOT NULL))`
+    const COMPLETE   = `(NOT ${BREACHED} AND NOT ${ATRISK} AND NOT ${HASOPEN})` // empty milestones → complete (matches every())
+    const RAG_WHERE  = {
+      red:      BREACHED,
+      amber:    `(NOT ${BREACHED} AND ${ATRISK})`,
+      complete: COMPLETE,
+      blue:     `(NOT ${BREACHED} AND NOT ${ATRISK} AND ${HASOPEN} AND ${HASTOUCHED})`,
+      grey:     `(NOT ${BREACHED} AND NOT ${ATRISK} AND ${HASOPEN} AND NOT ${HASTOUCHED})`,
+    }
+    if (rag && RAG_WHERE[rag]) filters.push(RAG_WHERE[rag])
+    if (sub_tab === 'complete')     filters.push(COMPLETE)
+    else if (sub_tab === 'ongoing') filters.push(`NOT ${COMPLETE}`)
+
+    const whereSql = filters.join(' AND ')
+
+    // ─── WHITELISTED SORT (+ unique po.id tiebreaker) ───
+    const SAFE_SORT = {
+      po_number: 'po.po_number', vendor: 'vendor_display', ros_date: 'po.ros_date',
+      status: 'po.status', value: 'po.value', wbs: 'po.wbs_code',
+    }
+    const orderBy  = SAFE_SORT[req.query.sort_col] || 'po.po_number'
+    const orderDir = String(req.query.sort_dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'
 
     const [[{ total }]] = await db.query(
-      `SELECT COUNT(*) AS total FROM purchase_orders po WHERE po.project_id=? AND po.is_locked=1${extraWhere}`,
-      [projectId, ...extraParams]
+      `SELECT COUNT(*) AS total
+       FROM purchase_orders po
+       LEFT JOIN suppliers s ON s.id = po.supplier_id
+       WHERE ${whereSql}`,
+      params
     )
 
     const [pos] = await db.query(
@@ -108,10 +149,10 @@ router.get('/:projectId/register', async (req, res) => {
        LEFT JOIN suppliers s   ON s.id   = po.supplier_id
        LEFT JOIN users own     ON own.id = po.owner_id
        LEFT JOIN users exp     ON exp.id = po.expeditor_id
-       WHERE po.project_id=? AND po.is_locked=1${extraWhere}
-       ORDER BY po.po_number
+       WHERE ${whereSql}
+       ORDER BY ${orderBy} ${orderDir}, po.id ${orderDir}
        LIMIT ? OFFSET ?`,
-      [projectId, ...extraParams, limit, offset]
+      [...params, limit, offset]
     )
 
     const result = []

@@ -2,9 +2,11 @@
 // Expediting register: locked POs with milestone timeline and RAG.
 // Row click navigates to ExpPODetailScreen via onNavigateToPODetail prop.
 // Tabs: All POs | VDRL Register (full cross-PO view) | Action Log
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
+import { Pager } from '../components/Pager'
+import { usePagedList } from '../hooks/usePagedList'
 import { HelpButton } from '../components/HelpDrawer'
 import { MilestoneTimeline } from '../components/MilestoneTimeline'
 import { MilestoneLegend } from '../components/MilestoneLegend'
@@ -426,12 +428,11 @@ const fmt = (d?: string | null) =>
 // Must be wrapped in ToastProvider; use the exported ExpeditingScreen below.
 const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigateToPODetail }: ExpeditingScreenProps) => {
   const { addToast } = useToast()
-  const [pos, setPOs]         = useState<PORow[]>([])
   const [stats, setStats]     = useState<Stats>({ total_pos: 0, ongoing: 0, complete: 0, breached: 0, at_risk: 0 })
-  const [loading, setLoading] = useState(true)
   const [activeTab, setTab]   = useState<ActiveTab>('pos')
   const [subTab, setSubTab]   = useState<SubTab>('all')
   const [search, setSearch]   = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [ragFilter, setRagFilter] = useState<RAGFilter>('all')
   const [criticalOnly, setCriticalOnly] = useState(false)
   const [rosFrom, setRosFrom] = useState('')
@@ -472,18 +473,44 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
   const sub     = '#94a3b8'
 
   // ─── FETCH DATA ───────────────────────────────────────────
-  // Loads register + stats in parallel on mount / projectId change.
+  // Stats are whole-project (independent of the register's filters/page).
   useEffect(() => {
-    setLoading(true)
-    Promise.all([
-      axios.get(`${API}/expediting/${projectId}/register`),
-      axios.get(`${API}/expediting/${projectId}/stats`),
-    ]).then(([r1, r2]) => {
-      setPOs(r1.data.data || [])
-      setStats(r2.data)
-    }).catch(e => console.error(e))
-      .finally(() => setLoading(false))
+    axios.get(`${API}/expediting/${projectId}/stats`).then(r => setStats(r.data)).catch(e => console.error(e))
   }, [projectId])
+
+  // Debounce search so we don't hit the server on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 350)
+    return () => clearTimeout(t)
+  }, [search])
+
+  // ─── SERVER-SIDE PAGED REGISTER ────────────────────────────
+  // All filters (sub-tab, RAG, search, critical, ROS range) + sort run
+  // server-side across every locked PO; the grid holds one page. Previously the
+  // screen fetched the register with NO page param, so only the first 50 locked
+  // POs were ever shown and the filters were page-local. RAG/sub-tab filtering
+  // is computed in SQL to match the JS RAG badge logic exactly.
+  const fetcher = useCallback(async ({ page, limit, sortCol, sortDir }: { page: number; limit: number; sortCol?: string; sortDir: 'asc' | 'desc' }) => {
+    const params: Record<string, string> = { page: String(page), limit: String(limit), sort_dir: sortDir }
+    if (sortCol)                params.sort_col      = sortCol
+    if (subTab !== 'all')       params.sub_tab       = subTab
+    if (ragFilter !== 'all')    params.rag           = ragFilter
+    if (debouncedSearch.trim()) params.search        = debouncedSearch.trim()
+    if (criticalOnly)           params.critical_only = 'true'
+    if (rosFrom)                params.ros_from      = rosFrom
+    if (rosTo)                  params.ros_to        = rosTo
+    const { data } = await axios.get(`${API}/expediting/${projectId}/register`, { params })
+    return { data: (data.data ?? []) as PORow[], total: (data.total ?? 0) as number }
+  }, [projectId, subTab, ragFilter, debouncedSearch, criticalOnly, rosFrom, rosTo])
+
+  const {
+    data: pos, total, page, setPage, pageSize, loading,
+    sortCol, sortDir, toggleSort,
+  } = usePagedList<PORow>({
+    fetcher, deps: [projectId, subTab, ragFilter, debouncedSearch, criticalOnly, rosFrom, rosTo],
+    pageSize: 50, initialSortCol: 'po_number', initialSortDir: 'asc',
+  })
+  const sortArrow = (k: string) => sortCol === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
 
   // ─── VDRL DATA LOAD ───────────────────────────────────────
   // Loads stats and packages when VDRL tab is activated.
@@ -525,23 +552,8 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
     axios.get(`${API}/expediting/${projectId}/action-log`).then(r => setActionLog(r.data)).catch(() => {}).finally(() => setLogLoading(false))
   }, [activeTab, projectId])
 
-  // ─── FILTER ───────────────────────────────────────────────
-  // Applies sub-tab, search, RAG filter, critical-only, ROS range.
-  const filtered = pos.filter(po => {
-    if (subTab === 'ongoing' && po.rag === 'complete') return false
-    if (subTab === 'complete' && po.rag !== 'complete') return false
-    if (search) {
-      const q = search.toLowerCase()
-      if (!po.po_number.toLowerCase().includes(q) &&
-          !(po.vendor_display || '').toLowerCase().includes(q) &&
-          !(po.material_description || '').toLowerCase().includes(q)) return false
-    }
-    if (ragFilter !== 'all' && po.rag !== ragFilter) return false
-    if (criticalOnly && !po.is_critical_path) return false
-    if (rosFrom && po.ros_date && po.ros_date < rosFrom) return false
-    if (rosTo   && po.ros_date && po.ros_date > rosTo)   return false
-    return true
-  })
+  // Filtering/sort/pagination now happen server-side (see fetcher above);
+  // `pos` already holds exactly the current page of the filtered, sorted set.
 
   // ─── STAT CARDS ───────────────────────────────────────────
   const statCards = [
@@ -658,28 +670,29 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
               title="ROS from" style={{ fontSize: 11, padding: '4px 7px', borderRadius: 5, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col }} />
             <input type="date" value={rosTo} onChange={e => setRosTo(e.target.value)}
               title="ROS to" style={{ fontSize: 11, padding: '4px 7px', borderRadius: 5, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col }} />
-            <span style={{ fontSize: 11, color: sub }}>{filtered.length} PO{filtered.length !== 1 ? 's' : ''}</span>
+            <span style={{ fontSize: 11, color: sub }}>{total} PO{total !== 1 ? 's' : ''}</span>
           </div>
 
           {/* Table */}
           {loading ? (
             <div style={{ textAlign: 'center', color: sub, padding: '48px 0', fontSize: 13 }}>Loading…</div>
-          ) : filtered.length === 0 ? (
+          ) : pos.length === 0 ? (
             <div style={{ textAlign: 'center', color: sub, padding: '48px 0', fontSize: 13 }}>No POs match the filter.</div>
           ) : (
             <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 320px)' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: dark ? '#162032' : '#f8fafc' }}>
                   <tr style={{ borderBottom: bd }}>
-                    {['★', '', 'PO Ref', 'Vendor / Group', 'Material', 'Owner / Expeditor', 'Milestones', 'ROS', 'Status', ''].map((h, i) => (
-                      <th key={i} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
-                        {h}
+                    {([['★'], [''], ['PO Ref', 'po_number'], ['Vendor / Group', 'vendor'], ['Material'], ['Owner / Expeditor'], ['Milestones'], ['ROS', 'ros_date'], ['Status', 'status'], ['']] as [string, string?][]).map(([h, key], i) => (
+                      <th key={i} onClick={key ? () => toggleSort(key) : undefined}
+                        style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>
+                        {h}{key ? sortArrow(key) : ''}
                       </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map(po => {
+                  {pos.map(po => {
                     // BUG-2 FIX: use RAG-based status pill, not procurement status
                     const ragPill = RAG_STATUS_PILLS[po.rag] || RAG_STATUS_PILLS['grey']
                     return (
@@ -750,6 +763,8 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
               </table>
             </div>
           )}
+
+          <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} />
 
           {/* ── MILESTONE LEGEND ─────────────────────────────── */}
           <MilestoneLegend dark={dark} />
