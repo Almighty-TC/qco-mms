@@ -87,7 +87,24 @@ async function c3(conn) {
   console.log(`  rows failing re-verify: ${bad.c}  ${bad.c == 0 ? '✓ all re-hash-verify' : '✗'}`)
 }
 
-const STEPS = { c1, c2, c3 }
+// ── C4: append-only ENFORCEMENT — BEFORE UPDATE/DELETE SIGNAL on both tables ──
+// MUST run AFTER C3 (this blocks the backfill UPDATE). Stops app/accidental/casual
+// edits even via direct DB access; a QCO_admin holder could DROP these triggers,
+// but the hash chain still DETECTS any tampering. (Least-priv app-user = logged
+// follow-up, not this build.)
+async function c4(conn) {
+  for (const table of ['audit_log', 'audit_review']) {
+    for (const [suffix, event] of [['bu', 'UPDATE'], ['bd', 'DELETE']]) {
+      await conn.query(`DROP TRIGGER IF EXISTS ${table}_${suffix}`)
+      await conn.query(
+        `CREATE TRIGGER ${table}_${suffix} BEFORE ${event} ON ${table} FOR EACH ROW
+         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '${table} is append-only (tamper-evidence)'`)
+      console.log(`C4 applied: ${table}_${suffix} BEFORE ${event} (rejects ${event})`)
+    }
+  }
+}
+
+const STEPS = { c1, c2, c3, c4 }
 
 async function main() {
   const step = process.argv[2]
