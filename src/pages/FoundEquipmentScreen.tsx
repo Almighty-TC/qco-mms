@@ -7,6 +7,8 @@ import { HelpButton } from '../components/HelpDrawer'
 import { EQUIPMENT_HELP } from '../helpContent'
 import { BackButton } from '../components/BackButton'
 import { MilestoneLegend } from '../components/MilestoneLegend'
+import { Pager } from '../components/Pager'
+import { usePagedList } from '../hooks/usePagedList'
 
 const API = 'http://localhost:3001/api'
 
@@ -222,14 +224,12 @@ const StatusPill = ({ status }: { status: string }) => {
 export const FoundEquipmentScreen = ({ dark, projectId, projectName, onBack }: {
   dark: boolean; projectId: number; projectName: string; onBack: () => void
 }) => {
-  const [items, setItems]   = useState<Equipment[]>([])
   const [wbsNodes, setWbs]  = useState<WBSNode[]>([])
-  const [loading, setLoading] = useState(true)
   const [tab, setTab]       = useState<'all' | 'PO raised' | 'RFQ' | 'Not started'>('all')
   const [search, setSearch] = useState('')
   const [groupBy, setGroupBy] = useState<'none' | 'wbs' | 'vendor'>('none')
-  const [sortCol, setSortCol] = useState<string>('tag')
-  const [sortAsc, setSortAsc] = useState(true)
+  // Project-wide status totals (drive the tab badges); set by the fetcher.
+  const [counts, setCounts] = useState<Record<string, number>>({ all: 0, 'PO raised': 0, 'RFQ': 0, 'Not started': 0 })
   const [addModal, setAddModal] = useState(false)
   const [editItem, setEditItem] = useState<Equipment | null>(null)
   const [certsItem, setCertsItem] = useState<Equipment | null>(null)
@@ -239,56 +239,44 @@ export const FoundEquipmentScreen = ({ dark, projectId, projectName, onBack }: {
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 2500) }
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const [eRes, wRes] = await Promise.all([
-        axios.get(`${API}/foundational/${projectId}/equipment`),
-        axios.get(`${API}/foundational/${projectId}/wbs`),
-      ])
-      setItems(eRes.data)
-      setWbs(wRes.data)
-    } catch { /* ignore */ }
-    finally { setLoading(false) }
+  // WBS nodes for the add/edit modal (small, unpaginated reference list).
+  useEffect(() => {
+    axios.get(`${API}/foundational/${projectId}/wbs`).then(r => setWbs(r.data)).catch(() => {})
   }, [projectId])
 
-  useEffect(() => { load() }, [load])
+  // ─── SERVER-SIDE PAGED LOAD ──────────────────────────────────
+  // Filter (status/search) + sort run server-side across the whole list; the
+  // grid only ever holds one page. Tab badges come from server `counts`.
+  const fetcher = useCallback(async ({ page, limit, sortCol, sortDir }: { page: number; limit: number; sortCol?: string; sortDir: 'asc' | 'desc' }) => {
+    const params: Record<string, string> = { page: String(page), limit: String(limit), sort_dir: sortDir }
+    if (sortCol)        params.sort_col = sortCol
+    if (tab !== 'all')  params.status   = tab
+    if (search.trim())  params.search   = search.trim()
+    const { data } = await axios.get(`${API}/foundational/${projectId}/equipment`, { params })
+    setCounts(data.counts ?? { all: 0, 'PO raised': 0, 'RFQ': 0, 'Not started': 0 })
+    return { data: data.data as Equipment[], total: data.total as number }
+  }, [projectId, tab, search])
 
-  const filtered = items.filter(e => {
-    if (tab !== 'all' && e.status !== tab) return false
-    if (search) {
-      const q = search.toLowerCase()
-      return e.tag.toLowerCase().includes(q) || e.description.toLowerCase().includes(q) ||
-             (e.wbs_code?.toLowerCase().includes(q) ?? false) ||
-             (e.vendor?.toLowerCase().includes(q) ?? false) ||
-             (e.spec?.toLowerCase().includes(q) ?? false)
-    }
-    return true
-  })
+  const {
+    data: items, total, page, setPage, pageSize, loading,
+    sortCol, sortDir, toggleSort, reload,
+  } = usePagedList<Equipment>({ fetcher, deps: [projectId, tab, search], pageSize: 50, initialSortCol: 'tag' })
 
-  const sorted = [...filtered].sort((a, b) => {
-    const av = (a as unknown as Record<string, unknown>)[sortCol] as string ?? ''
-    const bv = (b as unknown as Record<string, unknown>)[sortCol] as string ?? ''
-    return sortAsc ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av))
-  })
+  const sortArrow = (c: string) => sortCol === c ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''
 
-  const toggleSort = (c: string) => { if (sortCol === c) setSortAsc(p => !p); else { setSortCol(c); setSortAsc(true) } }
-  const sortArrow  = (c: string) => sortCol === c ? (sortAsc ? ' ↑' : ' ↓') : ''
-
+  // ─── GROUPING ────────────────────────────────────────────────
+  // Decision: grouping across paginated results isn't built yet — only correct
+  // when the whole list fits one page. On multi-page lists we disable it (NOT
+  // group-on-page) and show a notice. Grouped-summary redesign is backlog.
+  const groupingDisabled = total > pageSize
+  const effectiveGroupBy = groupingDisabled ? 'none' : groupBy
   const grouped: Record<string, Equipment[]> = {}
-  if (groupBy !== 'none') {
-    for (const e of sorted) {
-      const key = groupBy === 'wbs' ? (e.wbs_code ?? '—') : (e.vendor ?? 'Unassigned')
+  if (effectiveGroupBy !== 'none') {
+    for (const e of items) {
+      const key = effectiveGroupBy === 'wbs' ? (e.wbs_code ?? '—') : (e.vendor ?? 'Unassigned')
       if (!grouped[key]) grouped[key] = []
       grouped[key].push(e)
     }
-  }
-
-  const counts = {
-    all: items.length,
-    'PO raised': items.filter(e => e.status === 'PO raised').length,
-    'RFQ': items.filter(e => e.status === 'RFQ').length,
-    'Not started': items.filter(e => e.status === 'Not started').length,
   }
 
   const thStyle = (c: string): React.CSSProperties => ({
@@ -349,7 +337,7 @@ export const FoundEquipmentScreen = ({ dark, projectId, projectName, onBack }: {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: col, letterSpacing: '-0.02em' }}>🔧 Equipment List</h2>
-          <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 3 }}>{items.length} of {items.length} items · Tag numbers unique per project</div>
+          <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 3 }}>{total} item{total !== 1 ? 's' : ''} · Tag numbers unique per project</div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={async () => {
@@ -383,12 +371,19 @@ export const FoundEquipmentScreen = ({ dark, projectId, projectName, onBack }: {
           style={{ flex: 1, height: 34, padding: '0 12px', borderRadius: 6, border: bd, background: dark ? '#1e293b' : '#fff', color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none' }} />
         <label style={{ fontSize: 12, color: '#64748b', display: 'flex', alignItems: 'center', gap: 6 }}>
           Group by:
-          <select value={groupBy} onChange={e => setGroupBy(e.target.value as 'none' | 'wbs' | 'vendor')}
-            style={{ height: 32, padding: '0 8px', borderRadius: 6, border: bd, background: dark ? '#1e293b' : '#fff', color: col, fontSize: 12, fontFamily: 'inherit', outline: 'none' }}>
+          <select value={effectiveGroupBy} disabled={groupingDisabled}
+            onChange={e => setGroupBy(e.target.value as 'none' | 'wbs' | 'vendor')}
+            title={groupingDisabled ? "Grouping across paginated results isn't available yet" : undefined}
+            style={{ height: 32, padding: '0 8px', borderRadius: 6, border: bd, background: dark ? '#1e293b' : '#fff', color: col, fontSize: 12, fontFamily: 'inherit', outline: 'none', opacity: groupingDisabled ? 0.5 : 1, cursor: groupingDisabled ? 'not-allowed' : 'pointer' }}>
             <option value="none">None</option>
             <option value="wbs">WBS</option>
             <option value="vendor">Vendor</option>
           </select>
+          {groupingDisabled && (
+            <span style={{ fontSize: 11, color: '#94a3b8', fontStyle: 'italic' }}>
+              grouping unavailable on large lists — coming soon
+            </span>
+          )}
         </label>
       </div>
 
@@ -401,10 +396,10 @@ export const FoundEquipmentScreen = ({ dark, projectId, projectName, onBack }: {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               {tableHead}
               <tbody>
-                {groupBy === 'none' ? (
-                  sorted.length === 0
+                {effectiveGroupBy === 'none' ? (
+                  items.length === 0
                     ? <tr><td colSpan={8} style={{ padding: '32px', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>No equipment found.</td></tr>
-                    : renderRows(sorted)
+                    : renderRows(items)
                 ) : (
                   Object.entries(grouped).sort(([a],[b]) => a.localeCompare(b)).map(([grp, grpItems]) => (
                     <>
@@ -424,13 +419,15 @@ export const FoundEquipmentScreen = ({ dark, projectId, projectName, onBack }: {
         <MilestoneLegend dark={dark} />
       </div>
 
+      <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} />
+
       {/* Modals */}
       {(addModal || editItem) && (
         <EquipmentModal
           projectId={projectId} wbsNodes={wbsNodes} item={editItem} dark={dark}
           onClose={() => { setAddModal(false); setEditItem(null) }}
           onSaved={saved => {
-            setItems(prev => editItem ? prev.map(e => e.id === saved.id ? saved : e) : [saved, ...prev])
+            reload()  // re-fetch current page (a new/edited row may fall on another page or filter)
             showToast(`✓ Equipment ${saved.tag} ${editItem ? 'updated' : 'added'}`)
             setAddModal(false); setEditItem(null)
           }}
@@ -440,7 +437,7 @@ export const FoundEquipmentScreen = ({ dark, projectId, projectName, onBack }: {
         <CertificatesModal
           projectId={projectId} entityType="equipment" entityId={certsItem.id}
           entityCode={certsItem.tag} entityName={certsItem.description} dark={dark}
-          onClose={() => { setCertsItem(null); load() }}
+          onClose={() => { setCertsItem(null); reload() }}
         />
       )}
 

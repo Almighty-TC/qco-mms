@@ -2,13 +2,15 @@
 // Field Material Request register. Two views: MC view / Contractor view.
 // MC view: approve/reject FMRs with WBS ceiling and stock availability checks.
 // Contractor view: raise new FMRs against assigned WBS scope.
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { useCurrentUser } from '../hooks/useCurrentUser'
 import { ScopeBanner } from '../components/ScopeBanner'
 import { useAutoTitle } from '../hooks/useAutoTitle'
+import { Pager } from '../components/Pager'
+import { usePagedList } from '../hooks/usePagedList'
 
 const API = 'http://localhost:3001/api'
 type View = 'mc' | 'contractor'
@@ -55,34 +57,44 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
 
   // Subcontractors always in contractor view; can't switch to MC view
   const [view, setView]           = useState<View>(isSubcontractor ? 'contractor' : 'mc')
-  const [fmrs, setFmrs]           = useState<FMRRow[]>([])
   const [counts, setCounts]       = useState<FMRCounts | null>(null)
-  const [loading, setLoading]     = useState(true)
   const [search, setSearch]       = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [pickup, setPickup]       = useState<PickupWindow>('all')
   const [critOnly, setCritOnly]   = useState(false)
   const [approveFmr, setApproveFmr] = useState<FMRRow | null>(null)
   const [viewFmr, setViewFmr]     = useState<FMRRow | null>(null)
   const [raiseFmr, setRaiseFmr]   = useState(false)
-  // Truncated cells get a hover tooltip; re-runs when the FMR list changes.
   const tableRef = useRef<HTMLDivElement>(null)
+
+  // Debounce search so we don't hit the server on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 350)
+    return () => clearTimeout(t)
+  }, [search])
+
+  // ─── SERVER-SIDE PAGED LOAD ──────────────────────────────────
+  // Filter (search/critical/pickup) + sort run server-side; the grid holds one
+  // page. KPI counts come from the server (whole-project, independent of page).
+  const fetcher = useCallback(async ({ page, limit, sortCol, sortDir }: { page: number; limit: number; sortCol?: string; sortDir: 'asc' | 'desc' }) => {
+    const params: Record<string, string> = { page: String(page), limit: String(limit), sort_dir: sortDir }
+    if (sortCol)                params.sort_col      = sortCol
+    if (debouncedSearch.trim()) params.search        = debouncedSearch.trim()
+    if (critOnly)               params.critical_only = 'true'
+    if (pickup !== 'all' && pickup !== 'overdue' && pickup !== 'today') params.pickup_window = String(pickup)
+    const { data } = await axios.get(`${API}/mc/${projectId}/fmr`, { params })
+    setCounts(data.counts)
+    return { data: (data.data ?? []) as FMRRow[], total: (data.total ?? 0) as number }
+  }, [projectId, debouncedSearch, critOnly, pickup])
+
+  const {
+    data: fmrs, total, page, setPage, pageSize, loading,
+    sortCol, sortDir, toggleSort, reload,
+  } = usePagedList<FMRRow>({ fetcher, deps: [projectId, debouncedSearch, critOnly, pickup], pageSize: 50, initialSortCol: undefined })
+  const sortArrow = (k: string) => sortCol === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
+
+  // Truncated cells get a hover tooltip; re-runs when the FMR list changes.
   useAutoTitle(tableRef, [fmrs])
-
-  const fetchFMRs = async () => {
-    setLoading(true)
-    try {
-      const params: any = { search: search.trim() || undefined, critical_only: critOnly ? 'true' : undefined }
-      if (pickup !== 'all' && pickup !== 'overdue' && pickup !== 'today') params.pickup_window = pickup
-      const { data } = await axios.get(`${API}/mc/${projectId}/fmr`, { params })
-      setFmrs(data.data || [])
-      setCounts(data.counts)
-    } catch (e: any) {
-      addToast('error', e.response?.data?.error || 'Failed to load FMR register')
-    } finally { setLoading(false) }
-  }
-
-  useEffect(() => { fetchFMRs() }, [projectId, pickup, critOnly]) // eslint-disable-line
-  useEffect(() => { const t = setTimeout(fetchFMRs, 350); return () => clearTimeout(t) }, [search]) // eslint-disable-line
 
   // Heat/Lot P4a-i — one-click issue of the approved qty (auto-FIFO consume).
   const [issuingId, setIssuingId] = useState<number | null>(null)
@@ -97,7 +109,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
         ? `Issued ${data.total_issued} (stock short — line(s) partially issued)`
         : `Issued ${data.total_issued} — ${data.header_status}`
       addToast(data.short ? 'error' : 'success', msg)
-      fetchFMRs()
+      reload()
     } catch (e: any) {
       addToast('error', e.response?.data?.error || 'Failed to issue FMR')
     } finally { setIssuingId(null) }
@@ -223,8 +235,11 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                 <tr style={{ borderBottom: bd }}>
-                  {['FMR REF','ITEMS','WBS','WAREHOUSE','QTY','REQUESTED BY','REQ. DATE','STATUS',''].map(h => (
-                    <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
+                  {([['FMR REF','fmr_ref'],['ITEMS'],['WBS','wbs_code'],['WAREHOUSE','warehouse'],['QTY'],['REQUESTED BY','requested_by'],['REQ. DATE','required_date'],['STATUS','status'],['']] as [string,string?][]).map(([h,key]) => (
+                    <th key={h} onClick={key ? () => toggleSort(key) : undefined}
+                      style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>
+                      {h}{key ? sortArrow(key) : ''}
+                    </th>
                   ))}
                 </tr>
               </thead>
@@ -306,6 +321,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
               </tbody>
             </table>
           </div>
+          <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} />
         </div>
       </div>
 
@@ -314,7 +330,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
         <FMRApprovalModal
           dark={dark} fmr={approveFmr} projectId={projectId}
           onClose={() => setApproveFmr(null)}
-          onSaved={() => { setApproveFmr(null); fetchFMRs(); addToast('success', 'FMR decision recorded') }}
+          onSaved={() => { setApproveFmr(null); reload(); addToast('success', 'FMR decision recorded') }}
           addToast={addToast}
         />
       )}
@@ -324,7 +340,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
         <RaiseFMRModal
           dark={dark} projectId={projectId}
           onClose={() => setRaiseFmr(false)}
-          onSaved={() => { setRaiseFmr(false); fetchFMRs(); addToast('success', 'FMR submitted for approval') }}
+          onSaved={() => { setRaiseFmr(false); reload(); addToast('success', 'FMR submitted for approval') }}
           addToast={addToast}
         />
       )}
@@ -343,7 +359,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
         <IssuePickerModal
           dark={dark} projectId={projectId} fmr={pickFmr}
           onClose={() => setPickFmr(null)}
-          onIssued={(msg, short) => { setPickFmr(null); fetchFMRs(); addToast(short ? 'error' : 'success', msg) }}
+          onIssued={(msg, short) => { setPickFmr(null); reload(); addToast(short ? 'error' : 'success', msg) }}
           addToast={addToast}
         />
       )}

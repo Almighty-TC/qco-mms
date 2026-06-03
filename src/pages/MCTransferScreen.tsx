@@ -2,11 +2,13 @@
 // Warehouse Transfer Register — inter-warehouse movements.
 // Pipeline: Requested → In transit → Picked up → Delivered → Complete
 // + New transfer wizard (2 steps). Transfer detail modal with lifecycle stepper.
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { useAutoTitle } from '../hooks/useAutoTitle'
+import { Pager } from '../components/Pager'
+import { usePagedList } from '../hooks/usePagedList'
 
 const API = 'http://localhost:3001/api'
 
@@ -54,33 +56,42 @@ const MCTransferInner = ({ dark, projectId, projectName, onBack }: {
   const sub    = '#94a3b8'
   const theadBg = dark ? '#162032' : '#f8fafc'
 
-  const [transfers, setTransfers] = useState<Transfer[]>([])
   const [counts, setCounts]       = useState<TransferCounts | null>(null)
-  const [loading, setLoading]     = useState(true)
   const [search, setSearch]       = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<string|null>(null)
   const [viewTransfer, setViewTransfer] = useState<Transfer | null>(null)
   const [showNewTransfer, setShowNewTransfer] = useState(false)
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
-  // Truncated cells get a hover tooltip; re-runs when the transfer list changes.
   const tableRef = useRef<HTMLDivElement>(null)
+
+  // Debounce search so we don't hit the server on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 350)
+    return () => clearTimeout(t)
+  }, [search])
+
+  // ─── SERVER-SIDE PAGED LOAD ──────────────────────────────────
+  // Filter (search/status) + sort run server-side; the grid holds one page.
+  // KPI counts come from the server (whole-project, independent of page).
+  const fetcher = useCallback(async ({ page, limit, sortCol, sortDir }: { page: number; limit: number; sortCol?: string; sortDir: 'asc' | 'desc' }) => {
+    const params: Record<string, string> = { page: String(page), limit: String(limit), sort_dir: sortDir }
+    if (sortCol)                params.sort_col = sortCol
+    if (debouncedSearch.trim()) params.search   = debouncedSearch.trim()
+    if (statusFilter)           params.status   = statusFilter
+    const { data } = await axios.get(`${API}/mc/${projectId}/transfers`, { params })
+    setCounts(data.counts)
+    return { data: (data.data ?? []) as Transfer[], total: (data.total ?? 0) as number }
+  }, [projectId, debouncedSearch, statusFilter])
+
+  const {
+    data: transfers, total, page, setPage, pageSize, loading,
+    sortCol, sortDir, toggleSort, reload,
+  } = usePagedList<Transfer>({ fetcher, deps: [projectId, debouncedSearch, statusFilter], pageSize: 50, initialSortCol: undefined })
+  const sortArrow = (k: string) => sortCol === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
+
+  // Truncated cells get a hover tooltip; re-runs when the transfer list changes.
   useAutoTitle(tableRef, [transfers])
-
-  const fetchTransfers = async () => {
-    setLoading(true)
-    try {
-      const { data } = await axios.get(`${API}/mc/${projectId}/transfers`, {
-        params: { search: search.trim() || undefined, status: statusFilter || undefined }
-      })
-      setTransfers(data.data || [])
-      setCounts(data.counts)
-    } catch (e: any) {
-      addToast('error', e.response?.data?.error || 'Failed to load transfers')
-    } finally { setLoading(false) }
-  }
-
-  useEffect(() => { fetchTransfers() }, [projectId, statusFilter]) // eslint-disable-line
-  useEffect(() => { const t = setTimeout(fetchTransfers, 350); return () => clearTimeout(t) }, [search]) // eslint-disable-line
   useEffect(() => {
     axios.get(`${API}/mc/${projectId}/warehouses`).then(r => setWarehouses(r.data)).catch(() => {})
   }, [projectId])
@@ -134,8 +145,11 @@ const MCTransferInner = ({ dark, projectId, projectName, onBack }: {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                 <tr style={{ borderBottom: bd }}>
-                  {['REF','ITEM','DESCRIPTION','QTY','WBS','FROM → TO','REQUESTED BY','EST. PICKUP','STATUS','ACTION'].map(h => (
-                    <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
+                  {([['REF','transfer_ref'],['ITEM','item_code'],['DESCRIPTION'],['QTY'],['WBS','wbs_code'],['FROM → TO','from_warehouse'],['REQUESTED BY','requested_by'],['EST. PICKUP','est_pickup_date'],['STATUS','status'],['ACTION']] as [string,string?][]).map(([h,key]) => (
+                    <th key={h} onClick={key ? () => toggleSort(key) : undefined}
+                      style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>
+                      {h}{key ? sortArrow(key) : ''}
+                    </th>
                   ))}
                 </tr>
               </thead>
@@ -179,6 +193,7 @@ const MCTransferInner = ({ dark, projectId, projectName, onBack }: {
               </tbody>
             </table>
           </div>
+          <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} />
         </div>
       </div>
 
@@ -187,7 +202,7 @@ const MCTransferInner = ({ dark, projectId, projectName, onBack }: {
         <TransferDetailModal
           dark={dark} transfer={viewTransfer} projectId={projectId}
           onClose={() => setViewTransfer(null)}
-          onStatusUpdate={() => { setViewTransfer(null); fetchTransfers() }}
+          onStatusUpdate={() => { setViewTransfer(null); reload() }}
           addToast={addToast}
         />
       )}
@@ -197,7 +212,7 @@ const MCTransferInner = ({ dark, projectId, projectName, onBack }: {
         <NewTransferWizard
           dark={dark} projectId={projectId} warehouses={warehouses}
           onClose={() => setShowNewTransfer(false)}
-          onSaved={() => { setShowNewTransfer(false); fetchTransfers(); addToast('success', 'Transfer request created') }}
+          onSaved={() => { setShowNewTransfer(false); reload(); addToast('success', 'Transfer request created') }}
           addToast={addToast}
         />
       )}

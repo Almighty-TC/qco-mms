@@ -920,10 +920,62 @@ router.delete('/:projectId/commodities/:id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 
 // GET /api/foundational/:projectId/equipment
+// ─── SERVER-SIDE PAGINATION: equipment list ───────────────────────────────────
+// Returns { data, total, page, limit, counts }. Filter (status/search) + whitelisted
+// sort run across the WHOLE list (not page-local). `status` is the BUG-9 computed
+// status (PO-raised override when a po_line references the tag); counts + the status
+// filter use that same computed value.
 router.get('/:projectId/equipment', async (req, res) => {
   try {
-    const pid = Number(req.params.projectId)
-    // ─── BUG-9: override status with computed_status from po_lines.tag_number ─
+    const pid    = Number(req.params.projectId)
+    const page   = Math.max(1, parseInt(req.query.page  || '1', 10))
+    const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)))
+    const offset = (page - 1) * limit
+
+    // BUG-9: computed status — 'PO raised' when any po_line references this tag.
+    const PORAISED = `EXISTS(SELECT 1 FROM po_lines pl JOIN purchase_orders po ON po.id = pl.po_id WHERE po.project_id = e.project_id AND pl.tag_number = e.tag)`
+    const STATUS_EXPR = `CASE WHEN ${PORAISED} THEN 'PO raised' ELSE e.status END`
+
+    // ─── FILTERS (server-side, whole-set) ───
+    const where  = ['e.project_id = ?']
+    const params = [pid]
+    const { status, search } = req.query
+    if (status === 'PO raised')       where.push(PORAISED)
+    else if (status === 'RFQ')        where.push(`NOT ${PORAISED} AND e.status = 'RFQ'`)
+    else if (status === 'Not started') where.push(`NOT ${PORAISED} AND e.status = 'Not started'`)
+    if (search) {
+      const q = `%${search}%`
+      where.push('(e.tag LIKE ? OR e.description LIKE ? OR e.wbs_code LIKE ? OR e.vendor LIKE ? OR e.spec LIKE ?)')
+      params.push(q, q, q, q, q)
+    }
+    const whereSql = where.join(' AND ')
+
+    // ─── WHITELISTED SORT (+ unique id tiebreaker) ───
+    const SAFE_SORT = {
+      tag: 'e.tag', description: 'e.description', spec: 'e.spec', trace_class: 'e.trace_class',
+      criticality: 'e.criticality', equipment_type: 'e.equipment_type', wbs_code: 'e.wbs_code',
+      vendor: 'e.vendor', status: STATUS_EXPR,
+    }
+    const orderBy  = SAFE_SORT[req.query.sort_col] || 'e.tag'
+    const orderDir = String(req.query.sort_dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'
+
+    const [[{ total }]] = await db.query(
+      `SELECT COUNT(*) AS total FROM equipment_list e WHERE ${whereSql}`, params
+    )
+
+    // project-wide counts by computed status (drive the tab badges; ignore status/search)
+    const [[cnt]] = await db.query(
+      `SELECT COUNT(*) AS all_count,
+              SUM(${PORAISED}) AS po_raised,
+              SUM(CASE WHEN NOT ${PORAISED} AND e.status = 'RFQ' THEN 1 ELSE 0 END) AS rfq,
+              SUM(CASE WHEN NOT ${PORAISED} AND e.status = 'Not started' THEN 1 ELSE 0 END) AS not_started
+       FROM equipment_list e WHERE e.project_id = ?`, [pid]
+    )
+    const counts = {
+      all: Number(cnt.all_count) || 0, 'PO raised': Number(cnt.po_raised) || 0,
+      'RFQ': Number(cnt.rfq) || 0, 'Not started': Number(cnt.not_started) || 0,
+    }
+
     const [rows] = await db.query(
       `SELECT e.id, e.project_id, e.tag, e.equipment_type, e.wbs_code, e.wbs_node_id,
               e.description, e.area_location, e.criticality, e.spec, e.trace_class,
@@ -931,17 +983,14 @@ router.get('/:projectId/equipment', async (req, res) => {
               e.created_by, e.created_at, e.updated_at,
               (SELECT COUNT(*) FROM foundational_certificates fc
                WHERE fc.entity_type='equipment' AND fc.entity_id=e.id) AS cert_count,
-              CASE WHEN EXISTS(
-                SELECT 1 FROM po_lines pl
-                JOIN purchase_orders po ON po.id = pl.po_id
-                WHERE po.project_id = e.project_id AND pl.tag_number = e.tag
-              ) THEN 'PO raised' ELSE e.status END AS status
+              ${STATUS_EXPR} AS status
        FROM equipment_list e
-       WHERE e.project_id=?
-       ORDER BY e.tag`,
-      [pid]
+       WHERE ${whereSql}
+       ORDER BY ${orderBy} ${orderDir}, e.id ${orderDir}
+       LIMIT ? OFFSET ?`,
+      [...params, limit, offset]
     )
-    res.json(rows)
+    res.json({ data: rows, total, page, limit, counts })
   } catch (e) {
     console.error('[foundational:equipment:get]', e.message)
     res.status(500).json({ error: e.message })

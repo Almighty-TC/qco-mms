@@ -530,6 +530,27 @@ router.get('/:projectId/fmr', async (req, res) => {
         OR EXISTS (SELECT 1 FROM fmr_lines l WHERE l.fmr_id=f.id AND (l.item_code LIKE ? OR l.description LIKE ? OR l.wbs_code LIKE ?)))`)
       params.push(q, q, q, q, q, q, q, q)
     }
+    const whereSql = conditions.join(' AND ')
+
+    // ─── PAGINATE ─── default 50, hard cap 200
+    const page   = Math.max(1, parseInt(req.query.page  || '1', 10))
+    const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)))
+    const offset = (page - 1) * limit
+
+    // ─── WHITELISTED SORT (+ unique f.id tiebreaker). Default = overdue-first. ───
+    const SAFE_SORT = {
+      fmr_ref: 'f.fmr_ref', status: 'f.status', required_date: 'f.required_date',
+      item_code: 'f.item_code', wbs_code: 'f.wbs_code', requested_by: 'f.requested_by_name',
+      warehouse: 'w.name',
+    }
+    const orderDir = String(req.query.sort_dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'
+    const orderClause = req.query.sort_col && SAFE_SORT[req.query.sort_col]
+      ? `${SAFE_SORT[req.query.sort_col]} ${orderDir}, f.id ${orderDir}`
+      : `CASE WHEN f.required_date < CURDATE() THEN 0 ELSE 1 END, f.required_date ASC, f.id ASC`
+
+    const [[{ total }]] = await db.query(
+      `SELECT COUNT(*) AS total FROM fmr_requests f WHERE ${whereSql}`, params
+    )
 
     const [fmrs] = await db.query(
       `SELECT f.*,
@@ -540,11 +561,10 @@ router.get('/:projectId/fmr', async (req, res) => {
          (SELECT COALESCE(SUM(qty_available),0) FROM warehouse_stock WHERE item_code=f.item_code AND project_id=f.project_id AND condition_status='good' AND trace_hold=0) AS stock_on_hand
        FROM fmr_requests f
        LEFT JOIN warehouses w ON w.id = f.warehouse_id
-       WHERE ${conditions.join(' AND ')}
-       ORDER BY
-         CASE WHEN f.required_date < CURDATE() THEN 0 ELSE 1 END,
-         f.required_date ASC`,
-      params
+       WHERE ${whereSql}
+       ORDER BY ${orderClause}
+       LIMIT ? OFFSET ?`,
+      [...params, limit, offset]
     )
 
     // Counts
@@ -559,7 +579,7 @@ router.get('/:projectId/fmr', async (req, res) => {
       [pid]
     )
 
-    res.json({ data: fmrs, counts })
+    res.json({ data: fmrs, total, page, limit, counts })
   } catch (e) {
     console.error('[mc:fmr]', e.message)
     res.status(500).json({ error: e.message })
@@ -1089,6 +1109,26 @@ router.get('/:projectId/transfers', rejectExternal, async (req, res) => {
       conditions.push('(t.transfer_ref LIKE ? OR t.item_code LIKE ? OR t.description LIKE ? OR t.wbs_code LIKE ? OR t.requested_by_name LIKE ?)')
       params.push(q, q, q, q, q)
     }
+    const whereSql = conditions.join(' AND ')
+
+    // ─── PAGINATE ─── default 50, hard cap 200
+    const page   = Math.max(1, parseInt(req.query.page  || '1', 10))
+    const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)))
+    const offset = (page - 1) * limit
+
+    // ─── WHITELISTED SORT (+ unique t.id tiebreaker). Default = est_pickup_date. ───
+    const SAFE_SORT = {
+      transfer_ref: 't.transfer_ref', status: 't.status', est_pickup_date: 't.est_pickup_date',
+      item_code: 't.item_code', wbs_code: 't.wbs_code', requested_by: 't.requested_by_name',
+      from_warehouse: 'fw.name', to_warehouse: 'tw.name',
+    }
+    const orderDir = String(req.query.sort_dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'
+    const orderBy  = SAFE_SORT[req.query.sort_col] || 't.est_pickup_date'
+    const orderClause = `${orderBy} ${orderDir}, t.id ${orderDir}`
+
+    const [[{ total }]] = await db.query(
+      `SELECT COUNT(*) AS total FROM warehouse_transfers t WHERE ${whereSql}`, params
+    )
 
     const [transfers] = await db.query(
       `SELECT t.*,
@@ -1097,9 +1137,10 @@ router.get('/:projectId/transfers', rejectExternal, async (req, res) => {
        FROM warehouse_transfers t
        LEFT JOIN warehouses fw ON t.from_warehouse_id = fw.id
        LEFT JOIN warehouses tw ON t.to_warehouse_id = tw.id
-       WHERE ${conditions.join(' AND ')}
-       ORDER BY t.est_pickup_date ASC`,
-      params
+       WHERE ${whereSql}
+       ORDER BY ${orderClause}
+       LIMIT ? OFFSET ?`,
+      [...params, limit, offset]
     )
 
     const [[counts]] = await db.query(
@@ -1113,7 +1154,7 @@ router.get('/:projectId/transfers', rejectExternal, async (req, res) => {
       [pid]
     )
 
-    res.json({ data: transfers, counts })
+    res.json({ data: transfers, total, page, limit, counts })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
