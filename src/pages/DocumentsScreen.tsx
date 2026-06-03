@@ -19,13 +19,13 @@ interface DocRow {
   type_tags: string[]; module: string; source_label: string; source_record_id: number
   source_url: string; uploaded_by: string | null; uploaded_at: string | null
   status: 'Verified' | 'Available' | 'Under review' | 'Missing'; is_missing: boolean
-  group_key?: string
+  downloadable: boolean; group_key?: string
 }
 interface Summary { total: number; uploaded_last_7d: number; under_review: number; verified: number; missing: number }
 
 const MODULES = ['All', 'Foundational', 'MTO', 'Procurement', 'Expediting', 'VDRL', 'Logistics', 'Material Control', 'Traceability']
 // Modules whose upload endpoint is wired straight from this dropzone.
-const UPLOAD_SUPPORTED: Record<string, boolean> = { Logistics: true, Procurement: true }
+const UPLOAD_SUPPORTED: Record<string, boolean> = { Logistics: true, Procurement: true, VDRL: true }
 
 const statusPill = (s: string) => {
   switch (s) {
@@ -92,12 +92,29 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
   useEffect(() => { const t = setTimeout(loadRows, 300); return () => clearTimeout(t) }, [q]) // eslint-disable-line
 
   const goSource = (r: DocRow) => { window.location.href = r.source_url }
-  // NOTE: the inbox is a read-only AGGREGATOR — it does not stream file bytes.
-  // A direct in-inbox download isn't wired: storage is heterogeneous/partly-unbuilt
-  // (VDRL/MTO/Traceability have no file storage; Procurement/Logistics/Foundational
-  // store on disk but there's no unified serving route + PO docs don't carry poId).
-  // The honest path to the file is "Open in source" (goSource) — the owning module's
-  // screen, where its own download works. The previous fake "Downloading…" toast is gone.
+
+  // ─── DIRECT DOWNLOAD ──────────────────────────────────────────
+  // Streams real bytes from the unified, authenticated endpoint (per-module
+  // dispatch server-side). Uses a blob fetch — not a plain <a href> — so the JWT
+  // travels on the Authorization header. Rows with downloadable:false never reach
+  // here; if a recorded file has gone missing on disk the server 404s and we
+  // surface that honestly rather than saving an error page.
+  const download = async (r: DocRow) => {
+    if (!r.downloadable) { addToast('error', 'No file is stored for this document'); return }
+    try {
+      const { data, headers } = await axios.get(
+        `${API}/documents/${projectId}/download/${encodeURIComponent(r.doc_id)}`, { responseType: 'blob' })
+      const url = URL.createObjectURL(new Blob([data], { type: headers['content-type'] || 'application/octet-stream' }))
+      const a = document.createElement('a'); a.href = url; a.download = r.file_name || r.file_label; a.click()
+      URL.revokeObjectURL(url)
+    } catch (e: any) {
+      // axios returns the error body as a Blob for blob requests — read it back for the real message.
+      let msg = 'Download failed'
+      try { msg = JSON.parse(await e.response?.data?.text?.() || '{}').error || msg } catch { /* keep default */ }
+      addToast('error', msg)
+    }
+  }
+
   const exportCsv = async () => {
     try {
       const { data } = await axios.get(`${API}/documents/${projectId}/export`, {
@@ -150,7 +167,12 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
           ) : (
             <div style={{ display: 'flex', gap: 6 }}>
               <button title="Preview" onClick={() => setPreview(r)} style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>👁</button>
-              <button title={`Open in ${r.module} (download the file there)`} onClick={() => goSource(r)} style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 11 }}>↗ Open</button>
+              {r.downloadable ? (
+                <button title={`Download ${r.file_name || r.file_label}`} onClick={() => download(r)} style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: '#16a34a', cursor: 'pointer', fontSize: 11 }}>↓ Download</button>
+              ) : (
+                <button title="No file stored for this document — open the source record" disabled style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: sub, cursor: 'not-allowed', fontSize: 11, opacity: 0.6 }}>↓ No file</button>
+              )}
+              <button title={`Open in ${r.module}`} onClick={() => goSource(r)} style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 11 }}>↗ Open</button>
             </div>
           )}
         </td>
@@ -237,7 +259,7 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
                   <tr><td colSpan={7} style={{ padding: 40, textAlign: 'center', color: sub }}>Loading…</td></tr>
                 ) : rows.length === 0 ? (
                   <tr><td colSpan={7} style={{ padding: 50, textAlign: 'center', color: sub }}>
-                    No documents match.{module === 'Material Control' && <div style={{ marginTop: 6, fontSize: 11 }}>Material Control has no document source wired yet.</div>}
+                    No documents match.
                   </td></tr>
                 ) : grouped ? (
                   grouped.map(g => (
@@ -253,7 +275,7 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
         </div>
       </div>
 
-      {preview && <PreviewModal dark={dark} doc={preview} onClose={() => setPreview(null)} onGoSource={() => goSource(preview)} />}
+      {preview && <PreviewModal dark={dark} doc={preview} onClose={() => setPreview(null)} onGoSource={() => goSource(preview)} onDownload={() => download(preview)} />}
       {showUpload && (
         <UploadDocModal dark={dark} projectId={projectId}
           onClose={() => setShowUpload(false)}
@@ -264,7 +286,7 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
 }
 
 // ─── PREVIEW MODAL (mock) ─────────────────────────────────────
-const PreviewModal = ({ dark, doc, onClose, onGoSource }: { dark: boolean; doc: DocRow; onClose: () => void; onGoSource: () => void }) => {
+const PreviewModal = ({ dark, doc, onClose, onGoSource, onDownload }: { dark: boolean; doc: DocRow; onClose: () => void; onGoSource: () => void; onDownload: () => void }) => {
   const col = dark ? '#f1f5f9' : '#0f172a'; const cardBg = dark ? '#1e293b' : '#fff'
   const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`; const sub = '#94a3b8'
   const meta = (k: string, v: React.ReactNode) => (
@@ -301,7 +323,10 @@ const PreviewModal = ({ dark, doc, onClose, onGoSource }: { dark: boolean; doc: 
           </div>
         </div>
         <div style={{ padding: '14px 22px', borderTop: bd, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <button onClick={onGoSource} style={{ padding: '8px 18px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>↗ Go to source</button>
+          {doc.downloadable && (
+            <button onClick={onDownload} style={{ padding: '8px 18px', borderRadius: 6, border: 'none', background: '#16a34a', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>↓ Download file</button>
+          )}
+          <button onClick={onGoSource} style={{ padding: '8px 18px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>↗ Go to source</button>
         </div>
       </div>
     </>
@@ -339,6 +364,10 @@ const UploadDocModal = ({ dark, projectId, onClose, onDone, addToast }: {
           const { data } = await axios.get(`${API}/procurement/${projectId}/pos`)
           const list = (data.data || data || [])
           setSources(list.map((p: any) => ({ id: p.id, label: p.po_number || `PO ${p.id}` })))
+        } else if (module === 'VDRL') {
+          const { data } = await axios.get(`${API}/expediting/${projectId}/vdrl/documents`)
+          const list = (Array.isArray(data) ? data : data.data || [])
+          setSources(list.map((d: any) => ({ id: d.id, label: `${d.doc_number || `Doc ${d.id}`} · ${d.title || ''}`.trim() })))
         }
       } catch { addToast('error', `Could not load ${module} records`) }
     }
@@ -359,6 +388,7 @@ const UploadDocModal = ({ dark, projectId, onClose, onDone, addToast }: {
         fd.append('file', f)
         if (module === 'Logistics') { fd.append('document_type', docType) ; await axios.post(`${API}/logistics/scn/${sourceId}/documents`, fd, { headers: { 'Content-Type': 'multipart/form-data' } }) }
         else if (module === 'Procurement') { await axios.post(`${API}/procurement/pos/${sourceId}/documents`, fd, { headers: { 'Content-Type': 'multipart/form-data' } }) }
+        else if (module === 'VDRL') { await axios.post(`${API}/expediting/${projectId}/vdrl/documents/${sourceId}/file`, fd, { headers: { 'Content-Type': 'multipart/form-data' } }) }
         ok++
       }
       addToast('success', `Filed ${ok} document${ok !== 1 ? 's' : ''} to ${module}`)
@@ -411,7 +441,7 @@ const UploadDocModal = ({ dark, projectId, onClose, onDone, addToast }: {
             <div>
               <label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>Source record</label>
               <select value={sourceId} onChange={e => setSourceId(e.target.value)} style={inputSt}>
-                <option value="">— Select {module === 'Logistics' ? 'SCN' : 'PO'} —</option>
+                <option value="">— Select {module === 'Logistics' ? 'SCN' : module === 'VDRL' ? 'VDRL document' : 'PO'} —</option>
                 {sources.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
               </select>
             </div>
