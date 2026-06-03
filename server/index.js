@@ -64,6 +64,10 @@ app.use('/api/documents', require('./routes/documents'))
 // Stages create/delete for wbs/commodity/equipment/mto until a domain confirmer applies.
 app.use('/api/pending-changes', require('./routes/pendingChanges'))
 
+// ─── AUDIT VIEWER (read-only over the immutable audit_log) ───
+// Read gated to admin + oversight roles; QA sign-off (C2) writes to audit_review only.
+app.use('/api/audit', require('./routes/audit'))
+
 // ─── START SERVER ───────────────────────────────────────────
 const PORT = process.env.PORT || 3001
 app.listen(PORT, () => {

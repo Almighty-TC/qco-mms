@@ -54,6 +54,11 @@ add('project_director','procurement',1,0,0,1,0,0)
 // procurement: expeditor-assignment handled by MODULE-MOVE at the route (gate that route with
 // requirePermission('expediting','can_edit')) — so NO procurement matrix change needed for it.
 // (Reported as the chosen option; nothing to insert here.)
+// audit: revoke READ from the lowest-privilege 'viewer' role. Oversight roles
+// (admin/auditor/ceo/director/expediting_manager/procurement_manager/project_director)
+// keep audit.view for transparency; the external/read-only viewer must NOT see the
+// full forensic trail. Audit Viewer read gate = requirePermission('audit','view').
+add('viewer','audit', 0,0,0,0,0,0)
 
 async function main() {
   const conn = await db.getConnection()
@@ -68,7 +73,7 @@ async function main() {
       await conn.query(`DELETE FROM role_permissions WHERE role IN (${managedRoles.map(()=>'?').join(',')})`, managedRoles)
       await conn.query(`DELETE FROM role_permissions WHERE module IN ('wbs','commodity','equipment','mto','audit_review','fmr')`)
       // corrections: remove existing rows for the corrected (role,module) pairs so re-insert is clean
-      for (const [role,module] of [['expeditor','material_control'],['expediting_manager','material_control'],['procurement_officer','material_control'],['procurement_manager','material_control'],['project_manager','material_control'],['project_director','material_control'],['vendor','traceability'],['expeditor','traceability'],['materials_engineer','traceability'],['project_manager','mto'],['procurement_officer','procurement'],['project_director','procurement']])
+      for (const [role,module] of [['expeditor','material_control'],['expediting_manager','material_control'],['procurement_officer','material_control'],['procurement_manager','material_control'],['project_manager','material_control'],['project_director','material_control'],['vendor','traceability'],['expeditor','traceability'],['materials_engineer','traceability'],['project_manager','mto'],['procurement_officer','procurement'],['project_director','procurement'],['viewer','audit']])
         await conn.query('DELETE FROM role_permissions WHERE role=? AND module=?', [role, module])
     }
 
