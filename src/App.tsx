@@ -1329,6 +1329,8 @@ function App() {
               dark={dark}
               projectId={selectedProjectId}
               projectName={selectedProjectName}
+              userRole={user?.role ?? ''}
+              userId={user?.id ?? 0}
               onBack={() => setPage('dashboard')}
             />
           )}

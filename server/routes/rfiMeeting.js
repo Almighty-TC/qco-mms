@@ -129,6 +129,27 @@ router.get('/:projectId', requirePermission('rfi_meeting', 'can_view'), async (r
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// ─── PROJECT USERS (assignee dropdown) ────────────────────────
+// Defined BEFORE GET /:projectId/:id so '/users' isn't captured as an :id.
+router.get('/:projectId/users', requirePermission('rfi_meeting', 'can_view'), async (_req, res) => {
+  try {
+    const [rows] = await db.query('SELECT id, full_name AS name, role FROM users WHERE is_active=1 ORDER BY full_name')
+    res.json(rows)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── LINK-PICKER OPTIONS (project-scoped target lists) ────────
+router.get('/:projectId/link-options/:type', requirePermission('rfi_meeting', 'can_view'), async (req, res) => {
+  try {
+    const cfg = LINK_TABLE[req.params.type]
+    if (!cfg) return res.status(400).json({ error: 'Invalid link type' })
+    const [rows] = await db.query(
+      `SELECT id, \`${cfg.label}\` AS label FROM ${cfg.t} WHERE project_id=? ORDER BY \`${cfg.label}\` LIMIT 500`,
+      [Number(req.params.projectId)])
+    res.json(rows)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // ─── GET ONE ──────────────────────────────────────────────────
 router.get('/:projectId/:id', requirePermission('rfi_meeting', 'can_view'), async (req, res) => {
   try {
