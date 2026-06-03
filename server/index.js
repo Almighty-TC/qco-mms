@@ -64,6 +64,10 @@ app.use('/api/documents', require('./routes/documents'))
 // Stages create/delete for wbs/commodity/equipment/mto until a domain confirmer applies.
 app.use('/api/pending-changes', require('./routes/pendingChanges'))
 
+// ─── MEETING / RFI REGISTER (raise → assign → respond → close) ──
+// One register, two record types; polymorphic project/WBS/PO/SCN link.
+app.use('/api/rfi-meeting', require('./routes/rfiMeeting'))
+
 // ─── AUDIT VIEWER (read-only over the immutable audit_log) ───
 // Read gated to admin + oversight roles; QA sign-off (C2) writes to audit_review only.
 app.use('/api/audit', require('./routes/audit'))
