@@ -92,11 +92,12 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
   useEffect(() => { const t = setTimeout(loadRows, 300); return () => clearTimeout(t) }, [q]) // eslint-disable-line
 
   const goSource = (r: DocRow) => { window.location.href = r.source_url }
-  const download = (r: DocRow) => {
-    if (!r.file_name) return
-    // Files are owned by modules; the aggregator doesn't stream bytes.
-    addToast('success', `Downloading ${r.file_name} (opens from ${r.module})`)
-  }
+  // NOTE: the inbox is a read-only AGGREGATOR — it does not stream file bytes.
+  // A direct in-inbox download isn't wired: storage is heterogeneous/partly-unbuilt
+  // (VDRL/MTO/Traceability have no file storage; Procurement/Logistics/Foundational
+  // store on disk but there's no unified serving route + PO docs don't carry poId).
+  // The honest path to the file is "Open in source" (goSource) — the owning module's
+  // screen, where its own download works. The previous fake "Downloading…" toast is gone.
   const exportCsv = async () => {
     try {
       const { data } = await axios.get(`${API}/documents/${projectId}/export`, {
@@ -149,8 +150,7 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
           ) : (
             <div style={{ display: 'flex', gap: 6 }}>
               <button title="Preview" onClick={() => setPreview(r)} style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>👁</button>
-              <button title="Download" onClick={() => download(r)} style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>↓</button>
-              <button title="Go to source" onClick={() => goSource(r)} style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 11 }}>↗</button>
+              <button title={`Open in ${r.module} (download the file there)`} onClick={() => goSource(r)} style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 11 }}>↗ Open</button>
             </div>
           )}
         </td>
