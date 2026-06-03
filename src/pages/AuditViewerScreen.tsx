@@ -115,9 +115,12 @@ export const AuditViewerScreen = ({ dark, userRole, onBack }: {
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [exporting, setExporting] = useState(false)
+  // Integrity (hash-chain verification) — { status, tables:{audit_log,audit_review} }
+  const [integrity, setIntegrity] = useState<{ status: string; tables: Record<string, { status: string; brokenAtId: number | null }> } | null>(null)
 
-  // load filter dropdown values once
+  // load filter dropdown values + integrity status once
   useEffect(() => { axios.get(`${API}/audit/filters`).then(r => setFilterData(r.data)).catch(() => {}) }, [])
+  useEffect(() => { axios.get(`${API}/audit/verify`).then(r => setIntegrity(r.data)).catch(() => setIntegrity(null)) }, [])
   // debounce search
   useEffect(() => { const t = setTimeout(() => setDebouncedSearch(search), 350); return () => clearTimeout(t) }, [search])
 
@@ -231,6 +234,20 @@ export const AuditViewerScreen = ({ dark, userRole, onBack }: {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {/* Integrity (hash-chain) indicator */}
+          {integrity && (() => {
+            const ok = integrity.status === 'verified'
+            const broken = Object.entries(integrity.tables).find(([, v]) => v.status !== 'verified')
+            const where = broken ? ` (${broken[0]}${broken[1].brokenAtId != null ? ` row ${broken[1].brokenAtId}` : ''})` : ''
+            return (
+              <span title={ok ? 'Hash chain verified — no tampering detected' : 'Hash-chain verification FAILED — possible tampering'}
+                style={{ fontSize: 11, fontWeight: 700, padding: '5px 10px', borderRadius: 6, whiteSpace: 'nowrap',
+                  background: ok ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)', color: ok ? '#22c55e' : '#ef4444',
+                  border: `1px solid ${ok ? 'rgba(34,197,94,0.4)' : 'rgba(239,68,68,0.4)'}` }}>
+                {ok ? '🔗 Integrity: verified ✓' : `⚠ Chain broken${where}`}
+              </span>
+            )
+          })()}
           {/* Immutability indicator */}
           <span title="The audit trail is append-only and cannot be edited or deleted."
             style={{ fontSize: 11, fontWeight: 600, padding: '5px 10px', borderRadius: 6, background: 'rgba(148,163,184,0.12)', color: sub, border: bd, whiteSpace: 'nowrap' }}>

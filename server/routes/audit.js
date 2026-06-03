@@ -11,8 +11,37 @@ const router  = express.Router()
 const db      = require('../db')
 const { authenticateToken } = require('../middleware/auth')
 const { requirePermission } = require('../middleware/permissions')
+const { sealCheckpoint, verifyChain } = require('../lib/auditChain')
 
 router.use(authenticateToken)
+
+// ─── GET /api/audit/verify ── chain + content integrity for both tables ──
+// Read-only; gated like the viewer. Returns { status, tables:{ audit_log, audit_review } }.
+router.get('/verify', requirePermission('audit', 'can_view'), async (req, res) => {
+  try {
+    const tables = {}
+    for (const t of ['audit_log', 'audit_review']) tables[t] = await verifyChain(db, t)
+    const status = Object.values(tables).every(v => v.status === 'verified') ? 'verified' : 'broken'
+    res.json({ status, tables })
+  } catch (e) {
+    console.error('[audit:verify]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ─── POST /api/audit/checkpoint ── seal a new chain anchor (admin/auditor) ──
+// Appends an audit_checkpoint for each table. Gated to the reviewer set
+// (audit_review.can_create = admin + auditor). NOT behind denyReadOnly.
+router.post('/checkpoint', requirePermission('audit_review', 'can_create'), async (req, res) => {
+  try {
+    const sealed = {}
+    for (const t of ['audit_log', 'audit_review']) sealed[t] = await sealCheckpoint(db, t, req.user.id)
+    res.status(201).json(sealed)
+  } catch (e) {
+    console.error('[audit:checkpoint]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
 
 // ─── WHITELISTED SORT ────────────────────────────────────────
 // Maps UI keys → real columns; never interpolate raw input. Every paginated query
