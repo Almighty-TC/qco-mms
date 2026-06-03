@@ -147,7 +147,13 @@ function queueGate(createRe, deleteRe) {
     const p = (req.originalUrl || req.url || '').split('?')[0]
     const isRecordWrite = (req.method === 'POST' && createRe.test(p)) || (req.method === 'DELETE' && deleteRe.test(p))
     if (isRecordWrite) {
-      return res.status(409).json({ error: 'This change requires Project confirmation — submit it to the approval queue (Pending Changes).' })
+      // requiresApproval: machine-readable marker so the proposer's client can tell
+      // this governance-routing 409 apart from a genuine conflict 409 (e.g. dup code)
+      // and submit the change to /pending-changes instead of surfacing a failure.
+      return res.status(409).json({
+        error: 'This change requires Project confirmation — submit it to the approval queue (Pending Changes).',
+        requiresApproval: true,
+      })
     }
     return next()
   }
