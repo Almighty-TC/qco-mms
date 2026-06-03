@@ -785,19 +785,62 @@ router.get('/:projectId/wbs/:nodeId/materials', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 
 // GET /api/foundational/:projectId/commodities
+// ─── SERVER-SIDE PAGINATION: commodity library ────────────────────────────────
+// Returns { data, total, page, limit, counts }. Filter (status/search) + whitelisted
+// sort run across the WHOLE library (not page-local). `counts` are project-wide
+// status totals (drive the tab badges, independent of the active search).
 router.get('/:projectId/commodities', async (req, res) => {
   try {
-    const pid = Number(req.params.projectId)
+    const pid    = Number(req.params.projectId)
+    const page   = Math.max(1, parseInt(req.query.page  || '1', 10))
+    const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)))
+    const offset = (page - 1) * limit
+
+    // ─── FILTERS (server-side, whole-set) ───
+    const where  = ['c.project_id = ?']
+    const params = [pid]
+    const { status, search } = req.query
+    if (status === 'active' || status === 'inactive') { where.push('c.status = ?'); params.push(status) }
+    if (search) {
+      const q = `%${search}%`
+      where.push('(c.code LIKE ? OR c.name LIKE ? OR c.wbs_code LIKE ? OR c.preferred_vendor LIKE ?)')
+      params.push(q, q, q, q)
+    }
+    const whereSql = where.join(' AND ')
+
+    // ─── WHITELISTED SORT (+ unique id tiebreaker — stable OFFSET windows) ───
+    const SAFE_SORT = {
+      code: 'c.code', name: 'c.name', uom: 'c.uom', wbs_code: 'c.wbs_code',
+      trace_level: 'c.trace_level', preservation: 'c.preservation',
+      preferred_vendor: 'c.preferred_vendor', status: 'c.status',
+    }
+    const orderBy  = SAFE_SORT[req.query.sort_col] || 'c.code'
+    const orderDir = String(req.query.sort_dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'
+
+    const [[{ total }]] = await db.query(
+      `SELECT COUNT(*) AS total FROM commodity_library c WHERE ${whereSql}`, params
+    )
+
+    // project-wide status counts for the tab badges (ignore status/search)
+    const [[cnt]] = await db.query(
+      `SELECT COUNT(*) AS all_count,
+              SUM(status='active')   AS active,
+              SUM(status='inactive') AS inactive
+       FROM commodity_library WHERE project_id = ?`, [pid]
+    )
+    const counts = { all: Number(cnt.all_count) || 0, active: Number(cnt.active) || 0, inactive: Number(cnt.inactive) || 0 }
+
     const [rows] = await db.query(
       `SELECT c.*,
               (SELECT COUNT(*) FROM foundational_certificates fc
                WHERE fc.entity_type='commodity' AND fc.entity_id=c.id) AS cert_count
        FROM commodity_library c
-       WHERE c.project_id=?
-       ORDER BY c.code`,
-      [pid]
+       WHERE ${whereSql}
+       ORDER BY ${orderBy} ${orderDir}, c.id ${orderDir}
+       LIMIT ? OFFSET ?`,
+      [...params, limit, offset]
     )
-    res.json(rows)
+    res.json({ data: rows, total, page, limit, counts })
   } catch (e) {
     console.error('[foundational:commodities:get]', e.message)
     res.status(500).json({ error: e.message })
