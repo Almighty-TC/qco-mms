@@ -111,13 +111,17 @@ router.get('/:projectId', requirePermission('rfi_meeting', 'can_view'), async (r
 
     const [[{ total }]] = await db.query(`SELECT COUNT(*) AS total FROM rfi_meeting_records WHERE ${whereSql}`, params)
     const [rows] = await db.query(
-      `SELECT id, project_id, record_type, ref, title, status, priority,
-              link_type, link_id, link_label, raised_by, assigned_to,
-              DATE_FORMAT(raised_date,'%Y-%m-%d') AS raised_date,
-              DATE_FORMAT(due_date,'%Y-%m-%d')    AS due_date,
-              DATE_FORMAT(closed_date,'%Y-%m-%d') AS closed_date
-       FROM rfi_meeting_records WHERE ${whereSql}
-       ORDER BY ${orderBy} ${orderDir}, id ${orderDir}
+      `SELECT r.id, r.project_id, r.record_type, r.ref, r.title, r.status, r.priority,
+              r.link_type, r.link_id, r.link_label, r.raised_by, r.assigned_to,
+              ur.full_name AS raised_by_name, ua.full_name AS assigned_to_name,
+              DATE_FORMAT(r.raised_date,'%Y-%m-%d') AS raised_date,
+              DATE_FORMAT(r.due_date,'%Y-%m-%d')    AS due_date,
+              DATE_FORMAT(r.closed_date,'%Y-%m-%d') AS closed_date
+       FROM rfi_meeting_records r
+       LEFT JOIN users ur ON ur.id = r.raised_by
+       LEFT JOIN users ua ON ua.id = r.assigned_to
+       WHERE ${whereSql}
+       ORDER BY r.${orderBy} ${orderDir}, r.id ${orderDir}
        LIMIT ? OFFSET ?`, [...params, limit, offset])
 
     const amber = await amberDays(); const todayMs = new Date(new Date().toISOString().slice(0, 10)).getTime()
@@ -129,7 +133,12 @@ router.get('/:projectId', requirePermission('rfi_meeting', 'can_view'), async (r
 router.get('/:projectId/:id', requirePermission('rfi_meeting', 'can_view'), async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
-    const [[row]] = await db.query('SELECT * FROM rfi_meeting_records WHERE id=? AND project_id=?', [Number(req.params.id), pid])
+    const [[row]] = await db.query(
+      `SELECT r.*, ur.full_name AS raised_by_name, ua.full_name AS assigned_to_name
+       FROM rfi_meeting_records r
+       LEFT JOIN users ur ON ur.id = r.raised_by
+       LEFT JOIN users ua ON ua.id = r.assigned_to
+       WHERE r.id=? AND r.project_id=?`, [Number(req.params.id), pid])
     if (!row) return res.status(404).json({ error: 'Record not found in this project' })
     const amber = await amberDays(); const todayMs = new Date(new Date().toISOString().slice(0, 10)).getTime()
     res.json({ ...row, ...deriveRag(row, todayMs, amber) })

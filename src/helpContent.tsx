@@ -672,3 +672,42 @@ export const VDRL_REGISTER_HELP: HelpSection[] = [
     </>,
   },
 ]
+
+// ─── MEETING / RFI REGISTER ──────────────────────────────────
+export const RFI_MEETING_HELP: HelpSection[] = [
+  {
+    title: 'What is this?',
+    content: <>
+      {P(<>The {B('Meetings & RFIs')} register tracks two record types that share one
+        workflow: {B('RFIs')} (Requests For Information) and {B('Meetings')}. Each record can
+        be project-level or linked to a specific {B('WBS node')}, {B('PO')} or {B('SCN')}.</>)}
+    </>,
+  },
+  {
+    title: 'Workflow',
+    content: <>
+      {P(<>{B('RFI:')} {Code('draft → open → assigned → answered → closed')}.</>)}
+      {P(<>{B('Meeting:')} {Code('scheduled → held → actions_open → closed')}.</>)}
+      {P(<>Transitions are enforced — you can only move to a legal next state. {B('Closing')} a
+        record requires confirmer (approve) permission.</>)}
+    </>,
+  },
+  {
+    title: 'RAG / due colours',
+    content: <>
+      {P(<>The {B('Due')} pill is computed from the due date:</>)}
+      {P(<><span style={{ color: '#ef4444' }}>● Red</span> — overdue (past due and not yet answered/closed).
+        {' '}<span style={{ color: '#f59e0b' }}>● Amber</span> — due soon (within the project amber window).
+        {' '}<span style={{ color: '#22c55e' }}>● Green</span> — on track or resolved.</>)}
+      {Tip('The amber window is the rfi_amber_days system setting (default 3 days), set by an Admin.')}
+    </>,
+  },
+  {
+    title: 'Filters',
+    content: <>
+      {P(<>Filter by {B('type')} (RFI / Meeting), {B('status')}, {B('assignee')}, an {B('overdue')}
+        toggle, and free-text {B('search')} (ref / title / link). Sorting and paging are server-side
+        across the whole register — not just the current page.</>)}
+    </>,
+  },
+]
