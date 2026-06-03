@@ -8,6 +8,8 @@ import { ToastProvider, useToast } from '../hooks/useToast'
 import { MilestoneLegend } from '../components/MilestoneLegend'
 import { useCurrentUser } from '../hooks/useCurrentUser'
 import { ScopeBanner } from '../components/ScopeBanner'
+import { Pager } from '../components/Pager'
+import { usePagedList } from '../hooks/usePagedList'
 
 const API = 'http://localhost:3001/api'
 
@@ -105,11 +107,10 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
   const sub    = '#94a3b8'
   const theadBg = dark ? '#162032' : '#f8fafc'
 
-  const [scns, setScns]           = useState<SCNRow[]>([])
   const [pipeline, setPipeline]   = useState<PipelineCounts | null>(null)
-  const [loading, setLoading]     = useState(true)
   const [statusFilter, setStatusFilter] = useState<string | null>(null)
   const [search, setSearch]       = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [modeFilter, setModeFilter] = useState('all')
   const [criticalOnly, setCritical] = useState(false)
   const [arrivalDays, setArrivalDays] = useState('')
@@ -117,35 +118,38 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
   const [selectedScn, setSelectedScn] = useState<SCNDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
 
-  // ─── FETCH REGISTER ────────────────────────────────────────
-  const fetchRegister = useCallback(async () => {
-    setLoading(true)
-    try {
-      const params: any = { limit: 200 }
-      if (statusFilter) params.status = statusFilter
-      if (search.trim()) params.search = search.trim()
-      if (criticalOnly) params.critical_only = 'true'
-      const { data } = await axios.get(`${API}/logistics/register/${projectId}`, { params })
-      let rows: SCNRow[] = data.data || []
-      if (modeFilter !== 'all') rows = rows.filter(r => r.mode === modeFilter)
-      if (arrivalDays) {
-        const cutoff = new Date()
-        cutoff.setDate(cutoff.getDate() + Number(arrivalDays))
-        rows = rows.filter(r => r.eta && new Date(r.eta) <= cutoff)
-      }
-      setScns(rows)
-      setPipeline(data.pipeline_counts)
-    } catch (e: any) {
-      addToast('error', e.response?.data?.error || 'Failed to load logistics register')
-    } finally { setLoading(false) }
-  }, [projectId, statusFilter, search, modeFilter, criticalOnly, arrivalDays]) // eslint-disable-line
-
-  useEffect(() => { fetchRegister() }, [statusFilter, criticalOnly]) // eslint-disable-line
-  // Search debounce
+  // Debounce search so we don't hit the server on every keystroke.
   useEffect(() => {
-    const t = setTimeout(() => fetchRegister(), 350)
+    const t = setTimeout(() => setDebouncedSearch(search), 350)
     return () => clearTimeout(t)
-  }, [search, modeFilter, arrivalDays]) // eslint-disable-line
+  }, [search])
+
+  // ─── SERVER-SIDE PAGED LOAD ──────────────────────────────────
+  // All filters (status/search/critical/mode/arrival) + sort run server-side
+  // across the whole register; the grid holds one page. Previously the screen
+  // fetched limit:200 with no pager and filtered mode/arrival client-side — so
+  // SCNs beyond 200 were silently dropped and those filters were page-local.
+  const fetcher = useCallback(async ({ page, limit, sortCol, sortDir }: { page: number; limit: number; sortCol?: string; sortDir: 'asc' | 'desc' }) => {
+    const params: Record<string, string> = { page: String(page), limit: String(limit), sort_dir: sortDir }
+    if (sortCol)                params.sort_col      = sortCol
+    if (statusFilter)           params.status        = statusFilter
+    if (debouncedSearch.trim()) params.search        = debouncedSearch.trim()
+    if (criticalOnly)           params.critical_only = 'true'
+    if (modeFilter !== 'all')   params.mode          = modeFilter
+    if (arrivalDays)            params.arrival_days  = arrivalDays
+    const { data } = await axios.get(`${API}/logistics/register/${projectId}`, { params })
+    setPipeline(data.pipeline_counts)
+    return { data: (data.data ?? []) as SCNRow[], total: (data.total ?? 0) as number }
+  }, [projectId, statusFilter, debouncedSearch, criticalOnly, modeFilter, arrivalDays])
+
+  const {
+    data: scns, total, page, setPage, pageSize, loading,
+    sortCol, sortDir, toggleSort, reload,
+  } = usePagedList<SCNRow>({
+    fetcher, deps: [projectId, statusFilter, debouncedSearch, criticalOnly, modeFilter, arrivalDays],
+    pageSize: 50, initialSortCol: 'created_at', initialSortDir: 'desc',
+  })
+  const sortArrow = (k: string) => sortCol === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
 
   // ─── OPEN DETAIL ─────────────────────────────────────────
   const openDetail = async (scnId: number) => {
@@ -163,7 +167,7 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
     try {
       const { data } = await axios.get(`${API}/logistics/scn/${selectedScn.id}`)
       setSelectedScn(data)
-      fetchRegister()
+      reload()
     } catch (_) {}
   }
 
@@ -172,7 +176,7 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
     e.stopPropagation()
     try {
       await axios.put(`${API}/logistics/scn/${scn.id}/critical-path`, { is_critical_path: !scn.is_critical_path })
-      setScns(prev => prev.map(r => r.id === scn.id ? { ...r, is_critical_path: r.is_critical_path ? 0 : 1 } : r))
+      reload()
     } catch (_) { addToast('error', 'Failed to update critical path') }
   }
 
@@ -213,7 +217,7 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
         {/* Title + count */}
         {/* ScopeBanner for freight forwarders */}
         {isForwarder && (
-          <ScopeBanner role="freight_forwarder" scnCount={scns.length} />
+          <ScopeBanner role="freight_forwarder" scnCount={total} />
         )}
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 20 }}>
           <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: col }}>
@@ -272,7 +276,7 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
               style={{ ...inputSt, width: 55, textAlign: 'center' }} />
             days
           </div>
-          <div style={{ fontSize: 11, color: sub }}>{scns.length} result{scns.length !== 1 ? 's' : ''}</div>
+          <div style={{ fontSize: 11, color: sub }}>{total} result{total !== 1 ? 's' : ''}</div>
         </div>
 
         {/* ── TABLE ─────────────────────────────────────────── */}
@@ -281,10 +285,13 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                 <tr style={{ borderBottom: bd }}>
-                  {[['★','40px'],['SCN','110px'],['PO','100px'],['VENDOR','130px'],['FORWARDER','120px'],
-                    ['ROUTE','160px'],['MODE','90px'],['ETD','100px'],['ETA','100px'],
-                    ['PKGS','60px'],['WEIGHT','90px'],['STATUS','130px'],['RAG','50px']].map(([h,w]) => (
-                    <th key={h} style={{ padding: '8px 10px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', width: w, whiteSpace: 'nowrap' }}>{h}</th>
+                  {([['★','40px'],['SCN','110px','scn_ref'],['PO','100px'],['VENDOR','130px','vendor'],['FORWARDER','120px','forwarder'],
+                    ['ROUTE','160px','origin'],['MODE','90px','mode'],['ETD','100px','etd'],['ETA','100px','eta'],
+                    ['PKGS','60px'],['WEIGHT','90px'],['STATUS','130px','status'],['RAG','50px']] as [string,string,string?][]).map(([h,w,key]) => (
+                    <th key={h} onClick={key ? () => toggleSort(key) : undefined}
+                      style={{ padding: '8px 10px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', width: w, whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>
+                      {h}{key ? sortArrow(key) : ''}
+                    </th>
                   ))}
                 </tr>
               </thead>
@@ -346,6 +353,8 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
           {/* ── MILESTONE LEGEND ──────────────────────────────── */}
           <MilestoneLegend dark={dark} />
         </div>
+
+        <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} />
       </div>
 
       {/* ── LOADING OVERLAY ────────────────────────────────── */}

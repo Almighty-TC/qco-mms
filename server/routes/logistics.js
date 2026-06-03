@@ -123,8 +123,9 @@ router.get('/register/:projectId', async (req, res) => {
     const pid  = Number(req.params.projectId)
     const role = req.user?.role
     const uid  = req.user?.id
-    const { status, search, critical_only, page = 1, limit = 50 } = req.query
-    const offset = (Number(page) - 1) * Number(limit)
+    const { status, search, critical_only, mode, arrival_days, sort_col, sort_dir, page = 1 } = req.query
+    const lim    = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)))
+    const offset = (Math.max(1, Number(page)) - 1) * lim
 
     // Build WHERE clause
     const conditions = ['s.project_id = ?']
@@ -160,6 +161,13 @@ router.get('/register/:projectId', async (req, res) => {
       conditions.push('s.is_critical_path = 1')
     }
 
+    // Mode + arrival-window filters (moved server-side so they're correct across pages)
+    if (mode && mode !== 'all') { conditions.push('s.mode = ?'); params.push(mode) }
+    if (arrival_days) {
+      const d = parseInt(arrival_days, 10)
+      if (!isNaN(d)) { conditions.push('s.eta IS NOT NULL AND s.eta <= DATE_ADD(CURDATE(), INTERVAL ? DAY)'); params.push(d) }
+    }
+
     if (search) {
       const q = `%${search}%`
       conditions.push('(s.scn_ref LIKE ? OR po.po_number LIKE ? OR s.vendor_name LIKE ? OR s.forwarder_name LIKE ? OR s.origin_location LIKE ? OR w.name LIKE ?)')
@@ -176,6 +184,17 @@ router.get('/register/:projectId', async (req, res) => {
        WHERE ${where}`,
       params
     )
+
+    // ─── WHITELISTED SORT (+ unique s.id tiebreaker — stable OFFSET windows) ───
+    const SAFE_SORT = {
+      scn_ref: 's.scn_ref', status: 's.status', mode: 's.mode',
+      etd: 's.etd', eta: 's.eta', origin: 's.origin_location',
+      forwarder: 's.forwarder_name', vendor: 's.vendor_name',
+      destination: 'w.name', created_at: 's.created_at',
+    }
+    const orderDir = String(sort_dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC' // default DESC (preserve current)
+    const orderBy  = SAFE_SORT[sort_col] || 's.created_at'
+    const orderClause = `${orderBy} ${orderDir}, s.id ${orderDir}`
 
     const [rows] = await db.query(
       `SELECT
@@ -194,9 +213,9 @@ router.get('/register/:projectId', async (req, res) => {
        LEFT JOIN purchase_orders po ON s.po_id = po.id
        LEFT JOIN warehouses w ON s.destination_warehouse_id = w.id
        WHERE ${where}
-       ORDER BY s.created_at DESC
+       ORDER BY ${orderClause}
        LIMIT ? OFFSET ?`,
-      [...params, Number(limit), offset]
+      [...params, lim, offset]
     )
 
     // Recalculate + return display_status with each row
@@ -225,7 +244,7 @@ router.get('/register/:projectId', async (req, res) => {
       if (d in pipeline_counts) pipeline_counts[d]++
     })
 
-    res.json({ total: Number(total), page: Number(page), limit: Number(limit), data, pipeline_counts })
+    res.json({ total: Number(total), page: Number(page), limit: lim, data, pipeline_counts })
   } catch (e) {
     console.error('[logistics:register]', e.message)
     res.status(500).json({ error: e.message })
