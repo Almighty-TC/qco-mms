@@ -4,7 +4,7 @@
 // Health Score card (score + band + gradient bar + RAG-coloured module bars), and
 // the SVG pipeline funnel. Mine + Exceptions bands land in C3 (placeholders here).
 // Hand-rolled SVG/CSS — no chart library, consistent with the house style.
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import axios from 'axios'
 import { HelpButton } from '../components/HelpDrawer'
 import { BackButton } from '../components/BackButton'
@@ -26,6 +26,9 @@ interface DashData {
 }
 
 const MODULE_LABEL: Record<string, string> = { procurement: 'Procurement', expediting: 'Expediting', logistics: 'Logistics', materials: 'Mat. Control', traceability: 'Traceability' }
+const WEIGHT_KEYS = ['procurement', 'expediting', 'logistics', 'materials', 'traceability'] as const
+// mirrors dashboard.can_edit from the C1 matrix — the backend remains the enforcer.
+const CAN_EDIT_ROLES = new Set(['admin', 'project_manager', 'project_director'])
 const fmt = (n: number | null | undefined) => (n == null ? '—' : n.toLocaleString())
 
 // ─── BAND ROW (Mine / Attention) — clickable, drills to a module ──
@@ -44,7 +47,59 @@ function BandRow({ label, n, accent, dark, onClick }: { label: string; n: number
   )
 }
 
-function DashboardInner({ dark, projectId, projectName, onBack, onNavigate }: {
+// ─── HEALTH WEIGHTS MODAL (the wireframe's "Configure ⚙") ─────
+// Five sliders that must total 100 (Save disabled otherwise — mirrors the backend's
+// 422). On save → PUT /dashboard/:pid/weights → re-fetch so the score updates live.
+function WeightsModal({ projectId, dark, initial, onClose, onSaved, addToast }: {
+  projectId: number; dark: boolean; initial: { module: string; weight: number }[]
+  onClose: () => void; onSaved: () => void; addToast: (t: 'success' | 'error' | 'warning', m: string) => void
+}) {
+  const col = dark ? '#f1f5f9' : '#0f172a'; const sub = '#94a3b8'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`; const cardBg = dark ? '#1e293b' : '#fff'
+  const seed = () => { const o: Record<string, number> = {}; for (const k of WEIGHT_KEYS) o[k] = initial.find(x => x.module === k)?.weight ?? 0; return o }
+  const [w, setW] = useState<Record<string, number>>(seed)
+  const [saving, setSaving] = useState(false)
+  const total = WEIGHT_KEYS.reduce((a, k) => a + (w[k] || 0), 0)
+  const ok = total === 100
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      await axios.put(`${API}/dashboard/${projectId}/weights`, { weights: w })
+      addToast('success', 'Health weights updated'); onSaved()
+    } catch (e) {
+      addToast('error', (e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'Could not save weights')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: cardBg, borderRadius: 12, padding: 26, width: 480, maxWidth: '92vw', border: bd, boxShadow: '0 16px 48px rgba(0,0,0,0.4)' }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: col, marginBottom: 4 }}>Health score weights</div>
+        <div style={{ fontSize: 12, color: sub, marginBottom: 18 }}>Weight each area's contribution to the project score. Must total 100%.</div>
+        {WEIGHT_KEYS.map(k => (
+          <div key={k} style={{ marginBottom: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: col, marginBottom: 4 }}>
+              <span>{MODULE_LABEL[k]}</span><span style={{ fontWeight: 700 }}>{w[k]}%</span>
+            </div>
+            <input type="range" min={0} max={100} value={w[k]} onChange={e => setW({ ...w, [k]: Number(e.target.value) })}
+              style={{ width: '100%', accentColor: '#E84E0F' }} />
+          </div>
+        ))}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, paddingTop: 14, borderTop: bd }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: ok ? '#22c55e' : '#ef4444' }}>Total: {total}%{ok ? ' ✓' : ' (need 100)'}</span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setW(seed())} style={{ padding: '7px 14px', borderRadius: 6, border: bd, background: 'none', color: sub, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Reset</button>
+            <button disabled={!ok || saving} onClick={save}
+              style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: ok ? '#E84E0F' : (dark ? '#334155' : '#c4cedf'), color: '#fff', fontSize: 12, fontWeight: 600, cursor: ok && !saving ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DashboardInner({ dark, projectId, projectName, userRole, onBack, onNavigate }: {
   dark: boolean; projectId: number; projectName: string; userRole: string; onBack: () => void; onNavigate: (page: string) => void
 }) {
   const { addToast } = useToast()
@@ -52,14 +107,17 @@ function DashboardInner({ dark, projectId, projectName, onBack, onNavigate }: {
   const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`; const cardBg = dark ? '#1e293b' : '#fff'
   const [data, setData] = useState<DashData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [showConfig, setShowConfig] = useState(false)
+  const canEdit = CAN_EDIT_ROLES.has(userRole)   // mirrors dashboard.can_edit (backend enforces)
 
-  useEffect(() => {
+  const load = useCallback(() => {
     setLoading(true)
     axios.get(`${API}/dashboard/${projectId}`)
       .then(({ data }) => setData(data))
       .catch(e => addToast('error', e.response?.data?.error ?? 'Could not load dashboard'))
       .finally(() => setLoading(false))
   }, [projectId, addToast])
+  useEffect(() => { load() }, [load])
 
   const card: React.CSSProperties = { background: cardBg, border: bd, borderRadius: 12, padding: 18 }
 
@@ -130,9 +188,17 @@ function DashboardInner({ dark, projectId, projectName, onBack, onNavigate }: {
               </span>
             ))}
           </div>
+          {canEdit && data && (
+            <button onClick={() => setShowConfig(true)} style={{ padding: '7px 12px', borderRadius: 6, border: bd, background: 'none', color: sub, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Configure ⚙</button>
+          )}
           <HelpButton screenName="Project Dashboard" sections={DASHBOARD_HELP} dark={dark} />
         </div>
       </div>
+
+      {showConfig && data && (
+        <WeightsModal projectId={projectId} dark={dark} initial={data.health.weights}
+          onClose={() => setShowConfig(false)} onSaved={() => { setShowConfig(false); load() }} addToast={addToast} />
+      )}
 
       {loading && <div style={{ color: sub, fontSize: 14, padding: 40, textAlign: 'center' }}>Loading dashboard…</div>}
 
