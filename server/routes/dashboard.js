@@ -181,6 +181,53 @@ router.get('/:projectId', requirePermission('dashboard', 'can_view'), async (req
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// ─── GET /:projectId/exceptions — the real records behind the Attention counts ──
+// Deterministic: every item is an actual overdue/breached/held record (NOT AI).
+// Same gating as the aggregate — categories for modules the viewer can't see are
+// omitted. Each category capped (detail paging can be a later slice).
+router.get('/:projectId/exceptions', requirePermission('dashboard', 'can_view'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const vis = await visibleSet(req)
+    const CAP = 25
+    const rows = ([r]) => r
+    // [key, label, module-gate, page, query] — query returns {primary, secondary}
+    const defs = [
+      ['overdue_pos', 'Overdue POs', 'procurement', 'procurement',
+        db.query(`SELECT po.po_number AS pri, CONCAT('Line ', pl.line_number, ' · ROS ', DATE_FORMAT(pl.ros_date,'%Y-%m-%d')) AS sec
+                  FROM po_lines pl JOIN purchase_orders po ON po.id=pl.po_id
+                  WHERE po.project_id=? AND pl.ros_date < CURDATE() AND pl.status NOT IN ('received','closed') ORDER BY pl.ros_date LIMIT ${CAP}`, [pid])],
+      ['breached_milestones', 'Breached milestones', 'procurement', 'procurement',
+        db.query(`SELECT po.po_number AS pri, CONCAT('Line ', pl.line_number, ' · CDD ', DATE_FORMAT(pl.cdd,'%Y-%m-%d')) AS sec
+                  FROM po_lines pl JOIN purchase_orders po ON po.id=pl.po_id
+                  WHERE po.project_id=? AND pl.cdd < CURDATE() AND pl.status NOT IN ('received','closed') ORDER BY pl.cdd LIMIT ${CAP}`, [pid])],
+      ['at_risk_deliveries', 'At-risk deliveries', 'expediting', 'expediting',
+        db.query(`SELECT d.doc_number AS pri, d.title AS sec
+                  FROM vdrl_documents d JOIN vdrl_packages p ON p.id=d.package_id
+                  WHERE p.project_id=? AND (d.status='Overdue' OR (d.status='Not submitted' AND d.required_date < CURDATE())) LIMIT ${CAP}`, [pid])],
+      ['overdue_rfis', 'Overdue RFIs', null, 'rfi-meeting',
+        db.query(`SELECT ref AS pri, title AS sec FROM rfi_meeting_records
+                  WHERE project_id=? AND due_date < CURDATE() AND status NOT IN ('closed','cancelled','answered') ORDER BY due_date LIMIT ${CAP}`, [pid])],
+      ['overdue_actions', 'Overdue actions', null, 'rfi-meeting',
+        db.query(`SELECT CONCAT('Action #', seq) AS pri, description AS sec FROM meeting_actions
+                  WHERE project_id=? AND due_date < CURDATE() AND status IN ('open','in_progress') ORDER BY due_date LIMIT ${CAP}`, [pid])],
+      ['stockouts', 'Stock-outs', 'material_control', 'mc-stock',
+        db.query(`SELECT item_code AS pri, description AS sec FROM warehouse_stock WHERE project_id=? AND qty=0 LIMIT ${CAP}`, [pid])],
+      ['negative_stock', 'Negative stock', 'material_control', 'mc-stock',
+        db.query(`SELECT item_code AS pri, CONCAT(description, ' (qty ', qty, ')') AS sec FROM warehouse_stock WHERE project_id=? AND qty<0 LIMIT ${CAP}`, [pid])],
+      ['open_fmrs', 'Open FMRs', 'fmr', 'mc-fmr',
+        db.query(`SELECT fmr_ref AS pri, status AS sec FROM fmr_requests WHERE project_id=? AND status NOT IN ('issued','rejected') ORDER BY required_date LIMIT ${CAP}`, [pid])],
+    ]
+    const results = await Promise.all(defs.map(d => d[4]))
+    const groups = defs
+      .map((d, i) => ({ key: d[0], label: d[1], module: d[2], page: d[3], items: rows(results[i]) }))
+      .filter(g => g.module === null || vis.has(g.module))   // omit categories the viewer can't see
+      .filter(g => g.items.length > 0)
+      .map(({ key, label, page, items }) => ({ key, label, page, count: items.length, capped: items.length === CAP, items }))
+    res.json({ groups })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // ─── PUT /:projectId/weights — reweight (gated, total=100, audited) ──
 router.put('/:projectId/weights', requirePermission('dashboard', 'can_edit'), async (req, res) => {
   try {

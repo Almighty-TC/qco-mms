@@ -99,6 +99,48 @@ function WeightsModal({ projectId, dark, initial, onClose, onSaved, addToast }: 
   )
 }
 
+// ─── EXCEPTIONS "VIEW ALL" MODAL (real records — deterministic, not AI) ──
+interface ExGroup { key: string; label: string; page: string; count: number; capped?: boolean; items: { pri: string; sec: string }[] }
+function ExceptionsModal({ projectId, dark, onClose, onNavigate, addToast }: {
+  projectId: number; dark: boolean; onClose: () => void; onNavigate: (page: string) => void
+  addToast: (t: 'success' | 'error' | 'warning', m: string) => void
+}) {
+  const col = dark ? '#f1f5f9' : '#0f172a'; const sub = '#94a3b8'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`; const cardBg = dark ? '#1e293b' : '#fff'
+  const [groups, setGroups] = useState<ExGroup[] | null>(null)
+  useEffect(() => {
+    axios.get(`${API}/dashboard/${projectId}/exceptions`).then(({ data }) => setGroups(data.groups))
+      .catch(e => addToast('error', e.response?.data?.error ?? 'Could not load exceptions'))
+  }, [projectId, addToast])
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9000, display: 'flex', justifyContent: 'flex-end' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 520, maxWidth: '94vw', height: '100%', background: cardBg, borderLeft: bd, padding: 24, overflowY: 'auto', boxShadow: '-12px 0 40px rgba(0,0,0,0.35)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+          <span style={{ fontSize: 16, fontWeight: 700, color: col }}>All problems</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, color: sub, cursor: 'pointer' }}>×</button>
+        </div>
+        <div style={{ fontSize: 12, color: sub, marginBottom: 16 }}>Live exceptions across the project — every item is a real record.</div>
+        {groups == null && <div style={{ color: sub, fontSize: 13 }}>Loading…</div>}
+        {groups && groups.length === 0 && <div style={{ color: '#22c55e', fontSize: 13 }}>No open problems — nothing needs attention.</div>}
+        {groups && groups.map(g => (
+          <div key={g.key} style={{ marginBottom: 18 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: col }}>{g.label} <span style={{ color: '#ef4444' }}>({g.count}{g.capped ? '+' : ''})</span></span>
+              <button onClick={() => { onNavigate(g.page); onClose() }} style={{ background: 'none', border: 'none', color: '#E84E0F', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', padding: 0 }}>Open module →</button>
+            </div>
+            {g.items.map((it, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '6px 0', borderBottom: bd, fontSize: 12 }}>
+                <span style={{ color: col, fontWeight: 600, flexShrink: 0 }}>{it.pri}</span>
+                <span style={{ color: sub, textAlign: 'right' }}>{it.sec}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function DashboardInner({ dark, projectId, projectName, userRole, onBack, onNavigate }: {
   dark: boolean; projectId: number; projectName: string; userRole: string; onBack: () => void; onNavigate: (page: string) => void
 }) {
@@ -108,6 +150,7 @@ function DashboardInner({ dark, projectId, projectName, userRole, onBack, onNavi
   const [data, setData] = useState<DashData | null>(null)
   const [loading, setLoading] = useState(true)
   const [showConfig, setShowConfig] = useState(false)
+  const [showExceptions, setShowExceptions] = useState(false)
   const canEdit = CAN_EDIT_ROLES.has(userRole)   // mirrors dashboard.can_edit (backend enforces)
 
   const load = useCallback(() => {
@@ -199,6 +242,10 @@ function DashboardInner({ dark, projectId, projectName, userRole, onBack, onNavi
         <WeightsModal projectId={projectId} dark={dark} initial={data.health.weights}
           onClose={() => setShowConfig(false)} onSaved={() => { setShowConfig(false); load() }} addToast={addToast} />
       )}
+      {showExceptions && (
+        <ExceptionsModal projectId={projectId} dark={dark} onClose={() => setShowExceptions(false)}
+          onNavigate={onNavigate} addToast={addToast} />
+      )}
 
       {loading && <div style={{ color: sub, fontSize: 14, padding: 40, textAlign: 'center' }}>Loading dashboard…</div>}
 
@@ -269,7 +316,10 @@ function DashboardInner({ dark, projectId, projectName, userRole, onBack, onNavi
             </div>
             {/* Attention — project-wide exceptions (visible metrics only) */}
             <div style={{ ...card, flex: 1, minWidth: 300 }}>
-              <div style={{ fontSize: 11, color: sub, textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700, marginBottom: 4 }}>Attention</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                <div style={{ fontSize: 11, color: sub, textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>Attention</div>
+                <button onClick={() => setShowExceptions(true)} style={{ background: 'none', border: 'none', color: '#E84E0F', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', padding: 0 }}>View all problems →</button>
+              </div>
               {([
                 ['Overdue POs', data.attention.overdue_pos, 'procurement'],
                 ['Breached milestones', data.attention.breached_milestones, 'procurement'],
