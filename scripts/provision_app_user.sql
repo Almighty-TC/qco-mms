@@ -85,6 +85,11 @@ GRANT SELECT, INSERT, UPDATE ON qmat.warehouse_transfers TO 'qmat_app'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON qmat.warehouses TO 'qmat_app'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON qmat.wbs_nodes TO 'qmat_app'@'%';
 
+-- ─── C1: Meeting/RFI module (added by migrate-rfi-meeting.js) ──
+GRANT SELECT, INSERT, UPDATE, DELETE ON qmat.rfi_meeting_records TO 'qmat_app'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE ON qmat.meeting_attendees   TO 'qmat_app'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE ON qmat.meeting_actions     TO 'qmat_app'@'%';
+
 FLUSH PRIVILEGES;
 
 -- ─── DELIBERATELY NOT GRANTED (no runtime app code touches these as of this migration) ──
@@ -94,4 +99,5 @@ FLUSH PRIVILEGES;
 --   ros_change_log, user_project_access, vdrl_alert_rules, vdrl_mdr, vdrl_review_comments,
 --   vdrl_revisions, vdrl_transmittals, vdrl_transmittal_docs, vdrl_expediting_log, vendor_contacts
 --
--- Total: 59 tables granted (exact ops); 14 intentionally ungranted.
+-- Total: 62 tables granted (exact ops); 14 intentionally ungranted.
+--   (+3 in C1: rfi_meeting_records, meeting_attendees, meeting_actions)
