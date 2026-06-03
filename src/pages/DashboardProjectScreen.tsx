@@ -22,7 +22,7 @@ interface DashData {
   stats: { mto_lines: number | null; pos_awarded: number | null; at_risk: number | null; breached: number | null }
   mine: { approvals_pos: number; confirmer_queue: number; rfis_assigned: number; actions_assigned: number }
   attention: Record<string, number | null>
-  pipeline: { demand: number | null; po_raised: number | null; expedited: number | null; received: number | null; issued: number | null }
+  pipeline: { demand: number | null; po_raised: number | null; expedited: number | null; received: number | null }
 }
 
 const MODULE_LABEL: Record<string, string> = { procurement: 'Procurement', expediting: 'Expediting', logistics: 'Logistics', materials: 'Mat. Control', traceability: 'Traceability' }
@@ -173,9 +173,11 @@ function DashboardInner({ dark, projectId, projectName, userRole, onBack, onNavi
   )
 
   // ── Pipeline: an UPSTREAM demand bar (MTO — not chained, no FK to POs) above the
-  //    monotonic FK-traced procurement chain (raised ⊇ expedited ⊇ received ⊇ issued).
+  //    monotonic single-grain procurement chain (raised ⊇ expedited ⊇ received over
+  //    po_lines.status). No "issued" stage: nothing in the schema traces FMR issuance
+  //    back to a po_line, so it is omitted rather than shown as a phantom downstream count.
   const PipelineFunnel = ({ p }: { p: DashData['pipeline'] }) => {
-    const chain = [['PO raised', p.po_raised], ['Expedited', p.expedited], ['Received', p.received], ['Issued', p.issued]] as const
+    const chain = [['PO raised', p.po_raised], ['Expedited', p.expedited], ['Received', p.received]] as const
     const max = Math.max(1, ...chain.map(([, v]) => v ?? 0))
     const bar = (label: string, v: number | null, grad: string) => {
       const w = v == null ? 0 : Math.max(4, (v / max) * 100)

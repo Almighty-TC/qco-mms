@@ -72,12 +72,13 @@ router.get('/:projectId', requirePermission('dashboard', 'can_view'), async (req
       po_total:       db.query('SELECT COUNT(*) n FROM po_lines pl JOIN purchase_orders po ON po.id=pl.po_id WHERE po.project_id=?', [pid]),
       po_overdue:     db.query("SELECT COUNT(*) n FROM po_lines pl JOIN purchase_orders po ON po.id=pl.po_id WHERE po.project_id=? AND pl.ros_date < CURDATE() AND pl.status NOT IN ('received','closed')", [pid]),
       po_breached:    db.query("SELECT COUNT(*) n FROM po_lines pl JOIN purchase_orders po ON po.id=pl.po_id WHERE po.project_id=? AND pl.cdd < CURDATE() AND pl.status NOT IN ('received','closed')", [pid]),
-      po_raised:      db.query("SELECT COUNT(DISTINCT pl.id) n FROM po_lines pl JOIN purchase_orders po ON po.id=pl.po_id WHERE po.project_id=? AND pl.status IN ('po-raised','in-production','received','closed')", [pid]),
-      po_expedited:   db.query("SELECT COUNT(DISTINCT pl.id) n FROM po_lines pl JOIN purchase_orders po ON po.id=pl.po_id WHERE po.project_id=? AND pl.status IN ('in-production','received','closed')", [pid]),
-      // received/issued are FK-traced to the SAME po_line (not status-based) so the
-      // funnel is a real monotonic chain: raised ⊇ expedited ⊇ received ⊇ issued.
-      po_received:    db.query("SELECT COUNT(DISTINCT ws.po_line_id) n FROM warehouse_stock ws WHERE ws.project_id=? AND ws.po_line_id IS NOT NULL", [pid]),
-      po_issued:      db.query("SELECT COUNT(DISTINCT ws.po_line_id) n FROM warehouse_stock ws JOIN fmr_issue_lines fil ON fil.stock_id=ws.id WHERE ws.project_id=? AND ws.po_line_id IS NOT NULL", [pid]),
+      // ─── MATERIALS FUNNEL (one grain: po_lines.status lifecycle) ───
+      // raised ⊇ expedited ⊇ received are NESTED supersets of the same po_lines rows,
+      // so the funnel is monotonic by construction (each stage ≤ the prior). The
+      // status enum is ordered not-started→rfq→po-raised→in-production→shipped→received→closed.
+      po_raised:      db.query("SELECT COUNT(DISTINCT pl.id) n FROM po_lines pl JOIN purchase_orders po ON po.id=pl.po_id WHERE po.project_id=? AND pl.status IN ('po-raised','in-production','shipped','received','closed')", [pid]),
+      po_expedited:   db.query("SELECT COUNT(DISTINCT pl.id) n FROM po_lines pl JOIN purchase_orders po ON po.id=pl.po_id WHERE po.project_id=? AND pl.status IN ('in-production','shipped','received','closed')", [pid]),
+      po_received:    db.query("SELECT COUNT(DISTINCT pl.id) n FROM po_lines pl JOIN purchase_orders po ON po.id=pl.po_id WHERE po.project_id=? AND pl.status IN ('received','closed')", [pid]),
       po_pending_rcv: db.query("SELECT COUNT(*) n FROM po_lines pl JOIN purchase_orders po ON po.id=pl.po_id WHERE po.project_id=? AND pl.status='in-production'", [pid]),
       // expediting (VDRL)
       vdrl_total:     db.query('SELECT COUNT(*) n FROM vdrl_documents d JOIN vdrl_packages p ON p.id=d.package_id WHERE p.project_id=?', [pid]),
@@ -167,15 +168,16 @@ router.get('/:projectId', requirePermission('dashboard', 'can_view'), async (req
         pending_receipts:   gate(seeProc, n('po_pending_rcv')),
         open_fmrs:          gate(seeFmr, n('fmr_open')),
       },
-      // Monotonic FK-traced chain (raised ⊇ expedited ⊇ received ⊇ issued). `demand`
-      // (MTO lines) is UPSTREAM and NOT chained — no FK links po_lines back to
-      // mto_lines, so it is shown separately, never as a funnel parent.
+      // Monotonic single-grain chain (raised ⊇ expedited ⊇ received over po_lines.status).
+      // `demand` (MTO lines) is UPSTREAM and NOT chained — no FK links po_lines back to
+      // mto_lines, so it is shown separately, never as a funnel parent. There is no
+      // honest "issued" stage: fmr_issue_lines/warehouse_stock.po_line_id carry no data
+      // to trace issuance back to a po_line, so a count there would be a phantom — omitted.
       pipeline: {
         demand:    gate(seeMto, n('mto_lines')),
         po_raised: gate(seeProc, n('po_raised')),
         expedited: gate(seeProc, n('po_expedited')),
         received:  gate(seeProc, n('po_received')),
-        issued:    gate(seeProc, n('po_issued')),
       },
     })
   } catch (e) { res.status(500).json({ error: e.message }) }
