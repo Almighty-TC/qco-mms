@@ -143,7 +143,7 @@ export const AuditViewerScreen = ({ dark, userRole, onBack }: {
 
   const {
     data: rows, total, page, setPage, pageSize, loading,
-    sortCol, sortDir, setSortCol, setSortDir,
+    sortCol, sortDir, setSortCol, setSortDir, reload,
   } = usePagedList<AuditRow>({
     fetcher, deps: [action, entityType, userId, projectId, dateFrom, dateTo, debouncedSearch],
     pageSize: 50, initialSortCol: 'created_at', initialSortDir: 'desc',
@@ -151,6 +151,25 @@ export const AuditViewerScreen = ({ dark, userRole, onBack }: {
 
   const resetFilters = () => {
     setAction(''); setEntityType(''); setUserId(''); setProjectId(''); setDateFrom(''); setDateTo(''); setSearch('')
+  }
+
+  // ── C4: QA sign-off (append-only; backend enforces the gate) ──
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [batchBusy, setBatchBusy] = useState(false)
+  const toggleSel = (id: number) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const clearSel = () => setSelected(new Set())
+
+  const batchReview = async (review_status: 'reviewed' | 'flagged') => {
+    if (selected.size === 0) return
+    const note = window.prompt(`Optional note for marking ${selected.size} entr${selected.size === 1 ? 'y' : 'ies'} ${review_status}:`) ?? undefined
+    setBatchBusy(true)
+    try {
+      await axios.post(`${API}/audit/review/batch`, { audit_log_ids: [...selected], review_status, review_note: note || null })
+      clearSel(); reload()
+    } catch (e: unknown) {
+      const er = e as { response?: { data?: { error?: string } } }
+      window.alert(er.response?.data?.error ?? 'Batch review failed')
+    } finally { setBatchBusy(false) }
   }
 
   // ── CSV export of the WHOLE filtered set (all pages, not just the visible page) ──
@@ -181,6 +200,7 @@ export const AuditViewerScreen = ({ dark, userRole, onBack }: {
   }
 
   const COLS: AdminCol[] = [
+    ...(canReview ? [{ label: '', width: 32, noResize: true }] : []),
     { label: '', width: 34, noResize: true },
     { label: 'When', width: 150 },
     { label: 'Who', width: 150 },
@@ -272,6 +292,18 @@ export const AuditViewerScreen = ({ dark, userRole, onBack }: {
         </span>
       </div>
 
+      {/* Batch sign-off toolbar (reviewers only) */}
+      {canReview && selected.size > 0 && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, padding: '8px 12px', borderRadius: 8, background: dark ? '#1e293b' : '#fff', border: bd }}>
+          <span style={{ fontSize: 12, color: col, fontWeight: 600 }}>{selected.size} selected</span>
+          <button onClick={() => batchReview('reviewed')} disabled={batchBusy}
+            style={{ padding: '5px 12px', borderRadius: 6, border: 'none', background: '#22c55e', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>✓ Mark reviewed</button>
+          <button onClick={() => batchReview('flagged')} disabled={batchBusy}
+            style={{ padding: '5px 12px', borderRadius: 6, border: 'none', background: '#ef4444', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>⚑ Flag</button>
+          <button onClick={clearSel} style={{ padding: '5px 12px', borderRadius: 6, border: bd, background: 'none', color: sub, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Clear</button>
+        </div>
+      )}
+
       {/* Table */}
       <AdminTable tableId="audit_viewer" columns={COLS} dark={dark}
         empty={loading ? 'Loading…' : 'No audit records match the filters.'}>
@@ -281,6 +313,11 @@ export const AuditViewerScreen = ({ dark, userRole, onBack }: {
           return (
             <React.Fragment key={r.id}>
               <AdminRow dark={dark}>
+                {canReview && (
+                  <td style={{ padding: '0 6px', height: 44, verticalAlign: 'middle', textAlign: 'center', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
+                    <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggleSel(r.id)} title="Select for batch review" />
+                  </td>
+                )}
                 <td onClick={() => setExpandedId(expanded ? null : r.id)}
                   style={{ padding: '0 8px', height: 44, verticalAlign: 'middle', cursor: 'pointer', color: sub, borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, userSelect: 'none' }}>
                   {expanded ? '▾' : '▸'}
@@ -302,7 +339,7 @@ export const AuditViewerScreen = ({ dark, userRole, onBack }: {
               {expanded && (
                 <tr>
                   <td colSpan={COLS.length} style={{ padding: '14px 18px', background: dark ? '#0f172a' : '#f8fafc', borderBottom: bd }}>
-                    <DiffPanel row={r} dark={dark} />
+                    <ExpandedDetail row={r} dark={dark} canReview={canReview} onReviewed={reload} />
                   </td>
                 </tr>
               )}
@@ -312,6 +349,89 @@ export const AuditViewerScreen = ({ dark, userRole, onBack }: {
       </AdminTable>
 
       <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} />
+    </div>
+  )
+}
+
+// ─── EXPANDED DETAIL ─────────────────────────────────────────
+// Field-level diff + reason + the FULL review history (newest first) + a sign-off
+// form (reviewers only). Reviews are appended via the proven endpoint; on success
+// we refetch this entry's history and reload the list (latest badge).
+interface ReviewRow { id: number; review_status: 'reviewed' | 'flagged'; reviewed_at: string; reviewed_by_name: string | null; reviewed_by_role: string | null; review_note: string | null }
+
+const ExpandedDetail = ({ row, dark, canReview, onReviewed }: { row: AuditRow; dark: boolean; canReview: boolean; onReviewed: () => void }) => {
+  const sub = '#94a3b8'
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const bd  = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const [history, setHistory] = useState<ReviewRow[]>([])
+  const [histLoading, setHistLoading] = useState(true)
+  const [status, setStatus] = useState<'reviewed' | 'flagged'>('reviewed')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const loadHistory = useCallback(async () => {
+    setHistLoading(true)
+    try { const { data } = await axios.get(`${API}/audit/${row.id}/review-history`); setHistory(data.data ?? []) }
+    catch { setHistory([]) }
+    finally { setHistLoading(false) }
+  }, [row.id])
+  useEffect(() => { loadHistory() }, [loadHistory])
+
+  const submit = async () => {
+    setBusy(true)
+    try {
+      await axios.post(`${API}/audit/${row.id}/review`, { review_status: status, review_note: note.trim() || null })
+      setNote(''); await loadHistory(); onReviewed()
+    } catch (e: unknown) {
+      const er = e as { response?: { data?: { error?: string } } }
+      window.alert(er.response?.data?.error ?? 'Review failed')
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
+      {/* Diff + reason */}
+      <div style={{ flex: '2 1 420px', minWidth: 320 }}><DiffPanel row={row} dark={dark} /></div>
+
+      {/* Review history + sign-off */}
+      <div style={{ flex: '1 1 280px', minWidth: 260 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: sub, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>
+          QA review history{history.length ? ` (${history.length})` : ''}
+        </div>
+        {histLoading ? <div style={{ fontSize: 12, color: sub }}>Loading…</div>
+          : history.length === 0 ? <div style={{ fontSize: 12, color: sub, fontStyle: 'italic' }}>No reviews yet.</div>
+          : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
+              {history.map(h => { const rb = reviewBadge(h.review_status); return (
+                <div key={h.id} style={{ padding: '6px 10px', borderRadius: 6, background: dark ? '#1e293b' : '#fff', border: bd, fontSize: 12 }}>
+                  <span style={{ fontSize: 10, fontWeight: 600, padding: '1px 7px', borderRadius: 9999, background: rb.bg, color: rb.color }}>{rb.label}</span>
+                  <span style={{ marginLeft: 8, color: col }}>{h.reviewed_by_name ?? 'user'}</span>
+                  <span style={{ marginLeft: 6, color: sub }}>{fmtDateTime(h.reviewed_at)}</span>
+                  {h.review_note && <div style={{ marginTop: 3, color: sub }}>{h.review_note}</div>}
+                </div>
+              )})}
+            </div>
+          )}
+
+        {canReview && (
+          <div style={{ padding: '10px 12px', borderRadius: 6, background: dark ? '#1e293b' : '#fff', border: bd }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#E84E0F', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Sign off (appends)</div>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+              <select value={status} onChange={e => setStatus(e.target.value as 'reviewed' | 'flagged')}
+                style={{ height: 30, padding: '0 8px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 12, fontFamily: 'inherit' }}>
+                <option value="reviewed">Reviewed</option>
+                <option value="flagged">Flagged</option>
+              </select>
+              <button onClick={submit} disabled={busy}
+                style={{ padding: '0 14px', height: 30, borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+                {busy ? '…' : 'Record'}
+              </button>
+            </div>
+            <input value={note} onChange={e => setNote(e.target.value)} placeholder="Optional note…"
+              style={{ width: '100%', height: 30, padding: '0 8px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 12, fontFamily: 'inherit', boxSizing: 'border-box' }} />
+          </div>
+        )}
+      </div>
     </div>
   )
 }
