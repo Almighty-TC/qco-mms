@@ -613,6 +613,65 @@ router.put('/:projectId/vdrl/documents/:docId', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// ─── VDRL DOCUMENT FILE ATTACH ────────────────────────────────
+// Stores the ACTUAL deliverable file against a VDRL requirement row (until now
+// VDRL rows were metadata only). Saved to disk under uploads/vdrl-documents; the
+// Document Inbox then streams it via /api/documents/:pid/download/vdrl:<id>.
+// Marks the document submitted so the register reflects the received deliverable.
+const fsVdrl   = require('fs')
+const pathVdrl = require('path')
+const vdrlFileDir = pathVdrl.join(__dirname, '../uploads/vdrl-documents')
+const uploadVdrlFile = require('multer')({
+  storage: require('multer').diskStorage({
+    destination: (_req, _file, cb) => { fsVdrl.mkdirSync(vdrlFileDir, { recursive: true }); cb(null, vdrlFileDir) },
+    filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]+/g, '_')}`),
+  }),
+  limits: { fileSize: 25 * 1024 * 1024 },
+})
+router.post('/:projectId/vdrl/documents/:docId/file', uploadVdrlFile.single('file'), async (req, res) => {
+  try {
+    const pid   = Number(req.params.projectId)
+    const docId = Number(req.params.docId)
+    if (!req.file) return res.status(400).json({ error: 'No file provided' })
+
+    // Confirm the document belongs to this project before writing anything.
+    const [[doc]] = await db.query(
+      `SELECT d.id FROM vdrl_documents d JOIN vdrl_packages p ON p.id = d.package_id
+       WHERE d.id=? AND p.project_id=?`, [docId, pid])
+    if (!doc) { fsVdrl.unlinkSync(req.file.path); return res.status(404).json({ error: 'VDRL document not found in this project' }) }
+
+    // Storage columns arrive via migrate-document-files.js — fail honestly (not a
+    // 500) and discard the upload if the migration hasn't been applied yet.
+    if (!(await require('../lib/schemaColumns').fileColumnsReady('vdrl_documents'))) {
+      fsVdrl.unlinkSync(req.file.path)
+      return res.status(503).json({ error: 'Document storage is not yet provisioned (pending DB migration)' })
+    }
+
+    const relPath = pathVdrl.relative(pathVdrl.join(__dirname, '..'), req.file.path)  // uploads/vdrl-documents/<stored>
+    await db.query(
+      `UPDATE vdrl_documents
+         SET file_name=?, file_path=?, file_size=?, mime_type=?,
+             status=CASE WHEN status IN ('Not submitted','Overdue') THEN 'Under review' ELSE status END,
+             submitted_date=COALESCE(submitted_date, CURDATE()), updated_at=NOW()
+       WHERE id=?`,
+      [req.file.originalname, relPath, req.file.size, req.file.mimetype, docId])
+
+    db.query(
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, after_value, resource, ip)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [req.user.id, 'vdrl_file_attached', 'vdrl_document', docId, pid,
+       JSON.stringify({ file: req.file.originalname }),
+       (req.originalUrl || '').split('?')[0].replace(/^\/api(?=\/)/, ''), req.ip]
+    ).catch(e => console.error('[expediting:vdrl-file audit]', e.message))
+
+    const [[updated]] = await db.query('SELECT * FROM vdrl_documents WHERE id=?', [docId])
+    res.status(201).json(updated)
+  } catch (e) {
+    if (req.file) { try { fsVdrl.unlinkSync(req.file.path) } catch (_) {} }
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // ─── ACTION LOG ───────────────────────────────────────────────
 // Cross-PO action notes for all locked POs in a project.
 router.get('/:projectId/action-log', async (req, res) => {

@@ -8,6 +8,7 @@ const path    = require('path')
 const fs      = require('fs')
 const multer  = require('multer')
 const db      = require('../db')
+const { fileColumnsReady } = require('../lib/schemaColumns')
 const { authenticateToken } = require('../middleware/auth')
 
 router.use(authenticateToken)
@@ -167,6 +168,10 @@ router.post('/:projectId/cert', upload.single('file'), async (req, res) => {
 
     const fileName = req.file.originalname
     const fileSize = req.file.size
+    // Record WHERE the (already disk-saved) file lives so it can be streamed from
+    // the Document Inbox. Stored relative to the server root; never an abs path.
+    const filePath = path.relative(path.join(__dirname, '..'), req.file.path)
+    const mimeType = req.file.mimetype
     const reqId = document_requirement_id && Number(document_requirement_id)
 
     let certId
@@ -212,6 +217,14 @@ router.post('/:projectId/cert', upload.single('file'), async (req, res) => {
          (cert_id, rev, heat_ref, applies_to, file_name, file_size, status, created_by, created_date)
        VALUES (?, 'A', ?, ?, ?, ?, 'received', ?, NOW())`,
       [certId, heat_ref.trim(), applies_to || null, fileName, fileSize, uid])
+
+    // ── Record the on-disk path so the cert streams from the Document Inbox ──
+    // Gated on the migration so this never regresses cert upload if the file_path
+    // column isn't present yet (the file itself is already saved by multer).
+    if (await fileColumnsReady('traceability_certs')) {
+      await db.query(`UPDATE traceability_certs SET file_path=?, mime_type=? WHERE id=?`,
+        [filePath, mimeType, certId])
+    }
 
     res.status(201).json({ ok: true, cert_id: certId })
   } catch (e) {

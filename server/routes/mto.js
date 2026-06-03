@@ -10,6 +10,9 @@ const db      = require('../db')
 const { authenticateToken } = require('../middleware/auth')
 const multer  = require('multer')
 const XLSX    = require('xlsx')
+const fs      = require('fs')
+const path    = require('path')
+const { fileColumnsReady } = require('../lib/schemaColumns')
 
 // ─── AUTH MIDDLEWARE ──────────────────────────────────────────────────────────
 router.use(authenticateToken)
@@ -778,12 +781,30 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
       })
     }
 
+    // ─── Persist the uploaded spreadsheet ─────────────────────────
+    // The buffer was parsed into lines above; we now also keep the original
+    // file on disk so the revision is downloadable as-submitted from the
+    // Document Inbox (previously the buffer was discarded after parsing).
+    const mtoDir = path.join(__dirname, '..', 'uploads', 'mto-revisions')
+    fs.mkdirSync(mtoDir, { recursive: true })
+    const safeName   = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')
+    const storedName = `${Date.now()}_${safeName}`
+    fs.writeFileSync(path.join(mtoDir, storedName), req.file.buffer)
+    const relPath = path.join('uploads', 'mto-revisions', storedName)   // relative to server root
+
     // ─── Insert new revision record ───────────────────────────────
-    await db.query(
+    const [revIns] = await db.query(
       `INSERT INTO mto_revisions (mto_id, revision, uploaded_by, notes, line_count)
        VALUES (?, ?, ?, ?, ?)`,
       [mto.id, newRev, req.user.id, notes, lines.length]
     )
+    // Record the stored file — gated on the migration so this never regresses
+    // the upload flow if the file columns aren't present yet (see schemaColumns).
+    if (await fileColumnsReady('mto_revisions')) {
+      await db.query(
+        `UPDATE mto_revisions SET file_name=?, file_path=?, file_size=?, mime_type=? WHERE id=?`,
+        [req.file.originalname, relPath, req.file.size, req.file.mimetype, revIns.insertId])
+    }
 
     // ─── Insert lines ──────────────────────────────────────────────
     for (const l of lines) {
