@@ -3,6 +3,7 @@
 // MC view: approve/reject FMRs with WBS ceiling and stock availability checks.
 // Contractor view: raise new FMRs against assigned WBS scope.
 import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { createPortal } from 'react-dom'   // modals portal to document.body — see App.tsx zoom wrapper
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
@@ -458,7 +459,7 @@ const FMRApprovalModal = ({ dark, fmr, projectId, onClose, onSaved, addToast }: 
 
   const decBtnColor: Record<LineDecision, string> = { approve_full: '#22c55e', approve_partial: '#f59e0b', reject: '#ef4444' }
 
-  return (
+  return createPortal(
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
       <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, width: 760, maxWidth: '96vw', maxHeight: '92vh', display: 'flex', flexDirection: 'column', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
@@ -593,7 +594,8 @@ const FMRApprovalModal = ({ dark, fmr, projectId, onClose, onSaved, addToast }: 
           </div>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   )
 }
 
@@ -704,7 +706,7 @@ const RaiseFMRModal = ({ dark, projectId, onClose, onSaved, addToast }: {
   // Hide already-added items from results.
   const visibleResults = results.filter(r => !lines.some(l => l.item_id === r.item_id))
 
-  return (
+  return createPortal(
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
       <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 0, width: 860, maxWidth: '96vw', maxHeight: '92vh', display: 'flex', flexDirection: 'column', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
@@ -818,7 +820,8 @@ const RaiseFMRModal = ({ dark, projectId, onClose, onSaved, addToast }: {
           </div>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   )
 }
 
@@ -844,7 +847,7 @@ const FMRDetailModal = ({ dark, projectId, fmr, onClose, addToast }: {
       .finally(() => setLoading(false))
   }, [fmr.id]) // eslint-disable-line
 
-  return (
+  return createPortal(
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
       <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, width: 680, maxWidth: '95vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
@@ -905,7 +908,8 @@ const FMRDetailModal = ({ dark, projectId, fmr, onClose, addToast }: {
           )}
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   )
 }
 
@@ -968,7 +972,7 @@ const IssuePickerModal = ({ dark, projectId, fmr, onClose, onIssued, addToast }:
     } finally { setSaving(false) }
   }
 
-  return (
+  return createPortal(
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
       <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 24, width: 720, maxWidth: '95vw', maxHeight: '85vh', overflow: 'auto', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
@@ -1039,7 +1043,8 @@ const IssuePickerModal = ({ dark, projectId, fmr, onClose, onIssued, addToast }:
           </button>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   )
 }
 

@@ -4,6 +4,7 @@
 // Row click opens a stub drawer; the full raise→assign→respond→close workflow UI
 // arrives in C4. Help + status legend ship from day one.
 import { useState, useEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'   // modals portal to document.body — see App.tsx zoom wrapper
 import axios from 'axios'
 import { HelpButton } from '../components/HelpDrawer'
 import { BackButton } from '../components/BackButton'
@@ -273,7 +274,7 @@ function RecordDrawer({ recordId, projectId, dark, userRole, userId, onClose, on
 
   const sectionLabel = (t: string) => <div style={{ fontSize: 10, fontWeight: 700, color: sub, letterSpacing: '0.08em', textTransform: 'uppercase' as const, margin: '18px 0 8px' }}>{t}</div>
 
-  return (
+  return createPortal(
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9000, display: 'flex', justifyContent: 'flex-end' }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '92vw', height: '100%', background: cardBg, borderLeft: bd, padding: 24, overflowY: 'auto', boxShadow: '-12px 0 40px rgba(0,0,0,0.35)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -354,7 +355,8 @@ function RecordDrawer({ recordId, projectId, dark, userRole, userId, onClose, on
             users={users} canManage={!isExternal} isAdmin={userRole === 'admin'} addToast={addToast} />
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

@@ -3,6 +3,7 @@
 // 6 tabs: All · Arrived · In Transit · Customs · Shipments · Transfers
 // Click "Receipt →" on Arrived rows → 5-step Receipting Wizard.
 import React, { useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'   // modals portal to document.body — see App.tsx zoom wrapper
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
@@ -403,7 +404,7 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
 
   const STEPS = ['Review expected','Physical check','Assign location','TCCC sign-off','Complete']
 
-  return (
+  return createPortal(
     <div style={{ position: 'fixed', inset: 0, background: bg, zIndex: 5000, overflow: 'auto', fontFamily: 'IBM Plex Sans, sans-serif' }}>
       {/* Topbar */}
       <div style={{ background: cardBg, borderBottom: bd, padding: '10px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 1 }}>
@@ -1005,7 +1006,8 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

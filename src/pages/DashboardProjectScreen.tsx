@@ -5,6 +5,7 @@
 // the SVG pipeline funnel. Mine + Exceptions bands land in C3 (placeholders here).
 // Hand-rolled SVG/CSS — no chart library, consistent with the house style.
 import { useState, useEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'   // modals portal to document.body — see App.tsx zoom wrapper
 import axios from 'axios'
 import { HelpButton } from '../components/HelpDrawer'
 import { BackButton } from '../components/BackButton'
@@ -72,7 +73,7 @@ function WeightsModal({ projectId, dark, initial, onClose, onSaved, addToast }: 
     } finally { setSaving(false) }
   }
 
-  return (
+  return createPortal(
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
       <div onClick={e => e.stopPropagation()} style={{ background: cardBg, borderRadius: 12, padding: 26, width: 480, maxWidth: '92vw', border: bd, boxShadow: '0 16px 48px rgba(0,0,0,0.4)' }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: col, marginBottom: 4 }}>Health score weights</div>
@@ -95,7 +96,8 @@ function WeightsModal({ projectId, dark, initial, onClose, onSaved, addToast }: 
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -112,7 +114,7 @@ function ExceptionsModal({ projectId, dark, onClose, onNavigate, addToast }: {
     axios.get(`${API}/dashboard/${projectId}/exceptions`).then(({ data }) => setGroups(data.groups))
       .catch(e => addToast('error', e.response?.data?.error ?? 'Could not load exceptions'))
   }, [projectId, addToast])
-  return (
+  return createPortal(
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9000, display: 'flex', justifyContent: 'flex-end' }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 520, maxWidth: '94vw', height: '100%', background: cardBg, borderLeft: bd, padding: 24, overflowY: 'auto', boxShadow: '-12px 0 40px rgba(0,0,0,0.35)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
@@ -137,7 +139,8 @@ function ExceptionsModal({ projectId, dark, onClose, onNavigate, addToast }: {
           </div>
         ))}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

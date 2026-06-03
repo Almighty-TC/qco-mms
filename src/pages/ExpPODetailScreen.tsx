@@ -2,6 +2,7 @@
 // Full dedicated screen for expediting PO detail. Not a modal or drawer.
 // Tabs: Line Items & SCNs | Milestones | ITP | VDRL | Action Notes | Audit Trail
 import React, { useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'   // modals portal to document.body — see App.tsx zoom wrapper
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { HelpButton } from '../components/HelpDrawer'
@@ -861,7 +862,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
               )}
 
               {/* ── Delete confirm dialog ── */}
-              {itpDelConfirm && (
+              {itpDelConfirm && createPortal(
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 3000 }}>
                   <div style={{ background: cardBg, borderRadius: 10, padding: 28, maxWidth: 380, width: '90%', border: bd }}>
                     <div style={{ fontWeight: 600, marginBottom: 12, color: col }}>Delete ITP item #{itpDelConfirm.item_number}?</div>
@@ -884,7 +885,8 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                       </button>
                     </div>
                   </div>
-                </div>
+                </div>,
+                document.body,
               )}
 
               {/* ── Add / Edit modal ── */}
@@ -1142,7 +1144,7 @@ const ITPItemModal = ({
     setSaving(false)
   }
 
-  return (
+  return createPortal(
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 3000, overflowY: 'auto', paddingTop: '5vh', paddingBottom: '5vh' }}>
       <div style={{ background: cardBg, borderRadius: 12, padding: 28, width: 580, maxWidth: '94vw', border: bd, boxShadow: '0 20px 60px rgba(0,0,0,0.25)', maxHeight: '90vh', overflowY: 'auto', position: 'relative' }}>
         {/* Title */}
@@ -1267,7 +1269,8 @@ const ITPItemModal = ({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

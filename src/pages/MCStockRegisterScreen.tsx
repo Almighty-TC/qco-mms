@@ -2,6 +2,7 @@
 // Searchable warehouse stock across warehouses.
 // Group by: Warehouse / WBS / Item. Stock take modal. Move modal.
 import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { createPortal } from 'react-dom'   // modals portal to document.body — see App.tsx zoom wrapper
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { Pager } from '../components/Pager'
@@ -353,7 +354,7 @@ const HeatLinkModal = ({ dark, heat, projectId, onClose }: {
       .then(({ data }) => setData(data)).catch(() => setData({ certs: [], holds: [] })).finally(() => setLoading(false))
   }, [heat]) // eslint-disable-line
   const certStatusColor: Record<string, string> = { verified: '#16a34a', pending: '#d97706', received: '#d97706', overdue: '#d97706', rejected: '#dc2626' }
-  return (
+  return createPortal(
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
       <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 24, width: 520, maxWidth: '95vw', maxHeight: '85vh', overflow: 'auto', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
@@ -387,7 +388,8 @@ const HeatLinkModal = ({ dark, heat, projectId, onClose }: {
           </>
         )}
       </div>
-    </>
+    </>,
+    document.body,
   )
 }
 
@@ -421,7 +423,7 @@ const ResolveModal = ({ dark, item, projectId, onClose, onSaved, addToast }: {
     finally { setSaving(false) }
   }
 
-  return (
+  return createPortal(
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
       <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 24, width: 440, maxWidth: '95vw', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
@@ -461,7 +463,8 @@ const ResolveModal = ({ dark, item, projectId, onClose, onSaved, addToast }: {
           </button>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   )
 }
 
@@ -490,7 +493,7 @@ const StockTakeModal = ({ dark, stock, onClose }: { dark: boolean; stock: StockI
     ? { top: 16, left: 16, right: 16, bottom: 16 }
     : { top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: 700, maxWidth: '95vw', maxHeight: '85vh' }
 
-  return (
+  return createPortal(
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
       {/* Flex column: header + KPI + footer are pinned (flexShrink 0); only the
@@ -568,7 +571,8 @@ const StockTakeModal = ({ dark, stock, onClose }: { dark: boolean; stock: StockI
           </button>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   )
 }
 
@@ -594,7 +598,7 @@ const MoveModal = ({ dark, item, projectId, onClose, onSaved, addToast }: {
     finally { setSaving(false) }
   }
 
-  return (
+  return createPortal(
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
       <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 24, width: 400, zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif' }}>
@@ -616,7 +620,8 @@ const MoveModal = ({ dark, item, projectId, onClose, onSaved, addToast }: {
           </button>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   )
 }
 
@@ -634,7 +639,7 @@ const DocsPanel = ({ dark, item, onClose }: { dark: boolean; item: StockItem; on
     { label: 'DG / Handling', docs: [] },
   ]
 
-  return (
+  return createPortal(
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 6000 }} />
       <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 360, background: cardBg, borderLeft: bd, zIndex: 6001, display: 'flex', flexDirection: 'column', fontFamily: 'IBM Plex Sans, sans-serif' }}>
@@ -671,7 +676,8 @@ const DocsPanel = ({ dark, item, onClose }: { dark: boolean; item: StockItem; on
           <button style={{ padding: '6px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>↓ Download all (ZIP)</button>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   )
 }
 

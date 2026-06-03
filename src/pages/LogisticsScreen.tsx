@@ -2,6 +2,7 @@
 // SCN Register with pipeline status bar, filterable table, and
 // SCNDetailModal for full shipment detail (overview/packages/docs/timeline).
 import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { createPortal } from 'react-dom'   // modals portal to document.body — see App.tsx zoom wrapper
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
@@ -358,10 +359,11 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
       </div>
 
       {/* ── LOADING OVERLAY ────────────────────────────────── */}
-      {detailLoading && (
+      {detailLoading && createPortal(
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 4000 }}>
           <div style={{ background: cardBg, borderRadius: 12, padding: '20px 32px', color: col }}>Loading SCN…</div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* ── SCN DETAIL MODAL ────────────────────────────────── */}
@@ -398,7 +400,7 @@ const SCNDetailModal = ({ dark, scn, onClose, onRefresh, addToast, projectId }: 
   const sc = STATUS_CONFIG[scn.display_status] || STATUS_CONFIG.pending_pickup
   const rag = scn.rag || 'green'
 
-  return (
+  return createPortal(
     <>
       {/* Scrim */}
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 4000 }} />
@@ -467,7 +469,8 @@ const SCNDetailModal = ({ dark, scn, onClose, onRefresh, addToast, projectId }: 
           addToast={addToast}
         />
       )}
-    </>
+    </>,
+    document.body,
   )
 }
 
@@ -1076,7 +1079,7 @@ const StatusUpdateModal = ({ dark, scn, onClose, onSaved, addToast }: {
     } finally { setSaving(false) }
   }
 
-  return (
+  return createPortal(
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 5000 }} />
       <div style={{
@@ -1128,7 +1131,8 @@ const StatusUpdateModal = ({ dark, scn, onClose, onSaved, addToast }: {
           </button>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   )
 }
 

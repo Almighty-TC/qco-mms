@@ -3,6 +3,7 @@
 // Pipeline: Requested → In transit → Picked up → Delivered → Complete
 // + New transfer wizard (2 steps). Transfer detail modal with lifecycle stepper.
 import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { createPortal } from 'react-dom'   // modals portal to document.body — see App.tsx zoom wrapper
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
@@ -255,7 +256,7 @@ const TransferDetailModal = ({ dark, transfer, projectId, onClose, onStatusUpdat
     } catch (e: any) { addToast('error', e.response?.data?.error || 'Approval failed') }
   }
 
-  return (
+  return createPortal(
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
       <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 28, width: 520, maxWidth: '95vw', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
@@ -341,7 +342,8 @@ const TransferDetailModal = ({ dark, transfer, projectId, onClose, onStatusUpdat
           </div>
         )}
       </div>
-    </>
+    </>,
+    document.body,
   )
 }
 
@@ -407,7 +409,7 @@ const NewTransferWizard = ({ dark, projectId, warehouses, onClose, onSaved, addT
     finally { setSaving(false) }
   }
 
-  return (
+  return createPortal(
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
       <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 28, width: 560, maxWidth: '96vw', maxHeight: '92vh', overflow: 'auto', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
@@ -500,7 +502,8 @@ const NewTransferWizard = ({ dark, projectId, warehouses, onClose, onSaved, addT
           )}
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   )
 }
 

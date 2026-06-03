@@ -5,6 +5,7 @@
 // chosen module's own endpoint. Reuses the shared token / pill / table
 // patterns from Traceability & Material Control.
 import React, { useState, useEffect, useMemo } from 'react'
+import { createPortal } from 'react-dom'   // modals portal to document.body — see App.tsx zoom wrapper
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
@@ -294,7 +295,7 @@ const PreviewModal = ({ dark, doc, onClose, onGoSource, onDownload }: { dark: bo
       <span style={{ color: sub }}>{k}</span><span style={{ color: col, fontWeight: 500, textAlign: 'right' }}>{v}</span>
     </div>
   )
-  return (
+  return createPortal(
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 6000 }} />
       <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, width: 760, maxWidth: '95vw', maxHeight: '88vh', display: 'flex', flexDirection: 'column', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.35)' }}>
@@ -329,7 +330,8 @@ const PreviewModal = ({ dark, doc, onClose, onGoSource, onDownload }: { dark: bo
           <button onClick={onGoSource} style={{ padding: '8px 18px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>↗ Go to source</button>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   )
 }
 
@@ -397,7 +399,7 @@ const UploadDocModal = ({ dark, projectId, onClose, onDone, addToast }: {
     finally { setSaving(false) }
   }
 
-  return (
+  return createPortal(
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 6000 }} />
       <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 24, width: 560, maxWidth: '95vw', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.35)' }}>
@@ -469,7 +471,8 @@ const UploadDocModal = ({ dark, projectId, onClose, onDone, addToast }: {
           </button>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   )
 }
 
