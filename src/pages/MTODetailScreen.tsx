@@ -13,6 +13,8 @@ import { HelpButton } from '../components/HelpDrawer'
 import { MTO_DETAIL_HELP } from '../helpContent'
 import { BackButton } from '../components/BackButton'
 import { MilestoneLegend } from '../components/MilestoneLegend'
+import { Pager } from '../components/Pager'
+import { usePagedList } from '../hooks/usePagedList'
 
 // ─── API BASE ────────────────────────────────────────────────────────────────
 const API = 'http://localhost:3001/api'
@@ -348,50 +350,36 @@ const LineItemsTab = ({
 }: {
   dark: boolean; projectId: number; mtoId: number; currentRevision: string
 }) => {
-  const { addToast } = useToast()
-  const [lines,      setLines]      = useState<MTOLine[]>([])
-  const [loading,    setLoading]    = useState(true)
   const [filter,     setFilter]     = useState<'all' | 'po-raised' | 'rfq' | 'not-started'>('all')
   const [search,     setSearch]     = useState('')
   const [editTarget, setEditTarget] = useState<MTOLine | null>(null)
+  // Per-status totals for the whole revision (drive the tab badges); set by the fetcher.
+  const [counts, setCounts] = useState<Record<string, number>>({ all: 0, 'po-raised': 0, rfq: 0, 'not-started': 0 })
 
   const col  = dark ? '#f1f5f9' : '#0f172a'
   const sub  = dark ? '#94a3b8' : '#64748b'
   const bd   = `1px solid ${dark ? '#1e293b' : '#e2e8f0'}`
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const { data } = await axios.get<MTOLine[]>(`${API}/mto/${projectId}/${mtoId}/lines`, {
-        params: { revision: currentRevision }
-      })
-      setLines(data)
-    } catch {
-      addToast('error', 'Failed to load line items')
-    } finally {
-      setLoading(false)
+  // ─── SERVER-SIDE PAGED LOAD ──────────────────────────────────
+  // Filter (status/search) + sort run server-side across all 3,338 lines; the
+  // grid only ever holds one page. Tab badges come from the server `counts`.
+  const fetcher = useCallback(async ({ page, limit, sortCol, sortDir }: { page: number; limit: number; sortCol?: string; sortDir: 'asc' | 'desc' }) => {
+    const params: Record<string, string> = {
+      revision: currentRevision, page: String(page), limit: String(limit), sort_dir: sortDir,
     }
-  }, [projectId, mtoId, currentRevision])
+    if (sortCol)            params.sort_col = sortCol
+    if (filter !== 'all')   params.status   = filter
+    if (search.trim())      params.search   = search.trim()
+    const { data } = await axios.get(`${API}/mto/${projectId}/${mtoId}/lines`, { params })
+    setCounts(data.counts ?? { all: 0 })
+    return { data: data.data as MTOLine[], total: data.total as number }
+  }, [projectId, mtoId, currentRevision, filter, search])
 
-  useEffect(() => { load() }, [load])
-
-  const counts = {
-    all: lines.length,
-    'po-raised': lines.filter(l => l.status === 'po-raised').length,
-    rfq: lines.filter(l => l.status === 'rfq').length,
-    'not-started': lines.filter(l => l.status === 'not-started').length,
-  }
-
-  const visible = lines.filter(l => {
-    if (filter !== 'all' && l.status !== filter) return false
-    if (search) {
-      const q = search.toLowerCase()
-      return l.line_number.toLowerCase().includes(q) ||
-             l.description.toLowerCase().includes(q) ||
-             (l.wbs_code ?? '').toLowerCase().includes(q) ||
-             (l.po_ref ?? '').toLowerCase().includes(q)
-    }
-    return true
+  const {
+    data: lines, total, page, setPage, pageSize, loading, error,
+    sortCol, sortDir, toggleSort, reload,
+  } = usePagedList<MTOLine>({
+    fetcher, deps: [currentRevision, filter, search], pageSize: 50, initialSortCol: 'line_number',
   })
 
   const thStyle: React.CSSProperties = {
@@ -438,21 +426,40 @@ const LineItemsTab = ({
       {/* Table */}
       {loading ? (
         <div style={{ padding: 32, textAlign: 'center', color: sub, fontSize: 13 }}>Loading…</div>
+      ) : error ? (
+        <div style={{ padding: 32, textAlign: 'center', color: '#ef4444', fontSize: 13 }}>{error}</div>
       ) : (
         <>
         <div style={{ overflowX: 'auto', border: bd, borderRadius: 8, background: dark ? '#111827' : '#fff' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
-                {['LINE','WBS','DESCRIPTION','QTY','UOM','ROS','INSP','VDRL','PO REF','STATUS','',''].map((h, i) => (
-                  <th key={i} style={thStyle}>{h}</th>
+                {([
+                  { label: 'LINE', key: 'line_number' },
+                  { label: 'WBS', key: 'wbs_code' },
+                  { label: 'DESCRIPTION', key: 'description' },
+                  { label: 'QTY', key: 'quantity' },
+                  { label: 'UOM' },
+                  { label: 'ROS', key: 'ros_date' },
+                  { label: 'INSP' },
+                  { label: 'VDRL' },
+                  { label: 'PO REF' },
+                  { label: 'STATUS', key: 'status' },
+                  { label: '' },
+                  { label: '' },
+                ] as { label: string; key?: string }[]).map((c, i) => (
+                  <th key={i}
+                    onClick={c.key ? () => toggleSort(c.key!) : undefined}
+                    style={{ ...thStyle, cursor: c.key ? 'pointer' : 'default', userSelect: 'none' }}>
+                    {c.label}{c.key && sortCol === c.key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+                  </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {visible.length === 0 ? (
+              {lines.length === 0 ? (
                 <tr><td colSpan={12} style={{ padding: 28, textAlign: 'center', color: sub, fontSize: 13 }}>No lines match the filter.</td></tr>
-              ) : visible.map((l, i) => {
+              ) : lines.map((l, i) => {
                 const locked = l.status === 'po-raised'
                 const tdS: React.CSSProperties = {
                   padding: '9px 12px', borderBottom: bd, fontSize: 12, color: col,
@@ -490,6 +497,7 @@ const LineItemsTab = ({
             </tbody>
           </table>
         </div>
+        <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} />
         <MilestoneLegend dark={dark} />
         </>
       )}
@@ -501,8 +509,10 @@ const LineItemsTab = ({
           projectId={projectId}
           mtoId={mtoId}
           onClose={() => setEditTarget(null)}
-          onSaved={updated => {
-            setLines(prev => prev.map(l => l.id === updated.id ? updated : l))
+          onSaved={() => {
+            // Re-fetch the current page: an edit may change status and move the
+            // row out of the active filter, so a local splice would be wrong.
+            reload()
             setEditTarget(null)
           }}
         />

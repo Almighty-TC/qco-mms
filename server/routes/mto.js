@@ -406,6 +406,10 @@ router.get('/:projectId/:mtoId', async (req, res) => {
 })
 
 // ─── GET /:projectId/:mtoId/lines?revision=X — lines for a specific revision ──
+// ─── SERVER-SIDE PAGINATION: line items ───────────────────────────────────────
+// Returns { data, total, page, limit, counts }. Filter (status/search) + whitelisted
+// sort run across the WHOLE revision (not page-local). `counts` are per-status totals
+// for the revision (drive the filter-tab badges, independent of the active search).
 router.get('/:projectId/:mtoId/lines', async (req, res) => {
   try {
     const [[mto]] = await db.query(
@@ -415,13 +419,54 @@ router.get('/:projectId/:mtoId/lines', async (req, res) => {
     if (!mto) return res.status(404).json({ error: 'MTO not found' })
 
     const revision = req.query.revision || mto.current_revision
-    const [lines] = await db.query(
-      `SELECT * FROM mto_lines
-       WHERE mto_id = ? AND revision = ? AND is_deleted = 0
-       ORDER BY line_number ASC`,
+
+    // ─── PAGINATE ─── default 50, hard cap 200
+    const page   = Math.max(1, parseInt(req.query.page  || '1', 10))
+    const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)))
+    const offset = (page - 1) * limit
+
+    // ─── FILTERS (server-side, whole-set) ───
+    const where  = ['mto_id = ?', 'revision = ?', 'is_deleted = 0']
+    const params = [mto.id, revision]
+    const { status, search } = req.query
+    if (status && status !== 'all') { where.push('status = ?'); params.push(status) }
+    if (search) {
+      const q = `%${search}%`
+      where.push('(line_number LIKE ? OR description LIKE ? OR wbs_code LIKE ? OR po_ref LIKE ?)')
+      params.push(q, q, q, q)
+    }
+    const whereSql = where.join(' AND ')
+
+    // ─── WHITELISTED SORT (+ unique id tiebreaker — stable OFFSET windows) ───
+    const SAFE_SORT = {
+      line_number: 'line_number', description: 'description', wbs_code: 'wbs_code',
+      quantity: 'quantity', ros_date: 'ros_date', status: 'status',
+    }
+    const orderBy  = SAFE_SORT[req.query.sort_col] || 'line_number'
+    const orderDir = String(req.query.sort_dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'
+
+    // total for the filtered set
+    const [[{ total }]] = await db.query(
+      `SELECT COUNT(*) AS total FROM mto_lines WHERE ${whereSql}`, params
+    )
+
+    // per-status counts for the whole revision (tab badges — ignore status/search)
+    const [countRows] = await db.query(
+      `SELECT status, COUNT(*) AS n FROM mto_lines
+       WHERE mto_id = ? AND revision = ? AND is_deleted = 0 GROUP BY status`,
       [mto.id, revision]
     )
-    res.json(lines)
+    const counts = { all: 0, 'po-raised': 0, rfq: 0, 'not-started': 0 }
+    countRows.forEach(r => { counts[r.status] = r.n; counts.all += r.n })
+
+    const [lines] = await db.query(
+      `SELECT * FROM mto_lines
+       WHERE ${whereSql}
+       ORDER BY ${orderBy} ${orderDir}, id ${orderDir}
+       LIMIT ? OFFSET ?`,
+      [...params, limit, offset]
+    )
+    res.json({ data: lines, total, page, limit, counts })
   } catch (e) {
     console.error('GET /mto/:projectId/:mtoId/lines', e.message)
     res.status(500).json({ error: 'Failed to load lines' })
