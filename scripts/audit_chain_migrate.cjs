@@ -56,7 +56,38 @@ async function c2(conn) {
   }
 }
 
-const STEPS = { c1, c2 }
+// ── C3: one-time backfill of row_hash over EXISTING audit_log rows ──
+// MUST run before C4 (enforcement blocks UPDATE). project_id-backfill discipline:
+// changes ONLY row_hash; proves row count unchanged + every other column identical.
+async function c3(conn) {
+  const expr = rowHashExpr('audit_log', '')
+  // snapshot of ALL columns EXCEPT row_hash (order-stable, id-ordered)
+  const SNAP = `SELECT MD5(GROUP_CONCAT(MD5(CONCAT_WS('|',
+      id, COALESCE(user_id,'∅'), COALESCE(action,'∅'), COALESCE(entity_type,'∅'),
+      COALESCE(entity_id,'∅'), COALESCE(project_id,'∅'), COALESCE(before_value,'∅'),
+      COALESCE(after_value,'∅'), COALESCE(reason_category,'∅'), COALESCE(reason_detail,'∅'),
+      COALESCE(resource,'∅'), COALESCE(ip,'∅'), created_at)) ORDER BY id)) AS snap
+    FROM audit_log`
+  await conn.query('SET SESSION group_concat_max_len = 100000000')
+  const [[before]] = await conn.query('SELECT COUNT(*) c, SUM(row_hash IS NULL) nullh FROM audit_log')
+  const [[snapBefore]] = await conn.query(SNAP)
+
+  const [r] = await conn.query(`UPDATE audit_log SET row_hash = ${expr} WHERE row_hash IS NULL`)
+
+  const [[after]] = await conn.query('SELECT COUNT(*) c, SUM(row_hash IS NULL) nullh FROM audit_log')
+  const [[snapAfter]] = await conn.query(SNAP)
+  const [[bad]] = await conn.query(`SELECT COUNT(*) c FROM audit_log WHERE row_hash <> ${expr} OR row_hash IS NULL`)
+
+  console.log(`C3 backfill: updated ${r.affectedRows} rows`)
+  console.log(`  row count: ${before.c} -> ${after.c}  ${before.c === after.c ? '✓ unchanged' : '✗ CHANGED'}`)
+  console.log(`  row_hash NULL: ${before.nullh} -> ${after.nullh}  ${after.nullh == 0 ? '✓ all populated' : '✗'}`)
+  console.log(`  other-columns checksum: ${snapBefore.snap === snapAfter.snap ? '✓ IDENTICAL (only row_hash changed)' : '✗ OTHER COLUMNS MOVED'}`)
+  console.log(`    before=${snapBefore.snap}`)
+  console.log(`    after =${snapAfter.snap}`)
+  console.log(`  rows failing re-verify: ${bad.c}  ${bad.c == 0 ? '✓ all re-hash-verify' : '✗'}`)
+}
+
+const STEPS = { c1, c2, c3 }
 
 async function main() {
   const step = process.argv[2]
