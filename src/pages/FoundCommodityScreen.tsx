@@ -9,6 +9,7 @@ import { BackButton } from '../components/BackButton'
 import { MilestoneLegend } from '../components/MilestoneLegend'
 import { Pager } from '../components/Pager'
 import { usePagedList } from '../hooks/usePagedList'
+import { isApprovalRequired, submitForApproval, approvalToast } from '../lib/pendingChanges'
 
 const API = 'http://localhost:3001/api'
 
@@ -42,9 +43,10 @@ const TRACE_COLORS: Record<string, string> = {
 }
 
 // ─── ADD/EDIT COMMODITY MODAL ────────────────────────────────
-const CommodityModal = ({ projectId, wbsNodes, item, dark, onClose, onSaved }: {
+const CommodityModal = ({ projectId, wbsNodes, item, dark, onClose, onSaved, onQueued }: {
   projectId: number; wbsNodes: WBSNode[]; item: Commodity | null
   dark: boolean; onClose: () => void; onSaved: (c: Commodity) => void
+  onQueued: (msg: string) => void
 }) => {
   const editing = !!item
   const [code,     setCode]   = useState(item?.code ?? '')
@@ -69,8 +71,8 @@ const CommodityModal = ({ projectId, wbsNodes, item, dark, onClose, onSaved }: {
 
   const save = async () => {
     setSaving(true); setErr('')
+    const payload = { name, uom, wbs_code: wbs, wbs_node_id: wbsNode?.id ?? null, estimated_qty: qty ? Number(qty) : null, trace_level: trace, preservation: pres, preferred_vendor: vendor || null, notes: notes || null, status }
     try {
-      const payload = { name, uom, wbs_code: wbs, wbs_node_id: wbsNode?.id ?? null, estimated_qty: qty ? Number(qty) : null, trace_level: trace, preservation: pres, preferred_vendor: vendor || null, notes: notes || null, status }
       let result: Commodity
       if (editing && item) {
         const { data } = await axios.patch(`${API}/foundational/${projectId}/commodities/${item.id}`, payload)
@@ -82,6 +84,20 @@ const CommodityModal = ({ projectId, wbsNodes, item, dark, onClose, onSaved }: {
       onSaved(result)
       onClose()
     } catch (e: unknown) {
+      // Proposer roles can't create commodities directly (edits are free) — the
+      // create is intercepted with a requiresApproval 409. Stage it for confirmation.
+      if (isApprovalRequired(e)) {
+        try {
+          const r = await submitForApproval(projectId, 'commodity', 'create', { code: code.trim(), ...payload })
+          onQueued(`✓ ${approvalToast(r)}`)
+          onClose()
+        } catch (se: unknown) {
+          const ser = se as { response?: { data?: { error?: string } } }
+          setErr(ser.response?.data?.error ?? 'Could not submit to approval queue')
+          setSaving(false)
+        }
+        return
+      }
       const er = e as { response?: { data?: { error?: string } } }
       setErr(er.response?.data?.error ?? 'Save failed')
       setSaving(false)
@@ -399,6 +415,7 @@ export const FoundCommodityScreen = ({ dark, projectId, projectName, onBack }: {
             showToast(`✓ Commodity ${saved.code} ${editItem ? 'updated' : 'added'}`)
             setAddModal(false); setEditItem(null)
           }}
+          onQueued={msg => { reload(); showToast(msg); setAddModal(false); setEditItem(null) }}
         />
       )}
       {certsItem && (

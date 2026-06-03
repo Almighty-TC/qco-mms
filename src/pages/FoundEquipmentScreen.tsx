@@ -9,6 +9,7 @@ import { BackButton } from '../components/BackButton'
 import { MilestoneLegend } from '../components/MilestoneLegend'
 import { Pager } from '../components/Pager'
 import { usePagedList } from '../hooks/usePagedList'
+import { isApprovalRequired, submitForApproval, approvalToast } from '../lib/pendingChanges'
 
 const API = 'http://localhost:3001/api'
 
@@ -54,9 +55,10 @@ const CRIT_COLORS: Record<string, string> = {
 }
 
 // ─── ADD/EDIT EQUIPMENT MODAL ─────────────────────────────────
-const EquipmentModal = ({ projectId, wbsNodes, item, dark, onClose, onSaved }: {
+const EquipmentModal = ({ projectId, wbsNodes, item, dark, onClose, onSaved, onQueued }: {
   projectId: number; wbsNodes: WBSNode[]; item: Equipment | null
   dark: boolean; onClose: () => void; onSaved: (e: Equipment) => void
+  onQueued: (msg: string) => void
 }) => {
   const editing = !!item
   const [tag,    setTag]    = useState(item?.tag ?? '')
@@ -85,14 +87,14 @@ const EquipmentModal = ({ projectId, wbsNodes, item, dark, onClose, onSaved }: {
 
   const save = async () => {
     setSaving(true); setErr('')
+    const payload = {
+      equipment_type: type, wbs_code: wbs, wbs_node_id: wbsNode?.id ?? null,
+      description: desc.trim(), area_location: area || null, criticality: crit,
+      spec: spec || null, trace_class: trace, po_reference: poRef || null,
+      vendor: vendor || null, weight_kg: weight ? Number(weight) : null,
+      size_lwh: size || null, notes: notes || null, status,
+    }
     try {
-      const payload = {
-        equipment_type: type, wbs_code: wbs, wbs_node_id: wbsNode?.id ?? null,
-        description: desc.trim(), area_location: area || null, criticality: crit,
-        spec: spec || null, trace_class: trace, po_reference: poRef || null,
-        vendor: vendor || null, weight_kg: weight ? Number(weight) : null,
-        size_lwh: size || null, notes: notes || null, status,
-      }
       let result: Equipment
       if (editing && item) {
         const { data } = await axios.patch(`${API}/foundational/${projectId}/equipment/${item.id}`, payload)
@@ -104,6 +106,20 @@ const EquipmentModal = ({ projectId, wbsNodes, item, dark, onClose, onSaved }: {
       onSaved(result)
       onClose()
     } catch (e: unknown) {
+      // Proposer roles can't create equipment directly (edits are free) — the
+      // create is intercepted with a requiresApproval 409. Stage it for confirmation.
+      if (isApprovalRequired(e)) {
+        try {
+          const r = await submitForApproval(projectId, 'equipment', 'create', { tag: tag.trim(), ...payload })
+          onQueued(`✓ ${approvalToast(r)}`)
+          onClose()
+        } catch (se: unknown) {
+          const ser = se as { response?: { data?: { error?: string } } }
+          setErr(ser.response?.data?.error ?? 'Could not submit to approval queue')
+          setSaving(false)
+        }
+        return
+      }
       const er = e as { response?: { data?: { error?: string } } }
       setErr(er.response?.data?.error ?? 'Save failed')
       setSaving(false)
@@ -431,6 +447,7 @@ export const FoundEquipmentScreen = ({ dark, projectId, projectName, onBack }: {
             showToast(`✓ Equipment ${saved.tag} ${editItem ? 'updated' : 'added'}`)
             setAddModal(false); setEditItem(null)
           }}
+          onQueued={msg => { reload(); showToast(msg); setAddModal(false); setEditItem(null) }}
         />
       )}
       {certsItem && (

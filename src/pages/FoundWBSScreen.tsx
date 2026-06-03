@@ -8,6 +8,7 @@ import { HelpButton } from '../components/HelpDrawer'
 import { WBS_HELP } from '../helpContent'
 import { WBSGanttView } from '../components/WBSGanttView'
 import { BackButton } from '../components/BackButton'
+import { isApprovalRequired, submitForApproval, approvalToast } from '../lib/pendingChanges'
 
 const API = 'http://localhost:3001/api'
 
@@ -153,8 +154,9 @@ const NoteModal = ({ node, dark, onClose, onSaved }: { node: WBSNode; dark: bool
 }
 
 // ─── ADD WBS NODE MODAL — with forecast + actual dates ───────
-const AddNodeModal = ({ projectId, nodes, dark, onClose, onCreated, prefill }: {
+const AddNodeModal = ({ projectId, nodes, dark, onClose, onCreated, onQueued, prefill }: {
   projectId: number; nodes: WBSNode[]; dark: boolean; onClose: () => void; onCreated: (n: WBSNode) => void
+  onQueued: (msg: string) => void
   prefill?: Partial<WBSNode>
 }) => {
   const [parentId, setParentId]       = useState(prefill?.parent_id ? String(prefill.parent_id) : '')
@@ -195,6 +197,28 @@ const AddNodeModal = ({ projectId, nodes, dark, onClose, onCreated, prefill }: {
       onCreated(data)
       onClose()
     } catch (e: unknown) {
+      // Proposer roles can't write WBS directly — the create is intercepted with a
+      // requiresApproval 409. Stage it for confirmation; this is success, not error.
+      if (isApprovalRequired(e)) {
+        try {
+          const r = await submitForApproval(projectId, 'wbs', 'create', {
+            code: fullCode, description: description.trim(),
+            parent_id: parentId ? Number(parentId) : null,
+            rag: rag || null, ros_date: rosDate || null,
+            planned_start: plannedStart || null, planned_end: plannedEnd || null,
+            forecast_start: forecastStart || null, forecast_end: forecastEnd || null,
+            actual_start: actualStart || null, actual_end: actualEnd || null,
+            notes: notes || null,
+          })
+          onQueued(`✓ ${approvalToast(r)}`)
+          onClose()
+        } catch (se: unknown) {
+          const ser = se as { response?: { data?: { error?: string } } }
+          setErr(ser.response?.data?.error ?? 'Could not submit to approval queue')
+          setSaving(false)
+        }
+        return
+      }
       const er = e as { response?: { data?: { error?: string } } }
       setErr(er.response?.data?.error ?? 'Failed to create node')
       setSaving(false)
@@ -1884,7 +1908,7 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
         <NoteModal node={editNode} dark={dark} onClose={() => setEditNode(null)} onSaved={n => { handleNodeSaved(n); setEditNode(null) }} />
       )}
       {showAdd && (
-        <AddNodeModal projectId={projectId} nodes={nodes} dark={dark} onClose={() => setShowAdd(false)} onCreated={handleNodeCreated} />
+        <AddNodeModal projectId={projectId} nodes={nodes} dark={dark} onClose={() => setShowAdd(false)} onCreated={handleNodeCreated} onQueued={showToast} />
       )}
       {deleteNode && (
         <DeleteWBSWizard node={deleteNode} projectId={projectId} dark={dark} onClose={() => setDeleteNode(null)} onDeleted={() => { load(); showToast('Node deleted') }} />

@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import axios from 'axios'
+import { isApprovalRequired, submitForApproval, approvalToast } from '../lib/pendingChanges'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { ToastContainer } from '../components/Toast'
 import { HelpButton } from '../components/HelpDrawer'
@@ -146,6 +147,20 @@ const NewMTOModal = ({
       addToast('success', `${mto.reference} created`)
       onCreated(mto)
     } catch (e: unknown) {
+      // Proposer roles can't write the register directly — the POST above is
+      // intercepted with a requiresApproval 409. Stage it for confirmation instead.
+      if (isApprovalRequired(e)) {
+        try {
+          const r = await submitForApproval(projectId, 'mto', 'create',
+            { name, reference: ref, current_revision: revision, owner: owner || null, description: desc || null })
+          addToast('success', approvalToast(r))
+          onClose()
+        } catch (se: unknown) {
+          const serr = se as { response?: { data?: { error?: string } } }
+          addToast('error', serr.response?.data?.error ?? 'Could not submit to approval queue')
+        }
+        return
+      }
       const err = e as { response?: { data?: { error?: string } } }
       addToast('error', err.response?.data?.error ?? 'Failed to create MTO')
     } finally {
@@ -525,6 +540,21 @@ const UploadNewMTOModal = ({
       addToast('success', `${ref} created — ${parseResult.linesValid} lines imported`)
       onClose(); load()
     } catch (e: unknown) {
+      // Proposer: the register create is gated — stage it for confirmation. (The
+      // file's lines import only after the register exists, i.e. post-approval.)
+      if (isApprovalRequired(e)) {
+        try {
+          const r = await submitForApproval(projectId, 'mto', 'create',
+            { name, reference: ref, current_revision: revision, owner, description: notes })
+          addToast('success', approvalToast(r))
+          onClose(); load()
+        } catch (se: unknown) {
+          const serr = se as { response?: { data?: { error?: string } } }
+          addToast('error', serr.response?.data?.error ?? 'Could not submit to approval queue')
+        }
+        setCreating(false)
+        return
+      }
       const err = e as { response?: { data?: { error?: string } } }
       addToast('error', err.response?.data?.error ?? 'Failed to create MTO')
       setCreating(false)
