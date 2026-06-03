@@ -377,14 +377,38 @@ router.get('/:projectId/stock', async (req, res) => {
       conditions.push('(s.item_code LIKE ? OR s.description LIKE ? OR s.wbs_code LIKE ? OR s.vendor_name LIKE ?)')
       params.push(q, q, q, q)
     }
+    const whereSql = conditions.join(' AND ')
+
+    // ─── PAGINATE ─── default 50, hard cap 200
+    const page   = Math.max(1, parseInt(req.query.page  || '1', 10))
+    const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)))
+    const offset = (page - 1) * limit
+
+    // ─── WHITELISTED SORT (+ unique s.id tiebreaker — stable OFFSET windows) ───
+    // Default view keeps the natural warehouse→location ordering.
+    const SAFE_SORT = {
+      warehouse: 'w.name', location: 's.location_code', item_code: 's.item_code',
+      description: 's.description', wbs_code: 's.wbs_code', vendor_name: 's.vendor_name',
+      quantity: 's.qty', condition_status: 's.condition_status',
+    }
+    const orderDir = String(req.query.sort_dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'
+    const orderClause = req.query.sort_col && SAFE_SORT[req.query.sort_col]
+      ? `${SAFE_SORT[req.query.sort_col]} ${orderDir}, s.id ${orderDir}`
+      : `w.name ${orderDir}, s.location_code ${orderDir}, s.id ${orderDir}`
+
+    // total for the filtered set (conditions are all on s.* — no join needed)
+    const [[{ total }]] = await db.query(
+      `SELECT COUNT(*) AS total FROM warehouse_stock s WHERE ${whereSql}`, params
+    )
 
     const [stockRaw] = await db.query(
       `SELECT s.*, w.name AS warehouse_name, w.code AS warehouse_code
        FROM warehouse_stock s
        JOIN warehouses w ON s.warehouse_id = w.id
-       WHERE ${conditions.join(' AND ')}
-       ORDER BY w.name, s.location_code`,
-      params
+       WHERE ${whereSql}
+       ORDER BY ${orderClause}
+       LIMIT ? OFFSET ?`,
+      [...params, limit, offset]
     )
 
     // Subcontractors: strip grid location and hold reason
@@ -393,6 +417,7 @@ router.get('/:projectId/stock', async (req, res) => {
       : row
     )
 
+    // Whole-project stat cards (independent of filter/page).
     const [[totals]] = await db.query(
       `SELECT COUNT(*) AS total_items,
               COUNT(DISTINCT s.warehouse_id) AS warehouse_count,
@@ -402,7 +427,7 @@ router.get('/:projectId/stock', async (req, res) => {
       [pid]
     )
 
-    res.json({ data: stock, totals, wbs_scopes: subWbsCodes })
+    res.json({ data: stock, total, page, limit, totals, wbs_scopes: subWbsCodes })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 

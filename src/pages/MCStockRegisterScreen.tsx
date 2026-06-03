@@ -1,9 +1,11 @@
 // ─── MC STOCK REGISTER ────────────────────────────────────────
 // Searchable warehouse stock across warehouses.
 // Group by: Warehouse / WBS / Item. Stock take modal. Move modal.
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
+import { Pager } from '../components/Pager'
+import { usePagedList } from '../hooks/usePagedList'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { useCurrentUser } from '../hooks/useCurrentUser'
 import { ScopeBanner } from '../components/ScopeBanner'
@@ -65,12 +67,11 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
   const sub    = '#94a3b8'
   const theadBg = dark ? '#162032' : '#f8fafc'
 
-  const [stock, setStock]     = useState<StockItem[]>([])
   const [totals, setTotals]   = useState<any>(null)
   const [wbsScopes, setWbsScopes] = useState<string[]>([])
-  const [loading, setLoading] = useState(true)
   const [search, setSearch]   = useState('')
-  const [groupBy, setGroupBy] = useState<GroupBy>('warehouse')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [groupBy, setGroupBy] = useState<GroupBy>('warehouse') // now drives the server-side sort
   const [showHolds, setShowHolds] = useState(false)
   const [showStockTake, setShowStockTake] = useState(false)
   const [moveItem, setMoveItem] = useState<StockItem | null>(null)
@@ -81,20 +82,6 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
   const [heatLink, setHeatLink] = useState<string | null>(null)
   const normHeat = (h?: string | null) => (h || '').trim().toUpperCase()
 
-  const fetchStock = async () => {
-    setLoading(true)
-    try {
-      const { data } = await axios.get(`${API}/mc/${projectId}/stock`, {
-        params: { search: search.trim() || undefined, show_holds: showHolds ? 'true' : undefined }
-      })
-      setStock(data.data || [])
-      setTotals(data.totals)
-      if (data.wbs_scopes) setWbsScopes(data.wbs_scopes)
-    } catch (e: any) {
-      addToast('error', e.response?.data?.error || 'Failed to load stock register')
-    } finally { setLoading(false) }
-  }
-
   // Heat/Lot P5 — load the per-heat cert-status map once (read-only join feed).
   useEffect(() => {
     axios.get(`${API}/traceability/${projectId}/heat-status`)
@@ -102,21 +89,37 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
       .catch(() => setHeatStatus({}))
   }, [projectId])
 
-  useEffect(() => { fetchStock() }, [projectId, showHolds]) // eslint-disable-line
+  // Debounce search so we don't hit the server on every keystroke.
   useEffect(() => {
-    const t = setTimeout(fetchStock, 350)
+    const t = setTimeout(() => setDebouncedSearch(search), 350)
     return () => clearTimeout(t)
-  }, [search]) // eslint-disable-line
+  }, [search])
 
-  // Group stock
-  const grouped = stock.reduce((acc, item) => {
-    const key = groupBy === 'warehouse' ? `${item.warehouse_name} (${item.warehouse_code})` :
-                groupBy === 'wbs'       ? (item.wbs_code || 'No WBS') :
-                                          item.item_code
-    if (!acc[key]) acc[key] = []
-    acc[key].push(item)
-    return acc
-  }, {} as Record<string, StockItem[]>)
+  // ─── SERVER-SIDE PAGED LOAD ──────────────────────────────────
+  // Filter (search/show_holds) + sort run server-side across the whole register;
+  // the grid holds one page. The Warehouse/WBS/Item control drives sort_col so
+  // related items stay contiguous across pages (no misleading per-page grouping).
+  const fetcher = useCallback(async ({ page, limit, sortCol, sortDir }: { page: number; limit: number; sortCol?: string; sortDir: 'asc' | 'desc' }) => {
+    const params: Record<string, string> = { page: String(page), limit: String(limit), sort_dir: sortDir }
+    if (sortCol)                  params.sort_col   = sortCol
+    if (debouncedSearch.trim())   params.search     = debouncedSearch.trim()
+    if (showHolds)                params.show_holds = 'true'
+    const { data } = await axios.get(`${API}/mc/${projectId}/stock`, { params })
+    setTotals(data.totals)
+    if (data.wbs_scopes) setWbsScopes(data.wbs_scopes)
+    return { data: (data.data ?? []) as StockItem[], total: (data.total ?? 0) as number }
+  }, [projectId, debouncedSearch, showHolds])
+
+  const {
+    data: stock, total, page, setPage, pageSize, loading,
+    sortCol, sortDir, setSortCol, setSortDir, toggleSort, reload,
+  } = usePagedList<StockItem>({ fetcher, deps: [projectId, debouncedSearch, showHolds], pageSize: 50, initialSortCol: 'warehouse' })
+
+  // Group control → server sort column (related rows stay contiguous across pages).
+  const GROUP_SORT: Record<GroupBy, string> = { warehouse: 'warehouse', wbs: 'wbs_code', item: 'item_code' }
+  const selectGroup = (g: GroupBy) => { setGroupBy(g); setSortCol(GROUP_SORT[g]); setSortDir('asc') }
+  // A sortable column header (uses ▲/▼ on the active column).
+  const sortArrow = (k: string) => sortCol === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
 
   const inputSt: React.CSSProperties = { fontSize: 12, padding: '7px 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontFamily: 'inherit' }
 
@@ -194,9 +197,10 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
           <div style={{ display: 'flex', gap: 0, border: bd, borderRadius: 6, overflow: 'hidden' }}>
             {(['Warehouse','WBS','Item'] as const).map(g => {
               const val = g.toLowerCase() as GroupBy
+              const active = sortCol === GROUP_SORT[val]
               return (
-                <button key={g} onClick={() => setGroupBy(val)}
-                  style={{ padding: '6px 12px', border: 'none', background: groupBy === val ? '#E84E0F' : 'none', color: groupBy === val ? '#fff' : sub, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>
+                <button key={g} onClick={() => selectGroup(val)} title={`Sort by ${g.toLowerCase()}`}
+                  style={{ padding: '6px 12px', border: 'none', background: active ? '#E84E0F' : 'none', color: active ? '#fff' : sub, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>
                   {g}
                 </button>
               )
@@ -204,20 +208,17 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
           </div>
         </div>
 
-        {/* Table grouped */}
-        <div ref={tablesRef} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {/* Table (flat + paginated; the Warehouse/WBS/Item control sets the server sort) */}
+        <div ref={tablesRef}>
           {loading ? (
             <div style={{ background: cardBg, border: bd, borderRadius: 8, padding: 40, textAlign: 'center', color: sub }}>Loading…</div>
-          ) : Object.entries(grouped).map(([groupKey, items]) => (
-            <div key={groupKey} style={{ background: cardBg, border: bd, borderRadius: 8, overflow: 'hidden' }}>
-              {/* Group header */}
-              <div style={{ padding: '8px 14px', background: dark ? '#162032' : '#f8fafc', borderBottom: bd, display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontSize: 13, fontWeight: 600, color: col }}>{groupKey}</span>
-                <span style={{ fontSize: 11, color: sub }}>{items.length} item{items.length !== 1 ? 's' : ''}</span>
-                {items.some(i => i.trace_hold) && (
-                  <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: 6, background: 'rgba(239,68,68,0.1)', color: '#ef4444', fontWeight: 600 }}>HOLD</span>
-                )}
-              </div>
+          ) : stock.length === 0 ? (
+            <div style={{ background: cardBg, border: bd, borderRadius: 8, padding: 50, textAlign: 'center', color: sub }}>
+              <div style={{ fontSize: 24, marginBottom: 8 }}>🏭</div>
+              <div>No stock items found.</div>
+            </div>
+          ) : (
+            <div style={{ background: cardBg, border: bd, borderRadius: 8, overflow: 'hidden' }}>
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', minWidth: isSubcontractor ? STOCK_MINW_SUB : STOCK_MINW, borderCollapse: 'collapse', fontSize: 12, tableLayout: 'fixed' }}>
                   <colgroup>
@@ -225,13 +226,19 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                   </colgroup>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                     <tr style={{ borderBottom: bd }}>
-                      {(isSubcontractor ? ['ITEM/TAG','DESCRIPTION','HEAT','WBS','QTY','UOM','CONDITION','VENDOR'] : ['LOCATION','ITEM/TAG','DESCRIPTION','HEAT','WBS','QTY','UOM','CONDITION','VENDOR','HOLD','']).map(h => (
-                        <th key={h} style={{ padding: '7px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
+                      {(isSubcontractor
+                        ? [{ label: 'ITEM/TAG', key: 'item_code' }, { label: 'DESCRIPTION', key: 'description' }, { label: 'HEAT' }, { label: 'WBS', key: 'wbs_code' }, { label: 'QTY', key: 'quantity' }, { label: 'UOM' }, { label: 'CONDITION', key: 'condition_status' }, { label: 'VENDOR', key: 'vendor_name' }]
+                        : [{ label: 'LOCATION', key: 'location' }, { label: 'ITEM/TAG', key: 'item_code' }, { label: 'DESCRIPTION', key: 'description' }, { label: 'HEAT' }, { label: 'WBS', key: 'wbs_code' }, { label: 'QTY', key: 'quantity' }, { label: 'UOM' }, { label: 'CONDITION', key: 'condition_status' }, { label: 'VENDOR', key: 'vendor_name' }, { label: 'HOLD' }, { label: '' }]
+                      ).map(h => (
+                        <th key={h.label || 'actions'} onClick={h.key ? () => toggleSort(h.key!) : undefined}
+                          style={{ padding: '7px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap', cursor: h.key ? 'pointer' : 'default', userSelect: 'none' }}>
+                          {h.label}{h.key ? sortArrow(h.key) : ''}
+                        </th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {items.map(item => {
+                    {stock.map(item => {
                       const cond = condPill(item.condition_status)
                       return (
                         <tr key={item.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
@@ -258,9 +265,11 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                             <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: cond.bg, color: cond.color, fontWeight: 600 }}>{cond.label}</span>
                           </td>
                           <td style={{ padding: '8px 12px', color: sub, fontSize: 11, ...ellipsisCell }}>{item.vendor_name || '—'}</td>
-                          <td style={{ padding: '8px 12px' }}>
-                            {item.trace_hold ? <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: 'rgba(239,68,68,0.1)', color: '#ef4444', fontWeight: 600 }}>hold</span> : <span style={{ color: sub }}>—</span>}
-                          </td>
+                          {!isSubcontractor && (
+                            <td style={{ padding: '8px 12px' }}>
+                              {item.trace_hold ? <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: 'rgba(239,68,68,0.1)', color: '#ef4444', fontWeight: 600 }}>hold</span> : <span style={{ color: sub }}>—</span>}
+                            </td>
+                          )}
                           {/* Subcontractors: no Docs/Move/Resolve buttons */}
                           {!isSubcontractor && (
                             <td style={{ padding: '8px 12px' }}>
@@ -287,14 +296,10 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                 </table>
               </div>
             </div>
-          ))}
-          {!loading && Object.keys(grouped).length === 0 && (
-            <div style={{ background: cardBg, border: bd, borderRadius: 8, padding: 50, textAlign: 'center', color: sub }}>
-              <div style={{ fontSize: 24, marginBottom: 8 }}>🏭</div>
-              <div>No stock items found.</div>
-            </div>
           )}
         </div>
+
+        <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} />
       </div>
 
       {/* Stock Take Modal */}
@@ -306,7 +311,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
       {moveItem && (
         <MoveModal dark={dark} item={moveItem} projectId={projectId}
           onClose={() => setMoveItem(null)}
-          onSaved={() => { setMoveItem(null); fetchStock(); addToast('success', 'Item moved') }}
+          onSaved={() => { setMoveItem(null); reload(); addToast('success', 'Item moved') }}
           addToast={addToast} />
       )}
 
@@ -319,7 +324,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
       {resolveItem && (
         <ResolveModal dark={dark} item={resolveItem} projectId={projectId}
           onClose={() => setResolveItem(null)}
-          onSaved={(msg) => { setResolveItem(null); fetchStock(); addToast('success', msg) }}
+          onSaved={(msg) => { setResolveItem(null); reload(); addToast('success', msg) }}
           addToast={addToast} />
       )}
 
