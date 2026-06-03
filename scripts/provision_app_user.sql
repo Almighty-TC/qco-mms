@@ -90,6 +90,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON qmat.rfi_meeting_records TO 'qmat_app'@'
 GRANT SELECT, INSERT, UPDATE, DELETE ON qmat.meeting_attendees   TO 'qmat_app'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON qmat.meeting_actions     TO 'qmat_app'@'%';
 
+-- ─── Dashboard C1 (added by migrate-dashboard-weights.js) ──────
+GRANT SELECT, INSERT, UPDATE ON qmat.project_health_weights TO 'qmat_app'@'%';
+
 FLUSH PRIVILEGES;
 
 -- ─── DELIBERATELY NOT GRANTED (no runtime app code touches these as of this migration) ──
@@ -99,5 +102,6 @@ FLUSH PRIVILEGES;
 --   ros_change_log, user_project_access, vdrl_alert_rules, vdrl_mdr, vdrl_review_comments,
 --   vdrl_revisions, vdrl_transmittals, vdrl_transmittal_docs, vdrl_expediting_log, vendor_contacts
 --
--- Total: 62 tables granted (exact ops); 14 intentionally ungranted.
---   (+3 in C1: rfi_meeting_records, meeting_attendees, meeting_actions)
+-- Total: 63 tables granted (exact ops); 14 intentionally ungranted.
+--   (+3 rfi_meeting: rfi_meeting_records, meeting_attendees, meeting_actions)
+--   (+1 dashboard: project_health_weights)

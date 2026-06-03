@@ -68,6 +68,9 @@ app.use('/api/pending-changes', require('./routes/pendingChanges'))
 // One register, two record types; polymorphic project/WBS/PO/SCN link.
 app.use('/api/rfi-meeting', require('./routes/rfiMeeting'))
 
+// ─── DASHBOARD (project-view aggregate; gated, scoped, parallel) ──
+app.use('/api/dashboard', require('./routes/dashboard'))
+
 // ─── AUDIT VIEWER (read-only over the immutable audit_log) ───
 // Read gated to admin + oversight roles; QA sign-off (C2) writes to audit_review only.
 app.use('/api/audit', require('./routes/audit'))
