@@ -84,18 +84,20 @@ async function audit(req, action, resource, before = null, after = null, entityT
   try {
     const userId = req.user?.id ?? null
     const ip     = req.ip ?? null
+    // Parse the PO id from the structured resource (purchase_orders/<id>) ONCE — used for
+    // BOTH entity_id (the structured FK, fixes the NULL-entity_id bug) and the project_id
+    // fallback (the C3 work). `resource` stays the full URL; entity_id is the FK.
+    const m = /(?:^|\/)purchase_orders\/(\d+)/.exec(resource || '')
+    const entityId = (entityType === 'purchase_order' && m) ? Number(m[1]) : null
     let pid = Number(projectId) || null
-    if (pid == null) {
-      const m = /(?:^|\/)purchase_orders\/(\d+)/.exec(resource || '')
-      if (m) {
-        const [[po]] = await db.query('SELECT project_id FROM purchase_orders WHERE id=?', [Number(m[1])])
-        pid = po?.project_id ?? null
-      }
+    if (pid == null && m) {
+      const [[po]] = await db.query('SELECT project_id FROM purchase_orders WHERE id=?', [Number(m[1])])
+      pid = po?.project_id ?? null
     }
     await db.query(
-      `INSERT INTO audit_log (user_id, action, entity_type, project_id, resource, ip, before_value, after_value)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [userId, action, entityType, pid, resource, ip,
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, resource, ip, before_value, after_value)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [userId, action, entityType, entityId, pid, resource, ip,
        before ? JSON.stringify(before) : null,
        after  ? JSON.stringify(after)  : null]
     )
