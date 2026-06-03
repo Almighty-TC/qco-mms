@@ -283,9 +283,15 @@ router.get('/scn/:scnId', async (req, res) => {
       [scn.po_id || 0]
     )
 
-    // Off-PO additional items
+    // Off-PO additional items — LEFT JOIN the parent po_line so the read side can
+    // render parent-linked variations ("for: Line N — <desc>"), matching the wizard.
+    // is_variation/parent_po_line_id come from scn_additional_items; legacy unlinked
+    // rows return NULL parent fields and render as a generic "Additional item".
     const [additional_items] = await db.query(
-      'SELECT * FROM scn_additional_items WHERE scn_id = ?',
+      `SELECT ai.*, pl.line_number AS parent_line_number, pl.description AS parent_description
+       FROM scn_additional_items ai
+       LEFT JOIN po_lines pl ON pl.id = ai.parent_po_line_id
+       WHERE ai.scn_id = ?`,
       [scnId]
     )
 

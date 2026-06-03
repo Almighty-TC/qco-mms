@@ -646,13 +646,27 @@ const OverviewTab = ({ dark, scn, onRefresh, addToast }: {
       {scn.additional_items?.length > 0 && (
         <div style={{ marginTop: 16 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: col, marginBottom: 8 }}>Additional Items (off-PO)</div>
-          {scn.additional_items.map((it: any) => (
-            <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', background: dark ? '#162032' : '#f8fafc', borderRadius: 6, marginBottom: 4, fontSize: 12 }}>
-              <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 6, background: 'rgba(139,92,246,0.1)', color: '#8b5cf6' }}>Additional item</span>
-              <span style={{ color: col }}>{it.description}</span>
-              {it.qty && <span style={{ color: sub }}>{it.qty} {it.uom}</span>}
-            </div>
-          ))}
+          {scn.additional_items.map((it: any) => {
+            // Parent-linked off-PO variation (wizard-created) vs legacy unlinked item.
+            const isVariation = !!(it.is_variation || it.parent_po_line_id)
+            return (
+              <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', background: dark ? '#162032' : '#f8fafc', borderRadius: 6, marginBottom: 4, fontSize: 12 }}>
+                {isVariation ? (
+                  <span style={{ fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 6, background: 'rgba(245,158,11,0.12)', color: '#d97706' }}>⚠ Off-PO variation</span>
+                ) : (
+                  <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 6, background: 'rgba(139,92,246,0.1)', color: '#8b5cf6' }}>Additional item</span>
+                )}
+                <span style={{ color: col }}>{it.description}</span>
+                {it.qty && <span style={{ color: sub }}>{it.qty} {it.uom}</span>}
+                {/* Parent-line label — only when the join resolved a parent (graceful for legacy/deleted) */}
+                {isVariation && it.parent_line_number != null && (
+                  <span style={{ color: sub, fontStyle: 'italic' }}>
+                    for: Line {it.parent_line_number}{it.parent_description ? ` — ${it.parent_description}` : ''}
+                  </span>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
     </div>
