@@ -103,9 +103,12 @@ router.post('/change-password', authMiddleware, async (req, res) => {
     const user = rows[0]
 
     // ── Verify current password ───────────────────────────
+    // 400 (validation), NOT 401: a wrong *current* password is a field error, not an
+    // expired session — a 401 trips the axios interceptor's auto-logout and bounces
+    // the user to the login page instead of showing the inline error.
     const matches = await bcrypt.compare(currentPassword, user.password_hash)
     if (!matches) {
-      return res.status(401).json({ error: 'Current password is incorrect' })
+      return res.status(400).json({ error: 'Current password is incorrect' })
     }
 
     // ── History check ─────────────────────────────────────

@@ -47,7 +47,7 @@ function generate() {
 // last 5 stored hashes for the given user.
 async function checkHistory(userId, newPassword) {
   const [rows] = await db.query(
-    `SELECT password_hash FROM password_history
+    `SELECT hash FROM password_history
      WHERE user_id = ?
      ORDER BY created_at DESC
      LIMIT 5`,
@@ -55,7 +55,7 @@ async function checkHistory(userId, newPassword) {
   )
 
   for (const row of rows) {
-    if (await bcrypt.compare(newPassword, row.password_hash)) return true
+    if (await bcrypt.compare(newPassword, row.hash)) return true
   }
   return false
 }
@@ -65,7 +65,7 @@ async function checkHistory(userId, newPassword) {
 // table does not grow unbounded.
 async function addToHistory(userId, hash) {
   await db.query(
-    `INSERT INTO password_history (user_id, password_hash) VALUES (?, ?)`,
+    `INSERT INTO password_history (user_id, hash) VALUES (?, ?)`,
     [userId, hash]
   )
 
