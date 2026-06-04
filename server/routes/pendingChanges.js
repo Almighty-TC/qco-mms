@@ -13,6 +13,9 @@ router.use(authenticateToken)
 // module → real table + domain confirmer
 const MODULE_TABLE = { wbs: 'wbs_nodes', commodity: 'commodity_library', equipment: 'equipment_list', mto: 'mto_registers' }
 const ALLOWED_TABLES = new Set(['wbs_nodes', 'commodity_library', 'equipment_list', 'mto_registers', 'mto_lines'])
+// Tables with a NOT-NULL project_id the proposer payload doesn't carry — injected from
+// the pending_changes row on apply. (mto_lines excluded: scoped via mto_id, no project_id column.)
+const PROJECT_SCOPED = new Set(['wbs_nodes', 'commodity_library', 'equipment_list', 'mto_registers'])
 const DOMAIN_CONFIRMER = { wbs: 'project_controls_manager', commodity: 'engineering_lead', equipment: 'engineering_lead', mto: 'engineering_lead' }
 
 // audit row (correct columns + project_id, C3 convention)
@@ -103,7 +106,10 @@ router.get('/:projectId/queue', async (req, res) => {
 async function applyChange(conn, row) {
   if (!ALLOWED_TABLES.has(row.entity_type)) throw new Error('blocked entity_type')
   if (row.action === 'create') {
-    const payload = typeof row.proposed === 'string' ? JSON.parse(row.proposed) : row.proposed
+    const payload = typeof row.proposed === 'string' ? JSON.parse(row.proposed) : { ...row.proposed }
+    // carry the authoritative project scope from the pending_changes row — the proposer
+    // payload omits project_id (NOT NULL, no default), which fails the INSERT otherwise.
+    if (PROJECT_SCOPED.has(row.entity_type) && payload.project_id == null) payload.project_id = row.project_id
     const [r] = await conn.query('INSERT INTO ?? SET ?', [row.entity_type, payload])
     return r.insertId
   }
