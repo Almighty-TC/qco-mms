@@ -11,11 +11,12 @@
 // to project code 'ZZ_FLOWTEST'; users @zzflowtest.example; suppliers/warehouses ZZF-.
 // NEVER touches canonical data (projects 1–4).
 //
-// PRIVILEGE NOTE: run the seed as the app user (INSERT only). The teardown of audit_log/
-// audit_review is BLOCKED for the app user by the append-only guards — run
-// scripts/flowtest_teardown.sql as QCO_admin FIRST for a clean slate; this script then
-// inserts into a fresh project. If a ZZ project still exists it does a best-effort
-// non-audit teardown and aborts with guidance.
+// PRIVILEGE NOTE: run the seed as QCO_admin. The app user (qmat_app) is least-privilege:
+// it lacks INSERT on po_milestones/itp_items and DELETE on ~20 tables (fmr_issue_lines,
+// scn_heats, receipt_lines, mto_*, traceability_*, vdrl_*, …), so it can neither fully
+// seed nor tear down (verified via isolated smoke 2026-06-04). Sequence: run
+// scripts/flowtest_teardown.sql as QCO_admin first (drops the audit append-only guards,
+// wipes ZZ FK-safe, re-arms guards byte-identical), THEN run this seed as QCO_admin.
 const db = require('../../server/db')
 
 const MODE = process.argv[2] || 'full'
