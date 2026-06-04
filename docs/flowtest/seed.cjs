@@ -287,13 +287,15 @@ async function main() {
 
     // ── SCNs (ship po_lines that reached 'shipped'+) — po_id + monotonic dates + heats ──
     const ORIG = ['Shanghai', 'Houston', 'Perth', 'Singapore', 'Rotterdam']
-    const shippablePos = poMeta.filter(po => poLineMeta.some(m => m.poId === po.id && m.rank >= 4)).slice(0, S.scn)
+    // one SCN per shipping PO (no arbitrary cap) so every received line traces to an SCN —
+    // receipt_lines.scn_id is NOT NULL, so a received line whose PO had no SCN would fail.
+    const shippablePos = poMeta.filter(po => poLineMeta.some(m => m.poId === po.id && m.rank >= 4))
     const heatSeq = { n: 0 }
     const scnMeta = []
     for (let i = 0; i < shippablePos.length; i++) {
       const po = shippablePos[i]
       const lines = poLineMeta.filter(m => m.poId === po.id && m.rank >= 4)
-      const etd = addDays(po.ros, -ri(20, 50)), atd = addDays(etd, ri(0, 4)), eta = addDays(atd, ri(12, 45)), ata = addDays(eta, ri(-2, 6))
+      const etd = addDays(po.ros, -ri(20, 50)), atd = addDays(etd, ri(0, 4)), eta = addDays(atd, ri(12, 45)), ata = addDays(eta, ri(0, 6)) // etd≤atd≤eta≤ata (strict)
       const arrived = ata < TODAY
       const [scn] = await conn.query(
         `INSERT INTO shipment_control_notes (project_id,scn_ref,po_id,vendor_name,supplier_id,forwarder_name,origin_location,destination_warehouse_id,incoterms,etd,atd,eta,ata,status,mode,bl_number,container_ref,total_packages,total_weight_kg,rag,created_by)
@@ -316,7 +318,9 @@ async function main() {
     for (const m of poLineMeta.filter(x => x.rank >= 5)) {
       const scn = scnByPo.get(m.poId); const recDate = scn ? addDays(scn.ata, ri(0, 6)) : addDays(m.rosDate, ri(-5, 5))
       const qty = ri(1, 100); const stockout = chance(0.06); const cond = chance(0.08) ? rnd(['minor_damage', 'major_damage', 'quarantine']) : 'good'
-      recRows.push([pid, scn ? scn.id : null, scn ? `ZZ-SCN-${pad(scnMeta.indexOf(scn) + 1, 4)}` : null, m.id, m.heat || null, `${m.com.name} received`, qty, qty - (chance(0.1) ? ri(1, 3) : 0), 0, m.com.uom, someWh, iso(recDate > TODAY ? TODAY : recDate)])
+      // receipt_lines.scn_id is NOT NULL — only record a receipt when an SCN exists (it always
+      // should now, every shipping PO has one); stock can still exist with a null scn_id.
+      if (scn) recRows.push([pid, scn.id, `ZZ-SCN-${pad(scnMeta.indexOf(scn) + 1, 4)}`, m.id, m.heat || null, `${m.com.name} received`, qty, qty - (chance(0.1) ? ri(1, 3) : 0), 0, m.com.uom, someWh, iso(recDate > TODAY ? TODAY : recDate)])
       stockRows.push([pid, m.wh, scn ? scn.id : null, m.id, m.com.id, m.com.code, `${m.com.name} — ${m.com.code}`, m.com.wbs, stockout ? 0 : qty, stockout ? 0 : qty, m.com.uom, `Z${ri(1, 9)}-${ri(1, 99)}`, cond, cond === 'quarantine' ? 1 : 0, m.vendor, m.heat || null, iso(recDate > TODAY ? TODAY : recDate), someWh])
       stockMeta.push({ poLineId: m.id, com: m.com, heat: m.heat, wh: m.wh })
     }
