@@ -623,7 +623,9 @@ router.patch('/pos/:id/approve', async (req, res) => {
   try {
     const id   = Number(req.params.id)
     const role = req.user.role
-    const { chain_note } = req.body
+    // chain_note is optional (used as `chain_note || null`). The register quick-approve
+    // sends no body, so req.body is undefined — default it rather than destructure-crash.
+    const { chain_note } = req.body || {}
 
     const [[po]] = await db.query(
       'SELECT id, po_number, value, currency, status, project_id FROM purchase_orders WHERE id=?', [id]
