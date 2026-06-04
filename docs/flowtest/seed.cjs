@@ -95,6 +95,16 @@ async function teardown(conn, pid) {
       throw new Error(`audit/project delete blocked (${e.code}) — run scripts/flowtest_teardown.sql as QCO_admin first, then re-run the seed`)
     }
   }
+  // user-owned / cross-cutting rows that reference ZZ users (otherwise the users delete
+  // trips an FK). These are app-deletable and not project-scoped, so they survive the
+  // pid-block above. (audit_log/audit_review by ZZ user need the SQL teardown's guard-drop.)
+  const ZZU = "(SELECT id FROM users WHERE email LIKE '%@zzflowtest.example')"
+  for (const sql of [
+    `DELETE FROM password_history WHERE user_id IN ${ZZU}`,
+    `DELETE FROM notifications WHERE user_id IN ${ZZU}`,
+    `DELETE FROM user_permission_overrides WHERE user_id IN ${ZZU} OR overridden_by IN ${ZZU}`,
+    `DELETE FROM delegated_permissions WHERE granted_to IN ${ZZU} OR granted_by IN ${ZZU}`,
+  ]) await conn.query(sql).catch(() => {})
   await conn.query("DELETE FROM users WHERE email LIKE '%@zzflowtest.example'")
   await conn.query("DELETE FROM suppliers WHERE code LIKE 'ZZF-%'")
   await conn.query("DELETE FROM warehouses WHERE code LIKE 'ZZF-%'")

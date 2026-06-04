@@ -103,6 +103,19 @@ DELETE FROM wbs_nodes       WHERE project_id=@pid;
 -- audit_log so the join can still resolve project_id (and to satisfy the FK to audit_log).
 DELETE ar FROM audit_review ar JOIN audit_log a ON a.id=ar.audit_log_id WHERE a.project_id=@pid;
 DELETE FROM audit_log WHERE project_id=@pid;
+
+-- ─── USER-FK WEB — rows referencing ZZ users that are NOT project-scoped ──────
+-- A ZZ user's login / change-password / notification / delegation rows survive the
+-- project deletes above and would trip the users DELETE (audit_log.user_id,
+-- password_history.user_id, …). Clear them here. audit_log/audit_review by a ZZ user are
+-- sanctioned ZZ artefacts and the guards are already dropped, so these deletes are allowed.
+DELETE ar FROM audit_review ar JOIN audit_log a ON a.id=ar.audit_log_id WHERE a.user_id IN (SELECT id FROM users WHERE email LIKE '%@zzflowtest.example');
+DELETE FROM audit_review            WHERE reviewed_by  IN (SELECT id FROM users WHERE email LIKE '%@zzflowtest.example');
+DELETE FROM audit_log               WHERE user_id      IN (SELECT id FROM users WHERE email LIKE '%@zzflowtest.example');
+DELETE FROM password_history        WHERE user_id      IN (SELECT id FROM users WHERE email LIKE '%@zzflowtest.example');
+DELETE FROM notifications           WHERE user_id      IN (SELECT id FROM users WHERE email LIKE '%@zzflowtest.example');
+DELETE FROM user_permission_overrides WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%@zzflowtest.example') OR overridden_by IN (SELECT id FROM users WHERE email LIKE '%@zzflowtest.example');
+DELETE FROM delegated_permissions   WHERE granted_to IN (SELECT id FROM users WHERE email LIKE '%@zzflowtest.example') OR granted_by IN (SELECT id FROM users WHERE email LIKE '%@zzflowtest.example');
 -- audit_checkpoint is not project-scoped, but checkpoints sealed by a ZZ user are ZZ-only
 -- artefacts; remove them so the later users DELETE doesn't trip fk_ckpt_user (sealed_by).
 -- Canonical checkpoints (sealed by canonical users / NULL) are left untouched.
