@@ -5,6 +5,7 @@
 const express = require('express')
 const router  = express.Router()
 const db      = require('../db')
+const { dbError } = require('../utils/dbError')
 const { authenticateToken } = require('../middleware/auth')
 const multer  = require('multer')
 const path    = require('path')
@@ -248,7 +249,7 @@ router.get('/register/:projectId', async (req, res) => {
     res.json({ total: Number(total), page: Number(page), limit: lim, data, pipeline_counts })
   } catch (e) {
     console.error('[logistics:register]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -345,7 +346,7 @@ router.get('/scn/:scnId', async (req, res) => {
     })
   } catch (e) {
     console.error('[logistics:scn-detail]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -406,7 +407,7 @@ router.put('/scn/:scnId/status', async (req, res) => {
     res.json({ success: true, scn: { ...updated, display_status: dbToDisplay(updated.status), rag } })
   } catch (e) {
     console.error('[logistics:status-update]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -504,7 +505,7 @@ router.put('/scn/:scnId/dates', async (req, res) => {
     })
   } catch (e) {
     console.error('[logistics:dates]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -520,7 +521,7 @@ router.get('/scn/:scnId/packages', async (req, res) => {
       [req.params.scnId]
     )
     res.json(pkgs)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // POST /api/logistics/scn/:scnId/packages
@@ -563,7 +564,7 @@ router.post('/scn/:scnId/packages', requireInternalLogistics, async (req, res) =
     res.status(201).json(pkg)
   } catch (e) {
     console.error('[logistics:add-package]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -594,7 +595,7 @@ router.put('/scn/:scnId/packages/:packageId', async (req, res) => {
     )
     const [[pkg]] = await db.query('SELECT * FROM scn_packages WHERE id = ?', [packageId])
     res.json(pkg)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // DELETE /api/logistics/scn/:scnId/packages/:packageId
@@ -610,7 +611,7 @@ router.delete('/scn/:scnId/packages/:packageId', async (req, res) => {
       [scnId, scnId, scnId]
     )
     res.json({ success: true })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ═══════════════════════════════════════════════════════════════
@@ -644,7 +645,7 @@ router.post('/scn/:scnId/documents', requireInternalLogistics, upload.single('fi
     res.status(201).json(doc)
   } catch (e) {
     console.error('[logistics:upload-doc]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -663,7 +664,7 @@ router.delete('/scn/:scnId/documents/:docId', async (req, res) => {
       try { fs.unlinkSync(doc.file_path) } catch (_) {}
     }
     res.json({ success: true })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── CRITICAL PATH TOGGLE ────────────────────────────────────
@@ -674,7 +675,7 @@ router.put('/scn/:scnId/critical-path', async (req, res) => {
     await db.query('UPDATE shipment_control_notes SET is_critical_path=? WHERE id=?',
       [is_critical_path ? 1 : 0, scnId])
     res.json({ success: true, is_critical_path: is_critical_path ? 1 : 0 })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 module.exports = router

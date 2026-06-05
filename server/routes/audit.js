@@ -9,6 +9,7 @@
 const express = require('express')
 const router  = express.Router()
 const db      = require('../db')
+const { dbError } = require('../utils/dbError')
 const { authenticateToken } = require('../middleware/auth')
 const { requirePermission } = require('../middleware/permissions')
 const { sealCheckpoint, verifyChain } = require('../lib/auditChain')
@@ -25,7 +26,7 @@ router.get('/verify', requirePermission('audit', 'can_view'), async (req, res) =
     res.json({ status, tables })
   } catch (e) {
     console.error('[audit:verify]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -39,7 +40,7 @@ router.post('/checkpoint', requirePermission('audit_review', 'can_create'), asyn
     res.status(201).json(sealed)
   } catch (e) {
     console.error('[audit:checkpoint]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -125,7 +126,7 @@ router.get('/', requirePermission('audit', 'can_view'), async (req, res) => {
     res.json({ data: rows, total, page, limit })
   } catch (e) {
     console.error('[audit:list]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -148,7 +149,7 @@ router.get('/filters', requirePermission('audit', 'can_view'), async (req, res) 
     })
   } catch (e) {
     console.error('[audit:filters]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -181,7 +182,7 @@ router.post('/review/batch', requirePermission('audit_review', 'can_create'), as
     res.status(201).json({ inserted: r.affectedRows, review_status })
   } catch (e) {
     console.error('[audit:review:batch]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -205,7 +206,7 @@ router.post('/:auditLogId/review', requirePermission('audit_review', 'can_create
     res.status(201).json(row)
   } catch (e) {
     console.error('[audit:review:create]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -223,7 +224,7 @@ router.get('/:auditLogId/review-history', requirePermission('audit', 'can_view')
     res.json({ data: rows })
   } catch (e) {
     console.error('[audit:review:history]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 

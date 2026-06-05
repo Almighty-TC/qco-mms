@@ -5,6 +5,7 @@
 const express = require('express')
 const router  = express.Router()
 const db      = require('../db')
+const { dbError } = require('../utils/dbError')
 const { authenticateToken } = require('../middleware/auth')
 const { requirePermission } = require('../middleware/permissions')
 
@@ -79,7 +80,7 @@ router.post('/:projectId/submit', async (req, res) => {
     res.status(201).json({ id: r.insertId, status: 'pending', is_baseline_major: major, required_confirmer_role: required })
   } catch (e) {
     if (e.http) return res.status(e.http).json({ error: e.msg })
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   } finally { conn.release() }
 })
 
@@ -99,7 +100,7 @@ router.get('/:projectId/queue', async (req, res) => {
        WHERE ${where} ORDER BY pc.requested_at DESC`, params)
     // mark which this user may actually action (requester≠confirmer)
     res.json(rows.map(r => ({ ...r, can_action: r.requested_by !== uid })))
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── helper: apply one staged change to the real table (within a txn) ─────────
@@ -147,7 +148,7 @@ router.post('/:projectId/confirm/:id', async (req, res) => {
        (req.originalUrl||'').split('?')[0].replace(/^\/api(?=\/)/,''), req.ip])
     await conn.commit()
     res.json({ ok: true, applied_entity_id: appliedId })
-  } catch (e) { await conn.rollback(); res.status(500).json({ error: e.message }) }
+  } catch (e) { await conn.rollback(); dbError(res, e) }
   finally { conn.release() }
 })
 
@@ -161,7 +162,7 @@ router.post('/:projectId/reject/:id', async (req, res) => {
     await db.query("UPDATE pending_changes SET status='rejected', confirmed_by=?, confirmed_at=NOW(), confirm_comment=? WHERE id=?", [req.user.id, req.body.comment || null, row.id])
     audit(req, `${row.module}_${row.action}_rejected`, row.entity_type, row.entity_id, row.project_id, row.before_value, null)
     res.json({ ok: true })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── POST /batch/:batchId/confirm — confirm all pending in a batch ────────────
@@ -185,7 +186,7 @@ router.post('/:projectId/batch/:batchId/confirm', async (req, res) => {
     }
     await conn.commit()
     res.json({ ok: true, confirmed: applied })
-  } catch (e) { await conn.rollback(); res.status(500).json({ error: e.message }) }
+  } catch (e) { await conn.rollback(); dbError(res, e) }
   finally { conn.release() }
 })
 

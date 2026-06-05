@@ -7,6 +7,7 @@
 const express = require('express')
 const router  = express.Router()
 const db      = require('../db')
+const { dbError } = require('../utils/dbError')
 const { authenticateToken } = require('../middleware/auth')
 const { enforce, denyReadOnly, requirePermission } = require('../middleware/permissions')
 
@@ -126,7 +127,7 @@ router.get('/:projectId', requirePermission('rfi_meeting', 'can_view'), async (r
 
     const amber = await amberDays(); const todayMs = new Date(new Date().toISOString().slice(0, 10)).getTime()
     res.json({ data: rows.map(r => ({ ...r, ...deriveRag(r, todayMs, amber) })), total, page, limit })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── PROJECT USERS (assignee dropdown) ────────────────────────
@@ -135,7 +136,7 @@ router.get('/:projectId/users', requirePermission('rfi_meeting', 'can_view'), as
   try {
     const [rows] = await db.query('SELECT id, full_name AS name, role FROM users WHERE is_active=1 ORDER BY full_name')
     res.json(rows)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── LINK-PICKER OPTIONS (project-scoped target lists) ────────
@@ -147,7 +148,7 @@ router.get('/:projectId/link-options/:type', requirePermission('rfi_meeting', 'c
       `SELECT id, \`${cfg.label}\` AS label FROM ${cfg.t} WHERE project_id=? ORDER BY \`${cfg.label}\` LIMIT 500`,
       [Number(req.params.projectId)])
     res.json(rows)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── GET ONE ──────────────────────────────────────────────────
@@ -163,7 +164,7 @@ router.get('/:projectId/:id', requirePermission('rfi_meeting', 'can_view'), asyn
     if (!row) return res.status(404).json({ error: 'Record not found in this project' })
     const amber = await amberDays(); const todayMs = new Date(new Date().toISOString().slice(0, 10)).getTime()
     res.json({ ...row, ...deriveRag(row, todayMs, amber) })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── CREATE (auto-gen ref RFI-0001 / MTG-0001 per project+type) ──
@@ -191,7 +192,7 @@ router.post('/:projectId', async (req, res) => {
     await writeAudit(uid, 'rfi_meeting_created', 'rfi_meeting_record', r.insertId, null,
       { record_type, ref, title: title.trim() }, resourceOf(req), pid)
     res.status(201).json({ id: r.insertId, ref, status: INITIAL_STATUS[record_type] })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── WORKFLOW TRANSITION (validated state machine) ────────────
@@ -224,7 +225,7 @@ router.patch('/:projectId/:id/transition', async (req, res) => {
 
     await writeAudit(uid, `rfi_meeting_${to}`, 'rfi_meeting_record', rec.id, before, { status: to }, resourceOf(req), pid)
     res.json({ id: rec.id, status: to })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── SET / CLEAR POLYMORPHIC LINK (FK + snapshot label) ───────
@@ -250,7 +251,7 @@ router.patch('/:projectId/:id/link', async (req, res) => {
     await db.query('UPDATE rfi_meeting_records SET link_type=?, link_id=?, link_label=? WHERE id=?', [link_type, lid, label, rec.id])
     await writeAudit(uid, 'rfi_meeting_linked', 'rfi_meeting_record', rec.id, before, { link_type, link_id: lid, link_label: label }, resourceOf(req), pid)
     res.json({ id: rec.id, link_type, link_id: lid, link_label: label })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── EDIT FIELDS / RESPOND (no status change) ─────────────────
@@ -274,7 +275,7 @@ router.patch('/:projectId/:id', async (req, res) => {
     await db.query(`UPDATE rfi_meeting_records SET ${sets.join(', ')} WHERE id=?`, vals)
     await writeAudit(uid, 'rfi_meeting_edited', 'rfi_meeting_record', rec.id, null, after, resourceOf(req), pid)
     res.json({ id: rec.id, ...after })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ═══ MEETING CHILDREN (C5: attendees + action items) ═══════════
@@ -296,7 +297,7 @@ router.get('/:projectId/:id/attendees', requirePermission('rfi_meeting', 'can_vi
   try {
     const [rows] = await db.query('SELECT id, user_id, attendee_name, attendee_org, attended FROM meeting_attendees WHERE record_id=? ORDER BY id', [Number(req.params.id)])
     res.json(rows)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 router.post('/:projectId/:id/attendees', async (req, res) => {
   try {
@@ -308,7 +309,7 @@ router.post('/:projectId/:id/attendees', async (req, res) => {
       [m.id, user_id || null, attendee_name.trim(), attendee_org || null, attended === false ? 0 : 1])
     await writeAudit(uid, 'meeting_attendee_added', 'rfi_meeting_record', id, null, { attendee_name: attendee_name.trim() }, resourceOf(req), pid)
     res.status(201).json({ id: r.insertId })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 router.delete('/:projectId/:id/attendees/:attendeeId', async (req, res) => {
   try {
@@ -317,7 +318,7 @@ router.delete('/:projectId/:id/attendees/:attendeeId', async (req, res) => {
     await db.query('DELETE FROM meeting_attendees WHERE id=? AND record_id=?', [Number(req.params.attendeeId), id])
     await writeAudit(req.user.id, 'meeting_attendee_removed', 'rfi_meeting_record', id, null, { attendee_id: Number(req.params.attendeeId) }, resourceOf(req), pid)
     res.json({ ok: true })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── ACTION ITEMS (each its own mini-workflow) ────────────────
@@ -329,7 +330,7 @@ router.get('/:projectId/:id/actions', requirePermission('rfi_meeting', 'can_view
        FROM meeting_actions a LEFT JOIN users u ON u.id = a.assigned_to
        WHERE a.record_id=? ORDER BY a.seq`, [Number(req.params.id)])
     res.json(rows)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 router.post('/:projectId/:id/actions', async (req, res) => {
   try {
@@ -342,7 +343,7 @@ router.post('/:projectId/:id/actions', async (req, res) => {
       [m.id, pid, Number(mx) + 1, description.trim(), assigned_to || null, due_date || null])
     await writeAudit(uid, 'meeting_action_added', 'rfi_meeting_record', id, null, { seq: Number(mx) + 1, description: description.trim() }, resourceOf(req), pid)
     res.status(201).json({ id: r.insertId, seq: Number(mx) + 1 })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 router.patch('/:projectId/:id/actions/:actionId', async (req, res) => {
   try {
@@ -369,7 +370,7 @@ router.patch('/:projectId/:id/actions/:actionId', async (req, res) => {
     await db.query(`UPDATE meeting_actions SET ${sets.join(', ')} WHERE id=?`, vals)
     await writeAudit(uid, 'meeting_action_updated', 'rfi_meeting_record', id, { status: act.status }, after, resourceOf(req), pid)
     res.json({ id: act.id, ...after })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 module.exports = router

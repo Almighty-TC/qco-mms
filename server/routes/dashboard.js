@@ -13,6 +13,7 @@
 const express = require('express')
 const router  = express.Router()
 const db      = require('../db')
+const { dbError } = require('../utils/dbError')
 const { authenticateToken, } = require('../middleware/auth')
 const { requirePermission } = require('../middleware/permissions')
 
@@ -182,7 +183,7 @@ router.get('/:projectId', requirePermission('dashboard', 'can_view'), async (req
         received:  gate(seeProc, n('po_received')),
       },
     })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── GET /:projectId/exceptions — the real records behind the Attention counts ──
@@ -229,7 +230,7 @@ router.get('/:projectId/exceptions', requirePermission('dashboard', 'can_view'),
       .filter(g => g.items.length > 0)
       .map(({ key, label, page, items }) => ({ key, label, page, count: items.length, capped: items.length === CAP, items }))
     res.json({ groups })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── PUT /:projectId/weights — reweight (gated, total=100, audited) ──
@@ -251,7 +252,7 @@ router.put('/:projectId/weights', requirePermission('dashboard', 'can_edit'), as
     }
     await writeAudit(req.user.id, 'dashboard_weights_updated', 'project', pid, null, w, resourceOf(req), pid)
     res.json({ ok: true, weights: w })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 module.exports = router

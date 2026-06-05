@@ -9,6 +9,7 @@ const router  = express.Router()
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes (auth applied at mount)
 router.use(require('../middleware/permissions').enforce(p => /\/pos\/\d+\/expeditor$/.test(p) ? 'expediting' : 'procurement')) // C-b2: expeditor-assign→expediting (module-move), else procurement
 const db      = require('../db')       // connection pool — never createConnection
+const { dbError } = require('../utils/dbError')
 const path    = require('path')
 const fs      = require('fs')
 const multer  = require('multer')
@@ -197,7 +198,7 @@ router.get('/:projectId/stats', async (req, res) => {
     })
   } catch (e) {
     console.error('[procurement:stats]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -211,7 +212,7 @@ router.get('/:projectId/wbs', async (req, res) => {
     )
     res.json(rows)
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -227,7 +228,7 @@ router.get('/users/list', async (req, res) => {
     `)
     res.json(rows)
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -249,7 +250,7 @@ router.get('/pos/check-duplicate', async (req, res) => {
     `, [po_number, Number(project_id)])
     res.json({ exists: !!po, po: po ?? null })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -288,7 +289,7 @@ router.post('/pos/check-duplicates-batch', async (req, res) => {
     })
     res.json(results)
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -453,7 +454,7 @@ router.get('/:projectId/pos', async (req, res) => {
     res.json({ data, total: countRows[0].total, page, limit, atRiskDays })
   } catch (e) {
     console.error('[procurement:pos-list]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -518,7 +519,7 @@ router.get('/pos/:id', async (req, res) => {
     })
   } catch (e) {
     console.error('[procurement:pos-detail]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -552,7 +553,7 @@ router.put('/pos/:id/expeditor', async (req, res) => {
     res.json({ expeditor_id: newExpId, expeditor_name: expeditorName })
   } catch (e) {
     console.error('[procurement:assign-expeditor]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -588,7 +589,7 @@ router.put('/pos/:id/critical-path', async (req, res) => {
     res.json({ is_critical_path, isCriticalPath: is_critical_path })
   } catch (e) {
     console.error('[procurement:critical-path]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -613,7 +614,7 @@ router.patch('/pos/:id/star', async (req, res) => {
     )
     res.json({ isCriticalPath: !!newVal })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -738,7 +739,7 @@ router.patch('/pos/:id/approve', async (req, res) => {
     return res.status(400).json({ error: 'Cannot approve PO in its current state with your role' })
   } catch (e) {
     console.error('[procurement:approve]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -771,7 +772,7 @@ router.patch('/pos/:id/reject', async (req, res) => {
       { status: po.status }, { status: 'rfq', rejection_reason: reason })
     res.json({ ok: true, newStatus: 'rfq' })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -825,7 +826,7 @@ router.post('/pos/:id/documents', uploadPoDoc.single('file'), async (req, res) =
   } catch (e) {
     if (req.file) fs.unlinkSync(req.file.path).catch?.(() => {})
     console.error('[procurement:doc-upload]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -856,7 +857,7 @@ router.get('/pos/:id/documents/:docId/download', async (req, res) => {
     fs.createReadStream(absPath).pipe(res)
   } catch (e) {
     console.error('[procurement:doc-download]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -979,7 +980,7 @@ router.post('/:projectId/pos/bulk-upload', uploadBulk.single('file'), async (req
     res.json({ preview, totalRows: preview.length })
   } catch (e) {
     console.error('[procurement:bulk-upload]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1038,7 +1039,7 @@ router.post('/:projectId/pos/bulk-confirm', async (req, res) => {
     res.json({ created, replaced, skipped, failed, errors })
   } catch (e) {
     console.error('[procurement:bulk-confirm]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1080,7 +1081,7 @@ router.get('/:projectId/items/search', async (req, res) => {
 
     res.json(out)
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1337,7 +1338,7 @@ router.get('/template/po-upload', async (req, res) => {
     res.end()
   } catch (e) {
     console.error('[procurement:template]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1369,7 +1370,7 @@ router.put('/pos/:id/replace', async (req, res) => {
     const [[updated]] = await db.query('SELECT * FROM purchase_orders WHERE id=?', [id])
     res.json({ ...updated, statusLabel: STATUS_LABELS[updated.status] ?? updated.status })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1427,7 +1428,7 @@ router.post('/:projectId/pos', async (req, res) => {
       return res.status(409).json({ error: `PO number "${req.body.po_number}" already exists in this project` })
     }
     console.error('[procurement:create-po]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1464,7 +1465,7 @@ router.put('/pos/:id', async (req, res) => {
     if (e.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ error: `PO number "${req.body.po_number}" already exists` })
     }
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1480,7 +1481,7 @@ router.delete('/pos/:id', async (req, res) => {
     audit(req, 'po_deleted', `purchase_orders/${id}`, { po_number: existing.po_number }, null)
     res.json({ ok: true })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1497,7 +1498,7 @@ router.post('/pos/:id/lines', async (req, res) => {
     const [[line]] = await db.query('SELECT * FROM po_lines WHERE id=?', [r.insertId])
     res.status(201).json(line)
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1512,7 +1513,7 @@ router.put('/pos/:id/lines/:lineId', async (req, res) => {
     const [[line]] = await db.query('SELECT * FROM po_lines WHERE id=?', [lineId])
     res.json(line)
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1521,7 +1522,7 @@ router.delete('/pos/:id/lines/:lineId', async (req, res) => {
     await db.query('DELETE FROM po_lines WHERE id=?', [Number(req.params.lineId)])
     res.json({ ok: true })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1538,7 +1539,7 @@ router.get('/pos/:id/notes', async (req, res) => {
       ORDER BY n.created_at ASC
     `, [id])
     res.json(notes)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // POST /api/procurement/pos/:id/notes — add a note
@@ -1557,7 +1558,7 @@ router.post('/pos/:id/notes', async (req, res) => {
     )
     audit(req, 'note_added', `purchase_orders/${id}`, null, { note_type })
     res.status(201).json(note)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── VARIATIONS ───────────────────────────────────────────────────────────────
@@ -1574,7 +1575,7 @@ router.get('/pos/:id/variations', async (req, res) => {
       ORDER BY v.created_at DESC
     `, [id])
     res.json(rows)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // POST /api/procurement/pos/:id/variations
@@ -1595,7 +1596,7 @@ router.post('/pos/:id/variations', async (req, res) => {
     audit(req, 'variation_raised', `purchase_orders/${id}`, null, { variation_number: varNum, reason })
     const [[variation]] = await db.query('SELECT * FROM po_variations WHERE id=?', [r.insertId])
     res.status(201).json(variation)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── ITP (INSPECTION & TEST PLAN) ─────────────────────────────────────────────
@@ -1616,7 +1617,7 @@ router.get('/pos/:id/itp', async (req, res) => {
       req_.items = items
     }
     res.json(reqs)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // POST /api/procurement/pos/:id/itp
@@ -1631,7 +1632,7 @@ router.post('/pos/:id/itp', async (req, res) => {
     )
     const [[row]] = await db.query('SELECT * FROM itp_requirements WHERE id=?', [r.insertId])
     res.status(201).json({ ...row, items: [] })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── KEY DATES HISTORY ────────────────────────────────────────────────────────
@@ -1647,7 +1648,7 @@ router.get('/pos/:id/date-history', async (req, res) => {
       ORDER BY d.created_at DESC
     `, [id])
     res.json(rows)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // PUT /api/procurement/pos/:id/dates — update a milestone/key date with mandatory reason
@@ -1679,7 +1680,7 @@ router.put('/pos/:id/dates', async (req, res) => {
       { [field]: value || null, reason }
     )
     res.json({ ok: true, field, old: oldVal, new: value })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── DOCUMENTS LIST ───────────────────────────────────────────────────────────
@@ -1695,7 +1696,7 @@ router.get('/pos/:id/documents', async (req, res) => {
       ORDER BY pd.doc_type, pd.version DESC
     `, [id])
     res.json(docs)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── AUDIT TRAIL FOR SINGLE PO ────────────────────────────────────────────────
@@ -1719,7 +1720,7 @@ router.get('/pos/:id/audit', async (req, res) => {
       [id, `%purchase_orders/${id}%`]
     )
     res.json({ rows, total: total })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 module.exports = router

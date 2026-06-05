@@ -3,6 +3,7 @@
 const express = require('express')
 const router  = express.Router()
 const db      = require('../db')
+const { dbError } = require('../utils/dbError')
 const { authenticateToken } = require('../middleware/auth')
 const multer  = require('multer')
 const { fileFilter } = require('../utils/upload')
@@ -67,7 +68,7 @@ async function certGate(req, res, next) {
     const module = c.entity_type === 'equipment' ? 'equipment' : 'commodity'
     const action = req.method === 'DELETE' ? 'can_delete' : 'can_edit'
     return require('../middleware/permissions').requirePermission(module, action)(req, res, next)
-  } catch (e) { return res.status(500).json({ error: e.message }) }
+  } catch (e) { return dbError(res, e) }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -95,7 +96,7 @@ router.get('/:projectId/wbs', async (req, res) => {
     res.json(rows)
   } catch (e) {
     console.error('[foundational:wbs:get]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -140,7 +141,7 @@ router.get('/:projectId/wbs/impact/:id', async (req, res) => {
     })
   } catch (e) {
     console.error('[foundational:wbs:impact]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -158,7 +159,7 @@ router.get('/:projectId/wbs/allocation-check/:targetId', async (req, res) => {
     )
     res.json({ wbsCode: node.code, allocatedQty: lines[0].allocated_qty || 0 })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -187,7 +188,7 @@ router.post('/:projectId/wbs', async (req, res) => {
     res.status(201).json(created)
   } catch (e) {
     console.error('[foundational:wbs:create]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -229,7 +230,7 @@ router.patch('/:projectId/wbs/:id', async (req, res) => {
     const [[updated]] = await db.query('SELECT * FROM wbs_nodes WHERE id=?', [id])
     res.json(updated)
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -292,7 +293,7 @@ router.patch('/:projectId/wbs/:id/reallocate', async (req, res) => {
     res.json({ ok: true })
   } catch (e) {
     await conn.rollback()
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   } finally {
     conn.release()
   }
@@ -367,7 +368,7 @@ router.delete('/:projectId/wbs/:id', async (req, res) => {
   } catch (e) {
     await conn.rollback()
     console.error('[foundational:wbs:delete]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   } finally {
     conn.release()
   }
@@ -384,7 +385,7 @@ router.get('/:projectId/wbs/milestones', async (req, res) => {
     )
     res.json(rows)
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -445,7 +446,7 @@ router.get('/:projectId/wbs/template', async (req, res) => {
     res.send(buf)
   } catch (e) {
     console.error('[wbs:template]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -514,7 +515,7 @@ router.post('/:projectId/wbs/validate', uploadWBS.single('file'), async (req, re
     res.json({ results, summary: { total: results.length, ready: readyCount, warnings: warningCount, errors: errorCount } })
   } catch (e) {
     console.error('[wbs:validate]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -554,7 +555,7 @@ router.post('/:projectId/wbs/import', uploadWBS.single('file'), async (req, res)
     res.json({ ok: true, imported })
   } catch (e) {
     console.error('[wbs:import]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -575,7 +576,7 @@ router.get('/:projectId/wbs/:nodeId/pos', async (req, res) => {
     )
     res.json(pos)
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -609,7 +610,7 @@ router.get('/:projectId/wbs/export', async (req, res) => {
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     res.send(buf)
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -625,7 +626,7 @@ router.post('/:projectId/wbs/bulk-rag', async (req, res) => {
     )
     res.json({ ok: true, updated: ids.length })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -649,7 +650,7 @@ router.get('/:projectId/wbs/bulk-impact', async (req, res) => {
     }
     res.json(results)
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -706,7 +707,7 @@ router.post('/:projectId/wbs/bulk-delete', async (req, res) => {
     }
     res.json({ ok: true, deleted, skipped: skipped.length })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -755,7 +756,7 @@ router.get('/:projectId/wbs/:nodeId/readiness', async (req, res) => {
     })
   } catch (e) {
     console.error('[foundational:wbs:readiness]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -777,7 +778,7 @@ router.get('/:projectId/wbs/:nodeId/materials', async (req, res) => {
     )
     res.json({ wbsCode: node.code, commodities, equipment })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -846,7 +847,7 @@ router.get('/:projectId/commodities', async (req, res) => {
     res.json({ data: rows, total, page, limit, counts })
   } catch (e) {
     console.error('[foundational:commodities:get]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -875,7 +876,7 @@ router.post('/:projectId/commodities', async (req, res) => {
     res.status(201).json(created)
   } catch (e) {
     console.error('[foundational:commodities:create]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -900,7 +901,7 @@ router.patch('/:projectId/commodities/:id', async (req, res) => {
     const [[updated]] = await db.query('SELECT * FROM commodity_library WHERE id=?', [id])
     res.json(updated)
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -914,7 +915,7 @@ router.delete('/:projectId/commodities/:id', async (req, res) => {
     audit(req, 'commodity_deleted', `commodity_library/${id}`, row, {})
     res.json({ ok: true })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -997,7 +998,7 @@ router.get('/:projectId/equipment', async (req, res) => {
     res.json({ data: rows, total, page, limit, counts })
   } catch (e) {
     console.error('[foundational:equipment:get]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1027,7 +1028,7 @@ router.post('/:projectId/equipment', async (req, res) => {
     res.status(201).json(created)
   } catch (e) {
     console.error('[foundational:equipment:create]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1051,7 +1052,7 @@ router.patch('/:projectId/equipment/:id', async (req, res) => {
     const [[updated]] = await db.query('SELECT * FROM equipment_list WHERE id=?', [id])
     res.json(updated)
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1065,7 +1066,7 @@ router.delete('/:projectId/equipment/:id', async (req, res) => {
     audit(req, 'equipment_deleted', `equipment_list/${id}`, row, {})
     res.json({ ok: true })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1087,7 +1088,7 @@ router.get('/:projectId/certificates/:entityType/:entityId', async (req, res) =>
     )
     res.json(rows)
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1115,7 +1116,7 @@ router.post('/:projectId/certificates/:entityType/:entityId', uploadCert.single(
     res.status(201).json(created)
   } catch (e) {
     console.error('[foundational:certs:create]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1126,7 +1127,7 @@ router.patch('/:projectId/certificates/:id/status', certGate, async (req, res) =
     await db.query('UPDATE foundational_certificates SET status=? WHERE id=?', [status, Number(req.params.id)])
     res.json({ ok: true })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1143,7 +1144,7 @@ router.delete('/:projectId/certificates/:id', certGate, async (req, res) => {
     await db.query('DELETE FROM foundational_certificates WHERE id=?', [id])
     res.json({ ok: true })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1156,7 +1157,7 @@ router.get('/:projectId/certificates/:id/download', async (req, res) => {
     if (!fs.existsSync(fp)) return res.status(404).json({ error: 'File not on disk' })
     res.download(fp, cert.filename.replace(/^\d+-/, ''))
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1224,7 +1225,7 @@ router.post('/:projectId/commodities/validate', uploadCommodity.single('file'), 
     res.json({ results, summary: { total: results.length, ready: readyCount, warnings: warningCount, errors: errorCount } })
   } catch (e) {
     console.error('[commodities:validate]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1270,7 +1271,7 @@ router.post('/:projectId/commodities/import', uploadCommodity.single('file'), as
     res.json({ ok: true, imported, skipped })
   } catch (e) {
     console.error('[commodities:import]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1389,7 +1390,7 @@ router.get('/:projectId/commodities/template', async (req, res) => {
     res.end()
   } catch (e) {
     console.error('[commodities:template]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1455,7 +1456,7 @@ router.post('/:projectId/equipment/validate', uploadEquipment.single('file'), as
     res.json({ results, summary: { total: results.length, ready: readyCount, warnings: warningCount, errors: errorCount } })
   } catch (e) {
     console.error('[equipment:validate]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1515,7 +1516,7 @@ router.post('/:projectId/equipment/import', uploadEquipment.single('file'), asyn
     res.json({ ok: true, imported, skipped })
   } catch (e) {
     console.error('[equipment:import]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1632,7 +1633,7 @@ router.get('/:projectId/equipment/template', async (req, res) => {
     res.end()
   } catch (e) {
     console.error('[equipment:template]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 

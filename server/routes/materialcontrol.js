@@ -4,6 +4,7 @@
 const express = require('express')
 const router  = express.Router()
 const db      = require('../db')
+const { dbError } = require('../utils/dbError')
 const path    = require('path')
 const fs      = require('fs')
 const multer  = require('multer')
@@ -32,7 +33,7 @@ router.get('/package-types', async (req, res) => {
   try {
     const [rows] = await db.query('SELECT id, name, description FROM package_types WHERE is_active=1 ORDER BY name')
     res.json(rows)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── QUARANTINE LOCATION (Phase 3) ────────────────────────────
@@ -184,7 +185,7 @@ router.get('/:projectId/receipting', rejectExternal, async (req, res) => {
     })
   } catch (e) {
     console.error('[mc:receipting]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -221,7 +222,7 @@ router.get('/:projectId/receipting/:scnId', rejectExternal, async (req, res) => 
     )
 
     res.json({ ...scn, packages, lines, heats })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // POST /api/mc/:projectId/receipting/:scnId/complete — complete receipt (creates stock)
@@ -351,7 +352,7 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
     res.json({ success: true, stock_created: stockCreated, scn_status: newStatus })
   } catch (e) {
     console.error('[mc:receipt-complete]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -445,7 +446,7 @@ router.get('/:projectId/stock', async (req, res) => {
     )
 
     res.json({ data: stock, total, page, limit, totals, wbs_scopes: subWbsCodes })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // PUT /api/mc/:projectId/stock/:itemId/move — move to new location
@@ -470,7 +471,7 @@ router.put('/:projectId/stock/:itemId/move', async (req, res) => {
 
     const [[updated]] = await db.query('SELECT * FROM warehouse_stock WHERE id=?', [itemId])
     res.json(updated)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // POST /api/mc/:projectId/stock/:itemId/resolve — resolve a quarantined holding
@@ -512,7 +513,7 @@ router.post('/:projectId/stock/:itemId/resolve', rejectExternal, async (req, res
     res.json({ success: true, action })
   } catch (e) {
     console.error('[mc:stock-resolve]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -608,7 +609,7 @@ router.get('/:projectId/fmr', async (req, res) => {
     res.json({ data: fmrs, total, page, limit, counts })
   } catch (e) {
     console.error('[mc:fmr]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -668,7 +669,7 @@ router.get('/:projectId/fmr/items', async (req, res) => {
     res.json({ data: rows })
   } catch (e) {
     console.error('[mc:fmr-items]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -747,7 +748,7 @@ router.post('/:projectId/fmr', async (req, res) => {
     res.status(201).json({ ...fmr, line_count: lines.length })
   } catch (e) {
     console.error('[mc:fmr-create]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -789,7 +790,7 @@ router.get('/:projectId/fmr/:fmrId/detail', async (req, res) => {
     res.json({ fmr, lines, packages, pickups })
   } catch (e) {
     console.error('[mc:fmr-detail]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -879,7 +880,7 @@ router.get('/:projectId/fmr/:fmrId/approval', async (req, res) => {
     res.json({ fmr, lines: enriched })
   } catch (e) {
     console.error('[mc:fmr-approval]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -895,7 +896,7 @@ router.put('/:projectId/fmr/:fmrId/critical-path', async (req, res) => {
     if (!r.affectedRows) return res.status(404).json({ error: 'FMR not found' })
     res.json({ success: true, is_critical_path: flag })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1018,7 +1019,7 @@ router.put('/:projectId/fmr/:fmrId/approve', async (req, res) => {
     res.json({ success: true, fmr: updated, header_status: newStatus })
   } catch (e) {
     console.error('[mc:fmr-approve]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1184,7 +1185,7 @@ router.post('/:projectId/fmr/pickup/:pickupId/signature', pocUpload.single('file
   } catch (e) {
     if (req.file) fs.unlink(req.file.path, () => {})
     console.error('[mc:fmr-poc-upload]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1199,7 +1200,7 @@ router.get('/:projectId/fmr/pickup/:pickupId/signature', async (req, res) => {
     res.sendFile(fp)
   } catch (e) {
     console.error('[mc:fmr-poc-get]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1230,7 +1231,7 @@ router.get('/:projectId/fmr/:fmrId/issuable', async (req, res) => {
     res.json({ warehouse_id: fmr.warehouse_id, lines: out })
   } catch (e) {
     console.error('[mc:fmr-issuable]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1298,7 +1299,7 @@ router.get('/:projectId/transfers', rejectExternal, async (req, res) => {
     )
 
     res.json({ data: transfers, total, page, limit, counts })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // GET selectable transfer SOURCE holdings — clean good stock only.
@@ -1317,7 +1318,7 @@ router.get('/:projectId/transfers/stock-options', rejectExternal, async (req, re
        FROM warehouse_stock s LEFT JOIN warehouses w ON w.id = s.warehouse_id
        WHERE ${conds.join(' AND ')} ORDER BY s.item_code, s.location_code`, params)
     res.json({ data: rows })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // POST create — STOCK-LINKED. Source is a real warehouse_stock holding (stock_id);
@@ -1364,7 +1365,7 @@ router.post('/:projectId/transfers', rejectExternal, async (req, res) => {
     res.status(201).json(tr)
   } catch (e) {
     console.error('[mc:transfer-create]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1430,7 +1431,7 @@ router.put('/:projectId/transfers/:transferId/status', rejectExternal, async (re
 
     const [[updated]] = await db.query('SELECT t.*, fw.name AS from_warehouse_name, tw.name AS to_warehouse_name FROM warehouse_transfers t LEFT JOIN warehouses fw ON t.from_warehouse_id=fw.id LEFT JOIN warehouses tw ON t.to_warehouse_id=tw.id WHERE t.id=?', [transferId])
     res.json({ success: true, transfer: updated })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // POST /api/mc/:projectId/transfers/:transferId/approve — role-guarded (FMR pattern).
@@ -1459,7 +1460,7 @@ router.post('/:projectId/transfers/:transferId/approve', async (req, res) => {
 
     const [[updated]] = await db.query('SELECT t.*, fw.name AS from_warehouse_name, tw.name AS to_warehouse_name FROM warehouse_transfers t LEFT JOIN warehouses fw ON t.from_warehouse_id=fw.id LEFT JOIN warehouses tw ON t.to_warehouse_id=tw.id WHERE t.id=?', [transferId])
     res.json({ success: true, transfer: updated })
-  } catch (e) { console.error('[mc:transfer-approve]', e.message); res.status(500).json({ error: e.message }) }
+  } catch (e) { console.error('[mc:transfer-approve]', e.message); dbError(res, e) }
 })
 
 // GET /api/mc/:projectId/warehouses — list available warehouses
@@ -1468,7 +1469,7 @@ router.get('/:projectId/warehouses', async (req, res) => {
     // Project-scoped: only warehouses this project owns (warehouses.project_id).
     const [whs] = await db.query('SELECT id, name, code, type, city FROM warehouses WHERE status=? AND project_id=? ORDER BY name', ['active', Number(req.params.projectId)])
     res.json(whs)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 module.exports = router

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const { dbError } = require('../utils/dbError');
 
 // ─── LIST ALL PROJECTS ──────────────────────────────────────
 // Returns all projects ordered by creation date, with snake_case DB columns
@@ -31,7 +32,7 @@ router.get('/', async (req, res) => {
     `);
     res.json(rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    dbError(res, err);
   }
 });
 
@@ -41,7 +42,7 @@ router.get('/:id', async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: 'Project not found' });
     res.json(rows[0]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    dbError(res, err);
   }
 });
 

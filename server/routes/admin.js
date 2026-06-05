@@ -2,6 +2,7 @@ const express = require('express')
 const bcrypt  = require('bcryptjs')
 const router  = express.Router()
 const db      = require('../db')
+const { dbError } = require('../utils/dbError')
 const { sendEmail, sendAlert, html }                  = require('../services/email')
 const { generate, addToHistory, expiresAt: pwExpiry } = require('../utils/password')
 
@@ -100,7 +101,7 @@ router.get('/projects', async (req, res) => {
       FROM projects ORDER BY created_at DESC
     `)
     res.json(rows)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.post('/projects', async (req, res) => {
@@ -126,7 +127,7 @@ router.post('/projects', async (req, res) => {
     res.status(201).json(row)
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Project code already exists' })
-    res.status(500).json({ error: err.message })
+    dbError(res, err)
   }
 })
 
@@ -155,7 +156,7 @@ router.put('/projects/:id', async (req, res) => {
     res.json(row)
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Project code already exists' })
-    res.status(500).json({ error: err.message })
+    dbError(res, err)
   }
 })
 
@@ -167,7 +168,7 @@ router.delete('/projects/:id', async (req, res) => {
     if (!r.affectedRows) return res.status(404).json({ error: 'Project not found' })
     audit(req, 'project.delete', `id=${id} reason="${reason}"`)
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.patch('/projects/:id/status', async (req, res) => {
@@ -179,7 +180,7 @@ router.patch('/projects/:id/status', async (req, res) => {
     if (!r.affectedRows) return res.status(404).json({ error: 'Project not found' })
     audit(req, 'project.status', `id=${id} status=${status}`)
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ═══════════════════════════════════════════════════════════
@@ -242,7 +243,7 @@ router.get('/suppliers', async (req, res) => {
       )
     }
     res.json(rows)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ─── GET SUPPLIER DETAIL ─────────────────────────────────────
@@ -265,7 +266,7 @@ router.get('/suppliers/:id', async (req, res) => {
       )
     } catch { /* table may not exist */ }
     res.json({ ...row, addresses })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ─── GET SUPPLIER ADDRESSES ONLY ────────────────────────────
@@ -280,7 +281,7 @@ router.get('/suppliers/:id/addresses', async (req, res) => {
       [id]
     )
     res.json(rows)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.post('/suppliers', async (req, res) => {
@@ -299,7 +300,7 @@ router.post('/suppliers', async (req, res) => {
       [r.insertId]
     )
     res.status(201).json(row)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.put('/suppliers/:id', async (req, res) => {
@@ -319,7 +320,7 @@ router.put('/suppliers/:id', async (req, res) => {
       [id]
     )
     res.json(row)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ─── TOGGLE SUPPLIER STATUS ──────────────────────────────────
@@ -334,7 +335,7 @@ router.patch('/suppliers/:id/status', async (req, res) => {
     if (!r.affectedRows) return res.status(404).json({ error: 'Supplier not found' })
     audit(req, 'supplier.status', `id=${id} status=${status}`)
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.delete('/suppliers/:id', async (req, res) => {
@@ -345,7 +346,7 @@ router.delete('/suppliers/:id', async (req, res) => {
     if (!r.affectedRows) return res.status(404).json({ error: 'Supplier not found' })
     audit(req, 'supplier.delete', `id=${id} reason="${reason}"`)
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ═══════════════════════════════════════════════════════════
@@ -370,7 +371,7 @@ router.get('/users/check-email', async (req, res) => {
     if (excludeId) { sql = 'SELECT id FROM users WHERE email = ? AND id != ? LIMIT 1'; args.push(parseInt(excludeId)) }
     const [rows] = await db.query(sql, args)
     res.json({ exists: rows.length > 0 })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ─── LIST USERS ─────────────────────────────────────────────
@@ -482,7 +483,7 @@ router.get('/users/:id', async (req, res) => {
     )
     if (!user) return res.status(404).json({ error: 'User not found' })
     res.json(user)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ─── CREATE USER ────────────────────────────────────────────
@@ -579,7 +580,7 @@ router.post('/users', async (req, res) => {
         error: `Missing database table — ${err.message}. Run the SQL setup from Admin → System Settings → SQL Setup, then restart the server.`
       })
     }
-    res.status(500).json({ error: err.message || 'Unexpected database error — check server logs' })
+    dbError(res, err, 'Unexpected database error — check server logs')
   }
 })
 
@@ -628,7 +629,7 @@ router.post('/users/:id/reset-password', async (req, res) => {
     )
 
     res.json({ ok: true, message: `Password reset and emailed to ${user.email}` })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ─── UPDATE USER ────────────────────────────────────────────
@@ -694,7 +695,7 @@ router.put('/users/:id', async (req, res) => {
     res.json(user)
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Email already exists' })
-    res.status(500).json({ error: err.message })
+    dbError(res, err)
   }
 })
 
@@ -716,7 +717,7 @@ router.delete('/users/:id', async (req, res) => {
       `reason="${reason}" by=${req.user.id}(${req.user.email})`
     )
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ─── (approve endpoint removed) ─────────────────────────────
@@ -740,7 +741,7 @@ router.post('/users/:id/deactivate', async (req, res) => {
       `id=${id} name="${target.full_name}" reason="${reason}" by=${req.user.id}(${req.user.email})`
     )
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ─── REACTIVATE USER ────────────────────────────────────────
@@ -756,7 +757,7 @@ router.post('/users/:id/activate', async (req, res) => {
       `id=${id} name="${target.full_name}" by=${req.user.id}(${req.user.email})`
     )
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ═══════════════════════════════════════════════════════════
@@ -774,7 +775,7 @@ router.get('/permissions', async (req, res) => {
        ORDER BY role, module`
     )
     res.json(rows)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ─── GET PERMISSIONS FOR A SINGLE ROLE ──────────────────────
@@ -799,7 +800,7 @@ router.get('/permissions/role', async (req, res) => {
       [role]
     )
     res.json(rows)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ─── UPDATE PERMISSIONS FOR ROLE + MODULE ───────────────────
@@ -826,7 +827,7 @@ router.put('/permissions/:role/:module', async (req, res) => {
     )
     audit(req, 'permissions.update', `role=${role} module=${module}`)
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ─── RESET ROLE PERMISSIONS TO DEFAULTS ─────────────────────
@@ -849,7 +850,7 @@ router.delete('/permissions/role/:role', async (req, res) => {
     }
     audit(req, 'permissions.reset_role', `role=${role}`)
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ═══════════════════════════════════════════════════════════
@@ -869,7 +870,7 @@ router.get('/permissions/overrides/:userId', async (req, res) => {
       [parseInt(req.params.userId)]
     )
     res.json(rows)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.post('/permissions/overrides', async (req, res) => {
@@ -891,7 +892,7 @@ router.post('/permissions/overrides', async (req, res) => {
     )
     audit(req, 'override.set', `user=${userId} module=${module}`)
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.delete('/permissions/overrides/:id', async (req, res) => {
@@ -903,7 +904,7 @@ router.delete('/permissions/overrides/:id', async (req, res) => {
     if (!r.affectedRows) return res.status(404).json({ error: 'Override not found' })
     audit(req, 'override.delete', `id=${req.params.id}`)
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ─── GET USER PERMISSION OVERRIDES (by userId in URL) ───────
@@ -927,7 +928,7 @@ router.get('/permissions/user/:userId', async (req, res) => {
       )
     } catch { /* table may not exist */ }
     res.json({ user, overrides })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ─── SAVE USER PERMISSION OVERRIDES (batch) ─────────────────
@@ -962,7 +963,7 @@ router.post('/permissions/user/:userId', async (req, res) => {
     }
     audit(req, 'override.batch', `user=${userId} count=${overrides.length}`)
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ─── DELETE ALL USER PERMISSION OVERRIDES ───────────────────
@@ -973,7 +974,7 @@ router.delete('/permissions/user/:userId', async (req, res) => {
     await db.query('DELETE FROM user_permission_overrides WHERE user_id=?', [userId])
     audit(req, 'override.reset', `user=${userId}`)
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ═══════════════════════════════════════════════════════════
@@ -994,7 +995,7 @@ router.get('/wbs-access/:userId', async (req, res) => {
       [parseInt(req.params.userId)]
     )
     res.json(rows)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.post('/wbs-access', async (req, res) => {
@@ -1013,7 +1014,7 @@ router.post('/wbs-access', async (req, res) => {
     res.status(201).json(row)
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'WBS access already exists for this user/project' })
-    res.status(500).json({ error: err.message })
+    dbError(res, err)
   }
 })
 
@@ -1023,7 +1024,7 @@ router.delete('/wbs-access/:id', async (req, res) => {
     if (!r.affectedRows) return res.status(404).json({ error: 'WBS access not found' })
     audit(req, 'wbs.revoke', `id=${req.params.id}`)
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ═══════════════════════════════════════════════════════════
@@ -1043,7 +1044,7 @@ router.get('/delegated', async (req, res) => {
        ORDER BY d.granted_at DESC`
     )
     res.json(rows)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.post('/delegated', async (req, res) => {
@@ -1060,7 +1061,7 @@ router.post('/delegated', async (req, res) => {
     audit(req, 'delegation.grant', `to=${grantedTo} permission=${permission}`)
     const [[row]] = await db.query('SELECT * FROM delegated_permissions WHERE id=?', [r.insertId])
     res.status(201).json(row)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.delete('/delegated/:id', async (req, res) => {
@@ -1069,7 +1070,7 @@ router.delete('/delegated/:id', async (req, res) => {
     if (!r.affectedRows) return res.status(404).json({ error: 'Delegation not found' })
     audit(req, 'delegation.revoke', `id=${req.params.id}`)
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ═══════════════════════════════════════════════════════════
@@ -1106,28 +1107,28 @@ router.get('/notifications', async (req, res) => {
     )
 
     res.json({ rows, total, page, limit, pages: Math.ceil(total / limit) })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.put('/notifications/:id/read', async (req, res) => {
   try {
     await db.query('UPDATE notifications SET is_read=1 WHERE id=?', [parseInt(req.params.id)])
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.put('/notifications/read-all', async (req, res) => {
   try {
     await db.query('UPDATE notifications SET is_read=1')
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.delete('/notifications/:id', async (req, res) => {
   try {
     await db.query('DELETE FROM notifications WHERE id=?', [parseInt(req.params.id)])
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ═══════════════════════════════════════════════════════════
@@ -1155,7 +1156,7 @@ router.get('/system-settings', async (req, res) => {
     res.json(settings)
   } catch (err) {
     if (err.code === 'ER_NO_SUCH_TABLE') return res.json({})
-    res.status(500).json({ error: err.message })
+    dbError(res, err)
   }
 })
 
@@ -1176,7 +1177,7 @@ router.put('/system-settings', async (req, res) => {
     if (err.code === 'ER_NO_SUCH_TABLE') {
       return res.status(500).json({ error: 'System settings table missing — run the migration script.' })
     }
-    res.status(500).json({ error: err.message })
+    dbError(res, err)
   }
 })
 
@@ -1190,7 +1191,7 @@ router.post('/test-email', async (req, res) => {
       html('SMTP Test', `<p>SMTP is configured correctly. This email was sent at ${new Date().toISOString()}.</p>`)
     )
     res.json({ ok: true, sentTo: req.user.email })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ═══════════════════════════════════════════════════════════
@@ -1227,7 +1228,7 @@ router.get('/warehouses', async (req, res) => {
       [...args, limit, offset]
     )
     res.json({ rows, total, page, limit, pages: Math.ceil(total / limit) })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.post('/warehouses', async (req, res) => {
@@ -1249,7 +1250,7 @@ router.post('/warehouses', async (req, res) => {
     res.status(201).json(row)
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Warehouse code already exists' })
-    res.status(500).json({ error: err.message })
+    dbError(res, err)
   }
 })
 
@@ -1273,7 +1274,7 @@ router.put('/warehouses/:id', async (req, res) => {
     res.json(row)
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Warehouse code already exists' })
-    res.status(500).json({ error: err.message })
+    dbError(res, err)
   }
 })
 
@@ -1287,7 +1288,7 @@ router.patch('/warehouses/:id/status', async (req, res) => {
     if (!r.affectedRows) return res.status(404).json({ error: 'Warehouse not found' })
     audit(req, 'warehouse.status', `id=${id} status=${status}`)
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.delete('/warehouses/:id', async (req, res) => {
@@ -1298,7 +1299,7 @@ router.delete('/warehouses/:id', async (req, res) => {
     if (!r.affectedRows) return res.status(404).json({ error: 'Warehouse not found' })
     audit(req, 'warehouse.delete', `id=${id} reason="${reason}"`)
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ═══════════════════════════════════════════════════════════
@@ -1321,7 +1322,7 @@ router.get('/uom', async (req, res) => {
       args
     )
     res.json(rows)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.post('/uom', async (req, res) => {
@@ -1338,7 +1339,7 @@ router.post('/uom', async (req, res) => {
     res.status(201).json(row)
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'UoM code already exists' })
-    res.status(500).json({ error: err.message })
+    dbError(res, err)
   }
 })
 
@@ -1358,7 +1359,7 @@ router.put('/uom/:id', async (req, res) => {
     res.json(row)
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'UoM code already exists' })
-    res.status(500).json({ error: err.message })
+    dbError(res, err)
   }
 })
 
@@ -1372,7 +1373,7 @@ router.patch('/uom/:id/status', async (req, res) => {
     if (!r.affectedRows) return res.status(404).json({ error: 'UoM not found' })
     audit(req, 'uom.status', `id=${id} status=${status}`)
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.delete('/uom/:id', async (req, res) => {
@@ -1383,7 +1384,7 @@ router.delete('/uom/:id', async (req, res) => {
     if (!r.affectedRows) return res.status(404).json({ error: 'UoM not found' })
     audit(req, 'uom.delete', `id=${id} reason="${reason}"`)
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ═══════════════════════════════════════════════════════════
@@ -1406,7 +1407,7 @@ router.get('/acronyms', async (req, res) => {
       args
     )
     res.json(rows)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.post('/acronyms', async (req, res) => {
@@ -1426,7 +1427,7 @@ router.post('/acronyms', async (req, res) => {
     res.status(201).json(row)
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Acronym already exists' })
-    res.status(500).json({ error: err.message })
+    dbError(res, err)
   }
 })
 
@@ -1449,7 +1450,7 @@ router.put('/acronyms/:id', async (req, res) => {
     res.json(row)
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Acronym already exists' })
-    res.status(500).json({ error: err.message })
+    dbError(res, err)
   }
 })
 
@@ -1461,7 +1462,7 @@ router.delete('/acronyms/:id', async (req, res) => {
     if (!r.affectedRows) return res.status(404).json({ error: 'Acronym not found' })
     audit(req, 'acronym.delete', `id=${id} reason="${reason}"`)
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ═══════════════════════════════════════════════════════════
@@ -1489,7 +1490,7 @@ router.get('/inco-terms', async (req, res) => {
       args
     )
     res.json(rows)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.post('/inco-terms', async (req, res) => {
@@ -1513,7 +1514,7 @@ router.post('/inco-terms', async (req, res) => {
     res.status(201).json(row)
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'INCO term code already exists' })
-    res.status(500).json({ error: err.message })
+    dbError(res, err)
   }
 })
 
@@ -1539,7 +1540,7 @@ router.put('/inco-terms/:id', async (req, res) => {
     res.json(row)
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'INCO term code already exists' })
-    res.status(500).json({ error: err.message })
+    dbError(res, err)
   }
 })
 
@@ -1553,7 +1554,7 @@ router.patch('/inco-terms/:id/status', async (req, res) => {
     if (!r.affectedRows) return res.status(404).json({ error: 'INCO term not found' })
     audit(req, 'incoterm.status', `id=${id} status=${status}`)
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.delete('/inco-terms/:id', async (req, res) => {
@@ -1564,7 +1565,7 @@ router.delete('/inco-terms/:id', async (req, res) => {
     if (!r.affectedRows) return res.status(404).json({ error: 'INCO term not found' })
     audit(req, 'incoterm.delete', `id=${id} reason="${reason}"`)
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ═══════════════════════════════════════════════════════════════
@@ -1575,7 +1576,7 @@ router.get('/currencies', async (req, res) => {
   try {
     const [rows] = await db.query('SELECT * FROM currencies ORDER BY code')
     res.json(rows)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.post('/currencies', async (req, res) => {
@@ -1591,7 +1592,7 @@ router.post('/currencies', async (req, res) => {
       [upperCode, name.trim(), symbol.trim(), is_active ? 1 : 0])
     const [[created]] = await db.query('SELECT * FROM currencies WHERE id=?', [r.insertId])
     res.status(201).json(created)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.put('/currencies/:id', async (req, res) => {
@@ -1603,7 +1604,7 @@ router.put('/currencies/:id', async (req, res) => {
       [name.trim(), symbol.trim(), is_active ? 1 : 0, req.params.id])
     const [[updated]] = await db.query('SELECT * FROM currencies WHERE id=?', [req.params.id])
     res.json(updated)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.patch('/currencies/:id/status', async (req, res) => {
@@ -1611,7 +1612,7 @@ router.patch('/currencies/:id/status', async (req, res) => {
     const { is_active } = req.body
     await db.query('UPDATE currencies SET is_active=?, updated_at=NOW() WHERE id=?', [is_active ? 1 : 0, req.params.id])
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.delete('/currencies/:id', async (req, res) => {
@@ -1622,7 +1623,7 @@ router.delete('/currencies/:id', async (req, res) => {
     if (inUse.n > 0) return res.status(409).json({ error: `Cannot delete — currency ${curr.code} is used on ${inUse.n} purchase order(s)` })
     await db.query('DELETE FROM currencies WHERE id=?', [req.params.id])
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 // ═══════════════════════════════════════════════════════════════
@@ -1633,7 +1634,7 @@ router.get('/package-types', async (req, res) => {
   try {
     const [rows] = await db.query('SELECT * FROM package_types ORDER BY name')
     res.json(rows)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.post('/package-types', async (req, res) => {
@@ -1646,7 +1647,7 @@ router.post('/package-types', async (req, res) => {
       [name.trim(), description?.trim() || null, is_active ? 1 : 0])
     const [[created]] = await db.query('SELECT * FROM package_types WHERE id=?', [r.insertId])
     res.status(201).json(created)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.put('/package-types/:id', async (req, res) => {
@@ -1660,7 +1661,7 @@ router.put('/package-types/:id', async (req, res) => {
       [name.trim(), description?.trim() || null, is_active ? 1 : 0, req.params.id])
     const [[updated]] = await db.query('SELECT * FROM package_types WHERE id=?', [req.params.id])
     res.json(updated)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.patch('/package-types/:id/status', async (req, res) => {
@@ -1668,7 +1669,7 @@ router.patch('/package-types/:id/status', async (req, res) => {
     const { is_active } = req.body
     await db.query('UPDATE package_types SET is_active=?, updated_at=NOW() WHERE id=?', [is_active ? 1 : 0, req.params.id])
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 router.delete('/package-types/:id', async (req, res) => {
@@ -1682,7 +1683,7 @@ router.delete('/package-types/:id', async (req, res) => {
     if (inUse.n > 0) return res.status(409).json({ error: `Cannot delete — "${pt.name}" is used on ${inUse.n} SCN item(s)` })
     await db.query('DELETE FROM package_types WHERE id=?', [req.params.id])
     res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { dbError(res, err) }
 })
 
 module.exports = router

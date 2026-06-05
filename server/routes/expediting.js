@@ -5,6 +5,7 @@
 const express = require('express')
 const router  = express.Router()
 const db      = require('../db')
+const { dbError } = require('../utils/dbError')
 const { authenticateToken } = require('../middleware/auth')
 const { fileFilter } = require('../utils/upload')
 
@@ -68,7 +69,7 @@ router.get('/:projectId/stats', async (req, res) => {
     res.json(counts)
   } catch (e) {
     console.error(e)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -170,7 +171,7 @@ router.get('/:projectId/register', async (req, res) => {
     res.json({ total, page, limit, data: result })
   } catch (e) {
     console.error(e)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -318,7 +319,7 @@ router.get('/:projectId/po/:poId', async (req, res) => {
     })
   } catch (e) {
     console.error(e)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -356,7 +357,7 @@ router.put('/:projectId/po/:poId/milestone/:milestoneId/forecast', async (req, r
     res.json({ ...updated, status: computeMilestoneStatus(updated) })
   } catch (e) {
     console.error(e)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -394,7 +395,7 @@ router.put('/:projectId/po/:poId/milestone/:milestoneId/actual', async (req, res
     res.json({ ...updated, status: computeMilestoneStatus(updated) })
   } catch (e) {
     console.error(e)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -414,7 +415,7 @@ router.get('/:projectId/po/:poId/milestone/:milestoneId/forecast-history', async
     res.json(rows)
   } catch (e) {
     console.error(e)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -440,7 +441,7 @@ router.post('/:projectId/po/:poId/action-notes', async (req, res) => {
     res.json(note)
   } catch (e) {
     console.error(e)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -468,7 +469,7 @@ router.post('/:projectId/po/:poId/lines/:lineId/child-items', async (req, res) =
     res.json(child)
   } catch (e) {
     console.error(e)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -492,7 +493,7 @@ router.put('/:projectId/po/:poId/lines/:lineId/link', async (req, res) => {
     res.json(line)
   } catch (e) {
     console.error(e)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -521,7 +522,7 @@ router.get('/:projectId/vdrl/stats', async (req, res) => {
       abf_cleared_count: stats.abf_cleared_count || 0,
       progress_pct: total ? Math.round(submitted / total * 100) : 0,
     })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── VDRL PACKAGES LIST ───────────────────────────────────────
@@ -542,7 +543,7 @@ router.get('/:projectId/vdrl/packages', async (req, res) => {
       ORDER BY p.created_at DESC
     `, [pid])
     res.json(pkgs)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── VDRL PACKAGE CREATE ──────────────────────────────────────
@@ -560,7 +561,7 @@ router.post('/:projectId/vdrl/packages', async (req, res) => {
     )
     const [[pkg]] = await db.query('SELECT * FROM vdrl_packages WHERE id=?', [r.insertId])
     res.status(201).json(pkg)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── VDRL DOCUMENTS LIST ──────────────────────────────────────
@@ -593,7 +594,7 @@ router.get('/:projectId/vdrl/documents', async (req, res) => {
       ORDER BY d.doc_number
     `, params)
     res.json(docs)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── VDRL DOCUMENT CREATE ─────────────────────────────────────
@@ -614,7 +615,7 @@ router.post('/:projectId/vdrl/documents', async (req, res) => {
     )
     const [[doc]] = await db.query('SELECT * FROM vdrl_documents WHERE id=?', [r.insertId])
     res.status(201).json(doc)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── VDRL DOCUMENT UPDATE ─────────────────────────────────────
@@ -632,7 +633,7 @@ router.put('/:projectId/vdrl/documents/:docId', async (req, res) => {
     await db.query(`UPDATE vdrl_documents SET ${sets.join(',')}, updated_at=NOW() WHERE id=?`, vals)
     const [[doc]] = await db.query('SELECT * FROM vdrl_documents WHERE id=?', [docId])
     res.json(doc)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── VDRL DOCUMENT FILE ATTACH ────────────────────────────────
@@ -691,7 +692,7 @@ router.post('/:projectId/vdrl/documents/:docId/file', uploadVdrlFile.single('fil
     res.status(201).json(updated)
   } catch (e) {
     if (req.file) { try { fsVdrl.unlinkSync(req.file.path) } catch (_) {} }
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -712,7 +713,7 @@ router.get('/:projectId/action-log', async (req, res) => {
       LIMIT 100
     `, [pid])
     res.json(notes)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── PO AUDIT TRAIL ───────────────────────────────────────────
@@ -759,7 +760,7 @@ router.get('/:projectId/po/:poId/audit', async (req, res) => {
     ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
 
     res.json(combined)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── WAREHOUSES ───────────────────────────────────────────────
@@ -769,7 +770,7 @@ router.get('/:projectId/warehouses', async (req, res) => {
     // Project-scoped: a project only sees warehouses it owns (warehouses.project_id).
     const [rows] = await db.query("SELECT id, name, code, type, CONCAT_WS(', ', city, state) AS location, manager, phone FROM warehouses WHERE project_id=? ORDER BY name", [Number(req.params.projectId)])
     res.json(rows)
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { dbError(res, e) }
 })
 
 // ─── CREATE SCN ───────────────────────────────────────────────
@@ -872,7 +873,7 @@ router.post('/:projectId/scn', async (req, res) => {
   } catch (e) {
     await conn.rollback()
     console.error('[scn:create]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   } finally {
     conn.release()
   }
@@ -913,7 +914,7 @@ router.post('/:projectId/scn/:scnId/variation', async (req, res) => {
     res.status(201).json({ id: r.insertId, scn_id: scnId, parent_po_line_id: Number(parent_po_line_id), is_variation: 1 })
   } catch (e) {
     console.error('[scn:variation]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -951,7 +952,7 @@ router.get('/:projectId/vdrl/po-list', async (req, res) => {
         : 0,
     }))
     res.json(cast)
-  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
+  } catch (e) { console.error(e); dbError(res, e) }
 })
 
 // ─── VDRL TEMPLATE DOWNLOAD ───────────────────────────────────
@@ -1077,7 +1078,7 @@ router.get('/:projectId/vdrl/template', async (req, res) => {
     res.setHeader('Content-Disposition', 'attachment; filename="QCO_VDRL_Template.xlsx"')
     await wb.xlsx.write(res)
     res.end()
-  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
+  } catch (e) { console.error(e); dbError(res, e) }
 })
 
 // ─── VDRL UPLOAD ──────────────────────────────────────────────
@@ -1193,7 +1194,7 @@ router.post('/:projectId/vdrl/upload', uploadVDRL.single('file'), async (req, re
       hasErrors,
       dryRun,
     })
-  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
+  } catch (e) { console.error(e); dbError(res, e) }
 })
 
 // ─── ITP CRUD ─────────────────────────────────────────────────
@@ -1218,7 +1219,7 @@ router.get('/:projectId/po/:poId/itp', async (req, res) => {
     res.json({ items })
   } catch (e) {
     console.error('[itp:list]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1270,7 +1271,7 @@ router.post('/:projectId/po/:poId/itp', async (req, res) => {
     res.status(201).json(newItem)
   } catch (e) {
     console.error('[itp:create]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1359,7 +1360,7 @@ router.put('/:projectId/po/:poId/itp/:itemId', async (req, res) => {
     res.json({ success: true, item: updated })
   } catch (e) {
     console.error('[itp:update]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1384,7 +1385,7 @@ router.delete('/:projectId/po/:poId/itp/:itemId', async (req, res) => {
     res.json({ success: true })
   } catch (e) {
     console.error('[itp:delete]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1403,7 +1404,7 @@ router.get('/:projectId/po/:poId/itp/:itemId/date-history', async (req, res) => 
     res.json({ history })
   } catch (e) {
     console.error('[itp:date-history]', e.message)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 
@@ -1422,7 +1423,7 @@ router.put('/:projectId/po/:poId/lines/:lineId/heat-number', async (req, res) =>
     res.json(line)
   } catch (e) {
     console.error(e)
-    res.status(500).json({ error: e.message })
+    dbError(res, e)
   }
 })
 

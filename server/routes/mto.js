@@ -7,6 +7,7 @@
 const express = require('express')
 const router  = express.Router()
 const db      = require('../db')
+const { dbError } = require('../utils/dbError')
 const { authenticateToken } = require('../middleware/auth')
 const multer  = require('multer')
 const XLSX    = require('xlsx')
@@ -930,7 +931,7 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
     res.json({ ok: true, revision: newRev, linesImported: lines.length })
   } catch (e) {
     console.error('POST /mto/:projectId/:mtoId/upload', e.message)
-    res.status(500).json({ error: e.message || 'Upload failed' })
+    dbError(res, e, 'Upload failed')
   }
 })
 

@@ -2,6 +2,7 @@ const express = require('express')
 const bcrypt  = require('bcryptjs')
 const jwt     = require('jsonwebtoken')
 const db      = require('../db')
+const { dbError } = require('../utils/dbError')
 const { authenticateToken: authMiddleware } = require('../middleware/auth')
 const { validateComplexity, checkHistory, addToHistory, expiresAt: pwExpiry } = require('../utils/password')
 
@@ -61,7 +62,7 @@ router.post('/login', async (req, res) => {
 
     res.json({ token, user: payload })
   } catch (err) {
-    res.status(500).json({ error: err.message })
+    dbError(res, err)
   }
 })
 
@@ -158,7 +159,7 @@ router.post('/change-password', authMiddleware, async (req, res) => {
 
     res.json({ message: 'Password changed successfully', token: newToken, user: newPayload })
   } catch (err) {
-    res.status(500).json({ error: err.message })
+    dbError(res, err)
   }
 })
 
@@ -201,7 +202,7 @@ router.put('/profile', authMiddleware, async (req, res) => {
 
     res.json({ message: 'Profile updated', token: newToken, user: newPayload })
   } catch (err) {
-    res.status(500).json({ error: err.message })
+    dbError(res, err)
   }
 })
 
