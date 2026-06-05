@@ -86,7 +86,10 @@ async function teardown(conn, pid) {
     await conn.query('DELETE mr FROM mto_revisions mr JOIN mto_registers m ON m.id=mr.mto_id WHERE m.project_id=?', [pid])
     await conn.query('DELETE FROM mto_registers WHERE project_id=?', [pid])
     await conn.query('DELETE a FROM meeting_attendees a JOIN rfi_meeting_records r ON r.id=a.record_id WHERE r.project_id=?', [pid])
-    for (const t of ['meeting_actions', 'rfi_meeting_records', 'equipment_list', 'commodity_library', 'foundational_certificates', 'project_health_weights', 'pending_changes', 'user_wbs_access', 'wbs_nodes']) await conn.query(`DELETE FROM ${t} WHERE project_id=?`, [pid])
+    for (const t of ['meeting_actions', 'rfi_meeting_records', 'equipment_list', 'commodity_library', 'foundational_certificates', 'project_health_weights', 'pending_changes', 'user_wbs_access']) await conn.query(`DELETE FROM ${t} WHERE project_id=?`, [pid])
+    // wbs_nodes has a self-referential parent_id FK — break the links before the bulk delete
+    await conn.query('UPDATE wbs_nodes SET parent_id=NULL WHERE project_id=?', [pid])
+    await conn.query('DELETE FROM wbs_nodes WHERE project_id=?', [pid])
     try {
       await conn.query('DELETE ar FROM audit_review ar JOIN audit_log a ON a.id=ar.audit_log_id WHERE a.project_id=?', [pid])
       await conn.query('DELETE FROM audit_log WHERE project_id=?', [pid])
@@ -161,17 +164,23 @@ async function main() {
     const ADMIN = uidByRole['admin'][0]
     const someExp = uidByRole['expeditor'][0], someWh = uidByRole['warehouse'][0]
 
-    // ── WBS hierarchy (L1 disciplines → L2 areas → L3 subsystems → L4 packages) ──
+    // ── WBS hierarchy (L1 disciplines → L2 areas → L3 subsystems) ──
+    // Codes are discipline abbreviations (CIV, MEC, …) with zero-padded sub-levels
+    // (CIV.01, CIV.01.01) — alphabetic root, dot-separated so the parent_id derivation
+    // (SUBSTRING_INDEX on '.') still resolves CIV.01.01 → CIV.01 → CIV → root.
     const DISC = ['Civil', 'Structural', 'Mechanical', 'Piping', 'Electrical', 'Instrumentation', 'HVAC', 'Fire']
+    const ABBR = { Civil: 'CIV', Structural: 'STR', Mechanical: 'MEC', Piping: 'PIP', Electrical: 'ELE', Instrumentation: 'INS', HVAC: 'HVA', Fire: 'FIR' }
     const RAGS = ['green', 'amber', 'red', 'blue']
     const wbsRows = [], wbsMeta = [] // {code, disc}
     for (let a = 1; a <= S.wbsL1; a++) {
-      const disc = DISC[(a - 1) % DISC.length]
-      wbsRows.push([pid, null, `${a}`, `${disc} Works`, disc, rnd(RAGS), iso(addDays(TODAY, -300)), `WBS lead ${a}`]); wbsMeta.push({ code: `${a}`, disc })
+      const disc = DISC[(a - 1) % DISC.length]; const ab = ABBR[disc]
+      wbsRows.push([pid, null, ab, `${disc} Works`, disc, rnd(RAGS), iso(addDays(TODAY, -300)), `WBS lead ${a}`]); wbsMeta.push({ code: ab, disc })
       for (let b = 1; b <= ri(3, 6); b++) {
-        wbsRows.push([pid, null, `${a}.${b}`, `${disc} Area ${b}`, disc, rnd(RAGS), iso(addDays(TODAY, -250)), null]); wbsMeta.push({ code: `${a}.${b}`, disc })
+        const c2 = `${ab}.${pad(b, 2)}`
+        wbsRows.push([pid, null, c2, `${disc} Area ${b}`, disc, rnd(RAGS), iso(addDays(TODAY, -250)), null]); wbsMeta.push({ code: c2, disc })
         for (let c = 1; c <= ri(2, 5); c++) {
-          wbsRows.push([pid, null, `${a}.${b}.${c}`, `${disc} Subsystem ${c}`, disc, rnd(RAGS), null, null]); wbsMeta.push({ code: `${a}.${b}.${c}`, disc })
+          const c3 = `${ab}.${pad(b, 2)}.${pad(c, 2)}`
+          wbsRows.push([pid, null, c3, `${disc} Subsystem ${c}`, disc, rnd(RAGS), null, null]); wbsMeta.push({ code: c3, disc })
         }
       }
     }

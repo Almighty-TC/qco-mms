@@ -97,7 +97,9 @@ DELETE FROM date_change_log WHERE created_by IN (SELECT id FROM users WHERE emai
 
 -- WBS access + WBS nodes (po_lines.wbs_id FK already cleared above; wbs_nodes self-ref handled in one statement)
 DELETE FROM user_wbs_access WHERE project_id=@pid;
-DELETE FROM wbs_nodes       WHERE project_id=@pid;
+-- wbs_nodes has a self-referential parent_id FK — break the links before the bulk delete
+UPDATE wbs_nodes SET parent_id=NULL WHERE project_id=@pid;
+DELETE FROM wbs_nodes            WHERE project_id=@pid;
 
 -- audit_review has no project_id; scope it via its parent audit_log row. Delete BEFORE
 -- audit_log so the join can still resolve project_id (and to satisfy the FK to audit_log).
