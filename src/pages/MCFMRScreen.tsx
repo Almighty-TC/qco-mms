@@ -447,16 +447,28 @@ const FMRApprovalModal = ({ dark, fmr, projectId, onClose, onSaved, addToast }: 
   const [decisions, setDecisions] = useState<Record<number, { decision: LineDecision; qty: string; reason: string }>>({})
   const [saving, setSaving] = useState(false)
   const [error, setError]   = useState('')
+  // ── Issuance packaging: how the approved material ships (package type + dims + weight + DG) ──
+  const [packageTypes, setPackageTypes] = useState<{ id: number; name: string }[]>([])
+  type PkgDraft = { package_type_id: string; length_mm: string; width_mm: string; height_mm: string; gross_weight_kg: string; net_weight_kg: string; is_dangerous_goods: boolean; dg_class: string; dg_un_number: string }
+  const [packages, setPackages] = useState<PkgDraft[]>([])
+  const [lineAssign, setLineAssign] = useState<Record<number, number>>({})   // line_id → package index
 
   useEffect(() => {
     axios.get(`${API}/mc/${projectId}/fmr/${fmr.id}/approval`)
       .then(({ data }) => { setHeader(data.fmr); setLines(data.lines || []) })
       .catch((e: any) => addToast('error', e.response?.data?.error || 'Failed to load FMR'))
       .finally(() => setLoading(false))
+    axios.get(`${API}/mc/package-types`).then(({ data }) => setPackageTypes(data)).catch(() => {})
   }, [fmr.id]) // eslint-disable-line
 
   const setDec = (lineId: number, patch: Partial<{ decision: LineDecision; qty: string; reason: string }>) =>
     setDecisions(p => ({ ...p, [lineId]: { decision: p[lineId]?.decision ?? 'approve_full', qty: p[lineId]?.qty ?? '', reason: p[lineId]?.reason ?? '', ...patch } }))
+  const addPackage = () => setPackages(p => [...p, { package_type_id: '', length_mm: '', width_mm: '', height_mm: '', gross_weight_kg: '', net_weight_kg: '', is_dangerous_goods: false, dg_class: '', dg_un_number: '' }])
+  const setPkg = (i: number, patch: Partial<PkgDraft>) => setPackages(p => p.map((pk, j) => j === i ? { ...pk, ...patch } : pk))
+  const removePackage = (i: number) => {
+    setPackages(p => p.filter((_, j) => j !== i))
+    setLineAssign(a => { const n: Record<number, number> = {}; for (const k of Object.keys(a)) { const lid = Number(k), pi = a[lid]; if (pi === i) continue; n[lid] = pi > i ? pi - 1 : pi } return n })
+  }
 
   // ── Roll-up preview + per-line validity ────────────────────
   const counts = { approve_full: 0, approve_partial: 0, reject: 0 }
@@ -470,6 +482,11 @@ const FMRApprovalModal = ({ dark, fmr, projectId, onClose, onSaved, addToast }: 
     return false
   }
   const allValid = decidedAll && lines.every(lineValid)
+  // ── Packaging validity: every approved/partial line sits in exactly one valid package ──
+  const approvedLineIds = lines.filter(l => { const d = decisions[l.line_id]; return d && d.decision !== 'reject' }).map(l => l.line_id)
+  const pkgValid = (pk: PkgDraft) => !!pk.package_type_id && [pk.length_mm, pk.width_mm, pk.height_mm, pk.gross_weight_kg].every(v => Number(v) > 0) && (!pk.is_dangerous_goods || !!pk.dg_class.trim())
+  const packagingValid = approvedLineIds.length === 0 || (packages.length > 0 && packages.every(pkgValid) && approvedLineIds.every(id => lineAssign[id] != null && lineAssign[id] < packages.length))
+  const canConfirm = allValid && packagingValid
 
   // Roll-up preview label
   const rollupPreview = (() => {
@@ -484,6 +501,7 @@ const FMRApprovalModal = ({ dark, fmr, projectId, onClose, onSaved, addToast }: 
   const submit = async () => {
     setError('')
     if (!allValid) { setError('Every line needs a valid decision'); return }
+    if (!packagingValid) { setError('Add a package (type, dims, weight) and assign every approved line to one'); return }
     setSaving(true)
     try {
       await axios.put(`${API}/mc/${projectId}/fmr/${fmr.id}/approve`, {
@@ -495,6 +513,15 @@ const FMRApprovalModal = ({ dark, fmr, projectId, onClose, onSaved, addToast }: 
             reason: (d.decision === 'approve_partial' || d.decision === 'reject') ? d.reason.trim() : undefined,
           }
         }),
+        packages: packages.map((pk, i) => ({
+          package_type_id: Number(pk.package_type_id),
+          length_mm: Number(pk.length_mm), width_mm: Number(pk.width_mm), height_mm: Number(pk.height_mm),
+          gross_weight_kg: Number(pk.gross_weight_kg),
+          net_weight_kg: pk.net_weight_kg ? Number(pk.net_weight_kg) : undefined,
+          is_dangerous_goods: pk.is_dangerous_goods ? 1 : 0,
+          dg_class: pk.dg_class.trim() || undefined, dg_un_number: pk.dg_un_number.trim() || undefined,
+          line_ids: approvedLineIds.filter(id => lineAssign[id] === i),
+        })),
       })
       onSaved()
     } catch (e: any) { setError(e.response?.data?.error || 'Failed to record decisions') }
@@ -624,6 +651,61 @@ const FMRApprovalModal = ({ dark, fmr, projectId, onClose, onSaved, addToast }: 
               </div>
             )
           })}
+
+          {/* ── Issuance packaging (required on approved/partial lines) ── */}
+          {!loading && approvedLineIds.length > 0 && (
+            <div style={{ border: bd, borderRadius: 10, padding: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10, gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: col, textTransform: 'uppercase', letterSpacing: '0.05em' }}>📦 Issuance packaging</div>
+                  <div style={{ fontSize: 11, color: sub, marginTop: 2 }}>How the approved material ships — assign every approved line to a package.</div>
+                </div>
+                <button onClick={addPackage} style={{ padding: '6px 12px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 600, flexShrink: 0 }}>+ Add package</button>
+              </div>
+              {packages.length === 0 && <div style={{ fontSize: 11.5, color: '#ef4444', marginBottom: 8 }}>Add at least one package.</div>}
+              {packages.map((pk, i) => (
+                <div key={i} style={{ border: bd, borderRadius: 8, padding: 10, marginBottom: 8, background: dark ? '#162032' : '#f8fafc' }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, fontWeight: 700, color: col }}>PKG-{i + 1}</span>
+                    <select value={pk.package_type_id} onChange={e => setPkg(i, { package_type_id: e.target.value })} style={{ ...inputSt, minWidth: 130 }}>
+                      <option value="">Package type…</option>
+                      {packageTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                    <input type="number" placeholder="L mm" value={pk.length_mm} onChange={e => setPkg(i, { length_mm: e.target.value })} style={{ ...inputSt, width: 72 }} />
+                    <input type="number" placeholder="W mm" value={pk.width_mm} onChange={e => setPkg(i, { width_mm: e.target.value })} style={{ ...inputSt, width: 72 }} />
+                    <input type="number" placeholder="H mm" value={pk.height_mm} onChange={e => setPkg(i, { height_mm: e.target.value })} style={{ ...inputSt, width: 72 }} />
+                    <input type="number" placeholder="Gross kg" value={pk.gross_weight_kg} onChange={e => setPkg(i, { gross_weight_kg: e.target.value })} style={{ ...inputSt, width: 84 }} />
+                    <input type="number" placeholder="Net kg" value={pk.net_weight_kg} onChange={e => setPkg(i, { net_weight_kg: e.target.value })} style={{ ...inputSt, width: 72 }} />
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: sub, cursor: 'pointer' }}>
+                      <input type="checkbox" checked={pk.is_dangerous_goods} onChange={e => setPkg(i, { is_dangerous_goods: e.target.checked })} /> DG
+                    </label>
+                    {pk.is_dangerous_goods && <>
+                      <input placeholder="DG class" value={pk.dg_class} onChange={e => setPkg(i, { dg_class: e.target.value })} style={{ ...inputSt, width: 80 }} />
+                      <input placeholder="UN #" value={pk.dg_un_number} onChange={e => setPkg(i, { dg_un_number: e.target.value })} style={{ ...inputSt, width: 70 }} />
+                    </>}
+                    <button onClick={() => removePackage(i)} title="Remove package" style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 14 }}>✕</button>
+                  </div>
+                </div>
+              ))}
+              {packages.length > 0 && (
+                <div style={{ marginTop: 4 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: sub, textTransform: 'uppercase', marginBottom: 6 }}>Assign approved lines to a package</div>
+                  {lines.filter(l => approvedLineIds.includes(l.line_id)).map(l => (
+                    <div key={l.line_id} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 5 }}>
+                      <span style={{ flex: 1, fontSize: 12, color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#2563eb' }}>{l.item_code}</span> · {l.description}
+                      </span>
+                      <select value={lineAssign[l.line_id] ?? ''} onChange={e => setLineAssign(p => ({ ...p, [l.line_id]: Number(e.target.value) }))}
+                        style={{ ...inputSt, width: 110, border: lineAssign[l.line_id] == null ? '1px solid #ef4444' : bd }}>
+                        <option value="">Package…</option>
+                        {packages.map((_, pi) => <option key={pi} value={pi}>PKG-{pi + 1}</option>)}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -631,8 +713,8 @@ const FMRApprovalModal = ({ dark, fmr, projectId, onClose, onSaved, addToast }: 
           {error ? <span style={{ color: '#ef4444', fontSize: 12 }}>{error}</span> : <span style={{ fontSize: 11, color: sub }}>{decidedAll ? 'All lines decided' : `${lines.length - counts.approve_full - counts.approve_partial - counts.reject} line(s) still need a decision`}</span>}
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={onClose} style={{ padding: '8px 18px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
-            <button onClick={submit} disabled={saving || !allValid}
-              style={{ padding: '8px 18px', borderRadius: 6, border: 'none', background: allValid ? '#2563eb' : '#94a3b8', color: '#fff', cursor: allValid && !saving ? 'pointer' : 'not-allowed', fontSize: 12, fontWeight: 600 }}>
+            <button onClick={submit} disabled={saving || !canConfirm}
+              style={{ padding: '8px 18px', borderRadius: 6, border: 'none', background: canConfirm ? '#2563eb' : '#94a3b8', color: '#fff', cursor: canConfirm && !saving ? 'pointer' : 'not-allowed', fontSize: 12, fontWeight: 600 }}>
               {saving ? 'Saving…' : 'Confirm decision'}
             </button>
           </div>
@@ -884,10 +966,11 @@ const FMRDetailModal = ({ dark, projectId, fmr, onClose, addToast }: {
   const [header, setHeader] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState(false)   // ⤢ toggle: comfortable default ↔ near-fullscreen
+  const [packages, setPackages] = useState<any[]>([])
 
   useEffect(() => {
     axios.get(`${API}/mc/${projectId}/fmr/${fmr.id}/detail`)
-      .then(({ data }) => { setHeader(data.fmr); setLines(data.lines || []) })
+      .then(({ data }) => { setHeader(data.fmr); setLines(data.lines || []); setPackages(data.packages || []) })
       .catch((e: any) => addToast('error', e.response?.data?.error || 'Failed to load FMR'))
       .finally(() => setLoading(false))
   }, [fmr.id]) // eslint-disable-line
@@ -950,6 +1033,33 @@ const FMRDetailModal = ({ dark, projectId, fmr, onClose, addToast }: {
                   ))}
                 </tbody>
               </table>
+
+              {/* ── Issuance packaging (how the approved material ships) ── */}
+              {packages.length > 0 && (
+                <div style={{ marginTop: 18 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: sub, textTransform: 'uppercase', marginBottom: 8 }}>📦 Issuance packaging ({packages.length})</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {packages.map((p: any) => {
+                      const inPkg = lines.filter(l => l.package_id === p.id)
+                      return (
+                        <div key={p.id} style={{ border: bd, borderRadius: 8, padding: '10px 12px', background: dark ? '#162032' : '#f8fafc' }}>
+                          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}>
+                            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: col }}>{p.package_number}</span>
+                            <span style={{ color: col }}>{p.package_type_name || '—'}</span>
+                            <span style={{ color: sub, fontFamily: 'JetBrains Mono, monospace' }}>{Number(p.length_mm)}×{Number(p.width_mm)}×{Number(p.height_mm)} mm</span>
+                            <span style={{ color: sub, fontFamily: 'JetBrains Mono, monospace' }}>{Number(p.gross_weight_kg)} kg gross{p.net_weight_kg ? ` · ${Number(p.net_weight_kg)} kg net` : ''}</span>
+                            {p.is_dangerous_goods ? <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 5, background: 'rgba(239,68,68,0.12)', color: '#dc2626', fontWeight: 600 }}>⚠ DG {p.dg_class || ''}{p.dg_un_number ? ` · UN${p.dg_un_number}` : ''}</span> : null}
+                          </div>
+                          {inPkg.length > 0 && (
+                            <div style={{ marginTop: 6, fontSize: 11, color: sub }}>Contains: <span style={{ fontFamily: 'JetBrains Mono, monospace', color: col }}>{inPkg.map(l => l.item_code).join(', ')}</span></div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div style={{ fontSize: 11, color: sub, marginTop: 14 }}>
                 Work order: <span style={{ color: col }}>{fmr.work_order_ref || '—'}</span> · Required: <span style={{ color: col }}>{fmt(fmr.required_date)}</span>
               </div>

@@ -10,6 +10,15 @@ router.use(authenticateToken)
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
 router.use(require('../middleware/permissions').enforce((p, req) => (req.method === 'POST' && /\/fmr$/.test(p)) ? 'fmr' : 'material_control')) // C-b2: FMR-raise→fmr (contractors wbs-scoped); else material_control
 
+// GET /api/mc/package-types — active package types for FMR packaging (MC-accessible).
+// Defined first so it isn't swallowed by a /:projectId route.
+router.get('/package-types', async (req, res) => {
+  try {
+    const [rows] = await db.query('SELECT id, name, description FROM package_types WHERE is_active=1 ORDER BY name')
+    res.json(rows)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // ─── QUARANTINE LOCATION (Phase 3) ────────────────────────────
 // Damaged stock is held at this designated location_code (a "place"),
 // with condition_status='quarantine', trace_hold=1, qty_available=0 —
@@ -739,7 +748,7 @@ router.get('/:projectId/fmr/:fmrId/detail', async (req, res) => {
     if (!fmr) return res.status(404).json({ error: 'FMR not found' })
     const [lines] = await db.query(
       `SELECT id, item_id, item_code, item_type, description, wbs_code,
-              qty_requested, qty_approved, qty_issued, uom, line_status,
+              qty_requested, qty_approved, qty_issued, uom, line_status, package_id,
               DATE_FORMAT(ros_date, '%Y-%m-%d') AS ros_date
        FROM fmr_lines WHERE fmr_id=? ORDER BY id`, [fmrId])
     // Heat/Lot P4b-i: per-line issued-heat breakdown from the issue ledger, so the
@@ -748,7 +757,14 @@ router.get('/:projectId/fmr/:fmrId/detail', async (req, res) => {
       `SELECT fmr_line_id, heat_number, SUM(qty) AS qty FROM fmr_issue_lines
        WHERE fmr_id=? GROUP BY fmr_line_id, heat_number ORDER BY fmr_line_id, heat_number`, [fmrId])
     for (const l of lines) l.issued_heats = issuedHeats.filter(h => h.fmr_line_id === l.id)
-    res.json({ fmr, lines })
+    // Issuance packaging (how the approved material is packed) — for the View modal.
+    const [packages] = await db.query(
+      `SELECT p.id, p.package_number, p.package_type_id, pt.name AS package_type_name, p.description,
+              p.length_mm, p.width_mm, p.height_mm, p.gross_weight_kg, p.net_weight_kg,
+              p.is_dangerous_goods, p.dg_class, p.dg_un_number, p.marks_numbers
+       FROM fmr_packages p LEFT JOIN package_types pt ON pt.id=p.package_type_id
+       WHERE p.fmr_id=? ORDER BY p.id`, [fmrId])
+    res.json({ fmr, lines, packages })
   } catch (e) {
     console.error('[mc:fmr-detail]', e.message)
     res.status(500).json({ error: e.message })
@@ -870,10 +886,12 @@ router.put('/:projectId/fmr/:fmrId/approve', async (req, res) => {
     const pid = Number(req.params.projectId)
     const fmrId = Number(req.params.fmrId)
     const userId = req.user?.id || 1
-    const { decisions } = req.body
+    const { decisions, packages = [] } = req.body
 
     if (!Array.isArray(decisions) || decisions.length === 0)
       return res.status(422).json({ error: 'decisions array is required' })
+    if (!Array.isArray(packages))
+      return res.status(422).json({ error: 'packages must be an array' })
 
     const [[fmr]] = await db.query('SELECT * FROM fmr_requests WHERE id=? AND project_id=?', [fmrId, pid])
     if (!fmr) return res.status(404).json({ error: 'FMR not found' })
@@ -915,11 +933,48 @@ router.put('/:projectId/fmr/:fmrId/approve', async (req, res) => {
       }
     }
 
-    // ── Apply per-line + write an audit row per decision ───────
+    // ── Validate packaging — every approved/partial line must sit in exactly one package ──
+    const approvedIds = new Set(planned.filter(p => p.status !== 'rejected').map(p => p.line.id))
+    const lineToPkg = new Map()   // line_id → package array index
+    for (let i = 0; i < packages.length; i++) {
+      const pk = packages[i]
+      if (!pk.package_type_id) return res.status(422).json({ error: `Package ${i + 1}: a package type is required` })
+      for (const [field, label] of [['length_mm', 'length'], ['width_mm', 'width'], ['height_mm', 'height'], ['gross_weight_kg', 'gross weight']]) {
+        if (pk[field] == null || pk[field] === '' || Number(pk[field]) <= 0) return res.status(422).json({ error: `Package ${i + 1}: ${label} is required`, package_index: i })
+      }
+      if (pk.is_dangerous_goods && (!pk.dg_class || !String(pk.dg_class).trim())) return res.status(422).json({ error: `Package ${i + 1}: DG class is required for dangerous goods`, package_index: i })
+      for (const lid of (pk.line_ids || [])) {
+        const id = Number(lid)
+        if (!approvedIds.has(id)) return res.status(422).json({ error: `Package ${i + 1}: line ${id} is not an approved line` })
+        if (lineToPkg.has(id)) return res.status(422).json({ error: `Line ${id} is assigned to more than one package` })
+        lineToPkg.set(id, i)
+      }
+    }
+    for (const id of approvedIds) {
+      if (!lineToPkg.has(id)) { const ln = lineMap.get(id); return res.status(422).json({ error: `Line ${ln?.item_code || id} must be assigned to a package`, line_id: id }) }
+    }
+
+    // ── Clear any prior packaging (re-approval), then create the packages ──
+    await db.query('UPDATE fmr_lines SET package_id=NULL WHERE fmr_id=?', [fmrId])
+    await db.query('DELETE FROM fmr_packages WHERE fmr_id=?', [fmrId])
+    const pkgIds = []
+    for (let i = 0; i < packages.length; i++) {
+      const pk = packages[i]
+      const [pr] = await db.query(
+        `INSERT INTO fmr_packages (fmr_id, package_number, package_type_id, description, length_mm, width_mm, height_mm, gross_weight_kg, net_weight_kg, is_dangerous_goods, dg_class, dg_un_number, marks_numbers, created_by)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [fmrId, pk.package_number || `PKG-${i + 1}`, pk.package_type_id, pk.description || null,
+         pk.length_mm, pk.width_mm, pk.height_mm, pk.gross_weight_kg, pk.net_weight_kg || null,
+         pk.is_dangerous_goods ? 1 : 0, pk.dg_class || null, pk.dg_un_number || null, pk.marks_numbers || null, userId])
+      pkgIds.push(pr.insertId)
+    }
+
+    // ── Apply per-line (+ package assignment) + write an audit row per decision ───────
     for (const p of planned) {
+      const linePkgId = lineToPkg.has(p.line.id) ? pkgIds[lineToPkg.get(p.line.id)] : null
       await db.query(
-        `UPDATE fmr_lines SET line_status=?, qty_approved=?, approval_reason=?, approved_by=?, approved_date=NOW() WHERE id=?`,
-        [p.status, p.qty, p.reason, userId, p.line.id])
+        `UPDATE fmr_lines SET line_status=?, qty_approved=?, approval_reason=?, approved_by=?, approved_date=NOW(), package_id=? WHERE id=?`,
+        [p.status, p.qty, p.reason, userId, linePkgId, p.line.id])
       await writeAudit(userId, 'fmr_line_decision', 'fmr_line', p.line.id,
         { line_status: p.line.line_status },
         { line_status: p.status, qty_approved: p.qty, reason: p.reason },

@@ -67,7 +67,8 @@ async function teardown(conn, pid) {
       'fmr_lines': 'fmr_id IN (SELECT id FROM fmr_requests WHERE project_id=?)',
     }
     await conn.query(`DELETE FROM fmr_issue_lines WHERE ${j.fmr_issue_lines}`, [pid])
-    await conn.query(`DELETE FROM fmr_lines WHERE ${j.fmr_lines}`, [pid])
+    await conn.query(`DELETE FROM fmr_lines WHERE ${j.fmr_lines}`, [pid])   // clears fmr_lines.package_id refs before fmr_packages
+    await conn.query('DELETE FROM fmr_packages WHERE fmr_id IN (SELECT id FROM fmr_requests WHERE project_id=?)', [pid])
     for (const t of ['fmr_requests', 'warehouse_transfers', 'warehouse_stock', 'receipt_lines']) await conn.query(`DELETE FROM ${t} WHERE project_id=?`, [pid])
     await conn.query('DELETE e FROM expediting_child_items e JOIN po_lines pl ON pl.id=e.po_line_id JOIN purchase_orders p ON p.id=pl.po_id WHERE p.project_id=?', [pid])
     await conn.query('DELETE ii FROM itp_items ii JOIN itp_requirements ir ON ir.id=ii.requirement_id JOIN purchase_orders p ON p.id=ir.po_id WHERE p.project_id=?', [pid])

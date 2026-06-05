@@ -30,7 +30,8 @@ DELETE FROM expediting_forecast_history WHERE changed_by IN (SELECT id FROM user
 
 -- FMR (issue lines -> lines -> requests)
 DELETE fil FROM fmr_issue_lines fil JOIN fmr_requests f ON f.id=fil.fmr_id WHERE f.project_id=@pid;
-DELETE fl  FROM fmr_lines fl       JOIN fmr_requests f ON f.id=fl.fmr_id  WHERE f.project_id=@pid;
+DELETE fl  FROM fmr_lines fl       JOIN fmr_requests f ON f.id=fl.fmr_id  WHERE f.project_id=@pid;  -- clears package_id refs first
+DELETE fp  FROM fmr_packages fp    JOIN fmr_requests f ON f.id=fp.fmr_id  WHERE f.project_id=@pid;
 DELETE FROM fmr_requests WHERE project_id=@pid;
 
 -- Warehouse (transfers, stock, receipts) — stock is FK-referenced by fmr_issue_lines (deleted above)
