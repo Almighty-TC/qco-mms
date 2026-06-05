@@ -10,6 +10,8 @@ import { ToastProvider, useToast } from '../hooks/useToast'
 import { useCurrentUser } from '../hooks/useCurrentUser'
 import { useAutoTitle } from '../hooks/useAutoTitle'
 import { useResizableTable, ResetColumnsButton } from '../components/colResize'
+import { HelpButton } from '../components/HelpDrawer'
+import { RECEIPTING_HELP } from '../helpContent'
 
 const API = 'http://localhost:3001/api'
 
@@ -122,7 +124,10 @@ const MCReceiptingInner = ({ dark, projectId, projectName, onBack }: {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <BackButton onFallback={onBack} dark={dark} />
         </div>
-        <button style={{ padding: '6px 14px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>↓ Export</button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button style={{ padding: '6px 14px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>↓ Export</button>
+          <HelpButton screenName="Receipting" sections={RECEIPTING_HELP} dark={dark} />
+        </div>
       </div>
 
       <div style={{ padding: 24 }}>

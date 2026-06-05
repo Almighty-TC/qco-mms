@@ -8,6 +8,8 @@ import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { Pager } from '../components/Pager'
 import { useResizableTable, ResetColumnsButton } from '../components/colResize'
+import { HelpButton } from '../components/HelpDrawer'
+import { STOCK_REGISTER_HELP } from '../helpContent'
 import { usePagedList } from '../hooks/usePagedList'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { useCurrentUser } from '../hooks/useCurrentUser'
@@ -154,6 +156,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
           {!isSubcontractor && (
             <button style={{ padding: '6px 14px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>↓ Export</button>
           )}
+          <HelpButton screenName="Stock Register" sections={STOCK_REGISTER_HELP} dark={dark} />
         </div>
       </div>
 

@@ -12,6 +12,8 @@ import { useCurrentUser } from '../hooks/useCurrentUser'
 import { ScopeBanner } from '../components/ScopeBanner'
 import { Pager } from '../components/Pager'
 import { useResizableTable, ResetColumnsButton } from '../components/colResize'
+import { HelpButton } from '../components/HelpDrawer'
+import { LOGISTICS_HELP } from '../helpContent'
 
 // Resizable column defaults — SCN register (13 cols), seeded from the prior fixed widths.
 const LOG_W   = [40, 110, 100, 130, 120, 160, 90, 100, 100, 60, 90, 130, 50]
@@ -217,7 +219,10 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <BackButton onFallback={onBack} dark={dark} />
         </div>
-        {!isForwarder && <button onClick={exportCSV} style={{ ...inputSt, cursor: 'pointer', width: 'auto' }}>↓ Export</button>}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {!isForwarder && <button onClick={exportCSV} style={{ ...inputSt, cursor: 'pointer', width: 'auto' }}>↓ Export</button>}
+          <HelpButton screenName="Logistics" sections={LOGISTICS_HELP} dark={dark} />
+        </div>
       </div>
 
       <div style={{ padding: 24 }}>

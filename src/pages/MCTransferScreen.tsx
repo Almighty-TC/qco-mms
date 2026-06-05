@@ -11,6 +11,8 @@ import { ToastProvider, useToast } from '../hooks/useToast'
 import { useAutoTitle } from '../hooks/useAutoTitle'
 import { Pager } from '../components/Pager'
 import { useResizableTable, ResetColumnsButton } from '../components/colResize'
+import { HelpButton } from '../components/HelpDrawer'
+import { TRANSFERS_HELP } from '../helpContent'
 
 // Resizable column defaults — transfer register (10 cols).
 const TR_W   = [120, 120, 220, 80, 100, 160, 150, 120, 110, 110]
@@ -113,10 +115,13 @@ const MCTransferInner = ({ dark, projectId, projectName, onBack }: {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <BackButton onFallback={onBack} dark={dark} />
         </div>
-        <button onClick={() => setShowNewTransfer(true)}
-          style={{ padding: '6px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
-          + New transfer
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button onClick={() => setShowNewTransfer(true)}
+            style={{ padding: '6px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+            + New transfer
+          </button>
+          <HelpButton screenName="Warehouse Transfers" sections={TRANSFERS_HELP} dark={dark} />
+        </div>
       </div>
 
       <div style={{ padding: 24 }}>

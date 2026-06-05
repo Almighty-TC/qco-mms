@@ -739,3 +739,251 @@ export const DASHBOARD_HELP: HelpSection[] = [
     </>,
   },
 ]
+
+// ═══════════════════════════════════════════════════════════════
+// FMR REGISTER HELP (Material Control)
+// ═══════════════════════════════════════════════════════════════
+export const FMR_HELP: HelpSection[] = [
+  {
+    title: 'What is this?',
+    content: <>
+      {P(<>The {B('FMR (Field Material Request) Register')} is where site crews request material from the
+        warehouse, and where Material Control approves and issues it. Each FMR can hold {B('multiple line items')}.</>)}
+      {P(<>The flow is: {Code('Raised → Approved → Issued / Picked up')}.</>)}
+    </>,
+  },
+  {
+    title: 'Active register vs Records',
+    content: <>
+      {P(<>Tabs split the register by lifecycle:</>)}
+      <ul style={{ margin: '0 0 10px', paddingLeft: 18, fontSize: 13 }}>
+        <li>{B('Active register')} — live FMRs still to be approved or picked up.</li>
+        <li>{B('Records')} — picked-up FMRs (the Proof-of-Collection archive).</li>
+        <li>{B('All')} — everything.</li>
+      </ul>
+      {P(<>Once issued, an FMR is {B('terminal')} and moves to Records; any shortfall is raised as a new FMR.</>)}
+    </>,
+  },
+  {
+    title: 'Approving & packaging',
+    content: <>
+      {P(<>Click {B('Approve')} on a pending FMR to set approved quantities and capture
+        {B(' issuance packaging')} (type, dimensions, weight, dangerous-goods) per package.</>)}
+      {Tip('Use the ★ to flag an FMR as critical path so it sorts to the top and is easy to chase.')}
+    </>,
+  },
+  {
+    title: 'Issuing & Proof of Collection',
+    content: <>
+      {P(<>{B('Issue / Pickup')} decrements stock (auto-FIFO, or pick specific heats with {B('⊕ Heats')}) and
+        records {B('Proof of Collection')} — who collected, their company, notes, and a signature or photo.</>)}
+      {P(<>Open {B('🤝 View / PoC')} on a Records row to see the collection details and signature.</>)}
+    </>,
+  },
+  {
+    title: 'Multi-item FMRs & columns',
+    content: <>
+      {P(<>A {Code('+N more')} badge in the Items column means the FMR has several lines — click it to expand
+        them inline. Drag any column edge to resize; {B('↺ Reset columns')} restores the defaults.</>)}
+    </>,
+  },
+]
+
+// ═══════════════════════════════════════════════════════════════
+// STOCK REGISTER HELP (Material Control)
+// ═══════════════════════════════════════════════════════════════
+export const STOCK_REGISTER_HELP: HelpSection[] = [
+  {
+    title: 'What is this?',
+    content: <>
+      {P(<>The {B('Stock Register')} is the live inventory of everything received into the project's warehouses —
+        every line ties back to the receipt and SCN it came from.</>)}
+    </>,
+  },
+  {
+    title: 'Condition & holds',
+    content: <>
+      {P(<>The {B('Condition')} column shows whether stock is good, damaged, or in quarantine. The {B('Hold')}
+        column flags items on a traceability hold (e.g. missing cert) — these can't be issued until released.</>)}
+      {Warning('Stock on a trace hold is excluded from FMR issuing until the hold is cleared in Traceability.')}
+    </>,
+  },
+  {
+    title: 'Searching & columns',
+    content: <>
+      {P(<>Search by item, WBS, warehouse, vendor or tag. Click a column header to sort; drag the column edge
+        to resize and {B('↺ Reset columns')} to restore defaults.</>)}
+      {Tip('Contractors see a reduced view — grid/bin location is hidden from external users.')}
+    </>,
+  },
+]
+
+// ═══════════════════════════════════════════════════════════════
+// TRANSFERS HELP (Material Control)
+// ═══════════════════════════════════════════════════════════════
+export const TRANSFERS_HELP: HelpSection[] = [
+  {
+    title: 'What is this?',
+    content: <>
+      {P(<>The {B('Warehouse Transfer Register')} tracks material moving between warehouses within the project.</>)}
+      {P(<>Lifecycle: {Code('Requested → In transit → Picked up → Delivered → Complete')}.</>)}
+    </>,
+  },
+  {
+    title: 'Raising & approving',
+    content: <>
+      {P(<>Use {B('+ New transfer')} to request a move (from/to warehouse, item, qty). Material Control
+        approves, then the status advances as the goods move and arrive.</>)}
+    </>,
+  },
+  {
+    title: 'Detail & columns',
+    content: <>
+      {P(<>Click {B('View')} for the lifecycle stepper and full detail. Drag column edges to resize and use
+        {B(' ↺ Reset columns')} to restore defaults.</>)}
+    </>,
+  },
+]
+
+// ═══════════════════════════════════════════════════════════════
+// RECEIPTING HELP (Material Control)
+// ═══════════════════════════════════════════════════════════════
+export const RECEIPTING_HELP: HelpSection[] = [
+  {
+    title: 'What is this?',
+    content: <>
+      {P(<>{B('Receipting')} is where arriving shipments (SCNs) and inbound transfers are received into stock.
+        Completing a receipt creates {B('warehouse stock')} and stamps the arrival.</>)}
+    </>,
+  },
+  {
+    title: 'The queue',
+    content: <>
+      {P(<>Tabs filter what's receivable: {B('Arrived')}, {B('In transit')}, {B('Customs')}, plus {B('Shipments')}
+        and {B('Transfers')}. Search by ref, item, vendor, PO or WBS.</>)}
+    </>,
+  },
+  {
+    title: 'Receiving a shipment',
+    content: <>
+      {Steps([
+        <>Click {B('Receive')} (or {B('Begin inspection')}) on a queued SCN.</>,
+        <>Confirm the expected contents, then enter received and damaged quantities per line.</>,
+        <>Set the destination location and cargo condition, then complete.</>,
+      ])}
+      {P(<>Completing the receipt sets the SCN to {B('Delivered')} in Logistics — a shipment is delivered once
+        receipted, never "partially delivered". Any outstanding PO balance arrives on a new SCN.</>)}
+    </>,
+  },
+]
+
+// ═══════════════════════════════════════════════════════════════
+// LOGISTICS HELP
+// ═══════════════════════════════════════════════════════════════
+export const LOGISTICS_HELP: HelpSection[] = [
+  {
+    title: 'What is this?',
+    content: <>
+      {P(<>The {B('Logistics / SCN Register')} tracks every shipment (Shipment Control Note) from pickup to
+        delivery, with packages, documents, and a status timeline.</>)}
+      {P(<>Display statuses: {Code('Pending pickup → In transit → Customs review → Pending delivery → Delivered')}.</>)}
+    </>,
+  },
+  {
+    title: 'RAG & critical path',
+    content: <>
+      {RAGTable()}
+      {Tip('The ★ marks a critical-path shipment so it sorts to the top and is easy to watch.')}
+    </>,
+  },
+  {
+    title: 'Status & delivery',
+    content: <>
+      {P(<>You can advance an SCN's status manually, but it flips to {B('Delivered')} automatically when the
+        shipment is {B('receipted')} in Material Control.</>)}
+    </>,
+  },
+  {
+    title: 'Detail — packages & docs',
+    content: <>
+      {P(<>Click a row to open the SCN detail, which has four tabs: {B('Overview')}, {B('Packages')}
+        (dimensions, weight, DG), {B('Documents')} (packing list, BoL, certs), and {B('Timeline')}
+        (status + date-change history).</>)}
+    </>,
+  },
+]
+
+// ═══════════════════════════════════════════════════════════════
+// TRACEABILITY HELP
+// ═══════════════════════════════════════════════════════════════
+export const TRACEABILITY_HELP: HelpSection[] = [
+  {
+    title: 'What is this?',
+    content: <>
+      {P(<>The {B('Traceability')} module links every material back to its certificates and heat numbers, and
+        manages {B('quality holds')} on items with missing or failed documentation.</>)}
+    </>,
+  },
+  {
+    title: 'VDRL & certificates',
+    content: <>
+      {P(<>The {B('VDRL')} tab tracks required vendor documents (MTCs, test reports) per PO/tag with due dates
+        and status. The {B('Certificates')} tab is the QA verification queue for incoming certs.</>)}
+    </>,
+  },
+  {
+    title: 'Holds',
+    content: <>
+      {P(<>An item on a {B('hold')} (e.g. missing MTC, heat mismatch) is quarantined from issuing until QA
+        releases it. Holds carry an age and chase count so overdue ones stand out.</>)}
+      {Warning('Stock under an active trace hold cannot be issued on an FMR until the hold is released.')}
+    </>,
+  },
+]
+
+// ═══════════════════════════════════════════════════════════════
+// DOCUMENT INBOX HELP
+// ═══════════════════════════════════════════════════════════════
+export const DOCUMENT_INBOX_HELP: HelpSection[] = [
+  {
+    title: 'What is this?',
+    content: <>
+      {P(<>The {B('Document Inbox')} is a single, searchable feed of every document across the project —
+        certificates, packing lists, PoDs, MTO uploads and more — pulled from each module.</>)}
+    </>,
+  },
+  {
+    title: 'Filtering',
+    content: <>
+      {P(<>Filter by {B('module')}, {B('status')} (Verified / Available / Under review / Missing) and a
+        {B(' date range')}. Search matches filename, source, tag, type and uploader.</>)}
+    </>,
+  },
+  {
+    title: 'Columns',
+    content: <>
+      {P(<>Drag a column edge to resize and use {B('↺ Reset columns')} to restore the defaults.</>)}
+    </>,
+  },
+]
+
+// ═══════════════════════════════════════════════════════════════
+// PENDING CHANGES HELP (Confirmer queue)
+// ═══════════════════════════════════════════════════════════════
+export const PENDING_CHANGES_HELP: HelpSection[] = [
+  {
+    title: 'What is this?',
+    content: <>
+      {P(<>{B('Pending Changes')} is the approval queue for staged edits to Foundational and MTO data. Certain
+        changes don't apply immediately — they wait here for an authorised approver to confirm or reject.</>)}
+    </>,
+  },
+  {
+    title: 'Approving & rejecting',
+    content: <>
+      {P(<>Each row shows the {B('before → after')} of the proposed change. {B('Approve')} applies it and writes
+        an audit record; {B('Reject')} discards it. Changes submitted in a batch can be actioned together.</>)}
+      {Tip('Only changes you are authorised to confirm show an action button — others are visible but read-only.')}
+    </>,
+  },
+]

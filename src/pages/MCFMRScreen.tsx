@@ -6,6 +6,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'   // modals portal to document.body — see App.tsx zoom wrapper
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
+import { HelpButton } from '../components/HelpDrawer'
+import { FMR_HELP } from '../helpContent'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { useCurrentUser } from '../hooks/useCurrentUser'
 import { ScopeBanner } from '../components/ScopeBanner'
@@ -192,6 +194,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
             + Raise FMR
           </button>
           {!isSubcontractor && <button style={{ padding: '6px 14px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>↓ Export</button>}
+          <HelpButton screenName="FMR Register" sections={FMR_HELP} dark={dark} />
         </div>
       </div>
 

@@ -7,6 +7,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
+import { HelpButton } from '../components/HelpDrawer'
+import { PENDING_CHANGES_HELP } from '../helpContent'
 import { AdminTable, AdminRow, AdminCell } from '../components/AdminTable'
 import type { AdminCol } from '../components/AdminTable'
 
@@ -86,6 +88,7 @@ export const ConfirmerQueueScreen = ({ dark, projectId, projectName, onBack }: {
             </button>
           ))}
           <button onClick={load} style={{ padding: '7px 12px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>↺ Refresh</button>
+          <HelpButton screenName="Pending Changes" sections={PENDING_CHANGES_HELP} dark={dark} />
         </div>
       </div>
 

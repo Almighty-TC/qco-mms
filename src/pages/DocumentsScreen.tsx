@@ -10,6 +10,8 @@ import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { useResizableTable, ResetColumnsButton } from '../components/colResize'
+import { HelpButton } from '../components/HelpDrawer'
+import { DOCUMENT_INBOX_HELP } from '../helpContent'
 
 const API = 'http://localhost:3001/api'
 
@@ -195,6 +197,7 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={exportCsv} style={{ padding: '7px 14px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>↓ Export register</button>
           <button onClick={() => setShowUpload(true)} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>↑ Upload document</button>
+          <HelpButton screenName="Document Inbox" sections={DOCUMENT_INBOX_HELP} dark={dark} />
         </div>
       </div>
 

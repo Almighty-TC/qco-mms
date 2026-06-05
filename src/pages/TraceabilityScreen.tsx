@@ -6,6 +6,8 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
+import { HelpButton } from '../components/HelpDrawer'
+import { TRACEABILITY_HELP } from '../helpContent'
 import { Pager } from '../components/Pager'
 import { usePagedList } from '../hooks/usePagedList'
 import { ToastProvider, useToast } from '../hooks/useToast'
@@ -158,10 +160,13 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <BackButton onFallback={onBack} dark={dark} />
         </div>
-        <button onClick={() => setUploadOpen({ mode: 'global' })}
-          style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
-          ↑ Upload cert
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button onClick={() => setUploadOpen({ mode: 'global' })}
+            style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+            ↑ Upload cert
+          </button>
+          <HelpButton screenName="Traceability" sections={TRACEABILITY_HELP} dark={dark} />
+        </div>
       </div>
 
       <div style={{ padding: 24 }}>
