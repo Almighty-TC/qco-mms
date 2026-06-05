@@ -864,12 +864,37 @@ router.post('/:projectId/scn', async (req, res) => {
       )
     }
 
+    // ── Persist packages declared in the wizard (one row per physical package) ──
+    // Previously the wizard collected packages but the create endpoint dropped them,
+    // so the Logistics Packages tab showed nothing. scn_packages has no qty column,
+    // so a "qty N" line is expanded into N numbered package rows.
+    const num = v => (v == null || v === '') ? null : Number(v)
+    let pkgNum = 0
+    for (const p of (packages || [])) {
+      const count = Math.min(500, Math.max(1, Math.floor(Number(p.qty) || 1)))
+      for (let k = 0; k < count; k++) {
+        pkgNum++
+        await conn.query(
+          `INSERT INTO scn_packages (scn_id, package_number, description, length_mm, width_mm, height_mm, gross_weight_kg, is_dangerous_goods)
+           VALUES (?,?,?,?,?,?,?,?)`,
+          [scnId, String(pkgNum).padStart(2, '0'), (p.type || '').trim() || null,
+           num(p.length), num(p.width), num(p.height), num(p.weight), p.is_dg ? 1 : 0])
+      }
+    }
+    if (pkgNum > 0) {
+      await conn.query(
+        `UPDATE shipment_control_notes SET
+           total_packages  = (SELECT COUNT(*) FROM scn_packages WHERE scn_id=?),
+           total_weight_kg = (SELECT COALESCE(SUM(gross_weight_kg),0) FROM scn_packages WHERE scn_id=?)
+         WHERE id = ?`, [scnId, scnId, scnId])
+    }
+
     // Commit 2: project-scoped audit of the SCN creation + line assignments (in-txn).
     await conn.query(
       `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, after_value, resource, ip)
        VALUES (?,?,?,?,?,?,?,?)`,
       [req.user.id, 'scn_created', 'scn', scnId, pid,
-       JSON.stringify({ scn_ref: scnRef, po_id, assignments, additional_items: (additional_items || []).length }),
+       JSON.stringify({ scn_ref: scnRef, po_id, assignments, additional_items: (additional_items || []).length, packages: pkgNum }),
        (req.originalUrl || '').split('?')[0].replace(/^\/api(?=\/)/, ''), req.ip]
     )
 
