@@ -11,6 +11,11 @@ import { MilestoneLegend } from '../components/MilestoneLegend'
 import { useCurrentUser } from '../hooks/useCurrentUser'
 import { ScopeBanner } from '../components/ScopeBanner'
 import { Pager } from '../components/Pager'
+import { useResizableTable, ResetColumnsButton } from '../components/colResize'
+
+// Resizable column defaults — SCN register (13 cols), seeded from the prior fixed widths.
+const LOG_W   = [40, 110, 100, 130, 120, 160, 90, 100, 100, 60, 90, 130, 50]
+const LOG_MIN = [36, 80, 70, 90, 80, 100, 60, 70, 70, 50, 60, 90, 40]
 import { usePagedList } from '../hooks/usePagedList'
 
 const API = 'http://localhost:3001/api'
@@ -152,6 +157,7 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
     pageSize: 50, initialSortCol: 'created_at', initialSortDir: 'desc',
   })
   const sortArrow = (k: string) => sortCol === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
+  const rt = useResizableTable('logistics_scn', LOG_W, LOG_MIN)
 
   // ─── OPEN DETAIL ─────────────────────────────────────────
   const openDetail = async (scnId: number) => {
@@ -278,20 +284,22 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
             days
           </div>
           <div style={{ fontSize: 11, color: sub }}>{total} result{total !== 1 ? 's' : ''}</div>
+          <ResetColumnsButton onClick={rt.resetWidths} dark={dark} style={{ marginLeft: 'auto' }} />
         </div>
 
         {/* ── TABLE ─────────────────────────────────────────── */}
         <div style={{ background: cardBg, border: bd, borderRadius: 8 }}>
           <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 320px)' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <table style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 12 }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                 <tr style={{ borderBottom: bd }}>
                   {([['★','40px'],['SCN','110px','scn_ref'],['PO','100px'],['VENDOR','130px','vendor'],['FORWARDER','120px','forwarder'],
                     ['ROUTE','160px','origin'],['MODE','90px','mode'],['ETD','100px','etd'],['ETA','100px','eta'],
-                    ['PKGS','60px'],['WEIGHT','90px'],['STATUS','130px','status'],['RAG','50px']] as [string,string,string?][]).map(([h,w,key]) => (
+                    ['PKGS','60px'],['WEIGHT','90px'],['STATUS','130px','status'],['RAG','50px']] as [string,string,string?][]).map(([h,w,key], i) => (
                     <th key={h} onClick={key ? () => toggleSort(key) : undefined}
-                      style={{ padding: '8px 10px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', width: w, whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>
+                      style={{ ...rt.thStyle(i), padding: '8px 10px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>
                       {h}{key ? sortArrow(key) : ''}
+                      {rt.handle(i, dark)}
                     </th>
                   ))}
                 </tr>

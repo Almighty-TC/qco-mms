@@ -9,8 +9,13 @@ import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { useCurrentUser } from '../hooks/useCurrentUser'
 import { useAutoTitle } from '../hooks/useAutoTitle'
+import { useResizableTable, ResetColumnsButton } from '../components/colResize'
 
 const API = 'http://localhost:3001/api'
+
+// Resizable column defaults — receipting queue (10 cols).
+const RC_W   = [130, 90, 240, 80, 100, 170, 100, 150, 110, 120]
+const RC_MIN = [90, 60, 130, 60, 70, 110, 80, 100, 90, 90]
 
 type Tab = 'all' | 'arrived' | 'in_transit' | 'customs' | 'shipments' | 'transfers'
 type WizardStep = 1 | 2 | 3 | 4 | 5
@@ -80,6 +85,7 @@ const MCReceiptingInner = ({ dark, projectId, projectName, onBack }: {
   // Truncated cells get a hover tooltip; re-runs when the register rows change.
   const tableRef = useRef<HTMLDivElement>(null)
   useAutoTitle(tableRef, [rows])
+  const rt = useResizableTable('mc_receipting', RC_W, RC_MIN)
 
   const fetchData = async () => {
     setLoading(true)
@@ -167,16 +173,17 @@ const MCReceiptingInner = ({ dark, projectId, projectName, onBack }: {
           <select style={{ fontSize: 12, padding: '7px 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontFamily: 'inherit' }}>
             <option value="all">Destination: All</option>
           </select>
+          <ResetColumnsButton onClick={rt.resetWidths} dark={dark} />
         </div>
 
         {/* Table */}
         <div style={{ background: cardBg, border: bd, borderTop: 'none', borderRadius: '0 0 8px 8px', overflow: 'hidden' }}>
           <div ref={tableRef} style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 380px)' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <table style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 12 }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                 <tr style={{ borderBottom: bd }}>
-                  {['REFERENCE','TYPE','ITEM / DESCRIPTION','QTY','WBS','SOURCE / VENDOR','ETA','DESTINATION','STATUS',''].map(h => (
-                    <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
+                  {['REFERENCE','TYPE','ITEM / DESCRIPTION','QTY','WBS','SOURCE / VENDOR','ETA','DESTINATION','STATUS',''].map((h, i) => (
+                    <th key={h || i} style={{ ...rt.thStyle(i), padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}{rt.handle(i, dark)}</th>
                   ))}
                 </tr>
               </thead>

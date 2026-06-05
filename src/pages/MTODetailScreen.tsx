@@ -9,6 +9,13 @@ import { createPortal } from 'react-dom'
 import axios from 'axios'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { ToastContainer } from '../components/Toast'
+import { useResizableTable, ResetColumnsButton } from '../components/colResize'
+
+// Resizable column defaults — MTO line-items grid (12 cols) + revision history (5 cols).
+const MTO_LINE_W   = [70, 110, 260, 90, 70, 110, 90, 80, 120, 120, 80, 50]
+const MTO_LINE_MIN = [50, 70, 120, 60, 50, 80, 60, 50, 80, 90, 60, 40]
+const MTO_REV_W    = [140, 200, 130, 320, 80]
+const MTO_REV_MIN  = [90, 120, 90, 120, 60]
 import { HelpButton } from '../components/HelpDrawer'
 import { MTO_DETAIL_HELP } from '../helpContent'
 import { BackButton } from '../components/BackButton'
@@ -355,6 +362,7 @@ const LineItemsTab = ({
   const [editTarget, setEditTarget] = useState<MTOLine | null>(null)
   // Per-status totals for the whole revision (drive the tab badges); set by the fetcher.
   const [counts, setCounts] = useState<Record<string, number>>({ all: 0, 'po-raised': 0, rfq: 0, 'not-started': 0 })
+  const rt = useResizableTable('mto_lines', MTO_LINE_W, MTO_LINE_MIN)
 
   const col  = dark ? '#f1f5f9' : '#0f172a'
   const sub  = dark ? '#94a3b8' : '#64748b'
@@ -421,6 +429,7 @@ const LineItemsTab = ({
             fontFamily: 'IBM Plex Sans, sans-serif', width: 180,
           }}
         />
+        <ResetColumnsButton onClick={rt.resetWidths} dark={dark} />
       </div>
 
       {/* Table */}
@@ -431,27 +440,28 @@ const LineItemsTab = ({
       ) : (
         <>
         <div style={{ overflowX: 'auto', border: bd, borderRadius: 8, background: dark ? '#111827' : '#fff' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <table style={{ ...rt.tableStyle, borderCollapse: 'collapse' }}>
             <thead>
               <tr>
                 {([
                   { label: 'LINE', key: 'line_number' },
                   { label: 'WBS', key: 'wbs_code' },
                   { label: 'DESCRIPTION', key: 'description' },
-                  { label: 'QTY', key: 'quantity' },
+                  { label: 'QTY', key: 'quantity', align: 'right' },
                   { label: 'UOM' },
                   { label: 'ROS', key: 'ros_date' },
                   { label: 'INSP' },
-                  { label: 'VDRL' },
+                  { label: 'VDRL', align: 'center' },
                   { label: 'PO REF' },
                   { label: 'STATUS', key: 'status' },
                   { label: '' },
                   { label: '' },
-                ] as { label: string; key?: string }[]).map((c, i) => (
+                ] as { label: string; key?: string; align?: React.CSSProperties['textAlign'] }[]).map((c, i) => (
                   <th key={i}
                     onClick={c.key ? () => toggleSort(c.key!) : undefined}
-                    style={{ ...thStyle, cursor: c.key ? 'pointer' : 'default', userSelect: 'none' }}>
+                    style={{ ...rt.thStyle(i), ...thStyle, textAlign: c.align ?? 'left', cursor: c.key ? 'pointer' : 'default', userSelect: 'none' }}>
                     {c.label}{c.key && sortCol === c.key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+                    {rt.handle(i, dark)}
                   </th>
                 ))}
               </tr>

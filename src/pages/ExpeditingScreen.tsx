@@ -7,6 +7,11 @@ import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { Pager } from '../components/Pager'
 import { usePagedList } from '../hooks/usePagedList'
+import { useResizableTable, ResetColumnsButton } from '../components/colResize'
+
+// Resizable column defaults — Expediting PO register (10 cols).
+const EXP_W   = [36, 30, 130, 160, 200, 150, 140, 110, 120, 80]
+const EXP_MIN = [32, 28, 90, 100, 120, 100, 100, 80, 90, 60]
 import { HelpButton } from '../components/HelpDrawer'
 import { MilestoneTimeline } from '../components/MilestoneTimeline'
 import { MilestoneLegend } from '../components/MilestoneLegend'
@@ -511,6 +516,7 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
     pageSize: 50, initialSortCol: 'po_number', initialSortDir: 'asc',
   })
   const sortArrow = (k: string) => sortCol === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
+  const rt = useResizableTable('expediting_pos', EXP_W, EXP_MIN)
 
   // ─── VDRL DATA LOAD ───────────────────────────────────────
   // Loads stats and packages when VDRL tab is activated.
@@ -649,6 +655,7 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
               placeholder="Search PO, vendor, material…"
               style={{ flex: 1, minWidth: 180, fontSize: 12, padding: '6px 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontFamily: 'inherit' }}
             />
+            <ResetColumnsButton onClick={rt.resetWidths} dark={dark} />
             <div style={{ display: 'flex', gap: 4 }}>
               {(['all', 'blue', 'amber', 'red', 'grey', 'complete'] as RAGFilter[]).map(r => (
                 <button key={r} onClick={() => setRagFilter(r)} style={{
@@ -677,13 +684,14 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
             <div style={{ textAlign: 'center', color: sub, padding: '48px 0', fontSize: 13 }}>No POs match the filter.</div>
           ) : (
             <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 320px)' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <table style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: dark ? '#162032' : '#f8fafc' }}>
                   <tr style={{ borderBottom: bd }}>
                     {([['★'], [''], ['PO Ref', 'po_number'], ['Vendor / Group', 'vendor'], ['Material'], ['Owner / Expeditor'], ['Milestones'], ['ROS', 'ros_date'], ['Status', 'status'], ['']] as [string, string?][]).map(([h, key], i) => (
                       <th key={i} onClick={key ? () => toggleSort(key) : undefined}
-                        style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>
+                        style={{ ...rt.thStyle(i), padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>
                         {h}{key ? sortArrow(key) : ''}
+                        {rt.handle(i, dark)}
                       </th>
                     ))}
                   </tr>

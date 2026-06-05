@@ -7,6 +7,11 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import axios from 'axios'
 import { isApprovalRequired, submitForApproval, approvalToast } from '../lib/pendingChanges'
+import { useResizableTable, ResetColumnsButton } from '../components/colResize'
+
+// Resizable column defaults — MTO register grid (7 cols).
+const MTO_REG_W   = [280, 110, 80, 140, 160, 120, 80]
+const MTO_REG_MIN = [140, 80, 60, 100, 100, 90, 60]
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { ToastContainer } from '../components/Toast'
 import { HelpButton } from '../components/HelpDrawer'
@@ -822,6 +827,7 @@ const MTOListInner = ({
     } catch { addToast('error', 'Template download failed') }
   }
 
+  const rt = useResizableTable('mto_register', MTO_REG_W, MTO_REG_MIN)
   const thStyle: React.CSSProperties = {
     padding: '10px 14px', textAlign: 'left', fontSize: 11,
     fontWeight: 700, color: sub, fontFamily: 'IBM Plex Sans, sans-serif',
@@ -852,6 +858,7 @@ const MTOListInner = ({
             style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: 7, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
             + New MTO
           </button>
+          <ResetColumnsButton onClick={rt.resetWidths} dark={dark} />
         </div>
       </div>
 
@@ -865,16 +872,16 @@ const MTOListInner = ({
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <table style={{ ...rt.tableStyle, borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
-                  <th style={thStyle}>MTO / Reference</th>
-                  <th style={thStyle}>Latest Rev</th>
-                  <th style={thStyle}>Lines</th>
-                  <th style={thStyle}>Last Updated</th>
-                  <th style={thStyle}>Owner</th>
-                  <th style={thStyle}>Status</th>
-                  <th style={{ ...thStyle, textAlign: 'center' }}>View</th>
+                  <th style={{ ...rt.thStyle(0), ...thStyle }}>MTO / Reference{rt.handle(0, dark)}</th>
+                  <th style={{ ...rt.thStyle(1), ...thStyle }}>Latest Rev{rt.handle(1, dark)}</th>
+                  <th style={{ ...rt.thStyle(2), ...thStyle }}>Lines{rt.handle(2, dark)}</th>
+                  <th style={{ ...rt.thStyle(3), ...thStyle }}>Last Updated{rt.handle(3, dark)}</th>
+                  <th style={{ ...rt.thStyle(4), ...thStyle }}>Owner{rt.handle(4, dark)}</th>
+                  <th style={{ ...rt.thStyle(5), ...thStyle }}>Status{rt.handle(5, dark)}</th>
+                  <th style={{ ...rt.thStyle(6), ...thStyle, textAlign: 'center' }}>View</th>
                 </tr>
               </thead>
               <tbody>

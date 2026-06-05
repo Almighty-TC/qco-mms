@@ -9,6 +9,11 @@ import { BackButton } from '../components/BackButton'
 import { MilestoneLegend } from '../components/MilestoneLegend'
 import { Pager } from '../components/Pager'
 import { usePagedList } from '../hooks/usePagedList'
+import { useResizableTable, ResetColumnsButton } from '../components/colResize'
+
+// Resizable column defaults — commodity library (9 cols).
+const FC_W   = [120, 200, 70, 110, 110, 100, 150, 100, 90]
+const FC_MIN = [80, 120, 50, 70, 70, 70, 100, 70, 70]
 import { isApprovalRequired, submitForApproval, approvalToast } from '../lib/pendingChanges'
 
 const API = 'http://localhost:3001/api'
@@ -245,6 +250,7 @@ export const FoundCommodityScreen = ({ dark, projectId, projectName, onBack }: {
   } = usePagedList<Commodity>({ fetcher, deps: [projectId, tab, search], pageSize: 50, initialSortCol: 'code' })
 
   const sortArrow = (c: string) => sortCol === c ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''
+  const rt = useResizableTable('found_commodity', FC_W, FC_MIN)
 
   // ─── GROUPING ────────────────────────────────────────────────
   // Decision: grouping across paginated results isn't built yet. It's only
@@ -299,10 +305,10 @@ export const FoundCommodityScreen = ({ dark, projectId, projectName, onBack }: {
   const tableHead = (
     <thead>
       <tr style={{ background: dark ? '#0f172a' : '#f4f7fb', position: 'sticky', top: 0, zIndex: 2 }}>
-        {[['code','Code'],['name','Name'],['uom','UOM'],['wbs_code','WBS'],['trace_level','Trace level'],['preservation','Preserve'],['preferred_vendor','Vendor'],['status','Status']].map(([k,l]) => (
-          <th key={k} style={thStyle(k)} onClick={() => toggleSort(k)}>{l}{sortArrow(k)}</th>
+        {[['code','Code'],['name','Name'],['uom','UOM'],['wbs_code','WBS'],['trace_level','Trace level'],['preservation','Preserve'],['preferred_vendor','Vendor'],['status','Status']].map(([k,l], i) => (
+          <th key={k} style={{ ...rt.thStyle(i), ...thStyle(k) }} onClick={() => toggleSort(k)}>{l}{sortArrow(k)}{rt.handle(i, dark)}</th>
         ))}
-        <th style={{ padding: '8px 10px', borderBottom: bd, textAlign: 'left', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Actions</th>
+        <th style={{ ...rt.thStyle(8), padding: '8px 10px', borderBottom: bd, textAlign: 'left', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Actions</th>
       </tr>
     </thead>
   )
@@ -350,6 +356,7 @@ export const FoundCommodityScreen = ({ dark, projectId, projectName, onBack }: {
       <div style={{ display: 'flex', gap: 10, marginBottom: 14, alignItems: 'center' }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search code, name, WBS, vendor…"
           style={{ flex: 1, height: 34, padding: '0 12px', borderRadius: 6, border: bd, background: dark ? '#1e293b' : '#fff', color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none' }} />
+        <ResetColumnsButton onClick={rt.resetWidths} dark={dark} />
         <label style={{ fontSize: 12, color: '#64748b', display: 'flex', alignItems: 'center', gap: 6 }}>
           Group by:
           <select value={effectiveGroupBy} disabled={groupingDisabled}
@@ -374,7 +381,7 @@ export const FoundCommodityScreen = ({ dark, projectId, projectName, onBack }: {
           {loading ? (
             <div style={{ padding: '32px', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>Loading…</div>
           ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <table style={{ ...rt.tableStyle, borderCollapse: 'collapse' }}>
               {tableHead}
               <tbody>
                 {effectiveGroupBy === 'none' ? (

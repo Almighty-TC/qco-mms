@@ -10,6 +10,11 @@ import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { useAutoTitle } from '../hooks/useAutoTitle'
 import { Pager } from '../components/Pager'
+import { useResizableTable, ResetColumnsButton } from '../components/colResize'
+
+// Resizable column defaults — transfer register (10 cols).
+const TR_W   = [120, 120, 220, 80, 100, 160, 150, 120, 110, 110]
+const TR_MIN = [80, 80, 120, 60, 70, 110, 100, 90, 90, 90]
 import { usePagedList } from '../hooks/usePagedList'
 
 const API = 'http://localhost:3001/api'
@@ -91,6 +96,7 @@ const MCTransferInner = ({ dark, projectId, projectName, onBack }: {
     sortCol, sortDir, toggleSort, reload,
   } = usePagedList<Transfer>({ fetcher, deps: [projectId, debouncedSearch, statusFilter], pageSize: 50, initialSortCol: undefined })
   const sortArrow = (k: string) => sortCol === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
+  const rt = useResizableTable('mc_transfers', TR_W, TR_MIN)
 
   // Truncated cells get a hover tooltip; re-runs when the transfer list changes.
   useAutoTitle(tableRef, [transfers])
@@ -134,22 +140,24 @@ const MCTransferInner = ({ dark, projectId, projectName, onBack }: {
         )}
 
         {/* Search */}
-        <div style={{ marginBottom: 12 }}>
+        <div style={{ marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="Search ref, item, WBS, location, requester…"
-            style={{ width: '100%', fontSize: 12, padding: '7px 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontFamily: 'inherit', boxSizing: 'border-box' }} />
+            style={{ flex: 1, fontSize: 12, padding: '7px 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontFamily: 'inherit', boxSizing: 'border-box' }} />
+          <ResetColumnsButton onClick={rt.resetWidths} dark={dark} />
         </div>
 
         {/* Table */}
         <div style={{ background: cardBg, border: bd, borderRadius: 8, overflow: 'hidden' }}>
           <div ref={tableRef} style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 360px)' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <table style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 12 }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                 <tr style={{ borderBottom: bd }}>
-                  {([['REF','transfer_ref'],['ITEM','item_code'],['DESCRIPTION'],['QTY'],['WBS','wbs_code'],['FROM → TO','from_warehouse'],['REQUESTED BY','requested_by'],['EST. PICKUP','est_pickup_date'],['STATUS','status'],['ACTION']] as [string,string?][]).map(([h,key]) => (
+                  {([['REF','transfer_ref'],['ITEM','item_code'],['DESCRIPTION'],['QTY'],['WBS','wbs_code'],['FROM → TO','from_warehouse'],['REQUESTED BY','requested_by'],['EST. PICKUP','est_pickup_date'],['STATUS','status'],['ACTION']] as [string,string?][]).map(([h,key], i) => (
                     <th key={h} onClick={key ? () => toggleSort(key) : undefined}
-                      style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>
+                      style={{ ...rt.thStyle(i), padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>
                       {h}{key ? sortArrow(key) : ''}
+                      {rt.handle(i, dark)}
                     </th>
                   ))}
                 </tr>
