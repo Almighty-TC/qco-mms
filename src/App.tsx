@@ -687,9 +687,13 @@ const ProfileModal = ({ dark, onClose }: { dark: boolean; onClose: () => void })
           <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>Name</div>
           <div style={{ fontSize: 13, color: dark ? '#94a3b8' : '#475569' }}>{user?.full_name}</div>
         </div>
-        <div style={{ marginBottom: 20 }}>
+        <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>Email</div>
           <div style={{ fontSize: 13, color: dark ? '#94a3b8' : '#475569' }}>{user?.email}</div>
+        </div>
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>Role</div>
+          <div style={{ fontSize: 13, color: dark ? '#94a3b8' : '#475569', textTransform: 'capitalize' }}>{user?.role ? user.role.replace(/_/g, ' ') : '—'}</div>
         </div>
 
         {/* Editable phone field */}
