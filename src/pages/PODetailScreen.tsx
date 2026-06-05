@@ -11,6 +11,11 @@ import { ToastContainer } from '../components/Toast'
 import { HelpButton } from '../components/HelpDrawer'
 import { PO_DETAIL_HELP } from '../helpContent'
 import { BackButton } from '../components/BackButton'
+import { useResizableTable, ResetColumnsButton } from '../components/colResize'
+
+// Resizable column defaults — PO line items (12 + optional edit-actions col).
+const POL_W   = [60, 240, 70, 60, 90, 90, 100, 110, 100, 100, 100, 110, 60]
+const POL_MIN = [50, 120, 50, 50, 70, 70, 80, 80, 70, 80, 80, 80, 50]
 
 const API = 'http://localhost:3001/api'
 
@@ -356,6 +361,7 @@ const LineItemsTab = ({ po, dark, onRefresh }: { po: PO; dark: boolean; onRefres
   }
 
   const thStyle: React.CSSProperties = { padding: '8px 10px', fontWeight: 700, fontSize: 10, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap', borderBottom: `1px solid ${borderCol}` }
+  const rt = useResizableTable('po_lines', POL_W, POL_MIN)
   const tdStyle: React.CSSProperties = { padding: '0 10px', height: 44, verticalAlign: 'middle', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, fontSize: 13, color: col }
 
   return (
@@ -384,14 +390,17 @@ const LineItemsTab = ({ po, dark, onRefresh }: { po: PO; dark: boolean; onRefres
       )}
 
       {/* ── Line items table ──────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+        <ResetColumnsButton onClick={rt.resetWidths} dark={dark} />
+      </div>
       <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <table style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 13 }}>
           <thead style={{ background: dark ? '#0f172a' : '#f4f7fb' }}>
             <tr>
-              {['Line#', 'Description', 'Qty', 'UOM', 'Received', 'Remaining', 'Unit Value', 'Total Value', 'WBS', 'CDD', 'ROS', 'Heat No.'].map(h => (
-                <th key={h} style={thStyle}>{h}</th>
+              {['Line#', 'Description', 'Qty', 'UOM', 'Received', 'Remaining', 'Unit Value', 'Total Value', 'WBS', 'CDD', 'ROS', 'Heat No.'].map((h, i) => (
+                <th key={h} style={{ ...rt.thStyle(i), ...thStyle }}>{h}{rt.handle(i, dark)}</th>
               ))}
-              {editMode && <th style={thStyle} />}
+              {editMode && <th style={{ ...rt.thStyle(12), ...thStyle }} />}
             </tr>
           </thead>
           <tbody>
