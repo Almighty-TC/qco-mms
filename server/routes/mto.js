@@ -65,14 +65,59 @@ function nextRevision(current) {
   return String.fromCharCode(upper.charCodeAt(upper.length - 1) + 1)
 }
 
-// Numeric rank for a revision letter so revisions can be ordered/compared.
-// A=1, B=2 … Z=26, AA=27, AB=28 … (base-26). Used to block uploading a
-// revision that is older than (or equal to) the register's current revision.
-function revisionRank(rev) {
-  const s = String(rev || '').toUpperCase().replace(/[^A-Z]/g, '')
-  let n = 0
-  for (const ch of s) n = n * 26 + (ch.charCodeAt(0) - 64)
-  return n
+// Natural alphanumeric comparison of two revision labels so ordering works for
+// letters (A<B<…<Z<AA), numbers (1<2<10, 1.0<1.1) and mixes (A1<A2<A10,
+// "Rev 2"<"Rev 10"). Splits each label into number/letter chunks and compares
+// chunk-by-chunk. Returns -1 | 0 | 1.
+function compareRev(a, b) {
+  const chunk = s => (String(s == null ? '' : s).trim().toLowerCase().match(/\d+|\D+/g) || [])
+  const ax = chunk(a), bx = chunk(b)
+  const n = Math.max(ax.length, bx.length)
+  for (let i = 0; i < n; i++) {
+    const av = ax[i], bv = bx[i]
+    if (av === undefined) return -1            // a is a prefix of b → a is older
+    if (bv === undefined) return 1
+    if (av === bv) continue
+    const an = /^\d+$/.test(av), bn = /^\d+$/.test(bv)
+    if (an && bn) { const d = Number(av) - Number(bv); if (d) return d < 0 ? -1 : 1 }
+    else if (an !== bn) return an ? -1 : 1      // a number chunk sorts before a letter chunk
+    else {
+      // both non-numeric: pure-letter chunks order base-26 (Z < AA < AB), so a
+      // longer letter run is the later revision; otherwise plain lexical.
+      if (/^[a-z]+$/.test(av) && /^[a-z]+$/.test(bv) && av.length !== bv.length)
+        return av.length < bv.length ? -1 : 1
+      return av < bv ? -1 : 1
+    }
+  }
+  return 0
+}
+
+// True when an uploaded line set is content-identical to an existing revision's
+// lines (so a "new" revision would change nothing). Compares the substantive MTO
+// fields, normalised the way they'd be stored; order-independent.
+function sameMtoContent(uploaded, existing) {
+  const vd = v => (v === 1 || v === '1' || v === true || /^(y|yes|true)$/i.test(String(v ?? ''))) ? 1 : 0
+  const ymd = d => {            // local Y-M-D so a stored time/TZ doesn't shift the day
+    if (!d) return ''
+    const dt = new Date(d)
+    return isNaN(dt) ? String(d).slice(0, 10)
+      : `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+  }
+  const sig = l => [
+    String(l.line_number ?? '').trim(),
+    String(l.description ?? '').trim().toLowerCase(),
+    String(Number(l.quantity) || 0),
+    String(l.uom ?? '').trim().toLowerCase(),
+    String(l.wbs_code ?? '').trim().toLowerCase(),
+    ymd(l.ros_date),
+    String(l.inspection_class || 'Class II').trim().toLowerCase(),
+    vd(l.vdrl_required),
+  ].join('|')
+  const valid = a => a.filter(l => l.line_number != null && l.line_number !== '' && l.description)
+  const u = valid(uploaded).map(sig).sort()
+  const e = valid(existing).map(sig).sort()
+  if (u.length === 0 || u.length !== e.length) return false
+  return u.every((s, i) => s === e[i])
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -728,16 +773,15 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
     // regress current_revision and the live line set. We compare against the
     // highest existing revision (current_revision can be stale).
     const [allRevs] = await db.query('SELECT revision FROM mto_revisions WHERE mto_id = ?', [mtoId])
-    const newRank = revisionRank(newRev)
-    if (allRevs.some(r => r.revision === newRev)) {
+    if (allRevs.some(r => compareRev(r.revision, newRev) === 0)) {
       return res.status(409).json({
-        error: `Revision ${newRev} already exists for this MTO. Upload a new revision letter.`
+        error: `Revision ${newRev} already exists for this MTO. Upload a new revision number.`
       })
     }
-    const latest = allRevs.reduce((a, r) => revisionRank(r.revision) > revisionRank(a) ? r.revision : a, allRevs[0]?.revision || '')
-    if (latest && newRank <= revisionRank(latest)) {
+    const latest = allRevs.reduce((a, r) => (a === '' || compareRev(r.revision, a) > 0) ? r.revision : a, '')
+    if (latest && compareRev(newRev, latest) <= 0) {
       return res.status(409).json({
-        error: `Revision ${newRev} is older than the latest revision ${latest}. Uploads must be a later revision.`
+        error: `Revision ${newRev} is older than the latest revision ${latest} already in the system. Uploads must be a later revision.`
       })
     }
 
@@ -757,6 +801,19 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
       for (const [k, v] of Object.entries(row)) n[norm(k)] = v
       return n
     })
+
+    // ─── Reject a no-change re-upload ─────────────────────────────
+    // An MTO whose content is identical to the current revision (only the
+    // version differs) is meaningless — prompt and reject rather than create a
+    // duplicate revision. Compared against the live (current) revision's lines.
+    const [curLines] = await db.query(
+      'SELECT line_number, description, quantity, uom, wbs_code, ros_date, inspection_class, vdrl_required FROM mto_lines WHERE mto_id=? AND revision=? AND is_deleted=0',
+      [mtoId, mto.current_revision])
+    if (sameMtoContent(lines, curLines)) {
+      return res.status(409).json({
+        error: `This upload is identical to the current revision (${mto.current_revision}) — nothing has changed. Edit the take-off before uploading a new revision.`
+      })
+    }
 
     // ─── BUG-2: locked-line conflict detection ────────────────────
     const [lockedLines] = await db.query(
