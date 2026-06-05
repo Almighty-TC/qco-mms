@@ -131,7 +131,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
       {/* Header */}
       <div style={{ background: cardBg, borderBottom: bd, padding: '12px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <BackButton onClick={onBack} dark={dark} />
+          <BackButton onFallback={onBack} dark={dark} />
           <div style={{ fontSize: 11, color: sub }}>Dashboard › {projectName} › Material Control › <strong style={{ color: col }}>FMR Register</strong></div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -839,6 +839,7 @@ const FMRDetailModal = ({ dark, projectId, fmr, onClose, addToast }: {
   const [lines, setLines] = useState<any[]>([])
   const [header, setHeader] = useState<any>(null)
   const [loading, setLoading] = useState(true)
+  const [expanded, setExpanded] = useState(false)   // ⤢ toggle: comfortable default ↔ near-fullscreen
 
   useEffect(() => {
     axios.get(`${API}/mc/${projectId}/fmr/${fmr.id}/detail`)
@@ -850,7 +851,7 @@ const FMRDetailModal = ({ dark, projectId, fmr, onClose, addToast }: {
   return createPortal(
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
-      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, width: 680, maxWidth: '95vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, width: expanded ? '95vw' : 960, height: expanded ? '90vh' : undefined, maxWidth: '95vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
         <div style={{ padding: '16px 22px', borderBottom: bd, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div>
             <div style={{ fontSize: 15, fontWeight: 700, color: col, fontFamily: 'JetBrains Mono, monospace' }}>{fmr.fmr_ref}</div>
@@ -859,7 +860,11 @@ const FMRDetailModal = ({ dark, projectId, fmr, onClose, addToast }: {
               {(header?.warehouse_code || fmr.warehouse_code) ? ` · ${header?.warehouse_code || fmr.warehouse_code} ${header?.warehouse_name || fmr.warehouse_name || ''}` : ''}
             </div>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: sub, cursor: 'pointer' }}>✕</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+            <button onClick={() => setExpanded(e => !e)} title={expanded ? 'Shrink window' : 'Expand window'}
+              style={{ background: 'none', border: 'none', fontSize: 16, color: sub, cursor: 'pointer', padding: '2px 6px', lineHeight: 1 }}>{expanded ? '🗗' : '⤢'}</button>
+            <button onClick={onClose} title="Close" style={{ background: 'none', border: 'none', fontSize: 18, color: sub, cursor: 'pointer', padding: '2px 4px', lineHeight: 1 }}>✕</button>
+          </div>
         </div>
 
         <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
