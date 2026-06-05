@@ -112,6 +112,7 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`),
 })
 const { fileFilter } = require('../utils/upload')
+const { dateOrder } = require('../utils/validate')
 const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 }, fileFilter: fileFilter('document') })
 
 // ═══════════════════════════════════════════════════════════════
@@ -428,6 +429,14 @@ router.put('/scn/:scnId/dates', async (req, res) => {
 
     const [[scn]] = await db.query('SELECT id, etd, eta, cargo_ready_date AS crd, cargo_collection_date AS ccd, status FROM shipment_control_notes WHERE id = ?', [scnId])
     if (!scn) return res.status(404).json({ error: 'SCN not found' })
+
+    // Logical date ordering across the effective (unchanged + new) values.
+    const eff = (v, cur) => v !== undefined ? v : cur
+    const dateErr = dateOrder([
+      ['CRD', eff(crd, scn.crd)], ['CCD', eff(ccd, scn.ccd)],
+      ['ETD', eff(etd, scn.etd)], ['ETA', eff(eta, scn.eta)],
+    ])
+    if (dateErr) return res.status(400).json({ error: dateErr })
 
     const updates = []
     const vals = []

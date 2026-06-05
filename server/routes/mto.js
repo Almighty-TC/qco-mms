@@ -14,6 +14,7 @@ const XLSX    = require('xlsx')
 const fs      = require('fs')
 const path    = require('path')
 const { fileColumnsReady } = require('../lib/schemaColumns')
+const { fileNotEmpty } = require('../utils/validate')
 
 // ─── AUTH MIDDLEWARE ──────────────────────────────────────────────────────────
 router.use(authenticateToken)
@@ -329,7 +330,7 @@ router.get('/:projectId/template', async (req, res) => {
 // ─── POST /:projectId/parse-file — parse & validate an XLSX/CSV before commit ─
 // Returns preview, warnings, and error flags. Does NOT insert any data.
 router.post('/:projectId/parse-file', upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file provided', hasErrors: true })
+  { const fe = fileNotEmpty(req.file); if (fe) return res.status(400).json({ error: fe, hasErrors: true }) }
   try {
     const [wbsRows] = await db.query('SELECT code FROM wbs_nodes WHERE project_id = ?', [req.params.projectId])
     const validWBS = new Set(wbsRows.map(r => r.code))
@@ -800,7 +801,7 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
       })
     }
 
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+    { const fe = fileNotEmpty(req.file); if (fe) return res.status(400).json({ error: fe }) }
 
     // ─── Parse workbook ───────────────────────────────────────────
     const wb   = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true })

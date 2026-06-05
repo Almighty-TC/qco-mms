@@ -8,6 +8,7 @@ const db      = require('../db')
 const { dbError } = require('../utils/dbError')
 const { authenticateToken } = require('../middleware/auth')
 const { fileFilter } = require('../utils/upload')
+const { dateOrder } = require('../utils/validate')
 
 router.use(authenticateToken)
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
@@ -789,6 +790,10 @@ router.post('/:projectId/scn', async (req, res) => {
   } = req.body
 
   if (!po_id) return res.status(400).json({ error: 'po_id required' })
+
+  // Logical date ordering: cargo ready → collected → departs → arrives.
+  const dateErr = dateOrder([['CRD', crd], ['CCD', ccd], ['ETD', etd], ['ETA', eta]])
+  if (dateErr) return res.status(400).json({ error: dateErr })
 
   const conn = await db.getConnection()
   try {
