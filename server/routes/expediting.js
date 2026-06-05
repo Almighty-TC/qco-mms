@@ -187,6 +187,7 @@ router.get('/:projectId/po/:poId', async (req, res) => {
         po.is_critical_path, po.is_locked, po.status,
         po.currency, po.value, po.group_category,
         po.pre_expediting_enabled,
+        po.supplier_id,
         po.vendor_name, po.incoterms,
         po.milestone_po_date, po.milestone_fat_date,
         po.milestone_esd_date, po.milestone_eta_date, po.milestone_ros_date,
@@ -284,11 +285,31 @@ router.get('/:projectId/po/:poId', async (req, res) => {
       vdrl_package = { ...vp, documents: vdocs }
     }
 
+    // ─── SUPPLIER PICKUP ADDRESSES ────────────────────────────
+    // The SCN pickup location comes from the VENDOR/SUPPLIER's own address(es)
+    // (supplier_addresses), not the project warehouses. Primary first.
+    let supplier_addresses = []
+    if (po.supplier_id) {
+      const [addrs] = await db.query(
+        `SELECT id, type, line1, line2, city, state, postcode, country, is_primary
+         FROM supplier_addresses WHERE supplier_id=?
+         ORDER BY is_primary DESC, id`, [po.supplier_id])
+      supplier_addresses = addrs.map(a => ({
+        ...a,
+        label: [a.line1, a.line2, a.city, a.state, a.postcode, a.country].filter(Boolean).join(', '),
+      }))
+    }
+    // Fallback: the suppliers.address one-liner, if no structured addresses exist.
+    if (!supplier_addresses.length && po.supplier_address) {
+      supplier_addresses = [{ id: 0, type: 'primary', label: po.supplier_address, is_primary: 1 }]
+    }
+
     res.json({
       ...po,
       rag: computePORag(milestones),
       milestones: enrichedMilestones,
       po_lines: lines,   // Frontend expects po_lines
+      supplier_addresses,
       itp_items,
       action_notes: notes,
       forecast_history,
@@ -743,7 +764,8 @@ router.get('/:projectId/po/:poId/audit', async (req, res) => {
 // Returns all warehouses for use in the SCN wizard destination selector.
 router.get('/:projectId/warehouses', async (req, res) => {
   try {
-    const [rows] = await db.query('SELECT id, name, code, type, location, manager, phone FROM warehouses ORDER BY name')
+    // Project-scoped: a project only sees warehouses it owns (warehouses.project_id).
+    const [rows] = await db.query("SELECT id, name, code, type, CONCAT_WS(', ', city, state) AS location, manager, phone FROM warehouses WHERE project_id=? ORDER BY name", [Number(req.params.projectId)])
     res.json(rows)
   } catch (e) { res.status(500).json({ error: e.message }) }
 })

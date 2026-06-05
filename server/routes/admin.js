@@ -450,6 +450,24 @@ router.get('/users/:id/projects', async (req, res) => {
   }
 })
 
+// ─── GET ASSIGNABLE PROJECTS (for the CURRENT admin) ────────
+// Projects the logged-in admin may own/filter warehouses by. Convention: a user
+// scoped via user_wbs_access sees only those projects; no rows = full access (all).
+router.get('/assignable-projects', async (req, res) => {
+  try {
+    const uid = req.user?.id
+    const [scoped] = await db.query(
+      `SELECT DISTINCT p.id, p.code, p.name
+       FROM user_wbs_access w JOIN projects p ON p.id = w.project_id
+       WHERE w.user_id = ? ORDER BY p.code`, [uid])
+    if (scoped.length) return res.json({ projects: scoped, fullAccess: false })
+    const [all] = await db.query('SELECT id, code, name FROM projects ORDER BY code')
+    res.json({ projects: all, fullAccess: true })
+  } catch (err) {
+    res.status(500).json({ error: `Database error: ${err.message}` })
+  }
+})
+
 // ─── GET SINGLE USER ────────────────────────────────────────
 router.get('/users/:id', async (req, res) => {
   try {
@@ -1191,11 +1209,20 @@ router.get('/warehouses', async (req, res) => {
     }
     if (status === 'active')   where += ' AND status = "active"'
     if (status === 'inactive') where += ' AND status = "inactive"'
+    // Project-scoped admins (those with user_wbs_access rows) only see their projects'
+    // warehouses; full-access admins (no rows) see all.
+    const [scoped] = await db.query('SELECT DISTINCT project_id FROM user_wbs_access WHERE user_id = ?', [req.user?.id])
+    if (scoped.length) {
+      where += ` AND project_id IN (${scoped.map(() => '?').join(',')})`
+      args.push(...scoped.map(r => r.project_id))
+    }
+    if (req.query.project_id)  { where += ' AND project_id = ?'; args.push(Number(req.query.project_id)) }
     const [[{ total }]] = await db.query(`SELECT COUNT(*) AS total FROM warehouses WHERE ${where}`, args)
     const [rows] = await db.query(
       `SELECT id, name, code, address, state,
               IFNULL(contact_name,'') AS contactName,
-              IFNULL(phone,'') AS phone, status
+              IFNULL(phone,'') AS phone, status, project_id AS projectId,
+              (SELECT pr.name FROM projects pr WHERE pr.id = warehouses.project_id) AS projectName
        FROM warehouses WHERE ${where} ORDER BY name LIMIT ? OFFSET ?`,
       [...args, limit, offset]
     )
@@ -1204,20 +1231,20 @@ router.get('/warehouses', async (req, res) => {
 })
 
 router.post('/warehouses', async (req, res) => {
-  const { name, code, address, state, contactName, phone, status } = req.body
+  const { name, code, address, state, contactName, phone, status, projectId } = req.body
   if (!name?.trim()) return res.status(400).json({ error: 'Name is required' })
   if (!code?.trim()) return res.status(400).json({ error: 'Code is required' })
   try {
     const [r] = await db.query(
-      `INSERT INTO warehouses (name, code, address, state, contact_name, phone, status, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO warehouses (name, code, address, state, contact_name, phone, status, project_id, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [name.trim(), code.trim().toUpperCase(), address||null, state||null,
-       contactName||null, phone||null, status||'active', req.user.id]
+       contactName||null, phone||null, status||'active', projectId || null, req.user.id]
     )
     audit(req, 'warehouse.create', `id=${r.insertId}`)
     const [[row]] = await db.query(
       `SELECT id, name, code, address, state, IFNULL(contact_name,'') AS contactName,
-              IFNULL(phone,'') AS phone, status FROM warehouses WHERE id=?`, [r.insertId]
+              IFNULL(phone,'') AS phone, status, project_id AS projectId FROM warehouses WHERE id=?`, [r.insertId]
     )
     res.status(201).json(row)
   } catch (err) {
@@ -1228,20 +1255,20 @@ router.post('/warehouses', async (req, res) => {
 
 router.put('/warehouses/:id', async (req, res) => {
   const id = parseInt(req.params.id)
-  const { name, code, address, state, contactName, phone, status } = req.body
+  const { name, code, address, state, contactName, phone, status, projectId } = req.body
   if (!name?.trim()) return res.status(400).json({ error: 'Name is required' })
   if (!code?.trim()) return res.status(400).json({ error: 'Code is required' })
   try {
     const [r] = await db.query(
-      `UPDATE warehouses SET name=?,code=?,address=?,state=?,contact_name=?,phone=?,status=? WHERE id=?`,
+      `UPDATE warehouses SET name=?,code=?,address=?,state=?,contact_name=?,phone=?,status=?,project_id=? WHERE id=?`,
       [name.trim(), code.trim().toUpperCase(), address||null, state||null,
-       contactName||null, phone||null, status||'active', id]
+       contactName||null, phone||null, status||'active', projectId || null, id]
     )
     if (!r.affectedRows) return res.status(404).json({ error: 'Warehouse not found' })
     audit(req, 'warehouse.update', `id=${id}`)
     const [[row]] = await db.query(
       `SELECT id, name, code, address, state, IFNULL(contact_name,'') AS contactName,
-              IFNULL(phone,'') AS phone, status FROM warehouses WHERE id=?`, [id]
+              IFNULL(phone,'') AS phone, status, project_id AS projectId FROM warehouses WHERE id=?`, [id]
     )
     res.json(row)
   } catch (err) {

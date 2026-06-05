@@ -2561,14 +2561,16 @@ function ProjectsAdminTab({ dark }: { dark: boolean }) {
 type Warehouse = {
   id: number; name: string; code: string; address: string
   state: string; contactName: string; phone: string; status: string
+  projectId?: number | null; projectName?: string | null
 }
-type WhForm = { name: string; code: string; address: string; state: string; contactName: string; phone: string; status: string }
-const EMPTY_WH: WhForm = { name: '', code: '', address: '', state: '', contactName: '', phone: '', status: 'active' }
+type WhForm = { name: string; code: string; address: string; state: string; contactName: string; phone: string; status: string; projectId: number | '' }
+const EMPTY_WH: WhForm = { name: '', code: '', address: '', state: '', contactName: '', phone: '', status: 'active', projectId: '' }
 // ─── WAREHOUSES COLUMN DEFINITIONS ──────────────────────────
 const WH_COLS: AdminCol[] = [
   { label: 'Name',    width: 200, minWidth: 120 },
   { label: 'Code',    width: 80,  minWidth: 60  },
-  { label: 'Address', width: 220, minWidth: 120, flex: true },
+  { label: 'Project', width: 160, minWidth: 100 },
+  { label: 'Address', width: 200, minWidth: 120, flex: true },
   { label: 'State',   width: 80,  minWidth: 60  },
   { label: 'Contact', width: 140, minWidth: 90  },
   { label: 'Phone',   width: 130, minWidth: 90  },
@@ -2596,20 +2598,31 @@ function WarehousesTab({ dark }: { dark: boolean }) {
   const [deactivateSaving,  setDeactivateSaving]  = useState(false)
   const [deactivateErr,     setDeactivateErr]     = useState('')
   const [showHelp, setShowHelp] = useState(false)
+  const [filterProject, setFilterProject] = useState('')
+  const [projects, setProjects] = useState<{ id: number; code: string; name: string }[]>([])
+
+  // Only the projects THIS admin can assign/filter by (scoped admins see a subset;
+  // full-access admins see all). Feeds both the ownership selector and the filter.
+  useEffect(() => {
+    axios.get(`${API}/assignable-projects`)
+      .then(({ data }) => setProjects(data.projects ?? []))
+      .catch(() => setProjects([]))
+  }, [])
 
   const load = useCallback(async () => {
     setError('')
     try {
       const p: Record<string, string> = {}
-      if (search.trim()) p.search = search.trim()
-      if (filterSt)      p.status = filterSt
+      if (search.trim())   p.search = search.trim()
+      if (filterSt)        p.status = filterSt
+      if (filterProject)   p.project_id = filterProject
       const { data } = await axios.get(`${API}/warehouses`, { params: p })
       setRows(data.rows ?? data); setTotal(data.total ?? (data.rows ?? data).length)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
       setError(err.response?.data?.error ?? 'Failed to load warehouses')
     }
-  }, [search, filterSt])
+  }, [search, filterSt, filterProject])
 
   const states      = useMemo(() => [...new Set(rows.map(w => w.state).filter(Boolean))].sort(), [rows])
   const filteredWH  = useMemo(() => filterState ? rows.filter(w => w.state === filterState) : rows, [rows, filterState])
@@ -2621,12 +2634,13 @@ function WarehousesTab({ dark }: { dark: boolean }) {
 
   const openAdd  = () => { setForm(EMPTY_WH); setEditId(null); setFormErr(''); setShowForm(true) }
   const openEdit = (w: Warehouse) => {
-    setForm({ name: w.name, code: w.code, address: w.address, state: w.state, contactName: w.contactName, phone: w.phone, status: w.status })
+    setForm({ name: w.name, code: w.code, address: w.address, state: w.state, contactName: w.contactName, phone: w.phone, status: w.status, projectId: w.projectId ?? '' })
     setEditId(w.id); setFormErr(''); setShowForm(true)
   }
   const save = async () => {
     if (!form.name.trim()) { setFormErr('Name is required'); return }
     if (!form.code.trim()) { setFormErr('Code is required'); return }
+    if (form.projectId === '') { setFormErr('Owning project is required — a warehouse belongs to one project'); return }
     setSaving(true); setFormErr('')
     try {
       editId != null ? await axios.put(`${API}/warehouses/${editId}`, form) : await axios.post(`${API}/warehouses`, form)
@@ -2685,6 +2699,12 @@ function WarehousesTab({ dark }: { dark: boolean }) {
           <option value="active">Active</option>
           <option value="inactive">Inactive</option>
         </select>
+        {projects.length > 1 && (
+          <select value={filterProject} onChange={e => setFilterProject(e.target.value)} style={{ ...inp(dark), width: 180 }}>
+            <option value="">All projects</option>
+            {projects.map(p => <option key={p.id} value={p.id}>{p.code}</option>)}
+          </select>
+        )}
         {states.length > 0 && (
           <select value={filterState} onChange={e => setFilterState(e.target.value)} style={{ ...inp(dark), width: 130 }}>
             <option value="">All states</option>
@@ -2699,7 +2719,7 @@ function WarehousesTab({ dark }: { dark: boolean }) {
         </span>
         <button onClick={() => setShowHelp(true)} title="Warehouses help" style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>ℹ</button>
         {/* ─── RESET — clears search + status + state ──── */}
-        <ResetBtn dark={dark} onClick={() => { setSearch(''); setFilterSt(''); setFilterState('') }} />
+        <ResetBtn dark={dark} onClick={() => { setSearch(''); setFilterSt(''); setFilterState(''); setFilterProject('') }} />
         <AddBtn onClick={openAdd} label="+ Add Warehouse" />
       </div>
       {error && <Err msg={error} />}
@@ -2710,6 +2730,7 @@ function WarehousesTab({ dark }: { dark: boolean }) {
           <AdminRow key={w.id} dark={dark}>
             <AdminCell>{w.name}</AdminCell>
             <AdminCell mono>{w.code}</AdminCell>
+            <AdminCell muted>{w.projectName || '— unassigned'}</AdminCell>
             <AdminCell muted><span title={w.address}>{w.address || '—'}</span></AdminCell>
             <AdminCell muted>{w.state || '—'}</AdminCell>
             <AdminCell muted>{w.contactName || '—'}</AdminCell>
@@ -2730,6 +2751,12 @@ function WarehousesTab({ dark }: { dark: boolean }) {
         <Modal title={editId != null ? 'Edit Warehouse' : 'Add Warehouse'} dark={dark} onClose={() => setShowForm(false)} onSubmit={save} error={formErr} saving={saving}>
           <Field label="Name *"><input value={form.name} onChange={wf('name')} placeholder="e.g. Perth Laydown Yard" style={inp(dark)} /></Field>
           <Field label="Code *"><input value={form.code} onChange={wf('code')} placeholder="e.g. PLY" style={inp(dark)} /></Field>
+          <Field label="Owning project *">
+            <select value={form.projectId} onChange={e => setForm(p => ({ ...p, projectId: e.target.value ? Number(e.target.value) : '' }))} style={inp(dark)}>
+              <option value="">— Select project (only this project will see it)</option>
+              {projects.map(p => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}
+            </select>
+          </Field>
           <Field label="State"><input value={form.state} onChange={wf('state')} placeholder="WA / QLD / VIC…" style={inp(dark)} /></Field>
           <Field label="Contact Name"><input value={form.contactName} onChange={wf('contactName')} placeholder="Site contact" style={inp(dark)} /></Field>
           <Field label="Phone"><input value={form.phone} onChange={wf('phone')} placeholder="+61 8 1234 5678" style={inp(dark)} /></Field>

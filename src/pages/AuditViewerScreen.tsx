@@ -221,7 +221,6 @@ export const AuditViewerScreen = ({ dark, userRole, onBack }: {
       {/* Breadcrumb */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16, fontSize: 12, color: sub, flexWrap: 'wrap' }}>
         <BackButton onFallback={onBack} dark={dark} />
-        <span style={{ color: col, fontWeight: 600 }}>Audit Trail</span>
       </div>
 
       {/* Header */}

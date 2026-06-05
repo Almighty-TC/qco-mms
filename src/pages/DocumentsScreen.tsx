@@ -189,7 +189,6 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
       <div style={{ position: 'sticky', top: 0, zIndex: 10, background: cardBg, borderBottom: bd, padding: '12px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <BackButton onFallback={onBack} dark={dark} />
-          <div style={{ fontSize: 11, color: sub }}>Dashboard › {projectName} › <strong style={{ color: col }}>Document Inbox</strong></div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={exportCsv} style={{ padding: '7px 14px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>↓ Export register</button>

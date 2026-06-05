@@ -210,7 +210,6 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
       <div style={{ background: cardBg, borderBottom: bd, padding: '12px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <BackButton onFallback={onBack} dark={dark} />
-          <div style={{ fontSize: 11, color: sub }}>Dashboard › {projectName} › <strong style={{ color: col }}>Logistics</strong></div>
         </div>
         {!isForwarder && <button onClick={exportCSV} style={{ ...inputSt, cursor: 'pointer', width: 'auto' }}>↓ Export</button>}
       </div>

@@ -217,11 +217,9 @@ function DashboardInner({ dark, projectId, projectName, userRole, onBack, onNavi
 
   return (
     <div style={{ paddingTop: 20, fontFamily: 'IBM Plex Sans, sans-serif', width: '100%' }}>
-      {/* Breadcrumb */}
+      {/* Back */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16, fontSize: 12, color: sub, flexWrap: 'wrap' }}>
         <BackButton onFallback={onBack} dark={dark} />
-        <button onClick={onBack} style={{ background: 'none', border: 'none', color: sub, fontSize: 12, cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>← All projects</button>
-        <span>›</span><span style={{ color: col, fontWeight: 600 }}>{projectName}</span>
       </div>
 
       {/* Header */}

@@ -1074,16 +1074,9 @@ const PODetailInner = ({ dark, poId, projectName, onBack }: PODetailInnerProps) 
     <div style={{ fontFamily: 'IBM Plex Sans, sans-serif', paddingBottom: 40 }}>
       <ToastContainer />
 
-      {/* ── Breadcrumb ───────────────────────────────────────────────────────── */}
+      {/* ── Back ─────────────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 16, marginBottom: 8 }}>
         <BackButton onFallback={onBack} dark={dark} />
-        <button onClick={onBack} style={{ background: 'none', border: 'none', color: '#2563eb', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', padding: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
-          ← PO Register
-        </button>
-        <span style={{ color: '#94a3b8' }}>·</span>
-        <span style={{ fontSize: 13, color: '#94a3b8' }}>{projectName}</span>
-        <span style={{ color: '#94a3b8' }}>·</span>
-        <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: '#94a3b8' }}>{po.po_number}</span>
       </div>
 
       {/* ── Top bar ──────────────────────────────────────────────────────────── */}

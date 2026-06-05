@@ -72,8 +72,6 @@ export const ConfirmerQueueScreen = ({ dark, projectId, projectName, onBack }: {
     <div style={{ paddingTop: 20, fontFamily: 'IBM Plex Sans, sans-serif' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16, fontSize: 12, color: '#94a3b8', flexWrap: 'wrap' }}>
         <BackButton onFallback={onBack} dark={dark} />
-        <span>›</span><span>{projectName}</span><span>›</span>
-        <span style={{ color: col, fontWeight: 600 }}>Pending Changes</span>
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <div>

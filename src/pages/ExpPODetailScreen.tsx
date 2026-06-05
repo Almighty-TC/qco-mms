@@ -323,15 +323,6 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
         padding: '10px 24px', display: 'flex', alignItems: 'center', gap: 10,
       }}>
         <BackButton onFallback={onBack} dark={dark} />
-        <button onClick={onBack} style={{ background: 'none', border: 'none', color: sub, fontSize: 12, cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>
-          ← Dashboard
-        </button>
-        <span style={{ color: sub, fontSize: 12 }}>›</span>
-        <button onClick={onBack} style={{ background: 'none', border: 'none', color: sub, fontSize: 12, cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>
-          Expediting
-        </button>
-        <span style={{ color: sub, fontSize: 12 }}>›</span>
-        <span style={{ color: col, fontWeight: 600, fontSize: 12, fontFamily: 'JetBrains Mono, monospace' }}>{po.po_number}</span>
         <div style={{ flex: 1 }} />
         <button
           onClick={() => { setScnPreLineId(undefined); setShowSCNWizard(true) }}

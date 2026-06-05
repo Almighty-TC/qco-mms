@@ -69,6 +69,7 @@ async function teardown(conn, pid) {
     await conn.query(`DELETE FROM fmr_issue_lines WHERE ${j.fmr_issue_lines}`, [pid])
     await conn.query(`DELETE FROM fmr_lines WHERE ${j.fmr_lines}`, [pid])   // clears fmr_lines.package_id refs before fmr_packages
     await conn.query('DELETE FROM fmr_packages WHERE fmr_id IN (SELECT id FROM fmr_requests WHERE project_id=?)', [pid])
+    await conn.query('DELETE FROM fmr_pickups WHERE fmr_id IN (SELECT id FROM fmr_requests WHERE project_id=?)', [pid]) // PoC records FK fmr_requests
     for (const t of ['fmr_requests', 'warehouse_transfers', 'warehouse_stock', 'receipt_lines']) await conn.query(`DELETE FROM ${t} WHERE project_id=?`, [pid])
     await conn.query('DELETE e FROM expediting_child_items e JOIN po_lines pl ON pl.id=e.po_line_id JOIN purchase_orders p ON p.id=pl.po_id WHERE p.project_id=?', [pid])
     await conn.query('DELETE ii FROM itp_items ii JOIN itp_requirements ir ON ir.id=ii.requirement_id JOIN purchase_orders p ON p.id=ir.po_id WHERE p.project_id=?', [pid])
@@ -94,6 +95,7 @@ async function teardown(conn, pid) {
     try {
       await conn.query('DELETE ar FROM audit_review ar JOIN audit_log a ON a.id=ar.audit_log_id WHERE a.project_id=?', [pid])
       await conn.query('DELETE FROM audit_log WHERE project_id=?', [pid])
+      await conn.query('DELETE FROM warehouses WHERE project_id=?', [pid]) // warehouses → projects FK: clear before the project row
       await conn.query('DELETE FROM projects WHERE id=?', [pid])
     } catch (e) {
       throw new Error(`audit/project delete blocked (${e.code}) — run scripts/flowtest_teardown.sql as QCO_admin first, then re-run the seed`)
@@ -110,6 +112,7 @@ async function teardown(conn, pid) {
     `DELETE FROM delegated_permissions WHERE granted_to IN ${ZZU} OR granted_by IN ${ZZU}`,
   ]) await conn.query(sql).catch(() => {})
   await conn.query("DELETE FROM users WHERE email LIKE '%@zzflowtest.example'")
+  await conn.query("DELETE sa FROM supplier_addresses sa JOIN suppliers s ON s.id=sa.supplier_id WHERE s.code LIKE 'ZZF-%'") // FK before suppliers
   await conn.query("DELETE FROM suppliers WHERE code LIKE 'ZZF-%'")
   await conn.query("DELETE FROM warehouses WHERE code LIKE 'ZZF-%'")
 }
@@ -137,10 +140,11 @@ async function main() {
     console.log('[seed] project id =', pid)
 
     // ── WAREHOUSES ──
-    const whIds = await batchInsert(conn, 'warehouses', ['name', 'code', 'type', 'city', 'contact_name', 'phone', 'status'], [
-      ['ZZF Main Laydown', 'ZZF-WH1', 'laydown', 'Karratha', 'Dale Foreman', '0891110001', 'active'],
-      ['ZZF Covered Store', 'ZZF-WH2', 'store', 'Perth', 'Rita Kaur', '0891110002', 'active'],
-      ['ZZF DG Store', 'ZZF-WH3', 'site', 'Port Hedland', 'Sam Two', '0891110003', 'active'],
+    // project_id = pid → the SCN/transfer/receipting pickers only list this project's warehouses.
+    const whIds = await batchInsert(conn, 'warehouses', ['project_id', 'name', 'code', 'type', 'city', 'contact_name', 'phone', 'status'], [
+      [pid, 'ZZF Main Laydown', 'ZZF-WH1', 'laydown', 'Karratha', 'Dale Foreman', '0891110001', 'active'],
+      [pid, 'ZZF Covered Store', 'ZZF-WH2', 'store', 'Perth', 'Rita Kaur', '0891110002', 'active'],
+      [pid, 'ZZF DG Store', 'ZZF-WH3', 'site', 'Port Hedland', 'Sam Two', '0891110003', 'active'],
     ])
 
     // ── USERS: full 21-role matrix (each role gets ≥1 login; password "password") ──
@@ -202,6 +206,10 @@ async function main() {
     const supRows = []
     for (let i = 1; i <= S.supplier; i++) supRows.push([`ZZ Supplier ${i} Pty Ltd`, `ZZF-${pad(i, 3)}`, `5${pad(ri(10000000, 99999999), 8)}`, 'Australia', `Contact ${i}`, `sales${i}@zzsupplier.example`, `08${pad(ri(10000000, 99999999), 8)}`, rnd(['approved', 'approved', 'conditional']), 'active'])
     const supIds = await batchInsert(conn, 'suppliers', ['name', 'code', 'abn', 'country', 'contact_name', 'email', 'phone', 'avl_status', 'status'], supRows)
+    // Supplier shipping (pickup) addresses → the SCN wizard sources pickup location from here.
+    const SUP_ORIGINS = [['Shanghai', 'Shanghai', '200000', 'China'], ['Houston', 'TX', '77002', 'USA'], ['Hamburg', 'HH', '20457', 'Germany'], ['Singapore', 'Singapore', '049315', 'Singapore'], ['Busan', 'Busan', '48058', 'South Korea'], ['Perth', 'WA', '6000', 'Australia'], ['Mumbai', 'MH', '400001', 'India'], ['Rotterdam', 'ZH', '3011', 'Netherlands']]
+    const addrRows = supIds.map((sid, i) => { const o = SUP_ORIGINS[i % SUP_ORIGINS.length]; return [sid, 'shipping', `ZZ Supplier ${i + 1} Pty Ltd Works`, o[0], o[1], o[2], o[3], 1] })
+    await batchInsert(conn, 'supplier_addresses', ['supplier_id', 'type', 'line1', 'city', 'state', 'postcode', 'country', 'is_primary'], addrRows)
 
     // ── COMMODITIES (linked to WBS) + EQUIPMENT ──
     const COMCAT = ['Pipe', 'Valve', 'Fitting', 'Flange', 'Gasket', 'Bolt Set', 'Cable', 'Instrument', 'Steel Section']
@@ -352,16 +360,32 @@ async function main() {
     stockMeta.forEach((m, i) => { m.id = stockIds[i] })
 
     // ── FMRs + lines + ISSUE LINES (issue real stock → stock_id link) ──
-    const fmrPick = stockMeta.filter(m => m.id).sort(() => Math.random() - 0.5).slice(0, Math.min(S.fmr, stockMeta.length))
-    for (let i = 0; i < fmrPick.length; i++) {
-      const m = fmrPick[i]; const st = rnd(['issued', 'partial_issued', 'approved', 'pending_approval'])
-      const reqQty = ri(1, 20); const issQty = (st === 'issued' || st === 'partial_issued') ? ri(1, reqQty) : 0
+    // ~40% of FMRs carry MULTIPLE line items, all drawn from the SAME warehouse
+    // (an FMR is warehouse-scoped). The header keeps a legacy single-item summary
+    // (first line) + rolled-up qty; the fmr_lines carry the real per-item detail.
+    const fmrStock = stockMeta.filter(m => m.id)
+    const stockByWh = {}
+    for (const m of fmrStock) (stockByWh[m.wh] ||= []).push(m)
+    const whList = Object.keys(stockByWh)
+    for (let i = 0; i < S.fmr && whList.length; i++) {
+      const wh = rnd(whList); const pool = stockByWh[wh]
+      if (!pool || !pool.length) continue
+      const nLines = chance(0.4) ? Math.min(ri(2, 4), pool.length) : 1   // ~40% multi-line
+      const picks = [...pool].sort(() => Math.random() - 0.5).slice(0, nLines)
+      const st = rnd(['issued', 'partial_issued', 'approved', 'pending_approval'])
+      const lineStat = st === 'partial_issued' ? 'partial_issued' : st === 'issued' ? 'issued' : st === 'approved' ? 'approved' : 'pending'
+      const lineData = picks.map(m => { const rq = ri(1, 20); const iq = (st === 'issued' || st === 'partial_issued') ? ri(1, rq) : 0; return { m, rq, iq } })
+      const totReq = lineData.reduce((a, l) => a + l.rq, 0)
+      const totIss = lineData.reduce((a, l) => a + l.iq, 0)
+      const head = picks[0]
       const [fr] = await conn.query('INSERT INTO fmr_requests (project_id,warehouse_id,fmr_ref,item_code,description,wbs_code,qty_requested,qty_issued,uom,required_date,requested_by_name,requested_by_user,status,approved_by,approved_qty) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-        [pid, m.wh, `ZZ-FMR-${pad(i + 1, 4)}`, m.com.code, `Field request for ${m.com.name}`, m.com.wbs, reqQty, issQty, m.com.uom, iso(addDays(TODAY, ri(-20, 30))), 'ZZ Site Contractor 1', uidByRole['site_contractor'][0], st, st === 'pending_approval' ? null : ADMIN, st === 'pending_approval' ? null : reqQty])
-      const [fl] = await conn.query('INSERT INTO fmr_lines (fmr_id,item_code,item_type,description,wbs_code,qty_requested,qty_issued,qty_approved,uom,line_status) VALUES (?,?,?,?,?,?,?,?,?,?)',
-        [fr.insertId, m.com.code, 'commodity', m.com.name, m.com.wbs, reqQty, issQty, reqQty, m.com.uom, st === 'partial_issued' ? 'partial_issued' : st === 'issued' ? 'issued' : st === 'approved' ? 'approved' : 'pending'])
-      if (issQty > 0) await conn.query('INSERT INTO fmr_issue_lines (fmr_id,fmr_line_id,stock_id,qty,heat_number,location_code,item_code,wbs_code,issued_by,issued_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
-        [fr.insertId, fl.insertId, m.id, issQty, m.heat || null, `Z${ri(1, 9)}-${ri(1, 99)}`, m.com.code, m.com.wbs, someWh, new Date()])
+        [pid, wh, `ZZ-FMR-${pad(i + 1, 4)}`, head.com.code, picks.length > 1 ? `Field request — ${picks.length} items` : `Field request for ${head.com.name}`, head.com.wbs, totReq, totIss, head.com.uom, iso(addDays(TODAY, ri(-20, 30))), 'ZZ Site Contractor 1', uidByRole['site_contractor'][0], st, st === 'pending_approval' ? null : ADMIN, st === 'pending_approval' ? null : totReq])
+      for (const ld of lineData) {
+        const [fl] = await conn.query('INSERT INTO fmr_lines (fmr_id,item_code,item_type,description,wbs_code,qty_requested,qty_issued,qty_approved,uom,line_status) VALUES (?,?,?,?,?,?,?,?,?,?)',
+          [fr.insertId, ld.m.com.code, 'commodity', ld.m.com.name, ld.m.com.wbs, ld.rq, ld.iq, ld.rq, ld.m.com.uom, lineStat])
+        if (ld.iq > 0) await conn.query('INSERT INTO fmr_issue_lines (fmr_id,fmr_line_id,stock_id,qty,heat_number,location_code,item_code,wbs_code,issued_by,issued_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+          [fr.insertId, fl.insertId, ld.m.id, ld.iq, ld.m.heat || null, `Z${ri(1, 9)}-${ri(1, 99)}`, ld.m.com.code, ld.m.com.wbs, someWh, new Date()])
+      }
     }
 
     // ── TRACEABILITY certs (per heat → po_id from the heat's PO) + holds ──

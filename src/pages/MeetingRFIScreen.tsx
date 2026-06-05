@@ -100,11 +100,9 @@ function MeetingRFIInner({ dark, projectId, projectName, userRole, userId, onBac
 
   return (
     <div style={{ paddingTop: 20, fontFamily: 'IBM Plex Sans, sans-serif' }}>
-      {/* Breadcrumb */}
+      {/* Back */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16, fontSize: 12, color: sub, flexWrap: 'wrap' }}>
         <BackButton onFallback={onBack} dark={dark} />
-        <span>{projectName}</span><span>›</span>
-        <span style={{ color: col, fontWeight: 600 }}>Meetings &amp; RFIs</span>
       </div>
 
       {/* Header */}

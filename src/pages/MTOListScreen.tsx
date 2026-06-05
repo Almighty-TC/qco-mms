@@ -832,12 +832,9 @@ const MTOListInner = ({
 
   return (
     <div style={{ background: bg, minHeight: '100%', padding: '24px 28px', fontFamily: 'IBM Plex Sans, sans-serif' }}>
-      {/* ─── BREADCRUMB ─────────────────────────────────── */}
+      {/* ─── BACK ───────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
         <BackButton onFallback={onBack} dark={dark} />
-        <span style={{ fontSize: 13, color: sub }}>
-          Dashboard › <span style={{ color: col }}>{projectName}</span> › MTO Register
-        </span>
       </div>
 
       {/* ─── PAGE HEADER ────────────────────────────────── */}

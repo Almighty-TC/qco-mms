@@ -106,7 +106,6 @@ const MCTransferInner = ({ dark, projectId, projectName, onBack }: {
       <div style={{ background: cardBg, borderBottom: bd, padding: '12px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <BackButton onFallback={onBack} dark={dark} />
-          <div style={{ fontSize: 11, color: sub }}>Dashboard › {projectName} › Material Control › <strong style={{ color: col }}>Transfers</strong></div>
         </div>
         <button onClick={() => setShowNewTransfer(true)}
           style={{ padding: '6px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>

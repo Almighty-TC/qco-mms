@@ -1568,10 +1568,9 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
     <div style={{ fontFamily: 'IBM Plex Sans, sans-serif', paddingBottom: 32 }}>
       <ToastContainer />
 
-      {/* ── Breadcrumb row ────────────────────────────────────────────────────── */}
+      {/* ── Back row ──────────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', paddingTop: 16, marginBottom: 0 }}>
         <BackButton onFallback={() => {}} dark={dark} />
-        <span style={{ fontSize: 12, color: '#94a3b8' }}>Procurement · {projectName}</span>
       </div>
 
       {/* ── Page header ──────────────────────────────────────────────────────── */}

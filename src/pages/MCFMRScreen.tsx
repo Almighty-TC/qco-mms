@@ -12,8 +12,25 @@ import { ScopeBanner } from '../components/ScopeBanner'
 import { useAutoTitle } from '../hooks/useAutoTitle'
 import { Pager } from '../components/Pager'
 import { usePagedList } from '../hooks/usePagedList'
+import { useColumnResize } from '../hooks/useColumnResize'
 
 const API = 'http://localhost:3001/api'
+
+// ─── COLUMN RESIZE ────────────────────────────────────────────
+// Register grid columns persist their widths (localStorage qco_col_widths_fmr_register);
+// the "↺ Reset columns" button restores these defaults. 9 columns, last = actions.
+const FMR_COL_DEFAULTS = [140, 260, 110, 180, 100, 150, 110, 120, 200]
+const FMR_COL_MINS     = [90,  120, 70,  100, 60,  90,  80,  90,  120]
+const ColResizeHandle = ({ onMouseDown, dark }: { onMouseDown: (e: React.MouseEvent) => void; dark: boolean }) => {
+  const [hov, setHov] = useState(false)
+  return (
+    <>
+      <div style={{ position: 'absolute', right: 0, top: 0, width: hov ? 3 : 1, height: '100%', background: hov ? '#E84E0F' : (dark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)'), pointerEvents: 'none', transition: 'width 100ms, background 100ms', borderRadius: 1 }} />
+      <div onMouseDown={onMouseDown} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)} onClick={e => e.stopPropagation()}
+        style={{ position: 'absolute', right: -4, top: 0, width: 8, height: '100%', cursor: 'col-resize', zIndex: 3 }} />
+    </>
+  )
+}
 type View = 'mc' | 'contractor'
 type PickupWindow = 'all' | 'overdue' | 'today' | '3' | '7' | '14' | '30'
 
@@ -27,7 +44,8 @@ interface FMRRow {
   line_count?: number; total_qty_requested?: number
 }
 
-interface FMRCounts { total: number; pending_approval: number; approved: number; partial_issued: number; issued: number; issued_today: number; overdue: number }
+interface FMRCounts { total: number; pending_approval: number; approved: number; partial_issued: number; issued: number; issued_today: number; overdue: number; active_count: number; records_count: number }
+type RegView = 'active' | 'records' | 'all'
 
 const fmt = (d?: string | null) => d ? new Date(d).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'
 
@@ -64,6 +82,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
   const [pickup, setPickup]       = useState<PickupWindow>('all')
   const [critOnly, setCritOnly]   = useState(false)
   const [statusFilter, setStatusFilter] = useState('all')
+  const [regView, setRegView]     = useState<RegView>('active') // active hides picked-up; Records tab shows them
   const [approveFmr, setApproveFmr] = useState<FMRRow | null>(null)
   const [viewFmr, setViewFmr]     = useState<FMRRow | null>(null)
   const [raiseFmr, setRaiseFmr]   = useState(false)
@@ -84,17 +103,41 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
     if (debouncedSearch.trim()) params.search        = debouncedSearch.trim()
     if (critOnly)               params.critical_only = 'true'
     if (statusFilter !== 'all') params.status        = statusFilter
+    params.view = regView // active (default) hides picked-up; records = picked-up only
     if (pickup !== 'all' && pickup !== 'overdue' && pickup !== 'today') params.pickup_window = String(pickup)
     const { data } = await axios.get(`${API}/mc/${projectId}/fmr`, { params })
     setCounts(data.counts)
     return { data: (data.data ?? []) as FMRRow[], total: (data.total ?? 0) as number }
-  }, [projectId, debouncedSearch, critOnly, pickup, statusFilter])
+  }, [projectId, debouncedSearch, critOnly, pickup, statusFilter, regView])
 
   const {
     data: fmrs, total, page, setPage, pageSize, loading,
     sortCol, sortDir, toggleSort, reload,
-  } = usePagedList<FMRRow>({ fetcher, deps: [projectId, debouncedSearch, critOnly, pickup, statusFilter], pageSize: 50, initialSortCol: undefined })
+  } = usePagedList<FMRRow>({ fetcher, deps: [projectId, debouncedSearch, critOnly, pickup, statusFilter, regView], pageSize: 50, initialSortCol: undefined })
   const sortArrow = (k: string) => sortCol === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
+  // Resizable register columns (persisted) — see FMR_COL_DEFAULTS.
+  const { widths: colW, onMouseDown: onColResize, resetWidths } = useColumnResize('fmr_register', FMR_COL_DEFAULTS, FMR_COL_MINS)
+
+  // ─── INLINE ITEM DRILL-DOWN ──────────────────────────────────
+  // Multi-item FMRs expand their line items inline (no modal). Lines are fetched
+  // once from /fmr/:id/detail and cached. Works in every tab (shared table).
+  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
+  const [rowLines, setRowLines] = useState<Record<number, any[]>>({})
+  const [linesLoading, setLinesLoading] = useState<Set<number>>(new Set())
+  const toggleExpand = async (fmrId: number) => {
+    setExpandedRows(prev => { const n = new Set(prev); n.has(fmrId) ? n.delete(fmrId) : n.add(fmrId); return n })
+    if (rowLines[fmrId]) return // cached
+    setLinesLoading(prev => new Set(prev).add(fmrId))
+    try {
+      const { data } = await axios.get(`${API}/mc/${projectId}/fmr/${fmrId}/detail`)
+      setRowLines(prev => ({ ...prev, [fmrId]: data.lines || [] }))
+    } catch (e: any) {
+      addToast('error', e.response?.data?.error || 'Failed to load items')
+      setExpandedRows(prev => { const n = new Set(prev); n.delete(fmrId); return n }) // revert on failure
+    } finally {
+      setLinesLoading(prev => { const n = new Set(prev); n.delete(fmrId); return n })
+    }
+  }
 
   // Toggle the per-FMR critical-path flag (MC controllers only — backend enforces the role).
   const toggleCritical = async (fmr: FMRRow) => {
@@ -110,24 +153,10 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
   // Truncated cells get a hover tooltip; re-runs when the FMR list changes.
   useAutoTitle(tableRef, [fmrs])
 
-  // Heat/Lot P4a-i — one-click issue of the approved qty (auto-FIFO consume).
-  const [issuingId, setIssuingId] = useState<number | null>(null)
+  // Heat/Lot P4a-i — issue the approved qty (auto-FIFO). Pickup captures Proof of Collection.
+  const [pocFmr, setPocFmr] = useState<FMRRow | null>(null)
   // Heat/Lot P4b-ii-b — optional per-line heat-pick override modal.
   const [pickFmr, setPickFmr] = useState<FMRRow | null>(null)
-  const issueFmr = async (fmr: FMRRow) => {
-    if (issuingId) return
-    setIssuingId(fmr.id)
-    try {
-      const { data } = await axios.post(`${API}/mc/${projectId}/fmr/${fmr.id}/issue`, {})
-      const msg = data.short
-        ? `Issued ${data.total_issued} (stock short — line(s) partially issued)`
-        : `Issued ${data.total_issued} — ${data.header_status}`
-      addToast(data.short ? 'error' : 'success', msg)
-      reload()
-    } catch (e: any) {
-      addToast('error', e.response?.data?.error || 'Failed to issue FMR')
-    } finally { setIssuingId(null) }
-  }
 
   const inputSt: React.CSSProperties = { fontSize: 12, padding: '7px 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontFamily: 'inherit' }
 
@@ -145,7 +174,6 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
       <div style={{ background: cardBg, borderBottom: bd, padding: '12px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <BackButton onFallback={onBack} dark={dark} />
-          <div style={{ fontSize: 11, color: sub }}>Dashboard › {projectName} › Material Control › <strong style={{ color: col }}>FMR Register</strong></div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {/* MC / Contractor view toggle — hidden for subcontractors */}
@@ -220,31 +248,31 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
           </div>
         )}
 
-        {/* Pick-up window filter */}
-        <div style={{ display: 'flex', gap: 2, marginBottom: 12, background: cardBg, border: bd, borderRadius: 8, overflow: 'hidden', width: 'fit-content' }}>
-          <span style={{ padding: '7px 12px', fontSize: 11, color: sub, borderRight: bd }}>PICK-UP WINDOW</span>
-          {PICKUP_OPTS.map(opt => (
-            <button key={opt.key} onClick={() => setPickup(opt.key)}
-              style={{ padding: '7px 12px', background: pickup === opt.key ? '#E84E0F' : 'none', color: pickup === opt.key ? '#fff' : sub, border: 'none', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>
-              {opt.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Status tabs — quick segments (sync with the status dropdown below) */}
-        <div style={{ display: 'flex', gap: 2, marginBottom: 12, background: cardBg, border: bd, borderRadius: 8, overflow: 'hidden', width: 'fit-content', flexWrap: 'wrap' }}>
-          {([
-            ['all', 'All', counts?.total],
-            ['pending_approval', 'Pending', counts?.pending_approval],
-            ['approved', 'Awaiting pickup', counts?.approved],
-            ['partial_issued', 'Partially issued', counts?.partial_issued],
-            ['issued', 'Issued', counts?.issued],
-          ] as [string, string, number | string | undefined][]).map(([key, label, n]) => (
-            <button key={key} onClick={() => setStatusFilter(key)}
-              style={{ padding: '7px 14px', background: statusFilter === key ? '#E84E0F' : 'none', color: statusFilter === key ? '#fff' : sub, border: 'none', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', fontWeight: statusFilter === key ? 600 : 400 }}>
-              {label}{n != null ? ` (${n})` : ''}
-            </button>
-          ))}
+        {/* Register view tabs + pick-up window on ONE row to save vertical space.
+            Left: Active (live register) · Records (picked-up PoC archive) · All.
+            Right: pick-up window filter. */}
+        <div style={{ display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', gap: 2, background: cardBg, border: bd, borderRadius: 8, overflow: 'hidden', width: 'fit-content', flexWrap: 'wrap' }}>
+            {([
+              ['active',  'Active register', counts?.active_count],
+              ['records', 'Records (picked up)', counts?.records_count],
+              ['all',     'All', counts?.total],
+            ] as [RegView, string, number | string | undefined][]).map(([key, label, n]) => (
+              <button key={key} onClick={() => { setRegView(key); setStatusFilter('all') }}
+                style={{ padding: '7px 16px', background: regView === key ? '#E84E0F' : 'none', color: regView === key ? '#fff' : sub, border: 'none', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', fontWeight: regView === key ? 600 : 400 }}>
+                {label}{n != null ? ` (${n})` : ''}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 2, background: cardBg, border: bd, borderRadius: 8, overflow: 'hidden', width: 'fit-content', flexWrap: 'wrap' }}>
+            <span style={{ padding: '7px 12px', fontSize: 11, color: sub, borderRight: bd, whiteSpace: 'nowrap' }}>PICK-UP WINDOW</span>
+            {PICKUP_OPTS.map(opt => (
+              <button key={opt.key} onClick={() => setPickup(opt.key)}
+                style={{ padding: '7px 12px', background: pickup === opt.key ? '#E84E0F' : 'none', color: pickup === opt.key ? '#fff' : sub, border: 'none', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>
+                {opt.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Search + filter */}
@@ -266,18 +294,23 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
             style={{ ...inputSt, cursor: 'pointer', color: critOnly ? '#E84E0F' : sub, borderColor: critOnly ? '#E84E0F' : undefined }}>
             ★ Critical Path Only {critOnly ? `(${fmrs.filter(f => f.is_critical_path).length})` : ''}
           </button>
+          <button onClick={resetWidths} title="Reset column widths to default"
+            style={{ ...inputSt, cursor: 'pointer', color: sub }}>↺ Reset columns</button>
         </div>
 
         {/* Table */}
         <div style={{ background: cardBg, border: bd, borderRadius: 8, overflow: 'hidden' }}>
           <div ref={tableRef} style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 420px)' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <table style={{ width: colW.reduce((a, b) => a + b, 0), minWidth: '100%', borderCollapse: 'collapse', fontSize: 12, tableLayout: 'fixed' }}>
+              {/* colgroup drives the resizable column widths (table-layout: fixed) */}
+              <colgroup>{colW.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
               <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                 <tr style={{ borderBottom: bd }}>
-                  {([['FMR REF','fmr_ref'],['ITEMS'],['WBS','wbs_code'],['WAREHOUSE','warehouse'],['QTY'],['REQUESTED BY','requested_by'],['REQ. DATE','required_date'],['STATUS','status'],['']] as [string,string?][]).map(([h,key]) => (
-                    <th key={h} onClick={key ? () => toggleSort(key) : undefined}
-                      style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>
+                  {([['FMR REF','fmr_ref'],['ITEMS'],['WBS','wbs_code'],['WAREHOUSE','warehouse'],['QTY'],['REQUESTED BY','requested_by'],['REQ. DATE','required_date'],['STATUS','status'],['']] as [string,string?][]).map(([h,key], i) => (
+                    <th key={h || i} onClick={key ? () => toggleSort(key) : undefined}
+                      style={{ position: 'relative', padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>
                       {h}{key ? sortArrow(key) : ''}
+                      {i < colW.length - 1 && <ColResizeHandle onMouseDown={e => onColResize(i, e)} dark={dark} />}
                     </th>
                   ))}
                 </tr>
@@ -291,8 +324,11 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
                   const pill = statusPill(fmr.status)
                   const overdue = isOverdue(fmr.required_date)
                   const soon = isDueSoon(fmr.required_date)
+                  // Picked up (issued or partial_issued) → terminal record with Proof of Collection.
+                  const hasPoC = ['issued', 'partial_issued'].includes(fmr.status)
                   return (
-                    <tr key={fmr.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
+                    <React.Fragment key={fmr.id}>
+                    <tr style={{ borderBottom: expandedRows.has(fmr.id) ? 'none' : `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
                       <td style={{ padding: '9px 12px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           {view === 'mc' ? (
@@ -305,29 +341,42 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
                           <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600 }}>{fmr.fmr_ref}</span>
                         </div>
                       </td>
-                      <td style={{ padding: '9px 12px', maxWidth: 240, overflow: 'hidden' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col }}>{fmr.item_code || '—'}</span>
-                          {(fmr.line_count ?? 1) > 1 && (
-                            <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 6, background: dark ? '#334155' : '#eef2f7', color: sub, fontWeight: 600, whiteSpace: 'nowrap' }}>
-                              +{(fmr.line_count as number) - 1} more
-                            </span>
-                          )}
-                        </div>
+                      <td style={{ padding: '9px 12px', overflow: 'hidden' }}>
+                        {(() => {
+                          const multi = (fmr.line_count ?? 1) > 1
+                          const open = expandedRows.has(fmr.id)
+                          return (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              {multi ? (
+                                <button onClick={e => { e.stopPropagation(); toggleExpand(fmr.id) }}
+                                  title={open ? 'Hide items' : `Show all ${fmr.line_count} items`}
+                                  style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>
+                                  <span style={{ fontSize: 10, color: '#E84E0F', width: 9, display: 'inline-block', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 120ms' }}>▶</span>
+                                  <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col }}>{fmr.item_code || '—'}</span>
+                                  <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 6, background: open ? '#E84E0F' : (dark ? '#334155' : '#eef2f7'), color: open ? '#fff' : sub, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                                    +{(fmr.line_count as number) - 1} more
+                                  </span>
+                                </button>
+                              ) : (
+                                <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col }}>{fmr.item_code || '—'}</span>
+                              )}
+                            </div>
+                          )
+                        })()}
                         <div style={{ fontSize: 11, color: sub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fmr.description}</div>
                       </td>
                       <td style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>
                         {(fmr.line_count ?? 1) > 1 ? 'multiple' : (fmr.wbs_code || '—')}
                       </td>
-                      <td style={{ padding: '9px 12px', fontSize: 11, color: col, whiteSpace: 'nowrap' }}>
+                      <td style={{ padding: '9px 12px', fontSize: 11, color: col, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {fmr.warehouse_code ? <><span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#2563eb' }}>{fmr.warehouse_code}</span> <span style={{ color: sub }}>· {fmr.warehouse_name}</span></> : '—'}
                       </td>
                       <td style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col }}>
                         {(fmr.line_count ?? 1) > 1 ? `${fmr.line_count} lines` : `${fmr.qty_requested} ${fmr.uom}`}
                       </td>
-                      <td style={{ padding: '9px 12px', color: col, fontSize: 11 }}>
+                      <td style={{ padding: '9px 12px', color: col, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {fmr.requested_by_name || '—'}
-                        {fmr.requested_by_company && <div style={{ fontSize: 10, color: sub }}>{fmr.requested_by_company}</div>}
+                        {fmr.requested_by_company && <div style={{ fontSize: 10, color: sub, overflow: 'hidden', textOverflow: 'ellipsis' }}>{fmr.requested_by_company}</div>}
                       </td>
                       <td style={{ padding: '9px 12px', fontSize: 11 }}>
                         <span style={{ color: overdue ? '#ef4444' : soon ? '#d97706' : col, fontWeight: overdue || soon ? 600 : 400 }}>
@@ -344,23 +393,61 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
                             style={{ padding: '4px 12px', borderRadius: 6, border: 'none', background: '#22c55e', color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>
                             Approve
                           </button>
-                        ) : view === 'mc' && ['approved', 'partially_approved', 'partial_issued'].includes(fmr.status) ? (
+                        ) : view === 'mc' && ['approved', 'partially_approved'].includes(fmr.status) ? (
                           <div style={{ display: 'flex', gap: 6 }}>
-                            <button onClick={() => issueFmr(fmr)} disabled={issuingId === fmr.id}
-                              style={{ padding: '4px 12px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', cursor: issuingId === fmr.id ? 'wait' : 'pointer', fontSize: 11, fontWeight: 600 }}
-                              title="Issue the approved quantity (decrements stock, auto-FIFO)">
-                              {issuingId === fmr.id ? 'Issuing…' : 'Issue'}
+                            <button onClick={() => setPocFmr(fmr)}
+                              style={{ padding: '4px 12px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}
+                              title="Issue & record pickup (Proof of Collection, decrements stock, auto-FIFO)">
+                              Issue / Pickup
                             </button>
                             <button onClick={() => setPickFmr(fmr)}
                               style={{ padding: '4px 10px', borderRadius: 6, border: bd, background: 'none', color: '#7c3aed', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}
                               title="Choose which heats to issue (overrides FIFO per line)">⊕ Heats</button>
-                            <button onClick={() => setViewFmr(fmr)} style={{ padding: '4px 12px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>View</button>
+                            <button onClick={() => setViewFmr(fmr)} title={hasPoC ? 'View detail + Proof of Collection' : 'View detail'}
+                              style={{ padding: '4px 12px', borderRadius: 6, border: bd, background: 'none', color: hasPoC ? '#2563eb' : col, cursor: 'pointer', fontSize: 11, fontWeight: hasPoC ? 600 : 400 }}>{hasPoC ? '🤝 View / PoC' : 'View'}</button>
                           </div>
                         ) : (
-                          <button onClick={() => setViewFmr(fmr)} style={{ padding: '4px 12px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>View</button>
+                          <button onClick={() => setViewFmr(fmr)} title={hasPoC ? 'View detail + Proof of Collection' : 'View detail'}
+                            style={{ padding: '4px 12px', borderRadius: 6, border: bd, background: 'none', color: hasPoC ? '#2563eb' : col, cursor: 'pointer', fontSize: 11, fontWeight: hasPoC ? 600 : 400 }}>{hasPoC ? '🤝 View / PoC' : 'View'}</button>
                         )}
                       </td>
                     </tr>
+                    {expandedRows.has(fmr.id) && (
+                      <tr style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
+                        <td />
+                        <td colSpan={8} style={{ padding: '0 12px 10px', background: dark ? '#131c2e' : '#fafcff' }}>
+                          {linesLoading.has(fmr.id) ? (
+                            <div style={{ padding: '8px 4px', fontSize: 11, color: sub }}>Loading items…</div>
+                          ) : (
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                              <thead>
+                                <tr style={{ color: sub }}>
+                                  {['ITEM', 'DESCRIPTION', 'WBS', 'QTY REQ', 'APPROVED', 'ISSUED', 'STATUS'].map(h => (
+                                    <th key={h} style={{ textAlign: 'left', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', padding: '5px 8px', borderBottom: bd }}>{h}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(rowLines[fmr.id] || []).map(l => (
+                                  <tr key={l.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#eef2f7'}` }}>
+                                    <td style={{ padding: '5px 8px', fontFamily: 'JetBrains Mono, monospace', color: '#2563eb', fontWeight: 600 }}>{l.item_code || '—'}</td>
+                                    <td style={{ padding: '5px 8px', color: col }}>{l.description}</td>
+                                    <td style={{ padding: '5px 8px', fontFamily: 'JetBrains Mono, monospace', color: sub }}>{l.wbs_code || '—'}</td>
+                                    <td style={{ padding: '5px 8px', fontFamily: 'JetBrains Mono, monospace', color: col }}>{Number(l.qty_requested)} {l.uom}</td>
+                                    <td style={{ padding: '5px 8px', fontFamily: 'JetBrains Mono, monospace', color: l.qty_approved != null && Number(l.qty_approved) > 0 ? col : sub }}>{l.qty_approved != null && Number(l.qty_approved) > 0 ? `${Number(l.qty_approved)} ${l.uom}` : '—'}</td>
+                                    <td style={{ padding: '5px 8px', fontFamily: 'JetBrains Mono, monospace', color: Number(l.qty_issued) > 0 ? '#2563eb' : sub }}>{Number(l.qty_issued) > 0 ? `${Number(l.qty_issued)} ${l.uom}` : '—'}</td>
+                                    <td style={{ padding: '5px 8px' }}>
+                                      <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 5, fontWeight: 600, background: l.line_status === 'issued' ? 'rgba(34,197,94,0.12)' : l.line_status === 'partial_issued' ? 'rgba(245,158,11,0.12)' : (dark ? '#334155' : '#eef2f7'), color: l.line_status === 'issued' ? '#16a34a' : l.line_status === 'partial_issued' ? '#d97706' : sub }}>{(l.line_status || '—').replace('_', ' ')}</span>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                    </React.Fragment>
                   )
                 })}
               </tbody>
@@ -405,6 +492,16 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
           dark={dark} projectId={projectId} fmr={pickFmr}
           onClose={() => setPickFmr(null)}
           onIssued={(msg, short) => { setPickFmr(null); reload(); addToast(short ? 'error' : 'success', msg) }}
+          addToast={addToast}
+        />
+      )}
+
+      {/* Pickup / Proof of Collection — one-click FIFO issue + PoC capture */}
+      {pocFmr && (
+        <PoCModal
+          dark={dark} projectId={projectId} fmr={pocFmr}
+          onClose={() => setPocFmr(null)}
+          onIssued={(msg, short) => { setPocFmr(null); reload(); addToast(short ? 'error' : 'success', msg) }}
           addToast={addToast}
         />
       )}
@@ -967,13 +1064,24 @@ const FMRDetailModal = ({ dark, projectId, fmr, onClose, addToast }: {
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState(false)   // ⤢ toggle: comfortable default ↔ near-fullscreen
   const [packages, setPackages] = useState<any[]>([])
+  const [pickups, setPickups] = useState<any[]>([]) // Proof of Collection records
 
   useEffect(() => {
     axios.get(`${API}/mc/${projectId}/fmr/${fmr.id}/detail`)
-      .then(({ data }) => { setHeader(data.fmr); setLines(data.lines || []); setPackages(data.packages || []) })
+      .then(({ data }) => { setHeader(data.fmr); setLines(data.lines || []); setPackages(data.packages || []); setPickups(data.pickups || []) })
       .catch((e: any) => addToast('error', e.response?.data?.error || 'Failed to load FMR'))
       .finally(() => setLoading(false))
   }, [fmr.id]) // eslint-disable-line
+
+  // Signature endpoint is JWT-gated, so fetch as a blob (auth header) and open via object URL.
+  const viewSignature = async (pickupId: number) => {
+    try {
+      const { data } = await axios.get(`${API}/mc/${projectId}/fmr/pickup/${pickupId}/signature`, { responseType: 'blob' })
+      const url = URL.createObjectURL(data)
+      window.open(url, '_blank')
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+    } catch (e: any) { addToast('error', 'Failed to load signature') }
+  }
 
   return createPortal(
     <>
@@ -1060,6 +1168,34 @@ const FMRDetailModal = ({ dark, projectId, fmr, onClose, addToast }: {
                 </div>
               )}
 
+              {/* ── Proof of Collection (pickup records) ── */}
+              {pickups.length > 0 && (
+                <div style={{ marginTop: 18 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: sub, textTransform: 'uppercase', marginBottom: 8 }}>🤝 Proof of Collection ({pickups.length})</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {pickups.map((pk: any) => (
+                      <div key={pk.id} style={{ border: bd, borderRadius: 8, padding: '10px 12px', background: dark ? '#162032' : '#f8fafc', display: 'flex', gap: 12, alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                        <div style={{ fontSize: 12 }}>
+                          <div style={{ color: col, fontWeight: 600 }}>{pk.collected_by_name}{pk.collected_by_company ? <span style={{ color: sub, fontWeight: 400 }}> · {pk.collected_by_company}</span> : null}</div>
+                          <div style={{ color: sub, fontSize: 11, marginTop: 2 }}>
+                            Collected <span style={{ fontFamily: 'JetBrains Mono, monospace', color: col }}>{Number(pk.qty_issued)}</span>
+                            {' · '}{new Date(pk.picked_up_at).toLocaleString('en-AU', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                            {pk.issued_by_name ? ` · issued by ${pk.issued_by_name}` : ''}
+                          </div>
+                          {pk.notes && <div style={{ color: col, fontSize: 11, marginTop: 4, fontStyle: 'italic' }}>"{pk.notes}"</div>}
+                        </div>
+                        {pk.signature_file ? (
+                          <button onClick={() => viewSignature(pk.id)}
+                            style={{ flexShrink: 0, fontSize: 11, color: '#2563eb', background: 'none', cursor: 'pointer', border: bd, borderRadius: 6, padding: '5px 10px', fontWeight: 600 }}>
+                            ✍ View signature
+                          </button>
+                        ) : <span style={{ flexShrink: 0, fontSize: 10, color: sub }}>no signature</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div style={{ fontSize: 11, color: sub, marginTop: 14 }}>
                 Work order: <span style={{ color: col }}>{fmr.work_order_ref || '—'}</span> · Required: <span style={{ color: col }}>{fmt(fmr.required_date)}</span>
               </div>
@@ -1093,6 +1229,7 @@ const IssuePickerModal = ({ dark, projectId, fmr, onClose, onIssued, addToast }:
   const [saving, setSaving] = useState(false)
   // picks[fmr_line_id][stock_id] = qty string
   const [picks, setPicks] = useState<Record<number, Record<number, string>>>({})
+  const [poc, setPoc] = useState<PoCData>({ name: '', company: '', notes: '', file: null }) // Proof of Collection
 
   useEffect(() => {
     axios.get(`${API}/mc/${projectId}/fmr/${fmr.id}/issuable`)
@@ -1122,13 +1259,22 @@ const IssuePickerModal = ({ dark, projectId, fmr, onClose, onIssued, addToast }:
     }
     setSaving(true)
     try {
-      const { data: res } = await axios.post(`${API}/mc/${projectId}/fmr/${fmr.id}/issue`,
-        Object.keys(allocations).length ? { allocations } : {})
-      onIssued(res.short ? `Issued ${res.total_issued} — ${res.header_status} (some lines short)` : `Issued ${res.total_issued} — ${res.header_status}`, !!res.short)
+      const { data: res } = await axios.post(`${API}/mc/${projectId}/fmr/${fmr.id}/issue`, {
+        ...(Object.keys(allocations).length ? { allocations } : {}),
+        collected_by_name: poc.name.trim(),
+        collected_by_company: poc.company.trim() || undefined,
+        pickup_notes: poc.notes.trim() || undefined,
+      })
+      if (poc.file && res.pickup_id) {
+        try { await uploadPoC(projectId, res.pickup_id, poc.file) }
+        catch { addToast('error', 'Issued, but the signature/photo failed to upload') }
+      }
+      onIssued(res.short ? `Issued ${res.total_issued} — ${res.header_status} (some lines short)` : `Issued ${res.total_issued} — picked up by ${poc.name.trim()}`, !!res.short)
     } catch (e: any) {
       // Backend is the real guard — surface its 422 clearly.
       addToast('error', e.response?.data?.error || 'Issue failed')
-    } finally { setSaving(false) }
+      setSaving(false)
+    }
   }
 
   return createPortal(
@@ -1194,11 +1340,160 @@ const IssuePickerModal = ({ dark, projectId, fmr, onClose, onIssued, addToast }:
           </div>
         )}
 
+        {/* Proof of Collection — required to record the hand-over */}
+        {!loading && lines.length > 0 && (
+          <div style={{ marginTop: 16, paddingTop: 14, borderTop: bd }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: col, marginBottom: 10 }}>Proof of Collection</div>
+            <PoCCapture dark={dark} value={poc} onChange={setPoc} />
+          </div>
+        )}
+
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
           <button onClick={onClose} style={{ padding: '8px 16px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
-          <button onClick={submit} disabled={saving || anyOver || !anyPicked}
-            style={{ padding: '8px 18px', borderRadius: 6, border: 'none', background: (!saving && !anyOver && anyPicked) ? '#2563eb' : '#94a3b8', color: '#fff', cursor: (!saving && !anyOver && anyPicked) ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
+          {(() => { const ok = !saving && !anyOver && anyPicked && poc.name.trim().length > 0; return (
+          <button onClick={submit} disabled={!ok}
+            style={{ padding: '8px 18px', borderRadius: 6, border: 'none', background: ok ? '#2563eb' : '#94a3b8', color: '#fff', cursor: ok ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
             {saving ? 'Issuing…' : 'Issue selected heats'}
+          </button>) })()}
+        </div>
+      </div>
+    </>,
+    document.body,
+  )
+}
+
+// ─── PROOF OF COLLECTION — SHARED CAPTURE ─────────────────────
+// PoC = who physically collected the material at pickup: name (required),
+// company, notes, and a signature (drawn) OR a photo (uploaded). Reused by the
+// one-click PoCModal and the heat-pick IssuePickerModal.
+interface PoCData { name: string; company: string; notes: string; file: Blob | File | null }
+
+// Draw-to-sign canvas → exports a PNG blob on pointer-up.
+const SignaturePad = ({ dark, onChange }: { dark: boolean; onChange: (b: Blob | null) => void }) => {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const drawing = useRef(false)
+  const hasInk  = useRef(false)
+  const lineColor = dark ? '#f1f5f9' : '#0f172a'
+  const ctxOf = () => canvasRef.current?.getContext('2d') || null
+  const xy = (e: React.PointerEvent) => {
+    const c = canvasRef.current!; const r = c.getBoundingClientRect()
+    return { x: (e.clientX - r.left) * (c.width / r.width), y: (e.clientY - r.top) * (c.height / r.height) }
+  }
+  const down = (e: React.PointerEvent) => { e.preventDefault(); const ctx = ctxOf(); if (!ctx) return; drawing.current = true; const { x, y } = xy(e); ctx.beginPath(); ctx.moveTo(x, y); (e.target as Element).setPointerCapture?.(e.pointerId) }
+  const move = (e: React.PointerEvent) => { if (!drawing.current) return; const ctx = ctxOf(); if (!ctx) return; const { x, y } = xy(e); ctx.lineTo(x, y); ctx.strokeStyle = lineColor; ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.stroke(); hasInk.current = true }
+  const up = () => { if (!drawing.current) return; drawing.current = false; if (hasInk.current) canvasRef.current?.toBlob(b => onChange(b), 'image/png') }
+  const clear = () => { const c = canvasRef.current; const ctx = ctxOf(); if (c && ctx) ctx.clearRect(0, 0, c.width, c.height); hasInk.current = false; onChange(null) }
+  return (
+    <div>
+      <canvas ref={canvasRef} width={520} height={140}
+        onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerLeave={up}
+        style={{ width: '100%', height: 140, border: `1px dashed ${dark ? '#475569' : '#cbd5e1'}`, borderRadius: 8, background: dark ? '#0b1220' : '#fff', touchAction: 'none', cursor: 'crosshair', boxSizing: 'border-box' }} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+        <span style={{ fontSize: 10, color: '#94a3b8' }}>Sign above with mouse / finger</span>
+        <button type="button" onClick={clear} style={{ fontSize: 10, background: 'none', border: 'none', color: '#2563eb', cursor: 'pointer' }}>Clear</button>
+      </div>
+    </div>
+  )
+}
+
+const PoCCapture = ({ dark, value, onChange }: { dark: boolean; value: PoCData; onChange: (v: PoCData) => void }) => {
+  const col = dark ? '#f1f5f9' : '#0f172a'; const sub = '#94a3b8'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const inputSt: React.CSSProperties = { fontSize: 12, padding: '6px 9px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontFamily: 'inherit', width: '100%', boxSizing: 'border-box' }
+  const lbl: React.CSSProperties = { fontSize: 10, color: sub, textTransform: 'uppercase', fontWeight: 600, display: 'block', marginBottom: 3 }
+  const [mode, setMode] = useState<'sign' | 'photo'>('sign')
+  const set = (patch: Partial<PoCData>) => onChange({ ...value, ...patch })
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div><label style={lbl}>Collected by *</label>
+          <input value={value.name} onChange={e => set({ name: e.target.value })} placeholder="Full name of collector" style={inputSt} /></div>
+        <div><label style={lbl}>Company</label>
+          <input value={value.company} onChange={e => set({ company: e.target.value })} placeholder="Contractor / company" style={inputSt} /></div>
+      </div>
+      <div><label style={lbl}>Notes</label>
+        <textarea value={value.notes} onChange={e => set({ notes: e.target.value })} rows={2} placeholder="Condition on hand-over, who witnessed, etc." style={{ ...inputSt, resize: 'vertical' }} /></div>
+      <div>
+        <label style={lbl}>Proof (signature or photo)</label>
+        <div style={{ display: 'flex', gap: 2, marginBottom: 8, border: bd, borderRadius: 6, overflow: 'hidden', width: 'fit-content' }}>
+          {(['sign', 'photo'] as const).map(m => (
+            <button key={m} type="button" onClick={() => { setMode(m); set({ file: null }) }}
+              style={{ padding: '5px 12px', fontSize: 11, background: mode === m ? '#2563eb' : 'none', color: mode === m ? '#fff' : sub, border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+              {m === 'sign' ? '✍ Draw signature' : '📷 Upload photo'}
+            </button>
+          ))}
+        </div>
+        {mode === 'sign'
+          ? <SignaturePad dark={dark} onChange={b => set({ file: b })} />
+          : <input type="file" accept="image/*" onChange={e => set({ file: e.target.files?.[0] || null })} style={{ ...inputSt, padding: 6 }} />}
+        {value.file && <div style={{ fontSize: 10, color: '#16a34a', marginTop: 4 }}>✓ Proof attached</div>}
+      </div>
+    </div>
+  )
+}
+
+// Two-step: issue (JSON) returns pickup_id, then attach the signature/photo (multipart).
+async function uploadPoC(projectId: number, pickupId: number, file: Blob | File) {
+  const fd = new FormData()
+  const name = file instanceof File ? file.name : 'signature.png'
+  fd.append('file', file, name)
+  await axios.post(`${API}/mc/${projectId}/fmr/pickup/${pickupId}/signature`, fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+}
+
+// ─── PICKUP / PoC MODAL — one-click FIFO issue + capture ───────
+const PoCModal = ({ dark, projectId, fmr, onClose, onIssued, addToast }: {
+  dark: boolean; projectId: number; fmr: any; onClose: () => void
+  onIssued: (msg: string, short: boolean) => void; addToast: (t: 'success' | 'error', m: string) => void
+}) => {
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const cardBg = dark ? '#1e293b' : '#fff'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const sub = '#94a3b8'
+  const [poc, setPoc] = useState<PoCData>({ name: '', company: '', notes: '', file: null })
+  const [saving, setSaving] = useState(false)
+  const canConfirm = poc.name.trim().length > 0 && !saving
+
+  const submit = async () => {
+    if (!canConfirm) return
+    setSaving(true)
+    try {
+      const { data } = await axios.post(`${API}/mc/${projectId}/fmr/${fmr.id}/issue`, {
+        collected_by_name: poc.name.trim(),
+        collected_by_company: poc.company.trim() || undefined,
+        pickup_notes: poc.notes.trim() || undefined,
+      })
+      if (poc.file && data.pickup_id) {
+        try { await uploadPoC(projectId, data.pickup_id, poc.file) }
+        catch { addToast('error', 'Issued, but the signature/photo failed to upload') }
+      }
+      onIssued(data.short
+        ? `Issued ${data.total_issued} — ${data.header_status} (stock short, line(s) partial)`
+        : `Issued ${data.total_issued} — picked up by ${poc.name.trim()}`, !!data.short)
+    } catch (e: any) {
+      addToast('error', e.response?.data?.error || 'Failed to issue FMR')
+      setSaving(false)
+    }
+  }
+
+  return createPortal(
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 24, width: 560, maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: col }}>Issue & record pickup · {fmr.fmr_ref}</div>
+            <div style={{ fontSize: 12, color: sub, marginTop: 2 }}>Issues the approved qty (auto-FIFO) and logs Proof of Collection. The FMR then moves to <strong>Records</strong>.</div>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: sub, cursor: 'pointer' }}>✕</button>
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <PoCCapture dark={dark} value={poc} onChange={setPoc} />
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+          <button onClick={onClose} style={{ padding: '8px 16px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
+          <button onClick={submit} disabled={!canConfirm}
+            style={{ padding: '8px 18px', borderRadius: 6, border: 'none', background: canConfirm ? '#2563eb' : '#94a3b8', color: '#fff', cursor: canConfirm ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
+            {saving ? 'Issuing…' : 'Confirm pickup & issue'}
           </button>
         </div>
       </div>

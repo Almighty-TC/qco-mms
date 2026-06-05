@@ -1689,12 +1689,9 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
         </button>
       )}
 
-      {/* Breadcrumb */}
+      {/* Back */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16, fontSize: 12, color: '#94a3b8', flexWrap: 'wrap', flexShrink: 0 }}>
         <BackButton onFallback={onBack} dark={dark} />
-        <button onClick={onBack} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 12, cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>← Dashboard</button>
-        <span>›</span><span>{projectName}</span><span>›</span><span>Foundational</span><span>›</span>
-        <span style={{ color: col, fontWeight: 600 }}>WBS</span>
       </div>
 
       {/* Header */}

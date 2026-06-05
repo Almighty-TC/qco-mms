@@ -86,6 +86,9 @@ export const CreateSCNWizard: React.FC<Props> = ({
   const [selectedLines, setSelectedLines] = useState<Record<number, SelectedLineVal>>({})
   const [additionalItems, setAdditionalItems] = useState<AdditionalItem[]>([])
   const [showAdditional, setShowAdditional] = useState(false)
+  // Child lines (expediting_child_items) selected to ship — keyed by child id. Each
+  // carries its parent PO line so it can be sent as a linked off-PO variation on create.
+  const [selectedChildren, setSelectedChildren] = useState<Record<number, { checked: boolean; qty: string; description: string; uom: string; parentLineId: number }>>({})
 
   // ─── STEP 2: SCN details ──────────────────────────────────
   const [pickupLocation, setPickupLocation]   = useState('')
@@ -119,6 +122,14 @@ export const CreateSCNWizard: React.FC<Props> = ({
       .then(r => {
         const data = r.data
         setPO(data)
+        // ── Inherit CDD from the PO line(s) — earliest line CDD, else the PO's
+        // contract delivery date. The user no longer has to type it (still editable). ──
+        const lineCdds = (data.po_lines || []).map((l: any) => l.cdd).filter(Boolean).sort()
+        const inheritedCdd = lineCdds[0] || data.contract_delivery_date || null
+        if (inheritedCdd) setCdd(String(inheritedCdd).slice(0, 10))
+        // Pre-fill pickup from the supplier's primary address (supplier_addresses).
+        const primaryAddr = (data.supplier_addresses || [])[0]
+        if (primaryAddr?.label) setPickupLocation(String(primaryAddr.label))
         // Pre-select line if provided from drawer CTA
         if (preSelectedLineId) {
           const line = (data.po_lines || []).find((l: any) => l.id === preSelectedLineId)
@@ -150,9 +161,19 @@ export const CreateSCNWizard: React.FC<Props> = ({
   const updateQty = (lineId: number, val: string) => {
     setSelectedLines(prev => ({ ...prev, [lineId]: { ...prev[lineId], qty: val } }))
   }
+  // ─── CHILD LINE SELECTION (expediting_child_items) ────────
+  const toggleChild = (child: any, parentLineId: number) => {
+    setSelectedChildren(prev => {
+      if (prev[child.id]?.checked) { const next = { ...prev }; delete next[child.id]; return next }
+      return { ...prev, [child.id]: { checked: true, qty: String(child.qty || 1), description: child.description || `Sub-item ${child.sub_number}`, uom: child.uom || 'EA', parentLineId } }
+    })
+  }
+  const updateChildQty = (childId: number, val: string) =>
+    setSelectedChildren(prev => ({ ...prev, [childId]: { ...prev[childId], qty: val } }))
   const countSelected = () =>
     Object.values(selectedLines).filter(v => v.checked).length +
-    additionalItems.filter(i => i.desc.trim()).length
+    additionalItems.filter(i => i.desc.trim()).length +
+    Object.values(selectedChildren).filter(v => v.checked).length
 
   // ─── ADDITIONAL ITEMS ─────────────────────────────────────
   const addAdditional = () =>
@@ -190,7 +211,11 @@ export const CreateSCNWizard: React.FC<Props> = ({
     // Off-PO VARIATIONS (Commit 3 UI): each must name a parent PO line + description.
     // Legacy unlinked additional_items path is retired — we no longer send additional_items
     // in the create body; instead we POST each variation to /scn/:id/variation after the SCN exists.
-    const variations = additionalItems.filter(i => i.desc.trim() || i.parentLineId)
+    // Selected child lines ship as linked off-PO variations (parent = their PO line).
+    const childVariations: AdditionalItem[] = Object.values(selectedChildren)
+      .filter(c => c.checked)
+      .map(c => ({ desc: c.description, qty: c.qty, uom: c.uom, parentLineId: String(c.parentLineId) }))
+    const variations = [...additionalItems.filter(i => i.desc.trim() || i.parentLineId), ...childVariations]
     for (const v of variations) {
       if (!v.parentLineId) { onToast?.('Each off-PO variation must select a parent PO line.', 'error'); return }
       if (!v.desc.trim())  { onToast?.('Each off-PO variation needs a description.', 'error'); return }
@@ -347,6 +372,33 @@ export const CreateSCNWizard: React.FC<Props> = ({
                   <span style={{ fontSize: 11, color: '#94a3b8' }}>{line.uom} / {avail} max</span>
                 </div>
               )}
+
+              {/* Child lines (expediting_child_items) created on the PO detail screen —
+                  selectable here so they ship on this SCN as linked off-PO variations. */}
+              {Array.isArray(line.child_items) && line.child_items.length > 0 && (
+                <div style={{ marginLeft: 26, marginTop: 8, borderTop: '1px dashed #e2e8f0', paddingTop: 8 }}>
+                  <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.05em', marginBottom: 4 }}>Child lines</div>
+                  {line.child_items.map((ch: any) => {
+                    const cs = selectedChildren[ch.id]
+                    return (
+                      <div key={ch.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', flex: 1 }}>
+                          <input type="checkbox" checked={!!cs?.checked} onChange={() => toggleChild(ch, line.id)} style={{ accentColor: '#7c3aed', flexShrink: 0 }} />
+                          <span style={{ fontSize: 12, color: '#475569' }}>
+                            <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#7c3aed', fontWeight: 600 }}>{line.line_number}.{ch.sub_number}</span>
+                            {' '}{ch.description || '—'}
+                            <span style={{ color: '#94a3b8' }}> · {Number(ch.qty) || 0} {ch.uom || ''}</span>
+                          </span>
+                        </label>
+                        {cs?.checked && (
+                          <input type="number" value={cs.qty} min={1} onChange={e => updateChildQty(ch.id, e.target.value)}
+                            style={{ ...inputStyle, width: 70, padding: '4px 8px', fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }} />
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           )
         })}
@@ -434,13 +486,26 @@ export const CreateSCNWizard: React.FC<Props> = ({
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
         <div>
-          <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>Pickup location / supplier address</label>
-          <input
-            value={pickupLocation}
-            onChange={e => setPickupLocation(e.target.value)}
-            placeholder="e.g. Shanghai, China"
-            style={{ ...inputStyle, width: '100%' }}
-          />
+          <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>Pickup location <span style={{ color: '#94a3b8', fontWeight: 400 }}>· {po?.vendor_display || 'supplier'} address</span></label>
+          {(po?.supplier_addresses?.length ?? 0) > 0 ? (
+            <select
+              value={pickupLocation}
+              onChange={e => setPickupLocation(e.target.value)}
+              style={{ ...inputStyle, width: '100%' }}
+            >
+              <option value="">— Select supplier pickup address</option>
+              {po.supplier_addresses.map((a: any) => (
+                <option key={a.id} value={a.label}>{a.label}{a.is_primary ? ' (primary)' : ''}</option>
+              ))}
+            </select>
+          ) : (
+            <input
+              value={pickupLocation}
+              onChange={e => setPickupLocation(e.target.value)}
+              placeholder="Supplier pickup address (none on file — enter manually)"
+              style={{ ...inputStyle, width: '100%' }}
+            />
+          )}
         </div>
         <div>
           <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>Destination warehouse</label>
@@ -465,7 +530,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
           />
         </div>
         <div>
-          <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>Contract delivery date (CDD)</label>
+          <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>Contract delivery date (CDD) <span style={{ color: '#94a3b8', fontWeight: 400 }}>· from PO line (editable)</span></label>
           <input
             type="date"
             value={cdd}
@@ -770,6 +835,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
   const Step5 = () => {
     const selectedLinesList = (po?.po_lines || []).filter((l: any) => selectedLines[l.id]?.checked)
     const addItemsList = additionalItems.filter(i => i.desc.trim())
+    const childList = Object.values(selectedChildren).filter(c => c.checked)
     const warehouseName = warehouses.find((w: any) => w.id === warehouseId)?.name || '—'
     const modeName = MODES.find(m => m.id === transportMode)?.label || '—'
 
@@ -782,7 +848,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
           {/* Items */}
           <div style={{ padding: '14px 16px', borderBottom: '1px solid #e2e8f0' }}>
             <div style={{ fontSize: 10, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
-              Items ({selectedLinesList.length + addItemsList.length})
+              Items ({selectedLinesList.length + addItemsList.length + childList.length})
             </div>
             {selectedLinesList.map((l: any) => (
               <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#374151', marginBottom: 4 }}>
@@ -792,6 +858,15 @@ export const CreateSCNWizard: React.FC<Props> = ({
                 </span>
               </div>
             ))}
+            {childList.map((c, i) => {
+              const parent = (po?.po_lines || []).find((l: any) => String(l.id) === String(c.parentLineId))
+              return (
+              <div key={`ch-${i}`} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#7c3aed', marginBottom: 4 }}>
+                <span>↳ Child line — {c.description}{parent ? ` · for: Line ${parent.line_number}` : ''}</span>
+                <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#94a3b8' }}>{c.qty} {c.uom}</span>
+              </div>
+              )
+            })}
             {addItemsList.map((it, i) => {
               const parent = (po?.po_lines || []).find((l: any) => String(l.id) === String(it.parentLineId))
               return (
@@ -860,8 +935,10 @@ export const CreateSCNWizard: React.FC<Props> = ({
         display: 'flex', flexDirection: 'column', overflow: 'hidden',
         boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
       }}>
-        {/* Step indicator */}
-        <StepBar />
+        {/* Step indicator — call as functions (not <Comp/>) so they inline into THIS
+            render tree. Mounting them as components remounts on every keystroke and
+            steals input focus, because the function identities change each render. */}
+        {StepBar()}
 
         {/* Content area */}
         <div style={{ flex: 1, overflowY: 'auto', padding: 24 }}>
@@ -869,12 +946,12 @@ export const CreateSCNWizard: React.FC<Props> = ({
             <div style={{ color: '#94a3b8', fontSize: 13 }}>Loading PO data…</div>
           ) : (
             <>
-              {step === 1 && <Step1 />}
-              {step === 2 && <Step2 />}
-              {step === 3 && <Step3 />}
-              {step === 4 && <StepHeats />}
-              {step === 5 && <Step4 />}
-              {step === 6 && <Step5 />}
+              {step === 1 && Step1()}
+              {step === 2 && Step2()}
+              {step === 3 && Step3()}
+              {step === 4 && StepHeats()}
+              {step === 5 && Step4()}
+              {step === 6 && Step5()}
             </>
           )}
         </div>

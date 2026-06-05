@@ -32,6 +32,7 @@ DELETE FROM expediting_forecast_history WHERE changed_by IN (SELECT id FROM user
 DELETE fil FROM fmr_issue_lines fil JOIN fmr_requests f ON f.id=fil.fmr_id WHERE f.project_id=@pid;
 DELETE fl  FROM fmr_lines fl       JOIN fmr_requests f ON f.id=fl.fmr_id  WHERE f.project_id=@pid;  -- clears package_id refs first
 DELETE fp  FROM fmr_packages fp    JOIN fmr_requests f ON f.id=fp.fmr_id  WHERE f.project_id=@pid;
+DELETE pk  FROM fmr_pickups pk     JOIN fmr_requests f ON f.id=pk.fmr_id  WHERE f.project_id=@pid;  -- PoC records
 DELETE FROM fmr_requests WHERE project_id=@pid;
 
 -- Warehouse (transfers, stock, receipts) — stock is FK-referenced by fmr_issue_lines (deleted above)
@@ -124,11 +125,13 @@ DELETE FROM delegated_permissions   WHERE granted_to IN (SELECT id FROM users WH
 -- Canonical checkpoints (sealed by canonical users / NULL) are left untouched.
 DELETE c FROM audit_checkpoint c JOIN users u ON u.id=c.sealed_by WHERE u.email LIKE '%@zzflowtest.example';
 
--- Project row + global ZZ-marked records (users / suppliers / warehouses)
-DELETE FROM projects   WHERE id=@pid;
+-- Global ZZ-marked records, THEN the project row last (warehouses.project_id FKs
+-- projects, so warehouses must go before the project they belong to).
 DELETE FROM users      WHERE email LIKE '%@zzflowtest.example';
+DELETE sa FROM supplier_addresses sa JOIN suppliers s ON s.id=sa.supplier_id WHERE s.code LIKE 'ZZF-%';
 DELETE FROM suppliers  WHERE code  LIKE 'ZZF-%';
 DELETE FROM warehouses WHERE code  LIKE 'ZZF-%';
+DELETE FROM projects   WHERE id=@pid;
 
 -- ─── RESTORE APPEND-ONLY ENFORCEMENT (byte-identical to audit_chain_migrate.cjs c4) ──
 -- Single-statement SIGNAL triggers (no BEGIN/END, no internal ';') so no DELIMITER needed.

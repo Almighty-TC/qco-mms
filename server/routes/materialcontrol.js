@@ -4,7 +4,21 @@
 const express = require('express')
 const router  = express.Router()
 const db      = require('../db')
+const path    = require('path')
+const fs      = require('fs')
+const multer  = require('multer')
 const { authenticateToken } = require('../middleware/auth')
+
+// PoC signature/photo files land in uploads/fmr-poc (10 MB cap).
+const pocDir = path.join(__dirname, '../uploads/fmr-poc')
+fs.mkdirSync(pocDir, { recursive: true })
+const pocUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_q, _f, cb) => cb(null, pocDir),
+    filename: (_q, file, cb) => cb(null, `poc_${Date.now()}_${Math.round(Math.random() * 1e6)}${path.extname(file.originalname) || ''}`),
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 },
+})
 
 router.use(authenticateToken)
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
@@ -61,9 +75,9 @@ router.get('/:projectId/receipting', rejectExternal, async (req, res) => {
     const pid = Number(req.params.projectId)
     const { tab, search, destination } = req.query
 
-    // Status mapping by tab
-    // 'partially_received' SCNs stay receivable (a remainder is still due),
-    // so they appear alongside 'arrived' in the receipting queue.
+    // Status mapping by tab. ('partially_received' is LEGACY — new receipts always
+    // close an SCN as 'received'; it's still listed here only so any pre-existing
+    // partially_received rows remain visible/receivable.)
     const tabStatus = {
       arrived:    ['arrived', 'partially_received'],
       in_transit: ['in-transit', 'in_transit', 'pending'],
@@ -321,19 +335,11 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
       }
     }
 
-    // ── Phase 4: decide OPEN vs CLOSED from received-to-date vs ordered ──
-    // Fully received = every PO line's SUM(receipt_lines.received_qty) >= ordered qty.
-    // Otherwise the SCN stays open as 'partially_received' so the balance can be
-    // received later. (Legacy package path has no PO lines → treat as 'received'.)
-    let newStatus = 'received'
-    if (scn.po_id) {
-      const [[{ open_lines }]] = await db.query(
-        `SELECT COUNT(*) AS open_lines FROM po_lines pl
-         WHERE pl.po_id = ?
-           AND pl.qty > COALESCE((SELECT SUM(rl.received_qty) FROM receipt_lines rl WHERE rl.po_line_id = pl.id), 0)`,
-        [scn.po_id])
-      newStatus = Number(open_lines) > 0 ? 'partially_received' : 'received'
-    }
+    // ── An SCN is ONE physical shipment → completing its receipt = delivered ──
+    // It is never "partially delivered": any outstanding PO-line balance is a
+    // PO-line concern (tracked via received_to_date) and arrives on a NEW SCN.
+    // So the SCN closes as 'received' here regardless of the PO line's total.
+    const newStatus = 'received'
     await db.query('UPDATE shipment_control_notes SET status=? WHERE id=?', [newStatus, scnId])
 
     await writeAudit(userId, 'receipt_complete', 'scn', scnId,
@@ -516,11 +522,16 @@ router.post('/:projectId/stock/:itemId/resolve', rejectExternal, async (req, res
 router.get('/:projectId/fmr', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
-    const { search, status, wbs_scope, critical_only, pickup_window } = req.query
+    const { search, status, wbs_scope, critical_only, pickup_window, view } = req.query
 
     let conditions = ['f.project_id = ?']
     let params = [pid]
     if (status && status !== 'all') { conditions.push('f.status = ?'); params.push(status) }
+    // ── Register view ── active (default) hides completed; records = picked-up only.
+    // partial_issued is terminal: once part is released the FMR is done and a NEW FMR
+    // is raised for the balance — so it lives in Records, never Active.
+    if (view === 'records')      conditions.push("f.status IN ('issued','partial_issued')")
+    else if (view !== 'all')     conditions.push("f.status NOT IN ('issued','partial_issued','rejected','cancelled')") // active default
     if (critical_only === 'true') { conditions.push('f.is_critical_path = 1') }
     if (wbs_scope) {
       const scopes = wbs_scope.split(',').map(s => s.trim())
@@ -585,7 +596,9 @@ router.get('/:projectId/fmr', async (req, res) => {
          SUM(CASE WHEN status='partial_issued' THEN 1 ELSE 0 END) AS partial_issued,
          SUM(CASE WHEN status='issued' THEN 1 ELSE 0 END) AS issued,
          SUM(CASE WHEN status IN ('issued') AND DATE(updated_at)=CURDATE() THEN 1 ELSE 0 END) AS issued_today,
-         SUM(CASE WHEN required_date < CURDATE() AND status NOT IN ('issued','rejected','cancelled') THEN 1 ELSE 0 END) AS overdue
+         SUM(CASE WHEN status NOT IN ('issued','partial_issued','rejected','cancelled') THEN 1 ELSE 0 END) AS active_count,
+         SUM(CASE WHEN status IN ('issued','partial_issued') THEN 1 ELSE 0 END) AS records_count,
+         SUM(CASE WHEN required_date < CURDATE() AND status NOT IN ('issued','partial_issued','rejected','cancelled') THEN 1 ELSE 0 END) AS overdue
        FROM fmr_requests WHERE project_id = ?`,
       [pid]
     )
@@ -764,7 +777,14 @@ router.get('/:projectId/fmr/:fmrId/detail', async (req, res) => {
               p.is_dangerous_goods, p.dg_class, p.dg_un_number, p.marks_numbers
        FROM fmr_packages p LEFT JOIN package_types pt ON pt.id=p.package_type_id
        WHERE p.fmr_id=? ORDER BY p.id`, [fmrId])
-    res.json({ fmr, lines, packages })
+    // Proof of Collection — one row per pickup event (who collected, when, signature).
+    const [pickups] = await db.query(
+      `SELECT pk.id, pk.collected_by_name, pk.collected_by_company, pk.qty_issued, pk.notes,
+              pk.signature_file, pk.signature_mime, pk.picked_up_at, pk.issued_by,
+              u.full_name AS issued_by_name
+       FROM fmr_pickups pk LEFT JOIN users u ON u.id=pk.issued_by
+       WHERE pk.fmr_id=? ORDER BY pk.picked_up_at, pk.id`, [fmrId])
+    res.json({ fmr, lines, packages, pickups })
   } catch (e) {
     console.error('[mc:fmr-detail]', e.message)
     res.status(500).json({ error: e.message })
@@ -1016,6 +1036,11 @@ router.post('/:projectId/fmr/:fmrId/issue', async (req, res) => {
   // [{stock_id, qty}, ...] }. A line WITH an allocation consumes exactly those
   // holdings (validated); a line WITHOUT falls back to FIFO (P4a-i/P4b-i unchanged).
   const allocations = (req.body && typeof req.body.allocations === 'object' && req.body.allocations) || {}
+  // ── Proof of Collection — who physically collects the material (required) ──
+  const pocName    = String(req.body?.collected_by_name || '').trim()
+  const pocCompany = String(req.body?.collected_by_company || '').trim() || null
+  const pocNotes   = String(req.body?.pickup_notes || '').trim() || null
+  if (!pocName) return res.status(422).json({ error: 'Proof of Collection: collected-by name is required to issue' })
   // Guard violations throw with .http=422 → caught below, whole txn rolled back.
   const bad = (msg) => { throw Object.assign(new Error(msg), { http: 422 }) }
 
@@ -1117,19 +1142,62 @@ router.post('/:projectId/fmr/:fmrId/issue', async (req, res) => {
     const [[iq]] = await conn.query('SELECT COALESCE(SUM(qty_issued),0) AS q FROM fmr_lines WHERE fmr_id=?', [fmrId])
     await conn.query('UPDATE fmr_requests SET status=?, qty_issued=?, updated_at=NOW() WHERE id=?', [newStatus, iq.q, fmrId])
 
+    // Proof of Collection — one pickup record per issue event (signature/photo attached after).
+    let pickupId = null
+    if (totalIssued > 0) {
+      const [pr] = await conn.query(
+        `INSERT INTO fmr_pickups (fmr_id, collected_by_name, collected_by_company, qty_issued, notes, picked_up_at, issued_by)
+         VALUES (?,?,?,?,?,NOW(),?)`, [fmrId, pocName, pocCompany, totalIssued, pocNotes, userId])
+      pickupId = pr.insertId
+    }
+
     await conn.commit()
     await writeAudit(userId, 'fmr_issue', 'fmr', fmrId,
-      { status: fmr.status }, { status: newStatus, total_issued: totalIssued, short: anyShort },
+      { status: fmr.status }, { status: newStatus, total_issued: totalIssued, short: anyShort, collected_by: pocName },
       `/mc/${pid}/fmr/${fmrId}/issue`, Number(req.params.projectId) || null)
 
     const [[updated]] = await db.query('SELECT * FROM fmr_requests WHERE id=?', [fmrId])
-    res.json({ success: true, total_issued: totalIssued, short: anyShort, header_status: newStatus, fmr: updated })
+    res.json({ success: true, total_issued: totalIssued, short: anyShort, header_status: newStatus, fmr: updated, pickup_id: pickupId })
   } catch (e) {
     await conn.rollback()   // any guard violation rolls back the WHOLE issue — zero partial mutation
     console.error('[mc:fmr-issue]', e.message)
     res.status(e.http || 500).json({ error: e.message })
   } finally {
     conn.release()
+  }
+})
+
+// ─── PoC SIGNATURE / PHOTO UPLOAD ─────────────────────────────
+// Attach a signature or photo to a pickup event (multipart, field 'file').
+// Two-step (issue → upload) so the issue txn stays JSON/atomic.
+router.post('/:projectId/fmr/pickup/:pickupId/signature', pocUpload.single('file'), async (req, res) => {
+  try {
+    const pickupId = Number(req.params.pickupId)
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+    const [[pk]] = await db.query('SELECT id FROM fmr_pickups WHERE id=?', [pickupId])
+    if (!pk) { fs.unlink(req.file.path, () => {}); return res.status(404).json({ error: 'Pickup not found' }) }
+    await db.query('UPDATE fmr_pickups SET signature_file=?, signature_mime=? WHERE id=?',
+      [path.basename(req.file.path), req.file.mimetype, pickupId])
+    res.json({ success: true, signature_file: path.basename(req.file.path) })
+  } catch (e) {
+    if (req.file) fs.unlink(req.file.path, () => {})
+    console.error('[mc:fmr-poc-upload]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// GET /api/mc/:projectId/fmr/pickup/:pickupId/signature — stream the PoC file.
+router.get('/:projectId/fmr/pickup/:pickupId/signature', async (req, res) => {
+  try {
+    const [[pk]] = await db.query('SELECT signature_file, signature_mime FROM fmr_pickups WHERE id=?', [Number(req.params.pickupId)])
+    if (!pk || !pk.signature_file) return res.status(404).json({ error: 'No signature on file' })
+    const fp = path.join(pocDir, pk.signature_file)
+    if (!fs.existsSync(fp)) return res.status(404).json({ error: 'File missing' })
+    if (pk.signature_mime) res.type(pk.signature_mime)
+    res.sendFile(fp)
+  } catch (e) {
+    console.error('[mc:fmr-poc-get]', e.message)
+    res.status(500).json({ error: e.message })
   }
 })
 
@@ -1395,7 +1463,8 @@ router.post('/:projectId/transfers/:transferId/approve', async (req, res) => {
 // GET /api/mc/:projectId/warehouses — list available warehouses
 router.get('/:projectId/warehouses', async (req, res) => {
   try {
-    const [whs] = await db.query('SELECT id, name, code, type, city FROM warehouses WHERE status=? ORDER BY name', ['active'])
+    // Project-scoped: only warehouses this project owns (warehouses.project_id).
+    const [whs] = await db.query('SELECT id, name, code, type, city FROM warehouses WHERE status=? AND project_id=? ORDER BY name', ['active', Number(req.params.projectId)])
     res.json(whs)
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
