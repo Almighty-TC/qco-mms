@@ -35,6 +35,7 @@ const poDocStorage = multer.diskStorage({
   },
 })
 const { fileFilter } = require('../utils/upload')
+const { fileNotEmpty } = require('../utils/validate')
 const uploadPoDoc = multer({
   storage: poDocStorage,
   limits:  { fileSize: 50 * 1024 * 1024 },   // 50 MB
@@ -866,7 +867,7 @@ router.get('/pos/:id/documents/:docId/download', async (req, res) => {
 router.post('/:projectId/pos/bulk-upload', uploadBulk.single('file'), async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+    { const fe = fileNotEmpty(req.file); if (fe) return res.status(400).json({ error: fe }) }
 
     const ExcelJS = require('exceljs')
     const rows = []
@@ -901,6 +902,8 @@ router.post('/:projectId/pos/bulk-upload', uploadBulk.single('file'), async (req
         rows.push(obj)
       }
     }
+
+    if (!rows.length) return res.status(400).json({ error: 'The file has a header row but no data rows.' })
 
     // ── Map flexible column names ──────────────────────────────────────────────
     const FIELD_MAP = {

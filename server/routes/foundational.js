@@ -7,6 +7,7 @@ const { dbError } = require('../utils/dbError')
 const { authenticateToken } = require('../middleware/auth')
 const multer  = require('multer')
 const { fileFilter } = require('../utils/upload')
+const { parseImportSheet } = require('../utils/validate')
 const path    = require('path')
 const fs      = require('fs')
 const XLSX    = require('xlsx')
@@ -454,19 +455,13 @@ router.get('/:projectId/wbs/template', async (req, res) => {
 const uploadWBS = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 }, fileFilter: fileFilter('spreadsheet') })
 router.post('/:projectId/wbs/validate', uploadWBS.single('file'), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'No file provided' })
-    const wb   = XLSX.read(req.file.buffer, { type: 'buffer' })
-    const ws   = wb.Sheets[wb.SheetNames[0]]
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
-    if (rows.length < 2) return res.status(400).json({ error: 'File appears empty' })
-
-    const headers = rows[0].map(h => String(h).toLowerCase().trim())
+    const parsed = parseImportSheet(req.file, ['code', 'description'])
+    if (parsed.error) return res.status(400).json({ error: parsed.error })
+    const { headers, dataRows } = parsed
     const codeIdx = headers.findIndex(h => h === 'code')
     const descIdx = headers.findIndex(h => h === 'description')
     const parentIdx = headers.findIndex(h => h === 'parent_string' || h === 'parent_id')
     const rosIdx  = headers.findIndex(h => h === 'ros')
-
-    const dataRows = rows.slice(1).filter(r => r.some(c => c !== ''))
     const seenCodes = new Set()
     const results = []
 
@@ -523,17 +518,13 @@ router.post('/:projectId/wbs/validate', uploadWBS.single('file'), async (req, re
 router.post('/:projectId/wbs/import', uploadWBS.single('file'), async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
-    if (!req.file) return res.status(400).json({ error: 'No file provided' })
-    const wb   = XLSX.read(req.file.buffer, { type: 'buffer' })
-    const ws   = wb.Sheets[wb.SheetNames[0]]
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
-    const headers = rows[0].map(h => String(h).toLowerCase().trim())
+    const parsed = parseImportSheet(req.file, ['code', 'description'])
+    if (parsed.error) return res.status(400).json({ error: parsed.error })
+    const { headers, dataRows } = parsed
     const codeIdx  = headers.findIndex(h => h === 'code')
     const descIdx  = headers.findIndex(h => h === 'description')
     const parentIdx = headers.findIndex(h => h === 'parent_string')
     const rosIdx   = headers.findIndex(h => h === 'ros')
-
-    const dataRows = rows.slice(1).filter(r => r.some(c => c !== ''))
     const codeToId = {}
     let imported = 0
 
@@ -1170,15 +1161,9 @@ const uploadCommodity = multer({ storage: multer.memoryStorage(), limits: { file
 router.post('/:projectId/commodities/validate', uploadCommodity.single('file'), async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
-    if (!req.file) return res.status(400).json({ error: 'No file provided' })
-    const wb   = XLSX.read(req.file.buffer, { type: 'buffer' })
-    const ws   = wb.Sheets[wb.SheetNames[0]]
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
-    if (rows.length < 2) return res.status(400).json({ error: 'File appears empty' })
-
-    // Normalise header names
-    const headers = rows[0].map(h => String(h).toLowerCase().trim())
-    const col = name => headers.findIndex(h => h === name)
+    const parsed = parseImportSheet(req.file, ['commodity code'])
+    if (parsed.error) return res.status(400).json({ error: parsed.error })
+    const { headers, col, rows } = parsed
     const codeIdx = col('commodity code')
     const wbsIdx  = col('wbs code')
     const nameIdx = col('name/description') >= 0 ? col('name/description') : col('description')
@@ -1233,12 +1218,9 @@ router.post('/:projectId/commodities/validate', uploadCommodity.single('file'), 
 router.post('/:projectId/commodities/import', uploadCommodity.single('file'), async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
-    if (!req.file) return res.status(400).json({ error: 'No file provided' })
-    const wb   = XLSX.read(req.file.buffer, { type: 'buffer' })
-    const ws   = wb.Sheets[wb.SheetNames[0]]
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
-    const headers = rows[0].map(h => String(h).toLowerCase().trim())
-    const col = name => headers.findIndex(h => h === name)
+    const parsed = parseImportSheet(req.file, ['commodity code'])
+    if (parsed.error) return res.status(400).json({ error: parsed.error })
+    const { headers, col, rows } = parsed
     const codeIdx = col('commodity code')
     const wbsIdx  = col('wbs code')
     const nameIdx = col('name/description') >= 0 ? col('name/description') : col('description')
@@ -1403,14 +1385,9 @@ const uploadEquipment = multer({ storage: multer.memoryStorage(), limits: { file
 router.post('/:projectId/equipment/validate', uploadEquipment.single('file'), async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
-    if (!req.file) return res.status(400).json({ error: 'No file provided' })
-    const wb   = XLSX.read(req.file.buffer, { type: 'buffer' })
-    const ws   = wb.Sheets[wb.SheetNames[0]]
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
-    if (rows.length < 2) return res.status(400).json({ error: 'File appears empty' })
-
-    const headers = rows[0].map(h => String(h).toLowerCase().trim())
-    const col = name => headers.findIndex(h => h === name)
+    const parsed = parseImportSheet(req.file, ['equipment tag'])
+    if (parsed.error) return res.status(400).json({ error: parsed.error })
+    const { headers, col, rows } = parsed
     const tagIdx  = col('equipment tag')
     const descIdx = col('description')
     const wbsIdx  = col('wbs code')
@@ -1464,12 +1441,9 @@ router.post('/:projectId/equipment/validate', uploadEquipment.single('file'), as
 router.post('/:projectId/equipment/import', uploadEquipment.single('file'), async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
-    if (!req.file) return res.status(400).json({ error: 'No file provided' })
-    const wb   = XLSX.read(req.file.buffer, { type: 'buffer' })
-    const ws   = wb.Sheets[wb.SheetNames[0]]
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
-    const headers = rows[0].map(h => String(h).toLowerCase().trim())
-    const col = name => headers.findIndex(h => h === name)
+    const parsed = parseImportSheet(req.file, ['equipment tag'])
+    if (parsed.error) return res.status(400).json({ error: parsed.error })
+    const { headers, col, rows } = parsed
     const tagIdx   = col('equipment tag')
     const typeIdx  = col('equipment type')
     const wbsIdx   = col('wbs code')
