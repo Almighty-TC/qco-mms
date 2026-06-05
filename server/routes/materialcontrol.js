@@ -411,35 +411,36 @@ router.get('/:projectId/stock', async (req, res) => {
       ? `${SAFE_SORT[req.query.sort_col]} ${orderDir}, s.id ${orderDir}`
       : `w.name ${orderDir}, s.location_code ${orderDir}, s.id ${orderDir}`
 
-    // total for the filtered set (conditions are all on s.* — no join needed)
-    const [[{ total }]] = await db.query(
-      `SELECT COUNT(*) AS total FROM warehouse_stock s WHERE ${whereSql}`, params
-    )
-
-    const [stockRaw] = await db.query(
-      `SELECT s.*, w.name AS warehouse_name, w.code AS warehouse_code
-       FROM warehouse_stock s
-       JOIN warehouses w ON s.warehouse_id = w.id
-       WHERE ${whereSql}
-       ORDER BY ${orderClause}
-       LIMIT ? OFFSET ?`,
-      [...params, limit, offset]
-    )
+    // total / rows / stat-cards are independent — run them concurrently.
+    const [
+      [[{ total }]],
+      [stockRaw],
+      [[totals]],
+    ] = await Promise.all([
+      // total for the filtered set (conditions are all on s.* — no join needed)
+      db.query(`SELECT COUNT(*) AS total FROM warehouse_stock s WHERE ${whereSql}`, params),
+      db.query(
+        `SELECT s.*, w.name AS warehouse_name, w.code AS warehouse_code
+         FROM warehouse_stock s
+         JOIN warehouses w ON s.warehouse_id = w.id
+         WHERE ${whereSql}
+         ORDER BY ${orderClause}
+         LIMIT ? OFFSET ?`,
+        [...params, limit, offset]),
+      // Whole-project stat cards (independent of filter/page).
+      db.query(
+        `SELECT COUNT(*) AS total_items,
+                COUNT(DISTINCT s.warehouse_id) AS warehouse_count,
+                SUM(CASE WHEN s.trace_hold=1 THEN 1 ELSE 0 END) AS trace_hold_count,
+                SUM(CASE WHEN s.condition_status != 'good' THEN 1 ELSE 0 END) AS condition_issues
+         FROM warehouse_stock s WHERE s.project_id = ?`,
+        [pid]),
+    ])
 
     // Subcontractors: strip grid location and hold reason
     const stock = stockRaw.map(row => isSubcontractor
       ? { ...row, location_code: null, hold_reason: undefined }
       : row
-    )
-
-    // Whole-project stat cards (independent of filter/page).
-    const [[totals]] = await db.query(
-      `SELECT COUNT(*) AS total_items,
-              COUNT(DISTINCT s.warehouse_id) AS warehouse_count,
-              SUM(CASE WHEN s.trace_hold=1 THEN 1 ELSE 0 END) AS trace_hold_count,
-              SUM(CASE WHEN s.condition_status != 'good' THEN 1 ELSE 0 END) AS condition_issues
-       FROM warehouse_stock s WHERE s.project_id = ?`,
-      [pid]
     )
 
     res.json({ data: stock, total, page, limit, totals, wbs_scopes: subWbsCodes })
@@ -568,11 +569,14 @@ router.get('/:projectId/fmr', async (req, res) => {
       ? `${SAFE_SORT[req.query.sort_col]} ${orderDir}, f.id ${orderDir}`
       : `CASE WHEN f.required_date < CURDATE() THEN 0 ELSE 1 END, f.required_date ASC, f.id ASC`
 
-    const [[{ total }]] = await db.query(
-      `SELECT COUNT(*) AS total FROM fmr_requests f WHERE ${whereSql}`, params
-    )
-
-    const [fmrs] = await db.query(
+    // total / rows / counts are independent — run them concurrently.
+    const [
+      [[{ total }]],
+      [fmrs],
+      [[counts]],
+    ] = await Promise.all([
+      db.query(`SELECT COUNT(*) AS total FROM fmr_requests f WHERE ${whereSql}`, params),
+      db.query(
       `SELECT f.*,
          w.code AS warehouse_code, w.name AS warehouse_name,
          (SELECT COUNT(*) FROM fmr_lines WHERE fmr_id=f.id) AS line_count,
@@ -584,11 +588,8 @@ router.get('/:projectId/fmr', async (req, res) => {
        WHERE ${whereSql}
        ORDER BY ${orderClause}
        LIMIT ? OFFSET ?`,
-      [...params, limit, offset]
-    )
-
-    // Counts
-    const [[counts]] = await db.query(
+      [...params, limit, offset]),
+      db.query(
       `SELECT
          COUNT(*) AS total,
          SUM(CASE WHEN status='pending_approval' THEN 1 ELSE 0 END) AS pending_approval,
@@ -600,8 +601,8 @@ router.get('/:projectId/fmr', async (req, res) => {
          SUM(CASE WHEN status IN ('issued','partial_issued') THEN 1 ELSE 0 END) AS records_count,
          SUM(CASE WHEN required_date < CURDATE() AND status NOT IN ('issued','partial_issued','rejected','cancelled') THEN 1 ELSE 0 END) AS overdue
        FROM fmr_requests WHERE project_id = ?`,
-      [pid]
-    )
+      [pid]),
+    ])
 
     res.json({ data: fmrs, total, page, limit, counts })
   } catch (e) {

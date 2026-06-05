@@ -381,8 +381,13 @@ router.get('/:projectId/pos', async (req, res) => {
     const orderDir = sort_dir?.toLowerCase() === 'asc' ? 'ASC' : 'DESC'
     const where    = filters.join(' AND ')
 
-    // COUNT: DISTINCT because WHERE on l.cdd can produce multiple rows per PO
-    const [countRows] = await db.query(`
+    // COUNT + rows are independent — run concurrently.
+    const [
+      [countRows],
+      [rows],
+    ] = await Promise.all([
+      // COUNT: DISTINCT because WHERE on l.cdd can produce multiple rows per PO
+      db.query(`
       SELECT COUNT(DISTINCT po.id) AS total
       FROM purchase_orders po
       LEFT JOIN suppliers s   ON s.id   = po.supplier_id
@@ -391,9 +396,8 @@ router.get('/:projectId/pos', async (req, res) => {
       LEFT JOIN wbs_nodes w   ON w.code = po.wbs_code AND w.project_id = po.project_id
       LEFT JOIN po_lines  l   ON l.po_id = po.id
       WHERE ${where}
-    `, params)
-
-    const [rows] = await db.query(`
+    `, params),
+      db.query(`
       SELECT
         po.id, po.po_number, po.po_name, po.description,
         po.vendor_name, po.supplier_id, po.currency, po.value,
@@ -427,7 +431,8 @@ router.get('/:projectId/pos', async (req, res) => {
         po.milestone_eta_date, po.milestone_ros_date
       ORDER BY ${orderBy} ${orderDir}, po.id ${orderDir}
       LIMIT ? OFFSET ?
-    `, [...params, limit, offset])
+    `, [...params, limit, offset]),
+    ])
 
     // ── FIX 1: milestone_dots removed — milestones belong in Expediting ─────────
     // Milestone dates still included so the drawer can render the milestone section.
