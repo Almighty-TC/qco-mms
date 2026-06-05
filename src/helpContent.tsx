@@ -875,6 +875,17 @@ export const RECEIPTING_HELP: HelpSection[] = [
         receipted, never "partially delivered". Any outstanding PO balance arrives on a new SCN.</>)}
     </>,
   },
+  {
+    title: 'Heat numbers & split across heats',
+    content: <>
+      {P(<>One line can arrive against several heat/lot certificates. On the {B('Physical check')} step use
+        {B(' ⊕ Split across heats')} to break the line into allocations — e.g. 100 pipes as 5 × 20, each tied to
+        its own heat number. The allocation quantities must add up to the line total.</>)}
+      {P(<>Each allocation can also be given its {B('own grid location')}, so different heats can land in
+        different bins. Leave it blank to use the receipt's default location from the {B('Assign location')} step.</>)}
+      {P(<>Every allocation becomes its own warehouse-stock row (heat + bin preserved) for full traceability.</>)}
+    </>,
+  },
 ]
 
 // ═══════════════════════════════════════════════════════════════

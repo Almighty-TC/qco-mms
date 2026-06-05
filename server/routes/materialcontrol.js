@@ -299,13 +299,16 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
         const descr      = ln.description || scn.notes || 'Received goods'
         const wbs        = ln.wbs_code || null
 
-        // Good qty → available at its normal grid location. Heat (P2a) travels onto it.
+        // Good qty → available at its grid location. A split heat allocation may
+        // carry its OWN bin (ln.location_code); blank falls back to the receipt
+        // default. Heat (P2a) travels onto the holding.
+        const lineLoc = (ln.location_code || '').trim() || location_code
         if (goodQty > 0) {
           await db.query(
             `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by)
              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,CURDATE(),?)`,
             [pid, whId, scnId, ln.po_line_id || null, itemCode, descr, wbs,
-             goodQty, goodQty, uom, location_code, (damagedQty > 0 ? 'good' : condition), scn.vendor_name, heatNo, userId])
+             goodQty, goodQty, uom, lineLoc, (damagedQty > 0 ? 'good' : condition), scn.vendor_name, heatNo, userId])
           stockCreated++
         }
 

@@ -35,6 +35,9 @@ type WizardStep = 1 | 2 | 3 | 4 | 5
 interface SubLine {
   received_qty: number; damaged_qty: number
   heat_number: string; heat_off_list: boolean; heat_off_list_reason: string
+  // Each heat allocation may land in its own warehouse bin. Blank → falls back
+  // to the receipt's default grid location (step 3).
+  grid_location?: string
 }
 
 interface SCNRow {
@@ -392,6 +395,8 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
             heat_number: (s.heat_number || '').trim() || null,
             heat_off_list: s.heat_off_list ? 1 : 0,
             heat_off_list_reason: s.heat_off_list ? ((s.heat_off_list_reason || '').trim() || null) : null,
+            // Per-heat bin — blank falls back to the receipt default location server-side.
+            location_code: (s.grid_location || '').trim() || null,
           }))
         }
         // 1:1 (P2a) path — unchanged.
@@ -776,7 +781,15 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                         return (
                           <tr key={`${l.id}-sub-${i}`} style={{ background: dark ? '#0f1626' : '#fafbff', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
                             <td style={{ padding: '6px 12px' }} />
-                            <td colSpan={4} style={{ padding: '6px 12px 6px 28px', color: sub, fontSize: 11 }}>↳ heat allocation {i + 1}</td>
+                            <td colSpan={4} style={{ padding: '6px 12px 6px 28px', color: sub, fontSize: 11 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                <span style={{ whiteSpace: 'nowrap' }}>↳ heat allocation {i + 1}</span>
+                                <input value={s.grid_location || ''} onChange={e => updateSub(l.id, i, 'grid_location', e.target.value)}
+                                  placeholder="Grid location (optional)"
+                                  title="Bin for THIS heat allocation — blank uses the receipt's default location (step 3)"
+                                  style={{ ...inputSt, width: 180, fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }} />
+                              </div>
+                            </td>
                             <td style={{ padding: '6px 12px' }}>
                               <input type="number" min={0} value={s.received_qty}
                                 onChange={e => updateSub(l.id, i, 'received_qty', Number(e.target.value) || 0)}
@@ -885,9 +898,9 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
         {/* ── STEP 3 ── Assign location + Back button ── */}
         {step === 3 && (
           <div>
-            <p style={{ color: sub, fontSize: 13, marginBottom: 16 }}>Assign a warehouse grid location for the received items.</p>
+            <p style={{ color: sub, fontSize: 13, marginBottom: 16 }}>Assign the default warehouse grid location for this receipt. Any heat allocation you gave its own bin in the physical-check step keeps that location; everything else lands here.</p>
             <div style={{ background: cardBg, border: bd, borderRadius: 8, padding: 20 }}>
-              <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 8, fontWeight: 600 }}>Grid location</label>
+              <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 8, fontWeight: 600 }}>Default grid location</label>
               <input value={location} onChange={e => setLocation(e.target.value)}
                 placeholder="e.g. WH-B · B-02-01"
                 style={{ ...inputSt, fontSize: 14 }} />
