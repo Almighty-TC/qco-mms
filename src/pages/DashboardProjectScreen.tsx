@@ -26,7 +26,7 @@ interface DashData {
   pipeline: { demand: number | null; po_raised: number | null; expedited: number | null; received: number | null }
 }
 
-const MODULE_LABEL: Record<string, string> = { procurement: 'Procurement', expediting: 'Expediting', logistics: 'Logistics', materials: 'Mat. Control', traceability: 'Traceability' }
+const MODULE_LABEL: Record<string, string> = { procurement: 'Procurement', expediting: 'Expediting', logistics: 'Logistics', materials: 'Materials Control', traceability: 'Traceability' }
 const WEIGHT_KEYS = ['procurement', 'expediting', 'logistics', 'materials', 'traceability'] as const
 // mirrors dashboard.can_edit from the C1 matrix — the backend remains the enforcer.
 const CAN_EDIT_ROLES = new Set(['admin', 'project_manager', 'project_director'])
@@ -76,7 +76,10 @@ function WeightsModal({ projectId, dark, initial, onClose, onSaved, addToast }: 
   return createPortal(
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
       <div onClick={e => e.stopPropagation()} style={{ background: cardBg, borderRadius: 12, padding: 26, width: 480, maxWidth: '92vw', border: bd, boxShadow: '0 16px 48px rgba(0,0,0,0.4)' }}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: col, marginBottom: 4 }}>Health score weights</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+          <span style={{ fontSize: 16, fontWeight: 700, color: col }}>Health score weights</span>
+          <button onClick={onClose} aria-label="Close" style={{ background: 'none', border: 'none', fontSize: 20, color: sub, cursor: 'pointer', lineHeight: 1, padding: 2 }}>×</button>
+        </div>
         <div style={{ fontSize: 12, color: sub, marginBottom: 18 }}>Weight each area's contribution to the project score. Must total 100%.</div>
         {WEIGHT_KEYS.map(k => (
           <div key={k} style={{ marginBottom: 14 }}>
@@ -213,7 +216,7 @@ function DashboardInner({ dark, projectId, projectName, userRole, onBack, onNavi
   }
 
   return (
-    <div style={{ paddingTop: 20, fontFamily: 'IBM Plex Sans, sans-serif', maxWidth: 1100 }}>
+    <div style={{ paddingTop: 20, fontFamily: 'IBM Plex Sans, sans-serif', width: '100%' }}>
       {/* Breadcrumb */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16, fontSize: 12, color: sub, flexWrap: 'wrap' }}>
         <BackButton onFallback={onBack} dark={dark} />
@@ -287,7 +290,7 @@ function DashboardInner({ dark, projectId, projectName, userRole, onBack, onNavi
               <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
                 {data.health.modules.map(m => (
                   <div key={m.key} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{ width: 92, fontSize: 12, color: col, flexShrink: 0 }}>{MODULE_LABEL[m.key] || m.key}</div>
+                    <div style={{ width: 110, fontSize: 12, color: col, flexShrink: 0, whiteSpace: 'nowrap' }}>{MODULE_LABEL[m.key] || m.key}</div>
                     <div style={{ flex: 1, height: 12, borderRadius: 999, background: dark ? '#0f172a' : '#eef2f7', overflow: 'hidden' }}>
                       <div style={{ width: `${m.score}%`, height: '100%', background: RAG[m.rag], borderRadius: 999, transition: 'width .3s' }} />
                     </div>
