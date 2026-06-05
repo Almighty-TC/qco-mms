@@ -12,12 +12,14 @@ const { authenticateToken } = require('../middleware/auth')
 // PoC signature/photo files land in uploads/fmr-poc (10 MB cap).
 const pocDir = path.join(__dirname, '../uploads/fmr-poc')
 fs.mkdirSync(pocDir, { recursive: true })
+const { fileFilter } = require('../utils/upload')
 const pocUpload = multer({
   storage: multer.diskStorage({
     destination: (_q, _f, cb) => cb(null, pocDir),
     filename: (_q, file, cb) => cb(null, `poc_${Date.now()}_${Math.round(Math.random() * 1e6)}${path.extname(file.originalname) || ''}`),
   }),
   limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: fileFilter('image'),
 })
 
 router.use(authenticateToken)

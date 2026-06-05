@@ -33,15 +33,11 @@ const poDocStorage = multer.diskStorage({
     cb(null, `${ts}_${safe}`)
   },
 })
+const { fileFilter } = require('../utils/upload')
 const uploadPoDoc = multer({
   storage: poDocStorage,
   limits:  { fileSize: 50 * 1024 * 1024 },   // 50 MB
-  fileFilter: (req, file, cb) => {
-    const allowed = ['application/pdf', 'application/msword',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document']
-    if (allowed.includes(file.mimetype)) cb(null, true)
-    else cb(new Error('Only PDF, DOC, DOCX files are accepted for signed POs'))
-  },
+  fileFilter: fileFilter('document'),
 })
 
 // Bulk upload: accept CSV or XLSX
@@ -49,14 +45,7 @@ const bulkUploadStorage = multer.memoryStorage()   // buffer in memory — parse
 const uploadBulk = multer({
   storage: bulkUploadStorage,
   limits:  { fileSize: 10 * 1024 * 1024 },   // 10 MB
-  fileFilter: (req, file, cb) => {
-    const ok = file.mimetype === 'text/csv'
-      || file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      || file.originalname.endsWith('.csv')
-      || file.originalname.endsWith('.xlsx')
-    if (ok) cb(null, true)
-    else cb(new Error('Only CSV or XLSX files are accepted'))
-  },
+  fileFilter: fileFilter('spreadsheet'),
 })
 
 // ─── ALLOWED ROLES ────────────────────────────────────────────────────────────

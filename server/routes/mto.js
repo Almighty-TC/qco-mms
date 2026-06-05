@@ -22,17 +22,11 @@ router.use(require('../middleware/permissions').queueGate(/\/mto\/\d+$|\/mto\/\d
 
 // ─── FILE UPLOAD CONFIG ───────────────────────────────────────────────────────
 // New-revision files accepted in memory buffer — parsed then discarded.
+const { fileFilter } = require('../utils/upload')
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    const ok = file.mimetype === 'text/csv'
-      || file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      || file.originalname.endsWith('.csv')
-      || file.originalname.endsWith('.xlsx')
-    if (ok) cb(null, true)
-    else cb(new Error('Only CSV or XLSX files are accepted'))
-  },
+  fileFilter: fileFilter('spreadsheet'),
 })
 
 // ─── AUDIT HELPER ────────────────────────────────────────────────────────────
@@ -144,9 +138,18 @@ router.get('/:projectId', async (req, res) => {
 
 // ─── POST /:projectId — create a new MTO register ────────────────────────────
 router.post('/:projectId', async (req, res) => {
-  const { name, reference, current_revision, owner, description } = req.body
-  if (!name || !reference) return res.status(400).json({ error: 'name and reference are required' })
+  const name      = String(req.body.name ?? '').trim()
+  const reference = String(req.body.reference ?? '').trim()
+  const { current_revision, owner, description } = req.body
+  // ─── Basic input checks before accepting ──────────────────────
+  if (!name || !reference) return res.status(400).json({ error: 'Name and reference are required.' })
   try {
+    // Reject a duplicate MTO reference within the project (logical conflict).
+    const [[dup]] = await db.query(
+      'SELECT id FROM mto_registers WHERE project_id = ? AND reference = ?',
+      [req.params.projectId, reference])
+    if (dup) return res.status(409).json({ error: `An MTO with reference "${reference}" already exists in this project.` })
+
     const [result] = await db.query(
       `INSERT INTO mto_registers (project_id, name, reference, current_revision, owner, description, created_by)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -623,11 +626,22 @@ router.post('/:projectId/:mtoId/lines', async (req, res) => {
     )
     if (!mto) return res.status(404).json({ error: 'MTO not found' })
 
-    const { line_number, wbs_code, description, quantity, uom, ros_date,
+    const { wbs_code, quantity, uom, ros_date,
             inspection_class, vdrl_required, po_ref, status } = req.body
+    const line_number = String(req.body.line_number ?? '').trim()
+    const description = String(req.body.description ?? '').trim()
+    // ─── Basic input checks before accepting ──────────────────────
     if (!line_number || !description) {
-      return res.status(400).json({ error: 'line_number and description are required' })
+      return res.status(400).json({ error: 'Line number and description are required.' })
     }
+    if (quantity != null && quantity !== '' && (isNaN(Number(quantity)) || Number(quantity) < 0)) {
+      return res.status(400).json({ error: 'Quantity must be a non-negative number.' })
+    }
+    // Reject a duplicate line number within the current revision (logical conflict).
+    const [[dupLine]] = await db.query(
+      'SELECT id FROM mto_lines WHERE mto_id = ? AND revision = ? AND line_number = ? AND is_deleted = 0',
+      [mto.id, mto.current_revision, line_number])
+    if (dupLine) return res.status(409).json({ error: `Line number "${line_number}" already exists in revision ${mto.current_revision}.` })
 
     const [result] = await db.query(
       `INSERT INTO mto_lines

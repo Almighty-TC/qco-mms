@@ -6,6 +6,7 @@ const express = require('express')
 const router  = express.Router()
 const db      = require('../db')
 const { authenticateToken } = require('../middleware/auth')
+const { fileFilter } = require('../utils/upload')
 
 router.use(authenticateToken)
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
@@ -648,6 +649,7 @@ const uploadVdrlFile = require('multer')({
     filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]+/g, '_')}`),
   }),
   limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: fileFilter('document'),
 })
 router.post('/:projectId/vdrl/documents/:docId/file', uploadVdrlFile.single('file'), async (req, res) => {
   try {
@@ -1084,10 +1086,7 @@ router.get('/:projectId/vdrl/template', async (req, res) => {
 const uploadVDRL = require('multer')({
   storage: require('multer').memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    if (file.originalname.endsWith('.xlsx')) cb(null, true)
-    else cb(new Error('Only .xlsx files'))
-  },
+  fileFilter: fileFilter('spreadsheet'),
 })
 
 router.post('/:projectId/vdrl/upload', uploadVDRL.single('file'), async (req, res) => {

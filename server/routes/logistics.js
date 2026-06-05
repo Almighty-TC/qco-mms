@@ -110,7 +110,8 @@ const storage = multer.diskStorage({
   destination: uploadDir,
   filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`),
 })
-const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } })
+const { fileFilter } = require('../utils/upload')
+const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 }, fileFilter: fileFilter('document') })
 
 // ═══════════════════════════════════════════════════════════════
 // REGISTER

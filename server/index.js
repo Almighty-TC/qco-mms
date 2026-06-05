@@ -75,6 +75,25 @@ app.use('/api/dashboard', require('./routes/dashboard'))
 // Read gated to admin + oversight roles; QA sign-off (C2) writes to audit_review only.
 app.use('/api/audit', require('./routes/audit'))
 
+// ─── GLOBAL ERROR HANDLER ────────────────────────────────────
+// Turns upload failures into clean 400s: multer size-limit errors and our own
+// fileFilter rejections (err.isUploadError) — instead of a default 500/HTML.
+// Must be registered AFTER all routes. Anything else falls through to a 500.
+const multerLib = require('multer')
+app.use((err, req, res, next) => {
+  if (!err) return next()
+  if (res.headersSent) return next(err)
+  if (err instanceof multerLib.MulterError) {
+    const msg = err.code === 'LIMIT_FILE_SIZE'
+      ? 'File is too large for this upload.'
+      : `Upload error: ${err.message}`
+    return res.status(400).json({ error: msg })
+  }
+  if (err.isUploadError) return res.status(400).json({ error: err.message })
+  console.error('[unhandled]', err.stack || err.message)
+  return res.status(500).json({ error: 'Internal server error' })
+})
+
 // ─── START SERVER ───────────────────────────────────────────
 const PORT = process.env.PORT || 3001
 app.listen(PORT, () => {

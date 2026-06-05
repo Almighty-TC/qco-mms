@@ -26,7 +26,8 @@ const storage = multer.diskStorage({
   },
   filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9.\-]+/g, '_')}`),
 })
-const upload = multer({ storage, limits: { fileSize: 25 * 1024 * 1024 } })
+const { fileFilter } = require('../utils/upload')
+const upload = multer({ storage, limits: { fileSize: 25 * 1024 * 1024 }, fileFilter: fileFilter('document') })
 
 // ─── AUDIT HELPER ─────────────────────────────────────────────
 // Mirrors the writeAudit used across the other route files.

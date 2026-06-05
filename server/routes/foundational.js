@@ -5,6 +5,7 @@ const router  = express.Router()
 const db      = require('../db')
 const { authenticateToken } = require('../middleware/auth')
 const multer  = require('multer')
+const { fileFilter } = require('../utils/upload')
 const path    = require('path')
 const fs      = require('fs')
 const XLSX    = require('xlsx')
@@ -31,7 +32,7 @@ const certStorage = multer.diskStorage({
     cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`)
   },
 })
-const uploadCert = multer({ storage: certStorage, limits: { fileSize: 25 * 1024 * 1024 } })
+const uploadCert = multer({ storage: certStorage, limits: { fileSize: 25 * 1024 * 1024 }, fileFilter: fileFilter('document') })
 
 // ─── HELPER: audit ───────────────────────────────────────────────────────────
 // Writes an audit_log row. Fire-and-forget (NOT awaited) so an audit failure can
@@ -449,7 +450,7 @@ router.get('/:projectId/wbs/template', async (req, res) => {
 })
 
 // POST /api/foundational/:projectId/wbs/validate — validate upload before import
-const uploadWBS = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } })
+const uploadWBS = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 }, fileFilter: fileFilter('spreadsheet') })
 router.post('/:projectId/wbs/validate', uploadWBS.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file provided' })
@@ -1164,7 +1165,7 @@ router.get('/:projectId/certificates/:id/download', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 
 // POST /api/foundational/:projectId/commodities/validate — validate upload before import
-const uploadCommodity = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } })
+const uploadCommodity = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 }, fileFilter: fileFilter('spreadsheet') })
 router.post('/:projectId/commodities/validate', uploadCommodity.single('file'), async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
@@ -1397,7 +1398,7 @@ router.get('/:projectId/commodities/template', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 
 // POST /api/foundational/:projectId/equipment/validate — validate upload before import
-const uploadEquipment = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } })
+const uploadEquipment = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 }, fileFilter: fileFilter('spreadsheet') })
 router.post('/:projectId/equipment/validate', uploadEquipment.single('file'), async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
