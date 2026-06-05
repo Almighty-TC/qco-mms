@@ -507,9 +507,9 @@ const StockTakeModal = ({ dark, stock, onClose }: { dark: boolean; stock: StockI
             <div style={{ fontSize: 12, color: sub, marginTop: 2 }}>Cycle count or full count — variances generate adjustment proposals</div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            {/* Maximize / restore — grows the modal to near-full-screen and back */}
-            <button onClick={() => setMaximized(m => !m)} title={maximized ? 'Restore' : 'Maximize'}
-              style={{ background: 'none', border: 'none', fontSize: 16, color: sub, cursor: 'pointer' }}>{maximized ? '⤡' : '⤢'}</button>
+            {/* Expand / shrink — shared control, matches the other detail modals (keeps
+                the fixed-px maximize frame below; only the button is unified) */}
+            <ExpandBtn expanded={maximized} onToggle={() => setMaximized(m => !m)} color={sub} />
             <button onClick={onClose} title="Close" style={{ background: 'none', border: 'none', fontSize: 18, color: sub, cursor: 'pointer' }}>✕</button>
           </div>
         </div>
