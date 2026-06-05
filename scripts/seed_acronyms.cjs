@@ -5,6 +5,8 @@ const db = require('../server/db')
 const ROWS = [
   // [acronym, definition, module, notes]
   ['CDD',  'Contract Delivery Date',            'Procurement',      'Contractual date material is due — inherited onto SCNs from the PO line.'],
+  ['CRD',  'Cargo Ready Date',                  'Logistics',        'Date the goods are ready for collection at origin (shown on the SCN).'],
+  ['CCD',  'Cargo Collection Date',             'Logistics',        'Date the forwarder collects the cargo from origin (shown on the SCN).'],
   ['ETD',  'Estimated Time of Departure',       'Logistics',        'Planned date a shipment leaves origin.'],
   ['ETA',  'Estimated Time of Arrival',         'Logistics',        'Planned date a shipment arrives at destination.'],
   ['ATD',  'Actual Time of Departure',          'Logistics',        'Recorded date a shipment actually departed.'],
