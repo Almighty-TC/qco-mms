@@ -9,6 +9,7 @@ import axios from 'axios'
 import { HelpButton } from '../components/HelpDrawer'
 import { BackButton } from '../components/BackButton'
 import { Pager } from '../components/Pager'
+import { useResizableTable, ResetColumnsButton } from '../components/colResize'
 import { usePagedList } from '../hooks/usePagedList'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { ToastContainer } from '../components/Toast'
@@ -93,6 +94,7 @@ function MeetingRFIInner({ dark, projectId, projectName, userRole, userId, onBac
 
   const STATUSES = ['draft', 'open', 'assigned', 'answered', 'scheduled', 'held', 'actions_open', 'closed', 'cancelled']
   const sortArrow = (c: string) => sortCol === c ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''
+  const rt = useResizableTable('meeting_rfi', [110, 90, 240, 90, 140, 110, 110, 110], [80, 60, 120, 60, 100, 80, 90, 90])
   const thStyle = { padding: '8px 10px', borderBottom: bd, textAlign: 'left' as const, fontSize: 10,
     fontWeight: 700, color: sub, letterSpacing: '0.08em', textTransform: 'uppercase' as const, whiteSpace: 'nowrap' as const, cursor: 'pointer' as const }
   const td = { padding: '9px 10px', borderBottom: bd, fontSize: 13, color: col, verticalAlign: 'middle' as const }
@@ -145,21 +147,22 @@ function MeetingRFIInner({ dark, projectId, projectName, userRole, userId, onBac
           <input type="checkbox" checked={overdue} onChange={e => setOverdue(e.target.checked)} /> Overdue only
         </label>
         <input placeholder="Search ref / title / link…" value={search} onChange={e => setSearch(e.target.value)} style={{ ...inp, flex: 1, minWidth: 200 }} />
+        <ResetColumnsButton onClick={rt.resetWidths} dark={dark} />
       </div>
 
       {/* Table */}
       <div style={{ background: cardBg, border: bd, borderRadius: 10, overflow: 'hidden' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <table style={{ ...rt.tableStyle, borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ background: dark ? '#0f172a' : '#f4f7fb', position: 'sticky', top: 0, zIndex: 2 }}>
-              <th style={thStyle} onClick={() => toggleSort('ref')}>Ref{sortArrow('ref')}</th>
-              <th style={thStyle} onClick={() => toggleSort('record_type')}>Type{sortArrow('record_type')}</th>
-              <th style={thStyle} onClick={() => toggleSort('title')}>Title{sortArrow('title')}</th>
-              <th style={{ ...thStyle, cursor: 'default' }}>Link</th>
-              <th style={thStyle} onClick={() => toggleSort('assigned_to')}>Assignee{sortArrow('assigned_to')}</th>
-              <th style={thStyle} onClick={() => toggleSort('due_date')}>Due{sortArrow('due_date')}</th>
-              <th style={thStyle} onClick={() => toggleSort('status')}>Status{sortArrow('status')}</th>
-              <th style={thStyle} onClick={() => toggleSort('raised_date')}>Raised{sortArrow('raised_date')}</th>
+              <th style={{ ...rt.thStyle(0), ...thStyle }} onClick={() => toggleSort('ref')}>Ref{sortArrow('ref')}{rt.handle(0, dark)}</th>
+              <th style={{ ...rt.thStyle(1), ...thStyle }} onClick={() => toggleSort('record_type')}>Type{sortArrow('record_type')}{rt.handle(1, dark)}</th>
+              <th style={{ ...rt.thStyle(2), ...thStyle }} onClick={() => toggleSort('title')}>Title{sortArrow('title')}{rt.handle(2, dark)}</th>
+              <th style={{ ...rt.thStyle(3), ...thStyle, cursor: 'default' }}>Link{rt.handle(3, dark)}</th>
+              <th style={{ ...rt.thStyle(4), ...thStyle }} onClick={() => toggleSort('assigned_to')}>Assignee{sortArrow('assigned_to')}{rt.handle(4, dark)}</th>
+              <th style={{ ...rt.thStyle(5), ...thStyle }} onClick={() => toggleSort('due_date')}>Due{sortArrow('due_date')}{rt.handle(5, dark)}</th>
+              <th style={{ ...rt.thStyle(6), ...thStyle }} onClick={() => toggleSort('status')}>Status{sortArrow('status')}{rt.handle(6, dark)}</th>
+              <th style={{ ...rt.thStyle(7), ...thStyle }} onClick={() => toggleSort('raised_date')}>Raised{sortArrow('raised_date')}</th>
             </tr>
           </thead>
           <tbody>

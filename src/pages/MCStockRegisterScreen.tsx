@@ -7,6 +7,7 @@ import { useExpand, ExpandBtn } from '../components/ExpandToggle'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { Pager } from '../components/Pager'
+import { useResizableTable, ResetColumnsButton } from '../components/colResize'
 import { usePagedList } from '../hooks/usePagedList'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { useCurrentUser } from '../hooks/useCurrentUser'
@@ -24,6 +25,11 @@ const STOCK_COLS      = ['80px','90px','210px','90px','90px','70px','55px','110p
 const STOCK_COLS_SUB  = ['110px','280px','90px','100px','80px','60px','120px','150px']                       // ITEM,DESC,HEAT,WBS,QTY,UOM,COND,VENDOR
 const STOCK_MINW      = 1135 // Σ STOCK_COLS
 const STOCK_MINW_SUB  = 990  // Σ STOCK_COLS_SUB
+// Resizable defaults (numeric, same widths as the static colgroups above).
+const STOCK_W      = [80, 90, 210, 90, 90, 70, 55, 110, 130, 60, 150]
+const STOCK_W_SUB  = [110, 280, 90, 100, 80, 60, 120, 150]
+const STOCK_MIN_     = [50, 60, 120, 60, 60, 50, 45, 80, 90, 50, 90]
+const STOCK_MIN_SUB  = [70, 140, 60, 70, 60, 50, 80, 90]
 const ellipsisCell: React.CSSProperties = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
 
 const API = 'http://localhost:3001/api'
@@ -122,6 +128,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
   const selectGroup = (g: GroupBy) => { setGroupBy(g); setSortCol(GROUP_SORT[g]); setSortDir('asc') }
   // A sortable column header (uses ▲/▼ on the active column).
   const sortArrow = (k: string) => sortCol === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
+  const rt = useResizableTable(isSubcontractor ? 'mc_stock_sub' : 'mc_stock', isSubcontractor ? STOCK_W_SUB : STOCK_W, isSubcontractor ? STOCK_MIN_SUB : STOCK_MIN_)
 
   const inputSt: React.CSSProperties = { fontSize: 12, padding: '7px 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontFamily: 'inherit' }
 
@@ -182,6 +189,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="Search item, WBS, warehouse, vendor, tag…"
             style={{ ...inputSt, flex: '1 1 260px' }} />
+          <ResetColumnsButton onClick={rt.resetWidths} dark={dark} />
           <select style={{ ...inputSt }}>
             <option>All warehouses</option>
           </select>
@@ -221,19 +229,20 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
           ) : (
             <div style={{ background: cardBg, border: bd, borderRadius: 8, overflow: 'hidden' }}>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', minWidth: isSubcontractor ? STOCK_MINW_SUB : STOCK_MINW, borderCollapse: 'collapse', fontSize: 12, tableLayout: 'fixed' }}>
+                <table style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 12 }}>
                   <colgroup>
-                    {(isSubcontractor ? STOCK_COLS_SUB : STOCK_COLS).map((w, i) => <col key={i} style={{ width: w }} />)}
+                    {rt.widths.map((w, i) => <col key={i} style={{ width: w }} />)}
                   </colgroup>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                     <tr style={{ borderBottom: bd }}>
                       {(isSubcontractor
                         ? [{ label: 'ITEM/TAG', key: 'item_code' }, { label: 'DESCRIPTION', key: 'description' }, { label: 'HEAT' }, { label: 'WBS', key: 'wbs_code' }, { label: 'QTY', key: 'quantity' }, { label: 'UOM' }, { label: 'CONDITION', key: 'condition_status' }, { label: 'VENDOR', key: 'vendor_name' }]
                         : [{ label: 'LOCATION', key: 'location' }, { label: 'ITEM/TAG', key: 'item_code' }, { label: 'DESCRIPTION', key: 'description' }, { label: 'HEAT' }, { label: 'WBS', key: 'wbs_code' }, { label: 'QTY', key: 'quantity' }, { label: 'UOM' }, { label: 'CONDITION', key: 'condition_status' }, { label: 'VENDOR', key: 'vendor_name' }, { label: 'HOLD' }, { label: '' }]
-                      ).map(h => (
+                      ).map((h, i) => (
                         <th key={h.label || 'actions'} onClick={h.key ? () => toggleSort(h.key!) : undefined}
-                          style={{ padding: '7px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap', cursor: h.key ? 'pointer' : 'default', userSelect: 'none' }}>
+                          style={{ ...rt.thStyle(i), padding: '7px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap', cursor: h.key ? 'pointer' : 'default', userSelect: 'none' }}>
                           {h.label}{h.key ? sortArrow(h.key) : ''}
+                          {rt.handle(i, dark)}
                         </th>
                       ))}
                     </tr>

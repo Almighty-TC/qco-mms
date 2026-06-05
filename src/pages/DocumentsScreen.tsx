@@ -9,6 +9,7 @@ import { createPortal } from 'react-dom'   // modals portal to document.body —
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
+import { useResizableTable, ResetColumnsButton } from '../components/colResize'
 
 const API = 'http://localhost:3001/api'
 
@@ -182,6 +183,7 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
   }
 
   const headerCells = ['FILE / TYPE', 'MODULE', 'SOURCE', 'UPLOADED BY', 'DATE', 'STATUS', '']
+  const rt = useResizableTable('documents_inbox', [240, 120, 160, 150, 120, 110, 80], [120, 80, 100, 100, 90, 90, 60])
 
   return (
     <div style={{ background: bg, minHeight: '100vh', fontFamily: 'IBM Plex Sans, sans-serif' }}>
@@ -222,6 +224,7 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
           <select value={status} onChange={e => setStatus(e.target.value)} style={inputSt}>
             {['All', 'Verified', 'Available', 'Under review', 'Missing'].map(s => <option key={s} value={s}>{s === 'All' ? 'All statuses' : s}</option>)}
           </select>
+          <ResetColumnsButton onClick={rt.resetWidths} dark={dark} />
           <div style={{ display: 'flex', border: bd, borderRadius: 6, overflow: 'hidden' }}>
             {(['7', '30', '90', 'all'] as RangeKey[]).map(rk => (
               <button key={rk} onClick={() => setRange(rk)} style={{ padding: '7px 11px', border: 'none', background: range === rk ? '#2563eb' : 'none', color: range === rk ? '#fff' : sub, cursor: 'pointer', fontSize: 11.5, fontFamily: 'inherit' }}>
@@ -250,9 +253,9 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
         {/* Table */}
         <div style={{ background: cardBg, border: bd, borderRadius: 8, overflow: 'hidden' }}>
           <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 360px)' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <table style={{ ...rt.tableStyle, borderCollapse: 'collapse' }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
-                <tr style={{ borderBottom: bd }}>{headerCells.map(h => <th key={h} style={thSt}>{h}</th>)}</tr>
+                <tr style={{ borderBottom: bd }}>{headerCells.map((h, i) => <th key={h || i} style={{ ...rt.thStyle(i), ...thSt }}>{h}{rt.handle(i, dark)}</th>)}</tr>
               </thead>
               <tbody>
                 {loading ? (

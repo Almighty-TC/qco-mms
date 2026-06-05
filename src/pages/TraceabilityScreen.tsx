@@ -133,6 +133,8 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
   // ── Styles ──────────────────────────────────────────────────
   const inputSt: React.CSSProperties = { fontSize: 12, padding: '7px 10px', borderRadius: 6, border: t.bd, background: t.inputBg, color: t.col, fontFamily: 'inherit' }
   const thSt: React.CSSProperties = { padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: t.sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }
+  const rtVdrl = useResizableTable('trace_vdrl', [110, 130, 110, 200, 110, 110, 110, 80], [80, 90, 80, 120, 80, 80, 80, 60])
+  const rtCert = useResizableTable('trace_cert', [200, 90, 180, 180, 120, 100, 90], [120, 60, 120, 120, 90, 80, 70])
   const tdSt: React.CSSProperties = { padding: '9px 12px', fontSize: 12, color: t.col }
   const mono: React.CSSProperties = { fontFamily: 'JetBrains Mono, monospace' }
 
@@ -194,6 +196,7 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
           <div>
             <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
               <input value={vdrlSearch} onChange={e => setVdrlSearch(e.target.value)} placeholder="Search PO, vendor, tag, document…" style={{ ...inputSt, flex: '1 1 280px' }} />
+              <ResetColumnsButton onClick={rtVdrl.resetWidths} dark={dark} />
               <div style={{ display: 'flex', border: t.bd, borderRadius: 6, overflow: 'hidden' }}>
                 {(['all', 'received', 'pending', 'overdue'] as const).map(s => (
                   <button key={s} onClick={() => setVdrlStatus(s)}
@@ -206,10 +209,10 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
 
             <div style={{ background: t.cardBg, border: t.bd, borderRadius: 8, overflow: 'hidden' }}>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <table style={{ ...rtVdrl.tableStyle, borderCollapse: 'collapse' }}>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: t.theadBg }}>
                     <tr style={{ borderBottom: t.bd }}>
-                      {['PO REF', 'VENDOR', 'TAG', 'DOCUMENT', 'STATUS', 'DUE', 'RECEIVED', ''].map(h => <th key={h} style={thSt}>{h}</th>)}
+                      {['PO REF', 'VENDOR', 'TAG', 'DOCUMENT', 'STATUS', 'DUE', 'RECEIVED', ''].map((h, i) => <th key={h || i} style={{ ...rtVdrl.thStyle(i), ...thSt }}>{h}{rtVdrl.handle(i, dark)}</th>)}
                     </tr>
                   </thead>
                   <tbody>
@@ -257,12 +260,15 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
             <div style={{ background: dark ? '#162032' : '#fffbeb', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: dark ? '#f1f5f9' : '#92400e' }}>
               📋 {approvals.length} certificate{approvals.length !== 1 ? 's' : ''} awaiting QA verification.
             </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+              <ResetColumnsButton onClick={rtCert.resetWidths} dark={dark} />
+            </div>
             <div style={{ background: t.cardBg, border: t.bd, borderRadius: 8, overflow: 'hidden' }}>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <table style={{ ...rtCert.tableStyle, borderCollapse: 'collapse' }}>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: t.theadBg }}>
                     <tr style={{ borderBottom: t.bd }}>
-                      {['FILE', 'TYPE', 'ITEM/SCOPE', 'VENDOR/UPLOADER', 'UPLOADED', 'PRIORITY', 'ACTION'].map(h => <th key={h} style={thSt}>{h}</th>)}
+                      {['FILE', 'TYPE', 'ITEM/SCOPE', 'VENDOR/UPLOADER', 'UPLOADED', 'PRIORITY', 'ACTION'].map((h, i) => <th key={h || i} style={{ ...rtCert.thStyle(i), ...thSt }}>{h}{rtCert.handle(i, dark)}</th>)}
                     </tr>
                   </thead>
                   <tbody>
