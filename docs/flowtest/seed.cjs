@@ -328,11 +328,12 @@ async function main() {
       const lines = poLineMeta.filter(m => m.poId === po.id && m.rank >= 4)
       const etd = addDays(po.ros, -ri(20, 50)), atd = addDays(etd, ri(0, 4)), eta = addDays(atd, ri(12, 45)), ata = addDays(eta, ri(0, 6)) // etd≤atd≤eta≤ata (strict)
       const arrived = ata < TODAY
+      const crd = addDays(etd, -7), ccd = addDays(etd, -3) // cargo ready, then collected, before departure
       const [scn] = await conn.query(
-        `INSERT INTO shipment_control_notes (project_id,scn_ref,po_id,vendor_name,supplier_id,forwarder_name,origin_location,destination_warehouse_id,incoterms,etd,atd,eta,ata,status,mode,bl_number,container_ref,total_packages,total_weight_kg,rag,created_by)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO shipment_control_notes (project_id,scn_ref,po_id,vendor_name,supplier_id,forwarder_name,origin_location,destination_warehouse_id,incoterms,cargo_ready_date,cargo_collection_date,etd,atd,eta,ata,status,mode,bl_number,container_ref,total_packages,total_weight_kg,rag,created_by)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [pid, `ZZ-SCN-${pad(i + 1, 4)}`, po.id, po.vendor, supIds[po.sup], rnd(['ZZ Freight', 'ZZ Logistics Co']), rnd(ORIG), rnd(whIds), rnd(INCO),
-          iso(etd), iso(atd), iso(eta), iso(ata), arrived ? rnd(['arrived', 'received']) : rnd(['in-transit', 'pending']), rnd(['sea', 'air', 'road']),
+          iso(crd), iso(ccd), iso(etd), iso(atd), iso(eta), iso(ata), arrived ? rnd(['arrived', 'received']) : rnd(['in-transit', 'pending']), rnd(['sea', 'air', 'road']),
           `BL${ri(100000, 999999)}`, `CONT${ri(1000, 9999)}`, ri(1, 8), ri(500, 25000), arrived ? 'green' : 'amber', ADMIN])
       const scnId = scn.insertId
       await conn.query('INSERT INTO scn_packages (scn_id,package_number,description,gross_weight_kg,net_weight_kg) VALUES (?,?,?,?,?)', [scnId, `PKG-${i + 1}`, 'Crate', ri(1000, 30000), ri(800, 28000)])

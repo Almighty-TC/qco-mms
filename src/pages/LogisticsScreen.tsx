@@ -503,7 +503,9 @@ const OverviewTab = ({ dark, scn, onRefresh, addToast }: {
     background: dark ? '#0f172a' : '#f8fafc', color: col, fontFamily: 'inherit', width: '100%',
   }
 
-  const [editingDate, setEditingDate] = useState<'etd'|'eta'|null>(null)
+  const [editingDate, setEditingDate] = useState<'crd'|'ccd'|'etd'|'eta'|null>(null)
+  const [editCrd, setEditCrd] = useState((scn as any).cargo_ready_date ? (scn as any).cargo_ready_date.slice(0,10) : '')
+  const [editCcd, setEditCcd] = useState((scn as any).cargo_collection_date ? (scn as any).cargo_collection_date.slice(0,10) : '')
   const [editEtd, setEditEtd] = useState(scn.etd ? scn.etd.slice(0,10) : '')
   const [editEta, setEditEta] = useState(scn.eta ? scn.eta.slice(0,10) : '')
   const [dateReason, setDateReason] = useState('')
@@ -514,13 +516,21 @@ const OverviewTab = ({ dark, scn, onRefresh, addToast }: {
 
   const etdChanges = scn.date_changes?.filter(d => d.field_name === 'etd') || []
   const etaChanges = scn.date_changes?.filter(d => d.field_name === 'eta') || []
+  // Open the shared date editor pre-filled with the current values.
+  const openDateEdit = (which: 'crd'|'ccd'|'etd'|'eta') => {
+    setEditCrd((scn as any).cargo_ready_date ? (scn as any).cargo_ready_date.slice(0,10) : '')
+    setEditCcd((scn as any).cargo_collection_date ? (scn as any).cargo_collection_date.slice(0,10) : '')
+    setEditEtd(scn.etd ? scn.etd.slice(0,10) : '')
+    setEditEta(scn.eta ? scn.eta.slice(0,10) : '')
+    setDateReason(''); setDateError(''); setEditingDate(which)
+  }
 
   const saveDate = async () => {
     if (!dateReason.trim()) { setDateError('Reason is required'); return }
     setSavingDate(true); setDateError('')
     try {
       await axios.put(`${API}/logistics/scn/${scn.id}/dates`, {
-        etd: editEtd || null, eta: editEta || null, reason: dateReason.trim(),
+        crd: editCrd || null, ccd: editCcd || null, etd: editEtd || null, eta: editEta || null, reason: dateReason.trim(),
       })
       setEditingDate(null); setDateReason('')
       addToast('success', 'Dates updated')
@@ -558,12 +568,32 @@ const OverviewTab = ({ dark, scn, onRefresh, addToast }: {
             </div>
           ))}
 
+          {/* Cargo Ready Date (CRD) */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 13, alignItems: 'center' }}>
+            <span style={{ color: sub }} title="Cargo Ready Date">CRD</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ color: col }}>{fmt((scn as any).cargo_ready_date)}</span>
+              <button onClick={() => openDateEdit('crd')}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 12, padding: 0 }}>✎</button>
+            </span>
+          </div>
+
+          {/* Cargo Collection Date (CCD) */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 13, alignItems: 'center' }}>
+            <span style={{ color: sub }} title="Cargo Collection Date">CCD</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ color: col }}>{fmt((scn as any).cargo_collection_date)}</span>
+              <button onClick={() => openDateEdit('ccd')}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 12, padding: 0 }}>✎</button>
+            </span>
+          </div>
+
           {/* ETD row with edit */}
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 13, alignItems: 'center' }}>
             <span style={{ color: sub }}>ETD</span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ color: col }}>{fmt(scn.etd)}</span>
-              <button onClick={() => { setEditingDate('etd'); setEditEtd(scn.etd ? scn.etd.slice(0,10) : ''); setEditEta(scn.eta ? scn.eta.slice(0,10) : ''); setDateReason('') }}
+              <button onClick={() => openDateEdit('etd')}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 12, padding: 0 }}>✎</button>
               {etdChanges.length > 0 && (
                 <button onClick={() => setEtdHistOpen(v => !v)}
@@ -580,7 +610,7 @@ const OverviewTab = ({ dark, scn, onRefresh, addToast }: {
             <span style={{ color: sub }}>ETA</span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ color: etaColour(scn.eta) || col, fontWeight: etaColour(scn.eta) ? 600 : undefined }}>{fmt(scn.eta)}</span>
-              <button onClick={() => { setEditingDate('eta'); setEditEtd(scn.etd ? scn.etd.slice(0,10) : ''); setEditEta(scn.eta ? scn.eta.slice(0,10) : ''); setDateReason('') }}
+              <button onClick={() => openDateEdit('eta')}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 12, padding: 0 }}>✎</button>
               {etaChanges.length > 0 && (
                 <button onClick={() => setEtaHistOpen(v => !v)}
@@ -606,8 +636,16 @@ const OverviewTab = ({ dark, scn, onRefresh, addToast }: {
       {/* Date edit form */}
       {editingDate && (
         <div style={{ background: dark ? '#162032' : '#fffbeb', border: `1px solid rgba(245,158,11,0.3)`, borderRadius: 8, padding: '14px 18px', marginBottom: 20 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: col, marginBottom: 12 }}>Edit ETD / ETA</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: col, marginBottom: 12 }}>Edit shipment dates</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+            <div>
+              <label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>CRD — Cargo Ready Date</label>
+              <input type="date" value={editCrd} onChange={e => setEditCrd(e.target.value)} style={inputSt} />
+            </div>
+            <div>
+              <label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>CCD — Cargo Collection Date</label>
+              <input type="date" value={editCcd} onChange={e => setEditCcd(e.target.value)} style={inputSt} />
+            </div>
             <div>
               <label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>ETD</label>
               <input type="date" value={editEtd} onChange={e => setEditEtd(e.target.value)} style={inputSt} />
@@ -640,8 +678,8 @@ const OverviewTab = ({ dark, scn, onRefresh, addToast }: {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}` }}>
-                {['Line #','Description','Qty','Assigned','UOM'].map(h => (
-                  <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
+                {([['Line #','left'],['Description','left'],['Qty','right'],['Assigned','right'],['UOM','left']] as [string, 'left'|'right'][]).map(([h, align]) => (
+                  <th key={h} style={{ padding: '7px 10px', textAlign: align, fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
                 ))}
               </tr>
             </thead>

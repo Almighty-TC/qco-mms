@@ -417,21 +417,23 @@ router.put('/scn/:scnId/status', async (req, res) => {
 router.put('/scn/:scnId/dates', async (req, res) => {
   try {
     const scnId = Number(req.params.scnId)
-    const { etd, eta, reason } = req.body
+    const { etd, eta, crd, ccd, reason } = req.body
     const userId = req.user?.id || 1
 
     if (!reason || !reason.trim()) {
-      return res.status(400).json({ error: 'A reason is required when updating ETD or ETA dates' })
+      return res.status(400).json({ error: 'A reason is required when updating shipment dates' })
     }
 
-    const [[scn]] = await db.query('SELECT id, etd, eta, status FROM shipment_control_notes WHERE id = ?', [scnId])
+    const [[scn]] = await db.query('SELECT id, etd, eta, cargo_ready_date AS crd, cargo_collection_date AS ccd, status FROM shipment_control_notes WHERE id = ?', [scnId])
     if (!scn) return res.status(404).json({ error: 'SCN not found' })
 
     const updates = []
     const vals = []
+    if (crd !== undefined) { updates.push('cargo_ready_date = ?');      vals.push(crd || null) }
+    if (ccd !== undefined) { updates.push('cargo_collection_date = ?'); vals.push(ccd || null) }
     if (etd !== undefined) { updates.push('etd = ?'); vals.push(etd || null) }
     if (eta !== undefined) { updates.push('eta = ?'); vals.push(eta || null) }
-    if (!updates.length) return res.status(400).json({ error: 'At least one of etd or eta is required' })
+    if (!updates.length) return res.status(400).json({ error: 'At least one date (CRD, CCD, ETD or ETA) is required' })
 
     const newEta = eta !== undefined ? eta : scn.eta
     const newRag = computeRAG(scn.status, newEta)
@@ -453,6 +455,21 @@ router.put('/scn/:scnId/dates', async (req, res) => {
         `INSERT INTO date_change_log (entity_type, entity_id, field_name, old_value, new_value, change_reason, created_by)
          VALUES ('scn', ?, 'eta', ?, ?, ?, ?)`,
         [scnId, scn.eta || null, eta || null, reason.trim(), userId]
+      ).catch(() => {})
+    }
+    const fmtD = (d) => d ? new Date(d).toISOString().slice(0, 10) : null
+    if (crd !== undefined && fmtD(crd) !== fmtD(scn.crd)) {
+      await db.query(
+        `INSERT INTO date_change_log (entity_type, entity_id, field_name, old_value, new_value, change_reason, created_by)
+         VALUES ('scn', ?, 'cargo_ready_date', ?, ?, ?, ?)`,
+        [scnId, fmtD(scn.crd), crd || null, reason.trim(), userId]
+      ).catch(() => {})
+    }
+    if (ccd !== undefined && fmtD(ccd) !== fmtD(scn.ccd)) {
+      await db.query(
+        `INSERT INTO date_change_log (entity_type, entity_id, field_name, old_value, new_value, change_reason, created_by)
+         VALUES ('scn', ?, 'cargo_collection_date', ?, ?, ?, ?)`,
+        [scnId, fmtD(scn.ccd), ccd || null, reason.trim(), userId]
       ).catch(() => {})
     }
 
