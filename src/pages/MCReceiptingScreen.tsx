@@ -9,7 +9,7 @@ import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { useCurrentUser } from '../hooks/useCurrentUser'
 import { useAutoTitle } from '../hooks/useAutoTitle'
-import { useResizableTable, ResetColumnsButton } from '../components/colResize'
+import { useResizableTable, ResetColumnsButton, ColResizeHandle } from '../components/colResize'
 import { HelpButton } from '../components/HelpDrawer'
 import { RECEIPTING_HELP } from '../helpContent'
 
@@ -18,6 +18,15 @@ const API = 'http://localhost:3001/api'
 // Resizable column defaults — receipting queue (10 cols).
 const RC_W   = [130, 90, 240, 80, 100, 170, 100, 150, 110, 120]
 const RC_MIN = [90, 60, 130, 60, 70, 110, 80, 100, 90, 90]
+
+// ─── Wizard table column defaults ────────────────────────────
+// Step 1 "Review expected" (4 cols) and Step 2 "Physical check" (10 cols —
+// the 10th, Discrepancy type, only renders when a line has an issue, but the
+// width slot is reserved so persisted widths stay stable across the toggle).
+const RV_W   = [120, 420, 120, 90]
+const RV_MIN = [80, 160, 80, 60]
+const PC_W   = [36, 80, 300, 95, 70, 100, 100, 70, 200, 180]
+const PC_MIN = [32, 60, 140, 70, 55, 90, 90, 60, 170, 150]
 
 type Tab = 'all' | 'arrived' | 'in_transit' | 'customs' | 'shipments' | 'transfers'
 type WizardStep = 1 | 2 | 3 | 4 | 5
@@ -301,6 +310,10 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
   const [notes, setNotes]       = useState('')
   const [saving, setSaving]     = useState(false)
 
+  // ─── Resizable wizard tables (per-step, persisted by id) ──
+  const rvTable = useResizableTable('mc_receipt_review', RV_W, RV_MIN)   // Step 1
+  const pcTable = useResizableTable('mc_receipt_check', PC_W, PC_MIN)     // Step 2
+
   // ─── Step-nav helpers (preserve all state) ────────────────
   const goBack = () => setStep(s => (s > 1 ? (s - 1) as WizardStep : s))
 
@@ -458,18 +471,23 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
         })}
       </div>
 
-      {/* Content */}
-      <div style={{ maxWidth: 700, margin: '32px auto', padding: '0 24px' }}>
+      {/* Content — table steps (1, 2) get the full width so the grid breathes;
+          the form steps (3–5) stay in a comfortable reading column. */}
+      <div style={{ maxWidth: step === 1 ? 1000 : step === 2 ? 1360 : 700, margin: '24px auto', padding: '0 24px', transition: 'max-width 150ms ease' }}>
 
         {/* ── STEP 1 ── */}
         {step === 1 && (
           <div>
-            <p style={{ color: sub, fontSize: 13, marginBottom: 16 }}>Review the expected shipment contents. Confirm before beginning physical inspection.</p>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, background: cardBg, border: bd, borderRadius: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 16 }}>
+              <p style={{ color: sub, fontSize: 13, margin: 0 }}>Review the expected shipment contents. Confirm before beginning physical inspection.</p>
+              <ResetColumnsButton onClick={rvTable.resetWidths} dark={dark} />
+            </div>
+            <div style={{ overflowX: 'auto', border: bd, borderRadius: 8 }}>
+            <table style={{ ...rvTable.tableStyle, borderCollapse: 'collapse', fontSize: 12, background: cardBg }}>
               <thead>
                 <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
-                  {['LINE','DESCRIPTION','EXP. QTY','UOM'].map(h => (
-                    <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
+                  {['LINE','DESCRIPTION','EXP. QTY','UOM'].map((h, i) => (
+                    <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', ...rvTable.thStyle(i) }}>{h}{rvTable.handle(i, dark)}</th>
                   ))}
                 </tr>
               </thead>
@@ -491,6 +509,7 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                 ))}
               </tbody>
             </table>
+            </div>
             <div style={{ background: dark ? '#162032' : '#f0f9ff', border: bd, borderRadius: 8, padding: '10px 14px', marginTop: 12, display: 'flex', gap: 16, fontSize: 12, color: sub }}>
               <span>{(detail?.lines || []).length} line items</span>
               <span>{scn.total_weight_kg ? `${scn.total_weight_kg} t total` : '—'}</span>
@@ -530,6 +549,16 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
           const typesComplete = issueLines.every((l: any) => (discrepancyTypes[l.id] || '').length > 0)
           const discrepancyReady = anyIssue && discrepancyNotes.trim().length > 0 && typesComplete
           const DISC_TYPES = ['Short delivery','Over delivery','Damaged','Missing','Other']
+
+          // ── Resizable columns: the Discrepancy-type column (slot 9) only shows
+          // when a line has an issue, so the rendered count flexes 9↔10. Width is
+          // summed over rendered slots only, and the drag handle is suppressed on
+          // the genuinely-last visible column.
+          const pcCols = anyIssue ? 10 : 9
+          const pcLast = pcCols - 1
+          const pcWidth = pcTable.widths.slice(0, pcCols).reduce((a, b) => a + b, 0)
+          const pcTableStyle: React.CSSProperties = { tableLayout: 'fixed', width: pcWidth, minWidth: '100%', borderCollapse: 'collapse', fontSize: 12, background: cardBg }
+          const pcHandle = (i: number) => i < pcLast ? <ColResizeHandle onMouseDown={e => pcTable.onMouseDown(i, e)} dark={dark} /> : null
 
           // ── Heat/Lot P2b split gating + mutators ──
           // Valid split: sub-lines reconcile to the line total AND each sub's damaged ≤ its received.
@@ -605,17 +634,21 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                     Apply heat to selected ({selectedIds.length})
                   </button>
                   {declaredHeats.length === 0 && <span style={{ fontSize: 11, color: '#f59e0b' }}>No heats declared on this SCN — use "Other / not listed" per line.</span>}
+                  <div style={{ flex: 1 }} />
+                  <ResetColumnsButton onClick={pcTable.resetWidths} dark={dark} />
                 </div>
               )}
 
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, background: cardBg, border: bd, borderRadius: 8 }}>
+              <div style={{ overflowX: 'auto', border: bd, borderRadius: 8 }}>
+              <table style={pcTableStyle}>
                 <thead>
                   <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
-                    <th style={{ padding: '8px 12px', textAlign: 'center', width: 32 }}>
+                    <th style={{ padding: '8px 12px', textAlign: 'center', ...pcTable.thStyle(0) }}>
                       <input type="checkbox" checked={allSelected} onChange={toggleSelAll} style={{ accentColor: '#2563eb', cursor: 'pointer' }} title="Select all (bulk heat)" />
+                      {pcHandle(0)}
                     </th>
-                    {['LINE','DESCRIPTION','EXPECTED','UOM','ACTUAL','DAMAGED','MATCH','HEAT', ...(anyIssue ? ['DISCREPANCY TYPE'] : [])].map(h => (
-                      <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
+                    {['LINE','DESCRIPTION','EXPECTED','UOM','ACTUAL','DAMAGED','MATCH','HEAT', ...(anyIssue ? ['DISCREPANCY TYPE'] : [])].map((h, i) => (
+                      <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', ...pcTable.thStyle(i + 1) }}>{h}{pcHandle(i + 1)}</th>
                     ))}
                   </tr>
                 </thead>
@@ -804,6 +837,7 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                   })}
                 </tbody>
               </table>
+              </div>
 
               {/* Discrepancy notes — shown live whenever any line has an issue */}
               {anyIssue && (
