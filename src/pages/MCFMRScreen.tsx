@@ -63,6 +63,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [pickup, setPickup]       = useState<PickupWindow>('all')
   const [critOnly, setCritOnly]   = useState(false)
+  const [statusFilter, setStatusFilter] = useState('all')
   const [approveFmr, setApproveFmr] = useState<FMRRow | null>(null)
   const [viewFmr, setViewFmr]     = useState<FMRRow | null>(null)
   const [raiseFmr, setRaiseFmr]   = useState(false)
@@ -82,16 +83,17 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
     if (sortCol)                params.sort_col      = sortCol
     if (debouncedSearch.trim()) params.search        = debouncedSearch.trim()
     if (critOnly)               params.critical_only = 'true'
+    if (statusFilter !== 'all') params.status        = statusFilter
     if (pickup !== 'all' && pickup !== 'overdue' && pickup !== 'today') params.pickup_window = String(pickup)
     const { data } = await axios.get(`${API}/mc/${projectId}/fmr`, { params })
     setCounts(data.counts)
     return { data: (data.data ?? []) as FMRRow[], total: (data.total ?? 0) as number }
-  }, [projectId, debouncedSearch, critOnly, pickup])
+  }, [projectId, debouncedSearch, critOnly, pickup, statusFilter])
 
   const {
     data: fmrs, total, page, setPage, pageSize, loading,
     sortCol, sortDir, toggleSort, reload,
-  } = usePagedList<FMRRow>({ fetcher, deps: [projectId, debouncedSearch, critOnly, pickup], pageSize: 50, initialSortCol: undefined })
+  } = usePagedList<FMRRow>({ fetcher, deps: [projectId, debouncedSearch, critOnly, pickup, statusFilter], pageSize: 50, initialSortCol: undefined })
   const sortArrow = (k: string) => sortCol === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
 
   // Truncated cells get a hover tooltip; re-runs when the FMR list changes.
@@ -223,7 +225,16 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="Search FMR ref, item, WBS, contractor…"
             style={{ ...inputSt, flex: '1 1 260px' }} />
-          <select style={inputSt}><option>All statuses ({counts?.total || 0})</option></select>
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={inputSt}>
+            <option value="all">All statuses ({counts?.total || 0})</option>
+            <option value="pending_approval">Pending approval</option>
+            <option value="approved">Approved — awaiting pickup</option>
+            <option value="partially_approved">Partially approved</option>
+            <option value="partial_issued">Partially issued</option>
+            <option value="issued">Issued (picked up)</option>
+            <option value="rejected">Rejected</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
           <button onClick={() => setCritOnly(v => !v)}
             style={{ ...inputSt, cursor: 'pointer', color: critOnly ? '#E84E0F' : sub, borderColor: critOnly ? '#E84E0F' : undefined }}>
             ★ Critical Path Only {critOnly ? `(${fmrs.filter(f => f.is_critical_path).length})` : ''}
