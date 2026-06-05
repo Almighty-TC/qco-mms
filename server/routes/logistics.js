@@ -58,10 +58,13 @@ function displayToDb(display) {
   return map[display] || display
 }
 
-// Valid next statuses from current display status
+// Valid next statuses from current display status.
+// Arrival now ALWAYS routes through customs review: an in-transit shipment can
+// only advance to customs_review (recording arrival at destination). Customs
+// must then be cleared before pending_delivery / delivered. See the status PUT.
 const NEXT_STATUSES = {
   pending_pickup:   ['in_transit'],
-  in_transit:       ['customs_review', 'pending_delivery'],
+  in_transit:       ['customs_review'],
   customs_review:   ['pending_delivery'],
   pending_delivery: ['delivered'],
   delivered:        [],
@@ -359,12 +362,12 @@ router.get('/scn/:scnId', async (req, res) => {
 router.put('/scn/:scnId/status', async (req, res) => {
   try {
     const scnId = Number(req.params.scnId)
-    const { status: newDisplayStatus, notes, proof_of_custody } = req.body
+    const { status: newDisplayStatus, notes, proof_of_custody, customs_cleared } = req.body
     const userId = req.user?.id || 1
 
     if (!newDisplayStatus) return res.status(400).json({ error: 'status is required' })
 
-    const [[scn]] = await db.query('SELECT id, status FROM shipment_control_notes WHERE id = ?', [scnId])
+    const [[scn]] = await db.query('SELECT id, status, eta, ata, customs_cleared FROM shipment_control_notes WHERE id = ?', [scnId])
     if (!scn) return res.status(404).json({ error: 'SCN not found' })
 
     const currentDisplay = dbToDisplay(scn.status)
@@ -376,16 +379,41 @@ router.put('/scn/:scnId/status', async (req, res) => {
       })
     }
 
+    // ── Customs clearance gate ───────────────────────────────
+    // Leaving customs_review (→ pending_delivery) REQUIRES ticking "Customs
+    // cleared". Delivery is blocked until customs is cleared. This is what keeps
+    // a shipment visibly stuck in customs_review until someone clears it.
+    let markCleared = false
+    if (newDisplayStatus === 'pending_delivery' && currentDisplay === 'customs_review') {
+      if (!customs_cleared) {
+        return res.status(400).json({ error: 'Tick "Customs cleared" to release this shipment from customs review.' })
+      }
+      markCleared = true
+    }
+    if (newDisplayStatus === 'delivered' && !scn.customs_cleared) {
+      if (!customs_cleared) {
+        return res.status(400).json({ error: 'Customs must be cleared before a shipment can be marked delivered. Tick "Customs cleared" first.' })
+      }
+      markCleared = true   // legacy SCNs that reached pending_delivery before the gate existed
+    }
+
     const newDbStatus = displayToDb(newDisplayStatus)
     const rag = computeRAG(newDbStatus, scn.eta)
 
-    // For delivered: set ata to today if not set
-    const ataUpdate = newDisplayStatus === 'delivered' ? ', ata = CURDATE()' : ''
-
-    await db.query(
-      `UPDATE shipment_control_notes SET status = ?, rag = ? ${ataUpdate} WHERE id = ?`,
-      [newDbStatus, rag, scnId]
-    )
+    // Stamp actual arrival (ATA) when the shipment reaches the destination —
+    // i.e. on entering customs_review (or delivered, if it skipped customs in
+    // legacy data). COALESCE so a real arrival date is never overwritten.
+    const sets = ['status = ?', 'rag = ?']
+    const vals = [newDbStatus, rag]
+    if (newDisplayStatus === 'customs_review' || newDisplayStatus === 'delivered') {
+      sets.push('ata = COALESCE(ata, CURDATE())')
+    }
+    if (markCleared) {
+      sets.push('customs_cleared = 1', 'customs_cleared_date = COALESCE(customs_cleared_date, CURDATE())', 'customs_cleared_by = ?')
+      vals.push(userId)
+    }
+    vals.push(scnId)
+    await db.query(`UPDATE shipment_control_notes SET ${sets.join(', ')} WHERE id = ?`, vals)
 
     await db.query(
       `INSERT INTO scn_status_log (scn_id, from_status, to_status, changed_by, notes)
@@ -394,7 +422,7 @@ router.put('/scn/:scnId/status', async (req, res) => {
     )
 
     await writeAudit(userId, 'status_update', 'scn', scnId,
-      { status: currentDisplay }, { status: newDisplayStatus, notes },
+      { status: currentDisplay }, { status: newDisplayStatus, notes, ...(markCleared ? { customs_cleared: true } : {}) },
       `/logistics/scn/${scnId}/status`)
 
     const [[updated]] = await db.query(

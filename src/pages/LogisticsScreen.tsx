@@ -39,6 +39,7 @@ interface PipelineCounts {
 }
 interface SCNDetail extends SCNRow {
   atd?: string | null; ata?: string | null
+  customs_cleared?: number; customs_cleared_date?: string | null
   bl_number?: string | null; container_ref?: string | null; notes?: string | null
   forwarder_notified: number; forwarder_user_id?: number | null
   po_id?: number | null; vendor_display?: string | null
@@ -84,7 +85,7 @@ const MODE_ICON: Record<string, string> = { sea: '🚢', air: '✈', road: '🚛
 
 const NEXT_VALID: Record<string, string[]> = {
   pending_pickup: ['in_transit'],
-  in_transit: ['customs_review', 'pending_delivery'],
+  in_transit: ['customs_review'],   // arrival always enters customs review first
   customs_review: ['pending_delivery'],
   pending_delivery: ['delivered'],
   delivered: [],
@@ -621,6 +622,24 @@ const OverviewTab = ({ dark, scn, onRefresh, addToast }: {
             </span>
           </div>
           {etaHistOpen && <DateHistoryInline changes={etaChanges} dark={dark} />}
+
+          {/* ATA — actual arrival at destination (stamped on entering customs review) */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 13, alignItems: 'center' }}>
+            <span style={{ color: sub }} title="Actual Time of Arrival at destination">ATA</span>
+            <span style={{ color: scn.ata ? col : sub }}>{scn.ata ? fmt(scn.ata) : 'Not arrived'}</span>
+          </div>
+
+          {/* Customs clearance status — awareness if a shipment is stuck at customs */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 13, alignItems: 'center' }}>
+            <span style={{ color: sub }}>Customs</span>
+            {scn.customs_cleared ? (
+              <span style={{ color: '#16a34a', fontWeight: 600 }}>✓ Cleared{scn.customs_cleared_date ? ` · ${fmt(scn.customs_cleared_date)}` : ''}</span>
+            ) : scn.display_status === 'customs_review' ? (
+              <span style={{ color: '#d97706', fontWeight: 600 }}>⏳ In customs review</span>
+            ) : (
+              <span style={{ color: sub }}>—</span>
+            )}
+          </div>
         </div>
 
         <div style={{ background: dark ? '#162032' : '#f8fafc', border: bd, borderRadius: 8, padding: '14px 18px' }}>
@@ -1104,8 +1123,16 @@ const StatusUpdateModal = ({ dark, scn, onClose, onSaved, addToast }: {
   const [newStatus, setNewStatus] = useState(validNext[0] || '')
   const [notes, setNotes] = useState('')
   const [proofOfCustody, setProofOfCustody] = useState(false)
+  const [customsCleared, setCustomsCleared] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+
+  // "Customs cleared" must be ticked to leave customs review, and before a
+  // shipment that never cleared can be marked delivered.
+  const alreadyCleared = !!(scn.customs_cleared)
+  const needsCustomsTick =
+    newStatus === 'pending_delivery' ||
+    (newStatus === 'delivered' && !alreadyCleared)
 
   const col    = dark ? '#f1f5f9' : '#0f172a'
   const cardBg = dark ? '#1e293b' : '#fff'
@@ -1120,10 +1147,12 @@ const StatusUpdateModal = ({ dark, scn, onClose, onSaved, addToast }: {
 
   const handleSave = async () => {
     if (!newStatus) return setError('Select a new status')
+    if (needsCustomsTick && !customsCleared) return setError('Tick "Customs cleared" to proceed')
     setSaving(true); setError('')
     try {
       await axios.put(`${API}/logistics/scn/${scn.id}/status`, {
         status: newStatus, notes: notes || null, proof_of_custody: proofOfCustody,
+        customs_cleared: customsCleared,
       })
       addToast('success', `SCN status updated to ${STATUS_CONFIG[newStatus]?.label || newStatus}`)
       onSaved()
@@ -1156,7 +1185,23 @@ const StatusUpdateModal = ({ dark, scn, onClose, onSaved, addToast }: {
               <option key={s} value={s}>{STATUS_CONFIG[s]?.label || s}</option>
             ))}
           </select>
+          {newStatus === 'customs_review' && (
+            <div style={{ fontSize: 11, color: sub, marginTop: 6 }}>
+              Records arrival at destination — the shipment enters customs review and its actual arrival date (ATA) is stamped.
+            </div>
+          )}
         </div>
+
+        {/* Customs clearance gate — required to leave customs review / before delivery */}
+        {needsCustomsTick && (
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, cursor: 'pointer', marginBottom: 14, padding: '10px 12px', borderRadius: 8, border: `1px solid ${customsCleared ? 'rgba(34,197,94,0.4)' : 'rgba(245,158,11,0.4)'}`, background: customsCleared ? 'rgba(34,197,94,0.06)' : 'rgba(245,158,11,0.06)' }}>
+            <input type="checkbox" checked={customsCleared} onChange={e => setCustomsCleared(e.target.checked)} style={{ marginTop: 2 }} />
+            <span style={{ color: col }}>
+              <strong>Customs cleared *</strong>
+              <div style={{ color: sub, fontSize: 11, marginTop: 2 }}>Confirm the shipment has cleared customs. Required before it can move on{newStatus === 'delivered' ? ' to delivered' : ''}.</div>
+            </span>
+          </label>
+        )}
 
         {/* Delivered: proof of custody */}
         {newStatus === 'delivered' && (
@@ -1178,8 +1223,8 @@ const StatusUpdateModal = ({ dark, scn, onClose, onSaved, addToast }: {
 
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button onClick={onClose} style={{ padding: '7px 18px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
-          <button onClick={handleSave} disabled={saving || !newStatus}
-            style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600, opacity: saving ? 0.7 : 1 }}>
+          <button onClick={handleSave} disabled={saving || !newStatus || (needsCustomsTick && !customsCleared)}
+            style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', cursor: (saving || (needsCustomsTick && !customsCleared)) ? 'not-allowed' : 'pointer', fontSize: 12, fontWeight: 600, opacity: (saving || (needsCustomsTick && !customsCleared)) ? 0.7 : 1 }}>
             {saving ? 'Updating…' : 'Update Status'}
           </button>
         </div>

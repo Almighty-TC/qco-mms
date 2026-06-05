@@ -915,6 +915,16 @@ export const LOGISTICS_HELP: HelpSection[] = [
     </>,
   },
   {
+    title: 'Customs review & clearance',
+    content: <>
+      {P(<>When an in-transit shipment reaches the destination, advancing it moves to {B('Customs review')} and
+        stamps the {B('actual arrival date (ATA)')} — every arriving shipment passes through customs review.</>)}
+      {P(<>To leave customs review you must tick {B('Customs cleared')}; a shipment {B('cannot be marked delivered')}
+        until customs is cleared. This keeps a shipment visibly held in {B('Customs review')} if it's stuck,
+        and records who cleared it and when (shown in the Overview).</>)}
+    </>,
+  },
+  {
     title: 'Detail — packages & docs',
     content: <>
       {P(<>Click a row to open the SCN detail, which has four tabs: {B('Overview')}, {B('Packages')}
