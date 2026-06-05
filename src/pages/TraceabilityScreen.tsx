@@ -154,7 +154,7 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
       {/* Sticky breadcrumb header */}
       <div style={{ position: 'sticky', top: 0, zIndex: 10, background: t.cardBg, borderBottom: t.bd, padding: '12px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <BackButton onClick={onBack} dark={dark} />
+          <BackButton onFallback={onBack} dark={dark} />
           <div style={{ fontSize: 11, color: t.sub }}>Dashboard › {projectName} › <strong style={{ color: t.col }}>Traceability</strong></div>
         </div>
         <button onClick={() => setUploadOpen({ mode: 'global' })}

@@ -114,7 +114,7 @@ const MCReceiptingInner = ({ dark, projectId, projectName, onBack }: {
       {/* Header */}
       <div style={{ background: cardBg, borderBottom: bd, padding: '12px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <BackButton onClick={onBack} dark={dark} />
+          <BackButton onFallback={onBack} dark={dark} />
           <div style={{ fontSize: 11, color: sub }}>Dashboard › {projectName} › Material Control › <strong style={{ color: col }}>Receipting</strong></div>
         </div>
         <button style={{ padding: '6px 14px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>↓ Export</button>
