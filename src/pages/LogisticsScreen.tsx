@@ -444,8 +444,8 @@ const SCNDetailModal = ({ dark, scn, onClose, onRefresh, addToast, projectId }: 
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               {NEXT_VALID[scn.display_status]?.length > 0 && (
                 <button onClick={() => setShowStatusModal(true)}
-                  style={{ padding: '6px 14px', borderRadius: 6, background: '#2563eb', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
-                  Update Status
+                  style={{ padding: '6px 14px', borderRadius: 6, background: scn.display_status === 'in_transit' ? '#0ea5e9' : '#2563eb', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+                  {scn.display_status === 'in_transit' ? '📍 Confirm arrival' : 'Update Status'}
                 </button>
               )}
               <ExpandBtn expanded={expanded} onToggle={toggleExpand} color={sub} />
@@ -1120,6 +1120,8 @@ const StatusUpdateModal = ({ dark, scn, onClose, onSaved, addToast }: {
   onSaved: () => void; addToast: (t: 'success'|'error', m: string) => void
 }) => {
   const validNext = NEXT_VALID[scn.display_status] || []
+  // Advancing an in-transit SCN IS the arrival confirmation (→ customs review).
+  const isArrival = scn.display_status === 'in_transit'
   const [newStatus, setNewStatus] = useState(validNext[0] || '')
   const [notes, setNotes] = useState('')
   const [proofOfCustody, setProofOfCustody] = useState(false)
@@ -1169,7 +1171,14 @@ const StatusUpdateModal = ({ dark, scn, onClose, onSaved, addToast }: {
         background: cardBg, border: bd, borderRadius: 12, padding: 28, width: 420, maxWidth: '90vw',
         boxShadow: '0 20px 60px rgba(0,0,0,0.3)', zIndex: 5001, fontFamily: 'IBM Plex Sans, sans-serif',
       }}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: col, marginBottom: 16 }}>Update SCN Status</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: col, marginBottom: 16 }}>{isArrival ? '📍 Confirm Arrival at Destination' : 'Update SCN Status'}</div>
+        {isArrival && (
+          <div style={{ fontSize: 12, color: sub, marginBottom: 14, lineHeight: 1.5 }}>
+            Confirm this shipment has <strong style={{ color: col }}>arrived at its destination</strong>. It will move to
+            {' '}<strong style={{ color: '#d97706' }}>Customs review</strong> and today's date is stamped as the actual
+            arrival (ATA). An expeditor or logistics user can confirm this.
+          </div>
+        )}
 
         {/* Current */}
         <div style={{ marginBottom: 14 }}>
@@ -1177,20 +1186,17 @@ const StatusUpdateModal = ({ dark, scn, onClose, onSaved, addToast }: {
           <span style={{ fontSize: 12, padding: '4px 10px', borderRadius: 8, background: sc.bg, color: sc.color, fontWeight: 600 }}>{sc.label}</span>
         </div>
 
-        {/* New status */}
-        <div style={{ marginBottom: 14 }}>
-          <label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>New status *</label>
-          <select value={newStatus} onChange={e => setNewStatus(e.target.value)} style={inputSt}>
-            {validNext.map(s => (
-              <option key={s} value={s}>{STATUS_CONFIG[s]?.label || s}</option>
-            ))}
-          </select>
-          {newStatus === 'customs_review' && (
-            <div style={{ fontSize: 11, color: sub, marginTop: 6 }}>
-              Records arrival at destination — the shipment enters customs review and its actual arrival date (ATA) is stamped.
-            </div>
-          )}
-        </div>
+        {/* New status — hidden for arrival (single destination: customs review) */}
+        {!isArrival && (
+          <div style={{ marginBottom: 14 }}>
+            <label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>New status *</label>
+            <select value={newStatus} onChange={e => setNewStatus(e.target.value)} style={inputSt}>
+              {validNext.map(s => (
+                <option key={s} value={s}>{STATUS_CONFIG[s]?.label || s}</option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Customs clearance gate — required to leave customs review / before delivery */}
         {needsCustomsTick && (
@@ -1225,7 +1231,7 @@ const StatusUpdateModal = ({ dark, scn, onClose, onSaved, addToast }: {
           <button onClick={onClose} style={{ padding: '7px 18px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
           <button onClick={handleSave} disabled={saving || !newStatus || (needsCustomsTick && !customsCleared)}
             style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', cursor: (saving || (needsCustomsTick && !customsCleared)) ? 'not-allowed' : 'pointer', fontSize: 12, fontWeight: 600, opacity: (saving || (needsCustomsTick && !customsCleared)) ? 0.7 : 1 }}>
-            {saving ? 'Updating…' : 'Update Status'}
+            {saving ? 'Updating…' : isArrival ? 'Confirm Arrival' : 'Update Status'}
           </button>
         </div>
       </div>
