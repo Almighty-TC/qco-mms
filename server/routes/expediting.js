@@ -780,7 +780,7 @@ router.post('/:projectId/scn', async (req, res) => {
   const {
     po_id, selected_lines = [], additional_items = [],
     pickup_location, destination_warehouse_id, grid_bay,
-    cdd, etd, eta, transport_mode, forwarder_name, incoterms,
+    cdd, crd, ccd, etd, eta, transport_mode, forwarder_name, incoterms,
     packages = [], notify_forwarder,
     heats = [],   // ── Heat/Lot P1: per-shipment declared heats (additive) ──
   } = req.body
@@ -799,10 +799,10 @@ router.post('/:projectId/scn', async (req, res) => {
     const [r] = await conn.query(
       `INSERT INTO shipment_control_notes
         (scn_ref, po_id, project_id, origin_location, destination_warehouse_id,
-         etd, eta, mode, forwarder_name, incoterms, status, notes, created_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,'draft',?,?)`,
+         cargo_ready_date, cargo_collection_date, etd, eta, mode, forwarder_name, incoterms, status, notes, created_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?)`,
       [scnRef, po_id, pid, pickup_location || null, destination_warehouse_id || null,
-       etd || null, eta || null, transport_mode || null, forwarder_name || null,
+       crd || null, ccd || null, etd || null, eta || null, transport_mode || null, forwarder_name || null,
        incoterms || null, null, req.user.id]
     )
     const scnId = r.insertId

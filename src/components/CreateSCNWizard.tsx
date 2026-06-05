@@ -95,6 +95,8 @@ export const CreateSCNWizard: React.FC<Props> = ({
   const [warehouseId, setWarehouseId]         = useState<number | ''>('')
   const [gridBay, setGridBay]                 = useState('')
   const [cdd, setCdd]                         = useState('')
+  const [crd, setCrd]                         = useState('') // Cargo Ready Date
+  const [ccd, setCcd]                         = useState('') // Cargo Collection Date
   const [etd, setEtd]                         = useState('')
   const [eta, setEta]                         = useState('')
   const [transportMode, setTransportMode]     = useState('')
@@ -231,6 +233,8 @@ export const CreateSCNWizard: React.FC<Props> = ({
         destination_warehouse_id: warehouseId || null,
         grid_bay: gridBay || null,
         cdd: cdd || null,
+        crd: crd || null,
+        ccd: ccd || null,
         etd: etd || null,
         eta: eta || null,
         transport_mode: transportMode || null,
@@ -535,6 +539,24 @@ export const CreateSCNWizard: React.FC<Props> = ({
             type="date"
             value={cdd}
             onChange={e => setCdd(e.target.value)}
+            style={{ ...inputStyle, width: '100%' }}
+          />
+        </div>
+        <div>
+          <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>CRD (cargo ready date)</label>
+          <input
+            type="date"
+            value={crd}
+            onChange={e => setCrd(e.target.value)}
+            style={{ ...inputStyle, width: '100%' }}
+          />
+        </div>
+        <div>
+          <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>CCD (cargo collection date)</label>
+          <input
+            type="date"
+            value={ccd}
+            onChange={e => setCcd(e.target.value)}
             style={{ ...inputStyle, width: '100%' }}
           />
         </div>
@@ -887,6 +909,8 @@ export const CreateSCNWizard: React.FC<Props> = ({
               <span style={{ color: '#94a3b8' }}>Mode</span><span>{modeName}</span>
               <span style={{ color: '#94a3b8' }}>Origin</span><span>{pickupLocation || '—'}</span>
               <span style={{ color: '#94a3b8' }}>Destination</span><span>{warehouseName}</span>
+              <span style={{ color: '#94a3b8' }}>CRD</span><span>{crd || '—'}</span>
+              <span style={{ color: '#94a3b8' }}>CCD</span><span>{ccd || '—'}</span>
               <span style={{ color: '#94a3b8' }}>ETD</span><span>{etd || '—'}</span>
               <span style={{ color: '#94a3b8' }}>ETA</span><span>{eta || '—'}</span>
               <span style={{ color: '#94a3b8' }}>Forwarder</span><span>{forwarder || '—'}</span>
