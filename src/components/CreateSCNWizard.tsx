@@ -24,7 +24,7 @@ type Step = 1 | 2 | 3 | 4 | 5 | 6
 interface SelectedLineVal { checked: boolean; qty: string }
 interface AdditionalItem  { desc: string; qty: string; uom: string; parentLineId: string } // parentLineId REQUIRED — off-PO variation must name its parent PO line
 interface PackageRow {
-  type: string; qty: string
+  type: string; customType?: string; qty: string
   length: string; width: string; height: string; weight: string
   is_dg: boolean
 }
@@ -44,7 +44,7 @@ const MODES = [
 ]
 const INCOTERMS = ['CIF', 'FOB', 'EXW', 'DAP', 'DDP', 'FCA', 'CPT', 'CIP']
 const UOM_OPTIONS = ['EA', 'M', 'M²', 'M³', 'KG', 'T', 'LT', 'SET', 'LOT']
-const PKG_TYPES = ['Crate (timber)', 'Crate (steel)', 'Pallet', 'Drum', 'Carton', 'Bundle', 'Skid', 'IBC', 'Loose', 'Bag']
+const PKG_TYPES = ['Crate (timber)', 'Crate (steel)', 'Pallet', 'Drum', 'Carton', 'Bundle', 'Skid', 'IBC', 'Loose', 'Bag', 'Others']
 const REQUIRED_DOCS = ['Commercial invoice', 'Packing list', 'Bill of Lading / Air Waybill', 'Certificate of Origin', 'Mill test certs (MTC)']
 const OPTIONAL_DOCS = ['Inspection release note', 'Insurance certificate']
 
@@ -240,7 +240,8 @@ export const CreateSCNWizard: React.FC<Props> = ({
         transport_mode: transportMode || null,
         forwarder_name: forwarder || null,
         incoterms: incoterms || null,
-        packages,
+        // "Others" → send the user-defined type as the package type.
+        packages: packages.map(p => ({ ...p, type: p.type === 'Others' ? ((p.customType || '').trim() || 'Other') : p.type })),
         // Heat/Lot P1: declared heats for this shipment (optional — empty is fine).
         heats: heats
           .filter(h => h.heat_number.trim())
@@ -662,6 +663,14 @@ export const CreateSCNWizard: React.FC<Props> = ({
               >
                 {PKG_TYPES.map(t => <option key={t}>{t}</option>)}
               </select>
+              {pkg.type === 'Others' && (
+                <input
+                  value={pkg.customType || ''}
+                  onChange={e => updatePkg(i, 'customType', e.target.value)}
+                  placeholder="Specify package type *"
+                  style={{ ...inputStyle, width: '100%', marginTop: 6, borderColor: (pkg.customType || '').trim() ? undefined : '#f59e0b' }}
+                />
+              )}
             </div>
             <div>
               <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Qty</label>

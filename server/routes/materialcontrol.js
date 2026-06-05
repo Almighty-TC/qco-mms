@@ -961,7 +961,10 @@ router.put('/:projectId/fmr/:fmrId/approve', async (req, res) => {
     const lineToPkg = new Map()   // line_id → package array index
     for (let i = 0; i < packages.length; i++) {
       const pk = packages[i]
-      if (!pk.package_type_id) return res.status(422).json({ error: `Package ${i + 1}: a package type is required` })
+      // Package type: a known type id OR a custom "Others" type (free text).
+      const customType = String(pk.custom_type || '').trim()
+      const ptId = (pk.package_type_id && pk.package_type_id !== 'other') ? Number(pk.package_type_id) : null
+      if (!ptId && !customType) return res.status(422).json({ error: `Package ${i + 1}: a package type is required` })
       for (const [field, label] of [['length_mm', 'length'], ['width_mm', 'width'], ['height_mm', 'height'], ['gross_weight_kg', 'gross weight']]) {
         if (pk[field] == null || pk[field] === '' || Number(pk[field]) <= 0) return res.status(422).json({ error: `Package ${i + 1}: ${label} is required`, package_index: i })
       }
@@ -983,10 +986,13 @@ router.put('/:projectId/fmr/:fmrId/approve', async (req, res) => {
     const pkgIds = []
     for (let i = 0; i < packages.length; i++) {
       const pk = packages[i]
+      // Resolve type: a real id, or null + custom name stored in description ("Others").
+      const customType = String(pk.custom_type || '').trim()
+      const ptId = (pk.package_type_id && pk.package_type_id !== 'other') ? Number(pk.package_type_id) : null
       const [pr] = await db.query(
         `INSERT INTO fmr_packages (fmr_id, package_number, package_type_id, description, length_mm, width_mm, height_mm, gross_weight_kg, net_weight_kg, is_dangerous_goods, dg_class, dg_un_number, marks_numbers, created_by)
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [fmrId, pk.package_number || `PKG-${i + 1}`, pk.package_type_id, pk.description || null,
+        [fmrId, pk.package_number || `PKG-${i + 1}`, ptId, customType || pk.description || null,
          pk.length_mm, pk.width_mm, pk.height_mm, pk.gross_weight_kg, pk.net_weight_kg || null,
          pk.is_dangerous_goods ? 1 : 0, pk.dg_class || null, pk.dg_un_number || null, pk.marks_numbers || null, userId])
       pkgIds.push(pr.insertId)

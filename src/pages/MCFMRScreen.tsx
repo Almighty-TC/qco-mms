@@ -549,7 +549,7 @@ const FMRApprovalModal = ({ dark, fmr, projectId, onClose, onSaved, addToast }: 
   const [error, setError]   = useState('')
   // ── Issuance packaging: how the approved material ships (package type + dims + weight + DG) ──
   const [packageTypes, setPackageTypes] = useState<{ id: number; name: string }[]>([])
-  type PkgDraft = { package_type_id: string; length_mm: string; width_mm: string; height_mm: string; gross_weight_kg: string; net_weight_kg: string; is_dangerous_goods: boolean; dg_class: string; dg_un_number: string }
+  type PkgDraft = { package_type_id: string; custom_type: string; length_mm: string; width_mm: string; height_mm: string; gross_weight_kg: string; net_weight_kg: string; is_dangerous_goods: boolean; dg_class: string; dg_un_number: string }
   const [packages, setPackages] = useState<PkgDraft[]>([])
   const [lineAssign, setLineAssign] = useState<Record<number, number>>({})   // line_id → package index
 
@@ -563,7 +563,7 @@ const FMRApprovalModal = ({ dark, fmr, projectId, onClose, onSaved, addToast }: 
 
   const setDec = (lineId: number, patch: Partial<{ decision: LineDecision; qty: string; reason: string }>) =>
     setDecisions(p => ({ ...p, [lineId]: { decision: p[lineId]?.decision ?? 'approve_full', qty: p[lineId]?.qty ?? '', reason: p[lineId]?.reason ?? '', ...patch } }))
-  const addPackage = () => setPackages(p => [...p, { package_type_id: '', length_mm: '', width_mm: '', height_mm: '', gross_weight_kg: '', net_weight_kg: '', is_dangerous_goods: false, dg_class: '', dg_un_number: '' }])
+  const addPackage = () => setPackages(p => [...p, { package_type_id: '', custom_type: '', length_mm: '', width_mm: '', height_mm: '', gross_weight_kg: '', net_weight_kg: '', is_dangerous_goods: false, dg_class: '', dg_un_number: '' }])
   const setPkg = (i: number, patch: Partial<PkgDraft>) => setPackages(p => p.map((pk, j) => j === i ? { ...pk, ...patch } : pk))
   const removePackage = (i: number) => {
     setPackages(p => p.filter((_, j) => j !== i))
@@ -584,7 +584,8 @@ const FMRApprovalModal = ({ dark, fmr, projectId, onClose, onSaved, addToast }: 
   const allValid = decidedAll && lines.every(lineValid)
   // ── Packaging validity: every approved/partial line sits in exactly one valid package ──
   const approvedLineIds = lines.filter(l => { const d = decisions[l.line_id]; return d && d.decision !== 'reject' }).map(l => l.line_id)
-  const pkgValid = (pk: PkgDraft) => !!pk.package_type_id && [pk.length_mm, pk.width_mm, pk.height_mm, pk.gross_weight_kg].every(v => Number(v) > 0) && (!pk.is_dangerous_goods || !!pk.dg_class.trim())
+  const pkgTypeChosen = (pk: PkgDraft) => pk.package_type_id === 'other' ? !!pk.custom_type.trim() : !!pk.package_type_id
+  const pkgValid = (pk: PkgDraft) => pkgTypeChosen(pk) && [pk.length_mm, pk.width_mm, pk.height_mm, pk.gross_weight_kg].every(v => Number(v) > 0) && (!pk.is_dangerous_goods || !!pk.dg_class.trim())
   const packagingValid = approvedLineIds.length === 0 || (packages.length > 0 && packages.every(pkgValid) && approvedLineIds.every(id => lineAssign[id] != null && lineAssign[id] < packages.length))
   const canConfirm = allValid && packagingValid
 
@@ -614,7 +615,8 @@ const FMRApprovalModal = ({ dark, fmr, projectId, onClose, onSaved, addToast }: 
           }
         }),
         packages: packages.map((pk, i) => ({
-          package_type_id: Number(pk.package_type_id),
+          package_type_id: pk.package_type_id === 'other' ? null : Number(pk.package_type_id),
+          custom_type: pk.package_type_id === 'other' ? pk.custom_type.trim() : undefined,
           length_mm: Number(pk.length_mm), width_mm: Number(pk.width_mm), height_mm: Number(pk.height_mm),
           gross_weight_kg: Number(pk.gross_weight_kg),
           net_weight_kg: pk.net_weight_kg ? Number(pk.net_weight_kg) : undefined,
@@ -770,7 +772,12 @@ const FMRApprovalModal = ({ dark, fmr, projectId, onClose, onSaved, addToast }: 
                     <select value={pk.package_type_id} onChange={e => setPkg(i, { package_type_id: e.target.value })} style={{ ...inputSt, minWidth: 130 }}>
                       <option value="">Package type…</option>
                       {packageTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      <option value="other">Others (specify)…</option>
                     </select>
+                    {pk.package_type_id === 'other' && (
+                      <input value={pk.custom_type} onChange={e => setPkg(i, { custom_type: e.target.value })}
+                        placeholder="Custom package type *" style={{ ...inputSt, minWidth: 150, borderColor: pk.custom_type.trim() ? undefined : '#f59e0b' }} />
+                    )}
                     <input type="number" placeholder="L mm" value={pk.length_mm} onChange={e => setPkg(i, { length_mm: e.target.value })} style={{ ...inputSt, width: 72 }} />
                     <input type="number" placeholder="W mm" value={pk.width_mm} onChange={e => setPkg(i, { width_mm: e.target.value })} style={{ ...inputSt, width: 72 }} />
                     <input type="number" placeholder="H mm" value={pk.height_mm} onChange={e => setPkg(i, { height_mm: e.target.value })} style={{ ...inputSt, width: 72 }} />
@@ -1156,7 +1163,7 @@ const FMRDetailModal = ({ dark, projectId, fmr, onClose, addToast }: {
                         <div key={p.id} style={{ border: bd, borderRadius: 8, padding: '10px 12px', background: dark ? '#162032' : '#f8fafc' }}>
                           <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}>
                             <span style={{ fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: col }}>{p.package_number}</span>
-                            <span style={{ color: col }}>{p.package_type_name || '—'}</span>
+                            <span style={{ color: col }}>{p.package_type_name || p.description || '—'}</span>
                             <span style={{ color: sub, fontFamily: 'JetBrains Mono, monospace' }}>{Number(p.length_mm)}×{Number(p.width_mm)}×{Number(p.height_mm)} mm</span>
                             <span style={{ color: sub, fontFamily: 'JetBrains Mono, monospace' }}>{Number(p.gross_weight_kg)} kg gross{p.net_weight_kg ? ` · ${Number(p.net_weight_kg)} kg net` : ''}</span>
                             {p.is_dangerous_goods ? <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 5, background: 'rgba(239,68,68,0.12)', color: '#dc2626', fontWeight: 600 }}>⚠ DG {p.dg_class || ''}{p.dg_un_number ? ` · UN${p.dg_un_number}` : ''}</span> : null}
