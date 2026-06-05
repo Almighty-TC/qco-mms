@@ -9,6 +9,27 @@ import { WBS_HELP } from '../helpContent'
 import { WBSGanttView } from '../components/WBSGanttView'
 import { BackButton } from '../components/BackButton'
 import { isApprovalRequired, submitForApproval, approvalToast } from '../lib/pendingChanges'
+import { useColumnResize } from '../hooks/useColumnResize'
+
+// ─── RESIZABLE COLUMNS (tree table) ──────────────────────────
+// Resizable: Code, WBS Node, ROS, Notes, PO Qty (the 4px stripe / checkbox /
+// code-suffix / delete columns stay fixed). Widths persist via useColumnResize
+// (localStorage key qco_col_widths_wbs_tree); the "↺ Reset columns" button restores these.
+const WBS_COL_DEFAULTS = [150, 280, 120, 200, 90]
+const WBS_COL_MINS     = [70, 130, 70, 90, 60]
+
+// Column resize handle — 1px divider that turns into a 3px orange bar on hover,
+// over an 8px col-resize hit target (matches the Procurement/Admin tables).
+const ColResizeHandle = ({ onMouseDown, dark }: { onMouseDown: (e: React.MouseEvent) => void; dark: boolean }) => {
+  const [hov, setHov] = useState(false)
+  return (
+    <>
+      <div style={{ position: 'absolute', right: 0, top: 0, width: hov ? 3 : 1, height: '100%', background: hov ? '#E84E0F' : (dark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)'), pointerEvents: 'none', transition: 'width 100ms, background 100ms', borderRadius: 1 }} />
+      <div onMouseDown={onMouseDown} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)} onClick={e => e.stopPropagation()}
+        style={{ position: 'absolute', right: -4, top: 0, width: 8, height: '100%', cursor: 'col-resize', zIndex: 3 }} />
+    </>
+  )
+}
 
 const API = 'http://localhost:3001/api'
 
@@ -1547,6 +1568,9 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
   const expandAll = () => { const all = new Set(nodes.map(n => n.id)); setExpanded(all) }
   const collapseAll = () => { setExpanded(new Set()) }
 
+  // ── Resizable column widths (Code, WBS Node, ROS, Notes, PO Qty) ──
+  const { widths: colW, onMouseDown: onColResize, resetWidths } = useColumnResize('wbs_tree', WBS_COL_DEFAULTS, WBS_COL_MINS)
+
   const downloadTemplate = async () => {
     // Blob download — never window.open (would open in tab not download)
     try {
@@ -1689,6 +1713,7 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
           {wbsView === 'tree' && <>
             <button onClick={expandAll}   style={secBtn}>⊞ Expand all</button>
             <button onClick={collapseAll} style={secBtn}>⊟ Collapse all</button>
+            <button onClick={resetWidths} style={secBtn} title="Reset column widths to default">↺ Reset columns</button>
           </>}
           {/* Gantt-only controls */}
           {wbsView === 'gantt' && <>
@@ -1832,23 +1857,35 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
         {/* Tree table */}
         <div style={{ flex: 1, minWidth: 0, background: dark ? '#1e293b' : '#fff', border: bd, borderRadius: focusNode ? '10px 0 0 10px' : 10, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', ...(inFocus ? { display: 'flex', flexDirection: 'column' } : {}) }}>
           <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: inFocus ? undefined : 'calc(100vh - 310px)', flex: inFocus ? 1 : undefined }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <table style={{ width: 4 + 28 + 36 + colW[0] + colW[1] + colW[2] + (focusMode ? 0 : 80 + colW[3] + colW[4]), tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+              {/* colgroup drives the resizable column widths (table-layout: fixed) */}
+              <colgroup>
+                <col style={{ width: 4 }} />
+                <col style={{ width: 28 }} />
+                <col style={{ width: colW[0] }} />
+                <col style={{ width: colW[1] }} />
+                <col style={{ width: colW[2] }} />
+                {!focusMode && <col style={{ width: colW[3] }} />}
+                {!focusMode && <col style={{ width: colW[4] }} />}
+                {!focusMode && <col style={{ width: 80 }} />}
+                <col style={{ width: 36 }} />
+              </colgroup>
               <thead>
                 <tr style={{ background: dark ? '#0f172a' : '#f4f7fb', borderBottom: bd, position: 'sticky', top: 0, zIndex: 2 }}>
-                  <th style={{ width: 4, padding: 0 }} />
-                  <th style={{ width: 28, padding: '8px 4px', textAlign: 'center' }}>
+                  <th style={{ padding: 0 }} />
+                  <th style={{ padding: '8px 4px', textAlign: 'center' }}>
                     <input type="checkbox"
                       checked={selectedNodes.size === nodes.length && nodes.length > 0}
                       onChange={handleSelectAll}
                       style={{ cursor: 'pointer', accentColor: '#2563eb' }} />
                   </th>
-                  <th style={{ padding: '8px 8px 8px 22px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap' }}>Code</th>
-                  <th style={{ padding: '8px 4px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left' }}>WBS Node</th>
-                  <th style={{ padding: '8px 12px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap' }}>ROS</th>
-                  {!focusMode && <th style={{ padding: '8px 12px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left' }}>Notes</th>}
-                  {!focusMode && <th style={{ padding: '8px 8px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'right', whiteSpace: 'nowrap' }}>PO Qty</th>}
-                  {!focusMode && <th style={{ width: 80 }} />}
-                  <th style={{ width: 36 }} />
+                  <th style={{ position: 'relative', padding: '8px 8px 8px 22px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap' }}>Code<ColResizeHandle onMouseDown={e => onColResize(0, e)} dark={dark} /></th>
+                  <th style={{ position: 'relative', padding: '8px 4px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left' }}>WBS Node<ColResizeHandle onMouseDown={e => onColResize(1, e)} dark={dark} /></th>
+                  <th style={{ position: 'relative', padding: '8px 12px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap' }}>ROS<ColResizeHandle onMouseDown={e => onColResize(2, e)} dark={dark} /></th>
+                  {!focusMode && <th style={{ position: 'relative', padding: '8px 12px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left' }}>Notes<ColResizeHandle onMouseDown={e => onColResize(3, e)} dark={dark} /></th>}
+                  {!focusMode && <th style={{ position: 'relative', padding: '8px 8px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'right', whiteSpace: 'nowrap' }}>PO Qty<ColResizeHandle onMouseDown={e => onColResize(4, e)} dark={dark} /></th>}
+                  {!focusMode && <th />}
+                  <th />
                 </tr>
               </thead>
               <tbody>
