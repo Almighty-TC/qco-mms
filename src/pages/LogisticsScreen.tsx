@@ -3,6 +3,7 @@
 // SCNDetailModal for full shipment detail (overview/packages/docs/timeline).
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'   // modals portal to document.body — see App.tsx zoom wrapper
+import { useExpand, ExpandBtn } from '../components/ExpandToggle'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
@@ -390,6 +391,7 @@ const SCNDetailModal = ({ dark, scn, onClose, onRefresh, addToast, projectId }: 
 }) => {
   const [tab, setTab] = useState<'overview'|'packages'|'documents'|'timeline'>('overview')
   const [showStatusModal, setShowStatusModal] = useState(false)
+  const [expanded, toggleExpand] = useExpand()
 
   const col    = dark ? '#f1f5f9' : '#0f172a'
   const cardBg = dark ? '#1e293b' : '#fff'
@@ -407,7 +409,7 @@ const SCNDetailModal = ({ dark, scn, onClose, onRefresh, addToast, projectId }: 
 
       {/* Panel */}
       <div style={{
-        position: 'fixed', top: 0, right: 0, bottom: 0, width: 720, maxWidth: '95vw',
+        position: 'fixed', top: 0, right: 0, bottom: 0, width: expanded ? '95vw' : 720, maxWidth: '95vw',
         background: cardBg, borderLeft: bd, zIndex: 4001,
         display: 'flex', flexDirection: 'column', boxShadow: '-4px 0 32px rgba(0,0,0,0.2)',
         fontFamily: 'IBM Plex Sans, sans-serif',
@@ -433,6 +435,7 @@ const SCNDetailModal = ({ dark, scn, onClose, onRefresh, addToast, projectId }: 
                   Update Status
                 </button>
               )}
+              <ExpandBtn expanded={expanded} onToggle={toggleExpand} color={sub} />
               <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: sub, cursor: 'pointer', padding: '2px 6px' }}>✕</button>
             </div>
           </div>

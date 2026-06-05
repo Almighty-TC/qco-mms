@@ -3,6 +3,7 @@
 // Group by: Warehouse / WBS / Item. Stock take modal. Move modal.
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'   // modals portal to document.body — see App.tsx zoom wrapper
+import { useExpand, ExpandBtn } from '../components/ExpandToggle'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { Pager } from '../components/Pager'
@@ -631,6 +632,7 @@ const DocsPanel = ({ dark, item, onClose }: { dark: boolean; item: StockItem; on
   const cardBg = dark ? '#1e293b' : '#fff'
   const bd     = `1px solid ${dark ? '#334155' : '#dde3ed'}`
   const sub    = '#94a3b8'
+  const [expanded, toggleExpand] = useExpand()
 
   const docGroups = [
     { label: 'Commercial', docs: [{ name: 'Commercial Invoice', size: '214 kB' }, { name: 'Packing list', size: '128 kB' }, { name: 'Bill of Lading', size: '75 kB' }] },
@@ -642,13 +644,16 @@ const DocsPanel = ({ dark, item, onClose }: { dark: boolean; item: StockItem; on
   return createPortal(
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 6000 }} />
-      <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 360, background: cardBg, borderLeft: bd, zIndex: 6001, display: 'flex', flexDirection: 'column', fontFamily: 'IBM Plex Sans, sans-serif' }}>
+      <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: expanded ? '95vw' : 460, maxWidth: '95vw', background: cardBg, borderLeft: bd, zIndex: 6001, display: 'flex', flexDirection: 'column', fontFamily: 'IBM Plex Sans, sans-serif' }}>
         <div style={{ padding: '16px 20px', borderBottom: bd, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <div style={{ fontSize: 14, fontWeight: 700, color: col }}>SCN Documents</div>
             <div style={{ fontSize: 11, color: sub, marginTop: 2 }}>{item.item_code}</div>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: sub, cursor: 'pointer' }}>✕</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+            <ExpandBtn expanded={expanded} onToggle={toggleExpand} color={sub} />
+            <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: sub, cursor: 'pointer', padding: '2px 4px', lineHeight: 1 }}>✕</button>
+          </div>
         </div>
         <div style={{ flex: 1, overflowY: 'auto', padding: '12px 20px' }}>
           {docGroups.map(g => (

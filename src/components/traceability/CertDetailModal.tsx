@@ -5,6 +5,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 import { API, tokens, fmtDate, fmtBytes, scrimStyle } from './traceUtil'
+import { useExpand, ExpandBtn } from '../ExpandToggle'
 
 interface Version {
   id: number; rev: string; heat_ref: string; applies_to: string | null
@@ -33,6 +34,7 @@ export const CertDetailModal: React.FC<Props> = ({ dark, projectId, certId, onCl
   const [versions, setVersions] = useState<Version[]>([])
   const [loading, setLoading] = useState(true)
   const [activeRev, setActiveRev] = useState<number | null>(null)
+  const [expanded, toggleExpand] = useExpand()
   // Heat/Lot P5 — where this cert's heat now lives (stock / issued / transferred).
   const [material, setMaterial] = useState<{ stock: any[]; issues: any[]; transfers: any[] } | null>(null)
 
@@ -95,7 +97,7 @@ export const CertDetailModal: React.FC<Props> = ({ dark, projectId, certId, onCl
   return (
     <>
       <div onClick={onClose} style={scrimStyle} />
-      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: t.cardBg, border: t.bd, borderRadius: 12, zIndex: 6001, width: 920, maxWidth: '96vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.35)' }}>
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: t.cardBg, border: t.bd, borderRadius: 12, zIndex: 6001, width: expanded ? '95vw' : 920, height: expanded ? '90vh' : undefined, maxWidth: '96vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.35)' }}>
         {/* Header */}
         <div style={{ padding: '16px 22px', borderBottom: t.bd, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div>
@@ -104,7 +106,10 @@ export const CertDetailModal: React.FC<Props> = ({ dark, projectId, certId, onCl
               {cert ? `${cert.po_ref || '—'} · ${cert.vendor_name || '—'} · ${cert.tag || 'no tag'} · ${versions.length} version${versions.length !== 1 ? 's' : ''} on file` : '…'}
             </div>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: t.sub, cursor: 'pointer' }}>✕</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+            <ExpandBtn expanded={expanded} onToggle={toggleExpand} color={t.sub} />
+            <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: t.sub, cursor: 'pointer', padding: '2px 4px', lineHeight: 1 }}>✕</button>
+          </div>
         </div>
 
         {/* Body */}

@@ -4,6 +4,7 @@
 // + New transfer wizard (2 steps). Transfer detail modal with lifecycle stepper.
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'   // modals portal to document.body — see App.tsx zoom wrapper
+import { useExpand, ExpandBtn } from '../components/ExpandToggle'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
@@ -230,6 +231,7 @@ const TransferDetailModal = ({ dark, transfer, projectId, onClose, onStatusUpdat
   const cardBg = dark ? '#1e293b' : '#fff'
   const bd     = `1px solid ${dark ? '#334155' : '#dde3ed'}`
   const sub    = '#94a3b8'
+  const [expanded, toggleExpand] = useExpand()
 
   const isPending  = transfer.status === 'pending_approval'
   const isRejected = transfer.status === 'rejected'
@@ -259,10 +261,13 @@ const TransferDetailModal = ({ dark, transfer, projectId, onClose, onStatusUpdat
   return createPortal(
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 6000 }} />
-      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 28, width: 520, maxWidth: '95vw', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: cardBg, border: bd, borderRadius: 12, padding: 28, width: expanded ? '95vw' : 700, maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto', zIndex: 6001, fontFamily: 'IBM Plex Sans, sans-serif', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: col }}>Transfer — {transfer.transfer_ref}</div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: sub, cursor: 'pointer' }}>✕</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <ExpandBtn expanded={expanded} onToggle={toggleExpand} color={sub} />
+            <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: sub, cursor: 'pointer', padding: '2px 4px', lineHeight: 1 }}>✕</button>
+          </div>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
