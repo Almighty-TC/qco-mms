@@ -330,14 +330,20 @@ router.get('/:projectId/pos', async (req, res) => {
     }
 
     // ── Status tab filter ─────────────────────────────────────────────────────
+    // Route by LIFECYCLE status, not is_locked. is_locked is an edit-lock that
+    // stays on after a PO is approved AND after it's completed, so it can't tell
+    // "approved" from "complete". Each status maps to exactly one tab:
+    //   pending   → pre-approval        (draft/rfq/loa/pending_approval/pending_director_approval)
+    //   approved  → approved & in-flight (approved/po-raised/active) — NOT complete
+    //   completed → terminal            (closed/cancelled/rejected)
     if (status === 'approved') {
-      filters.push('po.is_locked = 1')
+      filters.push("po.status IN ('approved','po-raised','active')")
     } else if (status === 'pending') {
-      filters.push("po.status IN ('rfq','loa','pending_approval') AND po.is_locked = 0")
+      filters.push("po.status IN ('draft','rfq','loa','pending_approval','pending_director_approval')")
     } else if (status === 'completed') {
-      filters.push("po.status IN ('closed','cancelled')")
+      filters.push("po.status IN ('closed','cancelled','rejected')")
     } else if (status === 'all_active') {
-      filters.push("po.status NOT IN ('closed','cancelled')")
+      filters.push("po.status NOT IN ('closed','cancelled','rejected')")
     }
 
     // ── RAG filter — pure WHERE on l.cdd (no aggregates) ─────────────────────
