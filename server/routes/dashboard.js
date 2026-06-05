@@ -31,8 +31,10 @@ const resourceOf = req => (req.originalUrl || req.url || '').split('?')[0].repla
 const PERM_MODULES = ['procurement', 'expediting', 'logistics', 'material_control', 'traceability', 'mto', 'fmr']
 async function visibleSet(req) {
   if (req.user.role === 'admin') return new Set(PERM_MODULES)
-  const [roleRows] = await db.query('SELECT module, can_view FROM role_permissions WHERE role=? AND module IN (?)', [req.user.role, PERM_MODULES])
-  const [ovr] = await db.query('SELECT module, can_view FROM user_permission_overrides WHERE user_id=? AND module IN (?)', [req.user.id, PERM_MODULES])
+  const [[roleRows], [ovr]] = await Promise.all([
+    db.query('SELECT module, can_view FROM role_permissions WHERE role=? AND module IN (?)', [req.user.role, PERM_MODULES]),
+    db.query('SELECT module, can_view FROM user_permission_overrides WHERE user_id=? AND module IN (?)', [req.user.id, PERM_MODULES]),
+  ])
   const ov = new Map(ovr.filter(o => o.can_view !== null).map(o => [o.module, o.can_view]))
   const set = new Set()
   for (const m of PERM_MODULES) {

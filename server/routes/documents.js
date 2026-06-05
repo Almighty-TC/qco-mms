@@ -41,7 +41,11 @@ async function buildRegister(pid) {
   const rows = []
   const url = seg => `/project/${pid}/${seg}`
   const oc = await fileColumns()
+  // Each source below is independent — run them concurrently so the remote-DB
+  // round-trips overlap instead of stacking (was ~8 sequential queries).
+  const tasks = []
 
+  tasks.push((async () => {
   // ── Traceability — traceability_certs ─────────────────────
   const [tc] = await db.query(
     `SELECT c.id, c.document_name, c.cert_type, c.tag, c.po_ref, c.file_name, c.file_size,
@@ -68,6 +72,9 @@ async function buildRegister(pid) {
     })
   }
 
+  })())
+
+  tasks.push((async () => {
   // ── Expediting / VDRL — vdrl_documents ────────────────────
   // doc_type Report/Drawing → Expediting (FAT, fabrication, inspection);
   // the rest → VDRL package docs.
@@ -103,6 +110,9 @@ async function buildRegister(pid) {
     })
   }
 
+  })())
+
+  tasks.push((async () => {
   // ── Logistics — scn_documents ─────────────────────────────
   const [sd] = await db.query(
     `SELECT d.id, d.document_type, d.file_name, d.file_path, d.uploaded_by, u.full_name AS uploaded_by_name,
@@ -129,6 +139,9 @@ async function buildRegister(pid) {
     })
   }
 
+  })())
+
+  tasks.push((async () => {
   // ── Procurement — po_documents (current versions) ─────────
   const [pd] = await db.query(
     `SELECT pd.id, pd.doc_type, pd.file_name, pd.file_path, pd.file_size_bytes, pd.description, pd.uploaded_at,
@@ -153,6 +166,9 @@ async function buildRegister(pid) {
     })
   }
 
+  })())
+
+  tasks.push((async () => {
   // ── Foundational — foundational_certificates ──────────────
   const [fc] = await db.query(
     `SELECT fc.id, fc.entity_type, fc.cert_type, fc.ref_number, fc.filename, fc.file_size,
@@ -177,6 +193,9 @@ async function buildRegister(pid) {
     })
   }
 
+  })())
+
+  tasks.push((async () => {
   // ── MTO — mto_revisions (issued revision = a deliverable) ──
   const [mr] = await db.query(
     `SELECT r.id, r.revision, r.created_at, r.uploaded_by, u.full_name AS uploaded_by_name,
@@ -207,6 +226,9 @@ async function buildRegister(pid) {
     })
   }
 
+  })())
+
+  tasks.push((async () => {
   // ── Material Control — receipt POD/TCCC + FMR issue notes ──
   // MC persists no document FILE rows (storage is unbuilt), but a
   // receipt event and an FMR issue ARE document-like artifacts. We
@@ -238,6 +260,9 @@ async function buildRegister(pid) {
     })
   }
 
+  })())
+
+  tasks.push((async () => {
   // FMR issue note = one goods-issue voucher per FMR that has been issued.
   const [fi] = await db.query(
     `SELECT f.id, f.fmr_ref, MAX(il.issued_at) AS issued_at, MAX(il.issued_by) AS issued_by,
@@ -261,6 +286,10 @@ async function buildRegister(pid) {
       status: 'Available', is_missing: false,
     })
   }
+
+  })())
+
+  await Promise.all(tasks)
 
   // Material Control rows above are virtual (derived from receipt/issue events,
   // no stored file) — anything that did not opt into downloadable is not streamable.

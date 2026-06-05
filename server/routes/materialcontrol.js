@@ -107,39 +107,14 @@ router.get('/:projectId/receipting', rejectExternal, async (req, res) => {
       params.push(destination)
     }
 
-    const [scns] = await db.query(
-      `SELECT
-         s.id, s.scn_ref, s.status, s.mode, s.eta, s.atd,
-         s.origin_location, s.incoterms, s.forwarder_name,
-         s.total_packages, s.total_weight_kg, s.notes,
-         COALESCE(s.vendor_name, po.vendor_name) AS vendor_name,
-         po.po_number AS po_ref,
-         w.name AS destination_name, w.code AS destination_code,
-         s.destination_warehouse_id,
-         'SHIPMENT' AS type
-       FROM shipment_control_notes s
-       LEFT JOIN purchase_orders po ON s.po_id = po.id
-       LEFT JOIN warehouses w ON s.destination_warehouse_id = w.id
-       WHERE ${conditions.join(' AND ')}
-       ORDER BY
-         CASE s.status
-           WHEN 'arrived' THEN 1
-           WHEN 'customs_review' THEN 2
-           WHEN 'in-transit' THEN 3
-           ELSE 4
-         END, s.eta ASC`,
-      params
-    )
-
-    // Also get warehouse transfers if tab is 'transfers' or 'all'
-    let transfers = []
-    if (!tab || tab === 'all' || tab === 'transfers') {
+    // Build the (conditional) transfers query, then run everything concurrently.
+    const wantTransfers = (!tab || tab === 'all' || tab === 'transfers')
+    let transfersQ = Promise.resolve([[]]) // resolves to [rows] shape when skipped
+    if (wantTransfers) {
       const tConds = ['t.project_id = ?']
       const tParams = [pid]
-      if (tab === 'transfers') {
-        tConds.push("t.status NOT IN ('complete')")
-      }
-      const [trows] = await db.query(
+      if (tab === 'transfers') tConds.push("t.status NOT IN ('complete')")
+      transfersQ = db.query(
         `SELECT
            t.id, t.transfer_ref AS scn_ref, t.status, t.description AS item_description,
            t.qty, t.uom, t.wbs_code, t.est_pickup_date AS eta,
@@ -151,20 +126,44 @@ router.get('/:projectId/receipting', rejectExternal, async (req, res) => {
          LEFT JOIN warehouses fw ON t.from_warehouse_id = fw.id
          LEFT JOIN warehouses tw ON t.to_warehouse_id = tw.id
          WHERE ${tConds.join(' AND ')}`,
-        tParams
-      )
-      transfers = trows
+        tParams)
     }
 
-    // Pipeline counts
-    const [allRows] = await db.query(
-      'SELECT status FROM shipment_control_notes WHERE project_id = ? AND status NOT IN (?,?,?)',
-      [pid, 'received', 'closed', 'delivered']
-    )
-    const [[tCount]] = await db.query(
-      "SELECT COUNT(*) as n FROM warehouse_transfers WHERE project_id = ? AND status NOT IN ('complete')",
-      [pid]
-    )
+    const [
+      [scns],
+      [transfers],
+      [allRows],
+      [[tCount]],
+    ] = await Promise.all([
+      db.query(
+        `SELECT
+           s.id, s.scn_ref, s.status, s.mode, s.eta, s.atd,
+           s.origin_location, s.incoterms, s.forwarder_name,
+           s.total_packages, s.total_weight_kg, s.notes,
+           COALESCE(s.vendor_name, po.vendor_name) AS vendor_name,
+           po.po_number AS po_ref,
+           w.name AS destination_name, w.code AS destination_code,
+           s.destination_warehouse_id,
+           'SHIPMENT' AS type
+         FROM shipment_control_notes s
+         LEFT JOIN purchase_orders po ON s.po_id = po.id
+         LEFT JOIN warehouses w ON s.destination_warehouse_id = w.id
+         WHERE ${conditions.join(' AND ')}
+         ORDER BY
+           CASE s.status
+             WHEN 'arrived' THEN 1
+             WHEN 'customs_review' THEN 2
+             WHEN 'in-transit' THEN 3
+             ELSE 4
+           END, s.eta ASC`,
+        params),
+      transfersQ,
+      // Pipeline counts
+      db.query('SELECT status FROM shipment_control_notes WHERE project_id = ? AND status NOT IN (?,?,?)',
+        [pid, 'received', 'closed', 'delivered']),
+      db.query("SELECT COUNT(*) as n FROM warehouse_transfers WHERE project_id = ? AND status NOT IN ('complete')",
+        [pid]),
+    ])
 
     const arrived_count   = allRows.filter(r => ['arrived','partially_received'].includes(r.status)).length
     const transit_count   = allRows.filter(r => ['in-transit','in_transit','pending'].includes(r.status)).length
