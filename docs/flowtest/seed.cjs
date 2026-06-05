@@ -177,6 +177,9 @@ async function main() {
     }
     const wbsIds = await batchInsert(conn, 'wbs_nodes', ['project_id', 'parent_id', 'code', 'description', 'discipline', 'rag', 'ros_date', 'owner_id'], wbsRows.map(r => [r[0], r[1], r[2], r[3], r[4], r[5], r[6], null]))
     const wbsIdByCode = {}; wbsMeta.forEach((m, i) => { wbsIdByCode[m.code] = wbsIds[i] })
+    // wire parent_id from the dotted code hierarchy (parent of '1.5.4' is '1.5'; L1 → null)
+    // so the WBS tree view nests/indents (it builds depth from parent_id, not the code).
+    await conn.query("UPDATE wbs_nodes child JOIN wbs_nodes parent ON parent.project_id=child.project_id AND parent.code=SUBSTRING_INDEX(child.code,'.',LENGTH(child.code)-LENGTH(REPLACE(child.code,'.',''))) SET child.parent_id=parent.id WHERE child.project_id=? AND child.code LIKE '%.%'", [pid])
     const wbsCodes = wbsMeta.map(m => m.code)
     const leafCodes = wbsMeta.filter(m => m.code.split('.').length >= 2).map(m => m.code)
 
