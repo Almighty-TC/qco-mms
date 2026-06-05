@@ -65,6 +65,16 @@ function nextRevision(current) {
   return String.fromCharCode(upper.charCodeAt(upper.length - 1) + 1)
 }
 
+// Numeric rank for a revision letter so revisions can be ordered/compared.
+// A=1, B=2 … Z=26, AA=27, AB=28 … (base-26). Used to block uploading a
+// revision that is older than (or equal to) the register's current revision.
+function revisionRank(rev) {
+  const s = String(rev || '').toUpperCase().replace(/[^A-Z]/g, '')
+  let n = 0
+  for (const ch of s) n = n * 26 + (ch.charCodeAt(0) - 64)
+  return n
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // LIST / CREATE
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -711,14 +721,23 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
     const notes  = req.body.notes || `Rev ${newRev} upload`
     const dryRun = req.query.dryRun === 'true'
 
-    // ─── BUG-1: reject duplicate revision letter before any file parsing ──────
-    const [[existing]] = await db.query(
-      'SELECT id FROM mto_revisions WHERE mto_id = ? AND revision = ?',
-      [mtoId, newRev]
-    )
-    if (existing) {
+    // ─── Reject duplicate or out-of-order revisions before any file parsing ───
+    // Revisions only move FORWARD: an upload must be a LATER letter than every
+    // revision already on record. This blocks (a) re-uploading an existing letter
+    // and (b) loading an older revision after a newer one — which would otherwise
+    // regress current_revision and the live line set. We compare against the
+    // highest existing revision (current_revision can be stale).
+    const [allRevs] = await db.query('SELECT revision FROM mto_revisions WHERE mto_id = ?', [mtoId])
+    const newRank = revisionRank(newRev)
+    if (allRevs.some(r => r.revision === newRev)) {
       return res.status(409).json({
         error: `Revision ${newRev} already exists for this MTO. Upload a new revision letter.`
+      })
+    }
+    const latest = allRevs.reduce((a, r) => revisionRank(r.revision) > revisionRank(a) ? r.revision : a, allRevs[0]?.revision || '')
+    if (latest && newRank <= revisionRank(latest)) {
+      return res.status(409).json({
+        error: `Revision ${newRev} is older than the latest revision ${latest}. Uploads must be a later revision.`
       })
     }
 
