@@ -27,7 +27,7 @@ interface FMRRow {
   line_count?: number; total_qty_requested?: number
 }
 
-interface FMRCounts { total: number; pending_approval: number; partial_issued: number; issued_today: number; overdue: number }
+interface FMRCounts { total: number; pending_approval: number; approved: number; partial_issued: number; issued: number; issued_today: number; overdue: number }
 
 const fmt = (d?: string | null) => d ? new Date(d).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'
 
@@ -95,6 +95,17 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
     sortCol, sortDir, toggleSort, reload,
   } = usePagedList<FMRRow>({ fetcher, deps: [projectId, debouncedSearch, critOnly, pickup, statusFilter], pageSize: 50, initialSortCol: undefined })
   const sortArrow = (k: string) => sortCol === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
+
+  // Toggle the per-FMR critical-path flag (MC controllers only — backend enforces the role).
+  const toggleCritical = async (fmr: FMRRow) => {
+    try {
+      await axios.put(`${API}/mc/${projectId}/fmr/${fmr.id}/critical-path`, { is_critical_path: fmr.is_critical_path ? 0 : 1 })
+      addToast('success', fmr.is_critical_path ? 'Removed critical-path flag' : 'Marked as critical path')
+      reload()
+    } catch (e) {
+      addToast('error', (e as { response?: { data?: { error?: string } } }).response?.data?.error || 'Failed to update critical path')
+    }
+  }
 
   // Truncated cells get a hover tooltip; re-runs when the FMR list changes.
   useAutoTitle(tableRef, [fmrs])
@@ -220,6 +231,22 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
           ))}
         </div>
 
+        {/* Status tabs — quick segments (sync with the status dropdown below) */}
+        <div style={{ display: 'flex', gap: 2, marginBottom: 12, background: cardBg, border: bd, borderRadius: 8, overflow: 'hidden', width: 'fit-content', flexWrap: 'wrap' }}>
+          {([
+            ['all', 'All', counts?.total],
+            ['pending_approval', 'Pending', counts?.pending_approval],
+            ['approved', 'Awaiting pickup', counts?.approved],
+            ['partial_issued', 'Partially issued', counts?.partial_issued],
+            ['issued', 'Issued', counts?.issued],
+          ] as [string, string, number | string | undefined][]).map(([key, label, n]) => (
+            <button key={key} onClick={() => setStatusFilter(key)}
+              style={{ padding: '7px 14px', background: statusFilter === key ? '#E84E0F' : 'none', color: statusFilter === key ? '#fff' : sub, border: 'none', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', fontWeight: statusFilter === key ? 600 : 400 }}>
+              {label}{n != null ? ` (${n})` : ''}
+            </button>
+          ))}
+        </div>
+
         {/* Search + filter */}
         <div style={{ display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
           <input value={search} onChange={e => setSearch(e.target.value)}
@@ -268,7 +295,13 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
                     <tr key={fmr.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
                       <td style={{ padding: '9px 12px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          {fmr.is_critical_path ? <span style={{ color: '#E84E0F' }}>★</span> : null}
+                          {view === 'mc' ? (
+                            <button onClick={e => { e.stopPropagation(); toggleCritical(fmr) }}
+                              title={fmr.is_critical_path ? 'Critical path — click to unmark' : 'Mark as critical path'}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, padding: 0, lineHeight: 1, color: fmr.is_critical_path ? '#E84E0F' : '#cbd5e1' }}>
+                              {fmr.is_critical_path ? '★' : '☆'}
+                            </button>
+                          ) : (fmr.is_critical_path ? <span style={{ color: '#E84E0F' }}>★</span> : null)}
                           <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600 }}>{fmr.fmr_ref}</span>
                         </div>
                       </td>

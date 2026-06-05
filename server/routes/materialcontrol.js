@@ -572,7 +572,9 @@ router.get('/:projectId/fmr', async (req, res) => {
       `SELECT
          COUNT(*) AS total,
          SUM(CASE WHEN status='pending_approval' THEN 1 ELSE 0 END) AS pending_approval,
+         SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END) AS approved,
          SUM(CASE WHEN status='partial_issued' THEN 1 ELSE 0 END) AS partial_issued,
+         SUM(CASE WHEN status='issued' THEN 1 ELSE 0 END) AS issued,
          SUM(CASE WHEN status IN ('issued') AND DATE(updated_at)=CURDATE() THEN 1 ELSE 0 END) AS issued_today,
          SUM(CASE WHEN required_date < CURDATE() AND status NOT IN ('issued','rejected','cancelled') THEN 1 ELSE 0 END) AS overdue
        FROM fmr_requests WHERE project_id = ?`,
@@ -839,6 +841,22 @@ router.get('/:projectId/fmr/:fmrId/approval', async (req, res) => {
     res.json({ fmr, lines: enriched })
   } catch (e) {
     console.error('[mc:fmr-approval]', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// PUT /api/mc/:projectId/fmr/:fmrId/critical-path — toggle the per-FMR critical flag.
+// body: { is_critical_path: 0|1 }. Materials Controllers/Managers only.
+router.put('/:projectId/fmr/:fmrId/critical-path', async (req, res) => {
+  if (!APPROVAL_ALLOWED.has(req.user?.role)) return res.status(403).json({ error: 'Only Materials Controllers and Managers can change critical-path status' })
+  try {
+    const pid = Number(req.params.projectId)
+    const fmrId = Number(req.params.fmrId)
+    const flag = req.body?.is_critical_path ? 1 : 0
+    const [r] = await db.query('UPDATE fmr_requests SET is_critical_path=?, updated_at=NOW() WHERE id=? AND project_id=?', [flag, fmrId, pid])
+    if (!r.affectedRows) return res.status(404).json({ error: 'FMR not found' })
+    res.json({ success: true, is_critical_path: flag })
+  } catch (e) {
     res.status(500).json({ error: e.message })
   }
 })
