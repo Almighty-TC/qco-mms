@@ -817,29 +817,31 @@ router.get('/:projectId/commodities', async (req, res) => {
     const orderBy  = SAFE_SORT[req.query.sort_col] || 'c.code'
     const orderDir = String(req.query.sort_dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'
 
-    const [[{ total }]] = await db.query(
-      `SELECT COUNT(*) AS total FROM commodity_library c WHERE ${whereSql}`, params
-    )
-
-    // project-wide status counts for the tab badges (ignore status/search)
-    const [[cnt]] = await db.query(
-      `SELECT COUNT(*) AS all_count,
-              SUM(status='active')   AS active,
-              SUM(status='inactive') AS inactive
-       FROM commodity_library WHERE project_id = ?`, [pid]
-    )
+    // The three queries are independent — run them concurrently so the remote DB
+    // round-trips overlap instead of stacking (≈3× → ≈1× latency).
+    const [
+      [[{ total }]],
+      [[cnt]],
+      [rows],
+    ] = await Promise.all([
+      db.query(`SELECT COUNT(*) AS total FROM commodity_library c WHERE ${whereSql}`, params),
+      // project-wide status counts for the tab badges (ignore status/search)
+      db.query(
+        `SELECT COUNT(*) AS all_count,
+                SUM(status='active')   AS active,
+                SUM(status='inactive') AS inactive
+         FROM commodity_library WHERE project_id = ?`, [pid]),
+      db.query(
+        `SELECT c.*,
+                (SELECT COUNT(*) FROM foundational_certificates fc
+                 WHERE fc.entity_type='commodity' AND fc.entity_id=c.id) AS cert_count
+         FROM commodity_library c
+         WHERE ${whereSql}
+         ORDER BY ${orderBy} ${orderDir}, c.id ${orderDir}
+         LIMIT ? OFFSET ?`,
+        [...params, limit, offset]),
+    ])
     const counts = { all: Number(cnt.all_count) || 0, active: Number(cnt.active) || 0, inactive: Number(cnt.inactive) || 0 }
-
-    const [rows] = await db.query(
-      `SELECT c.*,
-              (SELECT COUNT(*) FROM foundational_certificates fc
-               WHERE fc.entity_type='commodity' AND fc.entity_id=c.id) AS cert_count
-       FROM commodity_library c
-       WHERE ${whereSql}
-       ORDER BY ${orderBy} ${orderDir}, c.id ${orderDir}
-       LIMIT ? OFFSET ?`,
-      [...params, limit, offset]
-    )
     res.json({ data: rows, total, page, limit, counts })
   } catch (e) {
     console.error('[foundational:commodities:get]', e.message)
@@ -959,24 +961,21 @@ router.get('/:projectId/equipment', async (req, res) => {
     const orderBy  = SAFE_SORT[req.query.sort_col] || 'e.tag'
     const orderDir = String(req.query.sort_dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'
 
-    const [[{ total }]] = await db.query(
-      `SELECT COUNT(*) AS total FROM equipment_list e WHERE ${whereSql}`, params
-    )
-
-    // project-wide counts by computed status (drive the tab badges; ignore status/search)
-    const [[cnt]] = await db.query(
-      `SELECT COUNT(*) AS all_count,
-              SUM(${PORAISED}) AS po_raised,
-              SUM(CASE WHEN NOT ${PORAISED} AND e.status = 'RFQ' THEN 1 ELSE 0 END) AS rfq,
-              SUM(CASE WHEN NOT ${PORAISED} AND e.status = 'Not started' THEN 1 ELSE 0 END) AS not_started
-       FROM equipment_list e WHERE e.project_id = ?`, [pid]
-    )
-    const counts = {
-      all: Number(cnt.all_count) || 0, 'PO raised': Number(cnt.po_raised) || 0,
-      'RFQ': Number(cnt.rfq) || 0, 'Not started': Number(cnt.not_started) || 0,
-    }
-
-    const [rows] = await db.query(
+    // Run the three independent queries concurrently (overlap remote round-trips).
+    const [
+      [[{ total }]],
+      [[cnt]],
+      [rows],
+    ] = await Promise.all([
+      db.query(`SELECT COUNT(*) AS total FROM equipment_list e WHERE ${whereSql}`, params),
+      // project-wide counts by computed status (drive the tab badges; ignore status/search)
+      db.query(
+        `SELECT COUNT(*) AS all_count,
+                SUM(${PORAISED}) AS po_raised,
+                SUM(CASE WHEN NOT ${PORAISED} AND e.status = 'RFQ' THEN 1 ELSE 0 END) AS rfq,
+                SUM(CASE WHEN NOT ${PORAISED} AND e.status = 'Not started' THEN 1 ELSE 0 END) AS not_started
+         FROM equipment_list e WHERE e.project_id = ?`, [pid]),
+      db.query(
       `SELECT e.id, e.project_id, e.tag, e.equipment_type, e.wbs_code, e.wbs_node_id,
               e.description, e.area_location, e.criticality, e.spec, e.trace_class,
               e.po_reference, e.vendor, e.weight_kg, e.size_lwh, e.notes,
@@ -988,8 +987,12 @@ router.get('/:projectId/equipment', async (req, res) => {
        WHERE ${whereSql}
        ORDER BY ${orderBy} ${orderDir}, e.id ${orderDir}
        LIMIT ? OFFSET ?`,
-      [...params, limit, offset]
-    )
+        [...params, limit, offset]),
+    ])
+    const counts = {
+      all: Number(cnt.all_count) || 0, 'PO raised': Number(cnt.po_raised) || 0,
+      'RFQ': Number(cnt.rfq) || 0, 'Not started': Number(cnt.not_started) || 0,
+    }
     res.json({ data: rows, total, page, limit, counts })
   } catch (e) {
     console.error('[foundational:equipment:get]', e.message)
