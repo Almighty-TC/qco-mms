@@ -10,9 +10,9 @@ import { usePagedList } from '../hooks/usePagedList'
 import { useResizableTable, ResetColumnsButton } from '../components/colResize'
 
 // Resizable column defaults — Expediting PO register (10 cols).
-// Col 0 is just the thin RAG colour stripe (3px bar) — kept as narrow as possible.
-const EXP_W   = [6, 34, 130, 160, 200, 150, 150, 110, 120, 60]
-const EXP_MIN = [6, 30, 90, 100, 120, 100, 110, 80, 90, 48]
+// Col 0 is just the RAG colour stripe (3px bar) — as thin as the bar itself.
+const EXP_W   = [4, 34, 130, 160, 200, 150, 150, 110, 120, 60]
+const EXP_MIN = [4, 30, 90, 100, 120, 100, 110, 80, 90, 48]
 import { HelpButton } from '../components/HelpDrawer'
 import { MilestoneTimeline } from '../components/MilestoneTimeline'
 import { MilestoneLegend } from '../components/MilestoneLegend'
@@ -517,8 +517,8 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
     pageSize: 50, initialSortCol: 'po_number', initialSortDir: 'asc',
   })
   const sortArrow = (k: string) => sortCol === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
-  // v4: stripe moved to col 0 — bump the id so saved widths don't apply in the old order.
-  const rt = useResizableTable('expediting_pos_v4', EXP_W, EXP_MIN)
+  // v5: stripe col trimmed to the bar width — bump id so old saved widths don't apply.
+  const rt = useResizableTable('expediting_pos_v5', EXP_W, EXP_MIN)
 
   // ─── VDRL DATA LOAD ───────────────────────────────────────
   // Loads stats and packages when VDRL tab is activated.
@@ -710,8 +710,8 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
                         onClick={() => setDrawerPoId(po.id)}
                       >
                         {/* RAG stripe — first column, as thin as the bar itself */}
-                        <td style={{ padding: '10px 0 10px 2px' }}>
-                          <div style={{ width: 3, height: 32, borderRadius: 2, background: RAG_COLORS[po.rag] || '#94a3b8' }} />
+                        <td style={{ padding: 0, width: 4 }}>
+                          <div style={{ width: 4, height: 36, background: RAG_COLORS[po.rag] || '#94a3b8' }} />
                         </td>
                         {/* BUG-3 FIX: ★ star column */}
                         <td style={{ padding: '10px 6px', width: 28, textAlign: 'center' }}
