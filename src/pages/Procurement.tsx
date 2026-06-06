@@ -1827,9 +1827,9 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
                     fontSize: 10, fontWeight: 700, color: '#94a3b8',
                     letterSpacing: '0.06em', textTransform: 'uppercase',
                     fontFamily: 'IBM Plex Sans, sans-serif', textAlign: 'center',
-                    position: 'sticky', top: 0, zIndex: 10, overflow: 'hidden', whiteSpace: 'nowrap',
+                    position: 'relative', overflow: 'hidden', whiteSpace: 'nowrap',
                     boxSizing: 'border-box',
-                    // opaque per-cell bg so rows scroll BEHIND the sticky header
+                    // opaque per-cell bg so rows scroll BEHIND the sticky thead
                     // (borderCollapse:separate doesn't paint the <thead> background)
                     background: dark ? '#0f172a' : '#f4f7fb',
                     borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}`,
