@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 
 export default function Login() {
@@ -7,6 +8,11 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // ── Forgot-password view state ──────────────────────────────
+  const [mode, setMode] = useState<'signin' | 'forgot'>('signin');
+  const [forgotMsg, setForgotMsg] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -18,6 +24,22 @@ export default function Login() {
       setError(err.response?.data?.error || 'Login failed');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleForgot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setForgotMsg('');
+    setForgotLoading(true);
+    try {
+      const { data } = await axios.post('http://localhost:3001/api/auth/forgot-password', { email });
+      setForgotMsg(data?.message || 'If an account with that email exists, a temporary password has been emailed.');
+    } catch (err: any) {
+      // The endpoint is intentionally generic; only a missing email returns an error.
+      setError(err.response?.data?.error || 'Could not process the request. Please try again.');
+    } finally {
+      setForgotLoading(false);
     }
   };
 
@@ -82,10 +104,16 @@ export default function Login() {
             fontWeight: 600,
             margin: '0 0 1.5rem 0',
           }}>
-            Sign in to your account
+            {mode === 'signin' ? 'Sign in to your account' : 'Reset your password'}
           </h2>
 
-          <form onSubmit={handleSubmit}>
+          {mode === 'forgot' && (
+            <p style={{ color: '#888', fontSize: 13, margin: '0 0 1.25rem 0', lineHeight: 1.5 }}>
+              Enter your account email and we'll send you a temporary password. You'll set a new one when you sign in.
+            </p>
+          )}
+
+          <form onSubmit={mode === 'signin' ? handleSubmit : handleForgot}>
             <div style={{ marginBottom: '1rem' }}>
               <label style={{
                 display: 'block',
@@ -118,6 +146,7 @@ export default function Login() {
               />
             </div>
 
+            {mode === 'signin' && (
             <div style={{ marginBottom: '1.5rem' }}>
               <label style={{
                 display: 'block',
@@ -149,6 +178,22 @@ export default function Login() {
                 }}
               />
             </div>
+            )}
+
+            {mode === 'forgot' && forgotMsg && (
+              <div style={{
+                background: '#0a1a0f',
+                border: '1px solid #1a3a24',
+                borderRadius: 6,
+                padding: '0.6rem 0.875rem',
+                color: '#4ade80',
+                fontSize: 13,
+                marginBottom: '1rem',
+                lineHeight: 1.5,
+              }}>
+                {forgotMsg}
+              </div>
+            )}
 
             {error && (
               <div style={{
@@ -166,23 +211,48 @@ export default function Login() {
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || forgotLoading}
               style={{
                 width: '100%',
                 padding: '0.75rem',
                 borderRadius: 6,
-                background: loading ? '#b33a0c' : '#E84E0F',
+                background: (loading || forgotLoading) ? '#b33a0c' : '#E84E0F',
                 color: '#fff',
                 fontWeight: 700,
                 fontSize: 14,
                 border: 'none',
-                cursor: loading ? 'not-allowed' : 'pointer',
+                cursor: (loading || forgotLoading) ? 'not-allowed' : 'pointer',
                 letterSpacing: 0.5,
                 transition: 'background 0.2s',
               }}
             >
-              {loading ? 'Signing in...' : 'Sign In'}
+              {mode === 'signin'
+                ? (loading ? 'Signing in...' : 'Sign In')
+                : (forgotLoading ? 'Sending...' : 'Send temporary password')}
             </button>
+
+            {/* Mode toggle */}
+            <div style={{ textAlign: 'center', marginTop: '1rem' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setError('');
+                  setForgotMsg('');
+                  setMode(mode === 'signin' ? 'forgot' : 'signin');
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#888',
+                  fontSize: 13,
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                  fontFamily: 'inherit',
+                }}
+              >
+                {mode === 'signin' ? 'Forgot password?' : '← Back to sign in'}
+              </button>
+            </div>
           </form>
         </div>
 

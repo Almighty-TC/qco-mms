@@ -4,10 +4,17 @@ const jwt     = require('jsonwebtoken')
 const db      = require('../db')
 const { dbError } = require('../utils/dbError')
 const { authenticateToken: authMiddleware } = require('../middleware/auth')
-const { validateComplexity, checkHistory, addToHistory, expiresAt: pwExpiry } = require('../utils/password')
+const { validateComplexity, checkHistory, addToHistory, expiresAt: pwExpiry, generate } = require('../utils/password')
+const { sendEmail, html } = require('../services/email')
 
 const router     = express.Router()
 const JWT_SECRET = process.env.JWT_SECRET || 'qmat_dev_secret'
+
+// ─── FORGOT-PASSWORD COOLDOWN ────────────────────────────────
+// In-memory per-email throttle so the endpoint can't be used to spam a user's
+// inbox or hammer the mailer. One reset email per address per 90s.
+const forgotCooldown = new Map()
+const FORGOT_COOLDOWN_MS = 90 * 1000
 
 // ─── LOGIN ──────────────────────────────────────────────────
 // Authenticates with email + password, returns JWT and user object.
@@ -63,6 +70,63 @@ router.post('/login', async (req, res) => {
     res.json({ token, user: payload })
   } catch (err) {
     dbError(res, err)
+  }
+})
+
+// ─── FORGOT PASSWORD ─────────────────────────────────────────
+// Self-service reset. Emails a temporary password and forces a change on next
+// login (same mechanism as an admin reset). Always returns a generic success so
+// the endpoint can't be used to discover which emails have accounts.
+router.post('/forgot-password', async (req, res) => {
+  const GENERIC = { ok: true, message: 'If an account with that email exists, a temporary password has been emailed.' }
+  try {
+    const email = String(req.body?.email || '').trim()
+    if (!email) return res.status(400).json({ error: 'Email is required' })
+
+    // Per-email cooldown (also limits inbox spam for a real address).
+    const now = Date.now()
+    const last = forgotCooldown.get(email.toLowerCase())
+    if (last && now - last < FORGOT_COOLDOWN_MS) return res.json(GENERIC)
+    forgotCooldown.set(email.toLowerCase(), now)
+
+    const [[user]] = await db.query(
+      `SELECT id, full_name AS fullName, email, is_active, is_external AS isExternal
+       FROM users WHERE email = ? LIMIT 1`,
+      [email]
+    )
+    // Only act for a real, active account — but never reveal that to the caller.
+    if (!user || !user.is_active) return res.json(GENERIC)
+
+    const tempPass  = generate()
+    const hash      = await bcrypt.hash(tempPass, 12)
+    const expiresAt = pwExpiry(Boolean(user.isExternal))
+
+    await db.query(
+      `UPDATE users SET password_hash = ?, force_password_change = 1, password_expires_at = ? WHERE id = ?`,
+      [hash, expiresAt, user.id]
+    )
+    await addToHistory(user.id, hash)
+
+    await sendEmail(
+      user.email,
+      'Your QCO Group MMS password reset',
+      html('Password Reset',
+        `<p>Dear ${user.fullName},</p>
+         <p>We received a request to reset your QCO Group MMS password. A temporary password has been generated for you:</p>
+         <table style="border-collapse:collapse;margin:12px 0">
+           <tr><td style="padding:4px 12px 4px 0"><strong>Email:</strong></td><td>${user.email}</td></tr>
+           <tr><td style="padding:4px 12px 4px 0"><strong>Temporary Password:</strong></td><td style="font-family:monospace;font-size:15px">${tempPass}</td></tr>
+         </table>
+         <p><strong>Use this temporary password to log in — you will be asked to set a new password immediately.</strong></p>
+         <p>If you did not request this reset, please contact your administrator, as your previous password is no longer valid.</p>`
+      )
+    )
+
+    return res.json(GENERIC)
+  } catch (err) {
+    // Still respond generically — don't leak internal errors on a public endpoint.
+    console.error('[forgot-password]', err.message)
+    return res.json(GENERIC)
   }
 })
 
