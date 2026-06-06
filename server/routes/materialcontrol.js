@@ -401,7 +401,7 @@ router.get('/:projectId/stock', async (req, res) => {
 
     // ─── PAGINATE ─── default 50, hard cap 200
     const page   = Math.max(1, parseInt(req.query.page  || '1', 10))
-    const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)))
+    const limit  = Math.min(100000, Math.max(1, parseInt(req.query.limit || '50', 10)))
     const offset = (page - 1) * limit
 
     // ─── WHITELISTED SORT (+ unique s.id tiebreaker — stable OFFSET windows) ───
@@ -560,7 +560,7 @@ router.get('/:projectId/fmr', async (req, res) => {
 
     // ─── PAGINATE ─── default 50, hard cap 200
     const page   = Math.max(1, parseInt(req.query.page  || '1', 10))
-    const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)))
+    const limit  = Math.min(100000, Math.max(1, parseInt(req.query.limit || '50', 10)))
     const offset = (page - 1) * limit
 
     // ─── WHITELISTED SORT (+ unique f.id tiebreaker). Default = overdue-first. ───
@@ -1266,7 +1266,7 @@ router.get('/:projectId/transfers', rejectExternal, async (req, res) => {
 
     // ─── PAGINATE ─── default 50, hard cap 200
     const page   = Math.max(1, parseInt(req.query.page  || '1', 10))
-    const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)))
+    const limit  = Math.min(100000, Math.max(1, parseInt(req.query.limit || '50', 10)))
     const offset = (page - 1) * limit
 
     // ─── WHITELISTED SORT (+ unique t.id tiebreaker). Default = est_pickup_date. ───

@@ -1479,7 +1479,7 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
   const [rosFrom,      setRosFrom]      = useState('')
   const [rosTo,        setRosTo]        = useState('')
   const [page,         setPage]         = useState(1)
-  const PAGE_SIZE = 50
+  const [pageSize,     setPageSize]     = useState(50)
 
   // ── UI state ────────────────────────────────────────────────────────────────
   const [showNew,       setShowNew]       = useState(false)
@@ -1525,7 +1525,7 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
   const load = useCallback(async (p = page) => {
     setLoading(true); setError('')
     try {
-      const params: Record<string, string> = { page: String(p), limit: String(PAGE_SIZE) }
+      const params: Record<string, string> = { page: String(p), limit: String(pageSize) }
       if (activeTab !== 'all')  params.status = activeTab
       if (criticalOnly)         params.is_critical_path = '1'
       if (search.trim())        params.search = search.trim()
@@ -1552,7 +1552,7 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
       const er = e as { response?: { data?: { error?: string } }; message?: string }
       setError(er.response?.data?.error ?? er.message ?? 'Failed to load POs')
     } finally { setLoading(false) }
-  }, [projectId, activeTab, criticalOnly, search, rosFrom, rosTo, page, cardFilter])
+  }, [projectId, activeTab, criticalOnly, search, rosFrom, rosTo, page, pageSize, cardFilter])
 
   useEffect(() => { setPage(1); load(1) }, [activeTab, criticalOnly, search, rosFrom, rosTo, cardFilter])
   useEffect(() => { load() }, [load])
@@ -1657,7 +1657,7 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
     color: active ? col : '#94a3b8', transition: 'all 120ms',
   })
 
-  const totalPages = Math.ceil(total / PAGE_SIZE)
+  const totalPages = Math.ceil(total / pageSize)
 
   return (
     <div style={{ fontFamily: 'IBM Plex Sans, sans-serif', paddingBottom: 32 }}>
@@ -1921,7 +1921,7 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
       </div>
 
       {/* ── Pagination controls (shared Pager) ──────────────────────────────────── */}
-      <Pager page={page} total={total} pageSize={PAGE_SIZE} dark={dark}
+      <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageSizeChange={n => { setPageSize(n); setPage(1) }}
         onPageChange={p => setPage(Math.max(1, Math.min(totalPages, p)))} />
 
       {/* ── Modals & drawers ──────────────────────────────────────────────────── */}

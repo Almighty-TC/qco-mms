@@ -396,7 +396,7 @@ const LineItemsTab = ({
   }, [projectId, mtoId, currentRevision, filter, search])
 
   const {
-    data: lines, total, page, setPage, pageSize, loading, error,
+    data: lines, total, page, setPage, setPageSize, pageSize, loading, error,
     sortCol, sortDir, toggleSort, reload,
   } = usePagedList<MTOLine>({
     fetcher, deps: [currentRevision, filter, search], pageSize: 50, initialSortCol: 'line_number',
@@ -513,7 +513,7 @@ const LineItemsTab = ({
             </tbody>
           </table>
         </div>
-        <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} />
+        <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} onPageSizeChange={setPageSize} />
         <MilestoneLegend dark={dark} />
         </>
       )}

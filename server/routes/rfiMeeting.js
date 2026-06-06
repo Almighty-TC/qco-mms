@@ -89,7 +89,7 @@ router.get('/:projectId', requirePermission('rfi_meeting', 'can_view'), async (r
   try {
     const pid    = Number(req.params.projectId)
     const page   = Math.max(1, parseInt(req.query.page || '1', 10))
-    const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)))
+    const limit  = Math.min(100000, Math.max(1, parseInt(req.query.limit || '50', 10)))
     const offset = (page - 1) * limit
 
     const where = ['project_id = ?']; const params = [pid]

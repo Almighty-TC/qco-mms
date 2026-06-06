@@ -94,7 +94,7 @@ const MCTransferInner = ({ dark, projectId, projectName, onBack }: {
   }, [projectId, debouncedSearch, statusFilter])
 
   const {
-    data: transfers, total, page, setPage, pageSize, loading,
+    data: transfers, total, page, setPage, setPageSize, pageSize, loading,
     sortCol, sortDir, toggleSort, reload,
   } = usePagedList<Transfer>({ fetcher, deps: [projectId, debouncedSearch, statusFilter], pageSize: 50, initialSortCol: undefined })
   const sortArrow = (k: string) => sortCol === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
@@ -207,7 +207,7 @@ const MCTransferInner = ({ dark, projectId, projectName, onBack }: {
               </tbody>
             </table>
           </div>
-          <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} />
+          <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} onPageSizeChange={setPageSize} />
         </div>
       </div>
 

@@ -517,7 +517,7 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, userRole = '', on
   }, [projectId, subTab, ragFilter, debouncedSearch, criticalOnly, rosFrom, rosTo])
 
   const {
-    data: pos, total, page, setPage, pageSize, loading,
+    data: pos, total, page, setPage, setPageSize, pageSize, loading,
     sortCol, sortDir, toggleSort,
   } = usePagedList<PORow>({
     fetcher, deps: [projectId, subTab, ragFilter, debouncedSearch, criticalOnly, rosFrom, rosTo],
@@ -777,7 +777,7 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, userRole = '', on
             </div>
           )}
 
-          <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} />
+          <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} onPageSizeChange={setPageSize} />
 
           {/* ── MILESTONE LEGEND ─────────────────────────────── */}
           <MilestoneLegend dark={dark} />

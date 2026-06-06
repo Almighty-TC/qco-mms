@@ -76,7 +76,7 @@ function audit(req, action, resource) {
 // Parses and clamps page/limit query params. Returns { page, limit, offset }.
 function paginate(query) {
   const page   = Math.max(1, parseInt(query.page  || '1'))
-  const limit  = Math.min(200, Math.max(1, parseInt(query.limit || '50')))
+  const limit  = Math.min(100000, Math.max(1, parseInt(query.limit || '50')))
   return { page, limit, offset: (page - 1) * limit }
 }
 

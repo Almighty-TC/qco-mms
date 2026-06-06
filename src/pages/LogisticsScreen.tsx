@@ -153,7 +153,7 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
   }, [projectId, statusFilter, debouncedSearch, criticalOnly, modeFilter, arrivalDays])
 
   const {
-    data: scns, total, page, setPage, pageSize, loading,
+    data: scns, total, page, setPage, setPageSize, pageSize, loading,
     sortCol, sortDir, toggleSort, reload,
   } = usePagedList<SCNRow>({
     fetcher, deps: [projectId, statusFilter, debouncedSearch, criticalOnly, modeFilter, arrivalDays],
@@ -369,7 +369,7 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
           <MilestoneLegend dark={dark} />
         </div>
 
-        <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} />
+        <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} onPageSizeChange={setPageSize} />
       </div>
 
       {/* ── LOADING OVERLAY ────────────────────────────────── */}

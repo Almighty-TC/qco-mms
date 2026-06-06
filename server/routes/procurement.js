@@ -61,7 +61,7 @@ const DOC_UPLOAD_ROLES        = new Set(['admin', 'procurement_manager', 'procur
 // ─── PAGINATION HELPER ────────────────────────────────────────────────────────
 function paginate(query) {
   const page  = Math.max(1, parseInt(query.page  || '1', 10))
-  const limit = Math.min(200, Math.max(1, parseInt(query.limit || '50', 10)))
+  const limit = Math.min(100000, Math.max(1, parseInt(query.limit || '50', 10)))
   return { page, limit, offset: (page - 1) * limit }
 }
 

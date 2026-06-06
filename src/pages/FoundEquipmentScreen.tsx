@@ -279,7 +279,7 @@ export const FoundEquipmentScreen = ({ dark, projectId, projectName, onBack }: {
   }, [projectId, tab, search])
 
   const {
-    data: items, total, page, setPage, pageSize, loading,
+    data: items, total, page, setPage, setPageSize, pageSize, loading,
     sortCol, sortDir, toggleSort, reload,
   } = usePagedList<Equipment>({ fetcher, deps: [projectId, tab, search], pageSize: 50, initialSortCol: 'tag' })
 
@@ -439,7 +439,7 @@ export const FoundEquipmentScreen = ({ dark, projectId, projectName, onBack }: {
         <MilestoneLegend dark={dark} />
       </div>
 
-      <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} />
+      <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} onPageSizeChange={setPageSize} />
 
       {/* Modals */}
       {(addModal || editItem) && (

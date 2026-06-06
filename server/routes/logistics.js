@@ -130,7 +130,7 @@ router.get('/register/:projectId', async (req, res) => {
     const role = req.user?.role
     const uid  = req.user?.id
     const { status, search, critical_only, mode, arrival_days, sort_col, sort_dir, page = 1 } = req.query
-    const lim    = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)))
+    const lim    = Math.min(100000, Math.max(1, parseInt(req.query.limit || '50', 10)))
     const offset = (Math.max(1, Number(page)) - 1) * lim
 
     // Build WHERE clause

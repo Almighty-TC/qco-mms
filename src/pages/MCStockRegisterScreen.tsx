@@ -121,7 +121,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
   }, [projectId, debouncedSearch, showHolds])
 
   const {
-    data: stock, total, page, setPage, pageSize, loading,
+    data: stock, total, page, setPage, setPageSize, pageSize, loading,
     sortCol, sortDir, setSortCol, setSortDir, toggleSort, reload,
   } = usePagedList<StockItem>({ fetcher, deps: [projectId, debouncedSearch, showHolds], pageSize: 50, initialSortCol: 'warehouse' })
 
@@ -312,7 +312,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
           )}
         </div>
 
-        <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} />
+        <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} onPageSizeChange={setPageSize} />
       </div>
 
       {/* Stock Take Modal */}

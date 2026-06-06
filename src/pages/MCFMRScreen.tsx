@@ -113,7 +113,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
   }, [projectId, debouncedSearch, critOnly, pickup, statusFilter, regView])
 
   const {
-    data: fmrs, total, page, setPage, pageSize, loading,
+    data: fmrs, total, page, setPage, setPageSize, pageSize, loading,
     sortCol, sortDir, toggleSort, reload,
   } = usePagedList<FMRRow>({ fetcher, deps: [projectId, debouncedSearch, critOnly, pickup, statusFilter, regView], pageSize: 50, initialSortCol: undefined })
   const sortArrow = (k: string) => sortCol === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
@@ -456,7 +456,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
               </tbody>
             </table>
           </div>
-          <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} />
+          <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} onPageSizeChange={setPageSize} />
         </div>
       </div>
 

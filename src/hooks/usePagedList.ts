@@ -21,11 +21,14 @@ interface Options<T> {
 }
 
 export function usePagedList<T>({
-  fetcher, deps = [], pageSize = 50, initialSortCol, initialSortDir = 'asc',
+  fetcher, deps = [], pageSize: initialPageSize = 50, initialSortCol, initialSortDir = 'asc',
 }: Options<T>) {
   const [data,    setData]    = useState<T[]>([])
   const [total,   setTotal]   = useState(0)
   const [page,    setPage]    = useState(1)
+  // pageSize is user-selectable (25/50/100/200/All) via the shared Pager.
+  const [pageSize, setPageSizeState] = useState(initialPageSize)
+  const setPageSize = useCallback((n: number) => { setPageSizeState(n); setPage(1) }, [])
   const [sortCol, setSortCol] = useState<string | undefined>(initialSortCol)
   const [sortDir, setSortDir] = useState<SortDir>(initialSortDir)
   const [loading, setLoading] = useState(true)
@@ -77,7 +80,7 @@ export function usePagedList<T>({
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
   return {
-    data, total, page, setPage, pageSize, totalPages,
+    data, total, page, setPage, pageSize, setPageSize, totalPages,
     loading, error,
     sortCol, sortDir, toggleSort, setSortCol, setSortDir,
     reload: () => load(page, sortCol, sortDir),

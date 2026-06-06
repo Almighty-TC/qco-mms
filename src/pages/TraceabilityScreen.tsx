@@ -101,7 +101,7 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
     return { data: (data.data ?? []) as HoldRow[], total: (data.total ?? 0) as number }
   }, [projectId])
   const {
-    data: holds, total: holdsTotal, page: holdsPage, setPage: setHoldsPage,
+    data: holds, total: holdsTotal, page: holdsPage, setPage: setHoldsPage, setPageSize: setHoldsPageSize,
     pageSize: holdsPageSize, sortCol: holdsSortCol, sortDir: holdsSortDir,
     toggleSort: toggleHoldsSort, reload: reloadHolds,
   } = usePagedList<HoldRow>({ fetcher: holdsFetcher, deps: [projectId], pageSize: 50, initialSortCol: 'age_days', initialSortDir: 'desc' })
@@ -403,7 +403,7 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
                   </tbody>
                 </table>
               </div>
-              <Pager page={holdsPage} total={holdsTotal} pageSize={holdsPageSize} dark={dark} onPageChange={setHoldsPage} />
+              <Pager page={holdsPage} total={holdsTotal} pageSize={holdsPageSize} dark={dark} onPageChange={setHoldsPage} onPageSizeChange={setHoldsPageSize} />
             </div>
           </div>
         )}

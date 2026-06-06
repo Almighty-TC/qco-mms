@@ -471,7 +471,7 @@ router.get('/:projectId/:mtoId/lines', async (req, res) => {
 
     // ─── PAGINATE ─── default 50, hard cap 200
     const page   = Math.max(1, parseInt(req.query.page  || '1', 10))
-    const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)))
+    const limit  = Math.min(100000, Math.max(1, parseInt(req.query.limit || '50', 10)))
     const offset = (page - 1) * limit
 
     // ─── FILTERS (server-side, whole-set) ───

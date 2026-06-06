@@ -145,7 +145,7 @@ export const AuditViewerScreen = ({ dark, userRole, onBack }: {
   }, [buildParams])
 
   const {
-    data: rows, total, page, setPage, pageSize, loading,
+    data: rows, total, page, setPage, setPageSize, pageSize, loading,
     sortCol, sortDir, setSortCol, setSortDir, reload,
   } = usePagedList<AuditRow>({
     fetcher, deps: [action, entityType, userId, projectId, dateFrom, dateTo, debouncedSearch],
@@ -364,7 +364,7 @@ export const AuditViewerScreen = ({ dark, userRole, onBack }: {
         })}
       </AdminTable>
 
-      <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} />
+      <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} onPageSizeChange={setPageSize} />
     </div>
   )
 }

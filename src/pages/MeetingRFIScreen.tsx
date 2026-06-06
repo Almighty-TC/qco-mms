@@ -79,7 +79,7 @@ function MeetingRFIInner({ dark, projectId, projectName, userRole, userId, onBac
   }, [projectId, type, status, assignee, overdue, search])
 
   const {
-    data: items, total, page, setPage, pageSize, loading, sortCol, sortDir, toggleSort, reload,
+    data: items, total, page, setPage, setPageSize, pageSize, loading, sortCol, sortDir, toggleSort, reload,
   } = usePagedList<RfiRow>({ fetcher, deps: [projectId, type, status, assignee, overdue, search], pageSize: 50, initialSortCol: 'raised_date', initialSortDir: 'desc' })
 
   // Assignee filter options — distinct assignees in the register (first 200).
@@ -186,7 +186,7 @@ function MeetingRFIInner({ dark, projectId, projectName, userRole, userId, onBac
         </table>
       </div>
 
-      <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} />
+      <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} onPageSizeChange={setPageSize} />
 
       {/* Detail drawer — workflow actions + link picker */}
       {selected && (
