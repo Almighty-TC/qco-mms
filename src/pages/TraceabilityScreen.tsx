@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
+import { useResizableTable, ResetColumnsButton } from '../components/colResize'
 import { HelpButton } from '../components/HelpDrawer'
 import { TRACEABILITY_HELP } from '../helpContent'
 import { Pager } from '../components/Pager'
