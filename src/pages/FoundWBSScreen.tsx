@@ -1854,7 +1854,7 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
         {/* Tree table */}
         <div style={{ flex: 1, minWidth: 0, background: dark ? '#1e293b' : '#fff', border: bd, borderRadius: focusNode ? '10px 0 0 10px' : 10, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', ...(inFocus ? { display: 'flex', flexDirection: 'column' } : {}) }}>
           <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: inFocus ? undefined : 'calc(100vh - 310px)', flex: inFocus ? 1 : undefined }}>
-            <table style={{ width: 4 + 28 + 36 + colW[0] + colW[1] + colW[2] + (focusMode ? 0 : 80 + colW[3] + colW[4]), tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+            <table style={{ width: 4 + 28 + 36 + colW[0] + colW[1] + colW[2] + (focusMode ? 0 : 80 + colW[3] + colW[4]), minWidth: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
               {/* colgroup drives the resizable column widths (table-layout: fixed) */}
               <colgroup>
                 <col style={{ width: 4 }} />

@@ -478,15 +478,8 @@ const PODrawer = ({ po, dark, users, projectId, projectName, onClose, onUpdated,
           </div>
         ) : (
         <>
-        {/* ── Action buttons ────────────────────────────────────────────────── */}
-        <div style={{ padding: '10px 20px', borderBottom: `1px solid ${borderCol}`, display: 'flex', gap: 8, flexShrink: 0 }}>
-          <button disabled style={{ padding: '6px 14px', borderRadius: 6, border: `1px solid ${borderCol}`, background: 'none', color: '#94a3b8', fontSize: 12, cursor: 'not-allowed', fontFamily: 'inherit' }} title="Phase 2: Create SCN">
-            + Create SCN
-          </button>
-          <button disabled style={{ padding: '6px 14px', borderRadius: 6, border: `1px solid ${borderCol}`, background: 'none', color: '#94a3b8', fontSize: 12, cursor: 'not-allowed', fontFamily: 'inherit' }} title="Phase 3: Documents">
-            📎 Documents
-          </button>
-        </div>
+        {/* SCN creation is an Expediting action, not Procurement — no Create SCN here.
+            Documents live in the expanded full PO view (⤢). */}
 
         {/* ── Scrollable body — Item 9C: drawer scrolls independently ──────── */}
         <div style={{ overflowY: 'auto', flex: 1, padding: '16px 20px', maxHeight: 'calc(100vh - 60px)' }}>
