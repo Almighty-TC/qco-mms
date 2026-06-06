@@ -12,8 +12,8 @@ import { ToastContainer } from '../components/Toast'
 import { useResizableTable, ResetColumnsButton } from '../components/colResize'
 
 // Resizable column defaults — MTO line-items grid (12 cols) + revision history (5 cols).
-const MTO_LINE_W   = [70, 110, 260, 90, 70, 110, 90, 80, 120, 120, 80, 50]
-const MTO_LINE_MIN = [50, 70, 120, 60, 50, 80, 60, 50, 80, 90, 60, 40]
+const MTO_LINE_W   = [70, 110, 260, 90, 70, 110, 120, 120, 80, 50]
+const MTO_LINE_MIN = [50, 70, 120, 60, 50, 80, 80, 90, 60, 40]
 const MTO_REV_W    = [140, 200, 130, 320, 80]
 const MTO_REV_MIN  = [90, 120, 90, 120, 60]
 import { HelpButton } from '../components/HelpDrawer'
@@ -80,6 +80,28 @@ function fmtDate(s: string | null | undefined) {
   return new Date(s).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
+// Suggest the next revision label. Works for pure letters (A→B, Z→AA), pure
+// numbers (1→2, 09→10) and mixed (2A→2B, R0→R1) — but it's only a suggestion;
+// the user can type any revision (letters, numbers or a mix).
+function suggestRev(cur: string | null | undefined): string {
+  const s = String(cur ?? 'A').trim()
+  if (!s) return 'A'
+  if (/^\d+$/.test(s)) return String(Number(s) + 1)
+  if (/^[A-Za-z]+$/.test(s)) {
+    const a = s.toUpperCase().split('')
+    for (let i = a.length - 1; i >= 0; i--) {
+      if (a[i] === 'Z') a[i] = 'A'
+      else { a[i] = String.fromCharCode(a[i].charCodeAt(0) + 1); return a.join('') }
+    }
+    return 'A' + a.join('')
+  }
+  const m = s.match(/^(.*?)([0-9]+)$/)   // trailing number → bump it (R0→R1, 2A09→…)
+  if (m) return m[1] + String(Number(m[2]) + 1)
+  const last = s.slice(-1)
+  if (/[A-Ya-y]/.test(last)) return s.slice(0, -1) + String.fromCharCode(last.charCodeAt(0) + 1)
+  return s + '1'
+}
+
 // ─── BUG-3: diff value display — format date fields instead of raw ISO ────────
 const isDateField = (f: string) => f.includes('date') || f.includes('_at')
 const displayVal = (field: string, val: unknown): string => {
@@ -120,12 +142,10 @@ const MTOLineEditModal = ({
   const locked = line.status === 'po-raised'
 
   const [rosDate,      setRosDate]      = useState(line.ros_date?.slice(0,10) ?? '')
-  const [vdrl,         setVdrl]         = useState(!!line.vdrl_required)
   const [description,  setDescription]  = useState(line.description)
   const [quantity,     setQuantity]     = useState(String(line.quantity ?? ''))
   const [uom,          setUom]          = useState(line.uom ?? '')
   const [wbsCode,      setWbsCode]      = useState(line.wbs_code ?? '')
-  const [inspClass,    setInspClass]    = useState(line.inspection_class)
   const [poRef,        setPoRef]        = useState(line.po_ref ?? '')
   const [status,       setStatus]       = useState(line.status)
   const [saving,       setSaving]       = useState(false)
@@ -144,10 +164,9 @@ const MTOLineEditModal = ({
     setSaving(true)
     try {
       const payload = locked
-        ? { ros_date: rosDate || null, vdrl_required: vdrl ? 1 : 0 }
+        ? { ros_date: rosDate || null }
         : { description, quantity: quantity ? parseFloat(quantity) : null, uom, wbs_code: wbsCode || null,
-            ros_date: rosDate || null, inspection_class: inspClass, vdrl_required: vdrl ? 1 : 0,
-            po_ref: poRef || null, status }
+            ros_date: rosDate || null, po_ref: poRef || null, status }
       const { data } = await axios.put<MTOLine>(
         `${API}/mto/${projectId}/${mtoId}/lines/${line.id}`, payload
       )
@@ -180,7 +199,7 @@ const MTOLineEditModal = ({
             borderRadius: 7, padding: '10px 14px', marginBottom: 16, fontSize: 12,
             color: '#92400e', fontFamily: 'IBM Plex Sans, sans-serif',
           }}>
-            🔒 This line is locked — PO has been raised. Only ROS date and VDRL can be edited.
+            🔒 This line is locked — PO has been raised. Only the ROS date can be edited.
           </div>
         )}
 
@@ -217,14 +236,6 @@ const MTOLineEditModal = ({
             <input value={rosDate} onChange={e => setRosDate(e.target.value)} type="date"
               style={{ ...inp, fontFamily: 'JetBrains Mono, monospace' }} />
           </div>
-          {/* Inspection Class */}
-          <div>
-            <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4, fontFamily: 'IBM Plex Sans, sans-serif' }}>Inspection Class</label>
-            <select value={inspClass} onChange={e => setInspClass(e.target.value as MTOLine['inspection_class'])}
-              disabled={locked} style={{ ...inp, opacity: locked ? 0.6 : 1 }}>
-              {['Class I','Class II','Class III'].map(c => <option key={c}>{c}</option>)}
-            </select>
-          </div>
           {/* PO Ref */}
           <div>
             <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4, fontFamily: 'IBM Plex Sans, sans-serif' }}>PO Reference</label>
@@ -240,13 +251,6 @@ const MTOLineEditModal = ({
               <option value="rfq">RFQ</option>
               <option value="po-raised">PO Raised</option>
             </select>
-          </div>
-          {/* VDRL */}
-          <div style={{ gridColumn: '1/-1', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <input type="checkbox" id="vdrl-chk" checked={vdrl} onChange={e => setVdrl(e.target.checked)} />
-            <label htmlFor="vdrl-chk" style={{ fontSize: 13, color: col, fontFamily: 'IBM Plex Sans, sans-serif', cursor: 'pointer' }}>
-              VDRL Required
-            </label>
           </div>
         </div>
 
@@ -273,7 +277,7 @@ const UploadRevModal = ({
   const [notes,    setNotes]    = useState('')
   const [uploading, setUploading] = useState(false)
 
-  const nextRevChar = String.fromCharCode((mto.current_revision.charCodeAt(mto.current_revision.length - 1)) + 1)
+  const [newRev, setNewRev] = useState(suggestRev(mto.current_revision))
   const bg  = dark ? '#0f172a' : '#fff'
   const bd  = `1px solid ${dark ? '#334155' : '#e2e8f0'}`
   const col = dark ? '#f1f5f9' : '#0f172a'
@@ -290,8 +294,8 @@ const UploadRevModal = ({
     try {
       const fd = new FormData()
       fd.append('file', file)
-      fd.append('revision', nextRevChar)
-      fd.append('notes', notes || `Rev ${nextRevChar} upload`)
+      fd.append('revision', newRev.trim())
+      fd.append('notes', notes || `Rev ${newRev.trim()} upload`)
       const { data } = await axios.post(`${API}/mto/${projectId}/${mto.id}/upload`, fd)
       addToast('success', `Rev ${data.revision} uploaded — ${data.linesImported} lines imported`)
       onUploaded()
@@ -311,9 +315,17 @@ const UploadRevModal = ({
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 18 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: col, fontFamily: 'IBM Plex Sans, sans-serif' }}>
-            Upload Rev {nextRevChar}
+            Upload new revision
           </div>
           <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: sub, fontSize: 20, cursor: 'pointer' }}>×</button>
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4, fontFamily: 'IBM Plex Sans, sans-serif' }}>New revision *</label>
+          <input value={newRev} onChange={e => setNewRev(e.target.value.slice(0, 10))}
+            placeholder="e.g. B, 2, 2A, R1" maxLength={10}
+            style={{ ...inp, width: 160, fontFamily: 'JetBrains Mono, monospace' }} />
+          <span style={{ fontSize: 11, color: sub, marginLeft: 10 }}>Current: Rev {mto.current_revision}. Letters, numbers or a mix.</span>
         </div>
 
         <div style={{ marginBottom: 14 }}>
@@ -335,14 +347,14 @@ const UploadRevModal = ({
         <div style={{ marginBottom: 20 }}>
           <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4, fontFamily: 'IBM Plex Sans, sans-serif' }}>Revision Notes</label>
           <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2}
-            placeholder={`Rev ${nextRevChar} — describe what changed`}
+            placeholder={`Rev ${newRev.trim() || '?'} — describe what changed`}
             style={{ ...inp, resize: 'vertical' }} />
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
           <button onClick={onClose} style={{ background: 'transparent', border: bd, color: sub, padding: '7px 16px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontFamily: 'IBM Plex Sans, sans-serif' }}>Cancel</button>
           <button onClick={doUpload} disabled={!file || uploading} style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '7px 18px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'IBM Plex Sans, sans-serif', opacity: (!file || uploading) ? 0.5 : 1 }}>
-            {uploading ? 'Uploading…' : `↑ Upload Rev ${nextRevChar}`}
+            {uploading ? 'Uploading…' : `↑ Upload Rev ${newRev.trim() || '?'}`}
           </button>
         </div>
       </div>
@@ -362,7 +374,7 @@ const LineItemsTab = ({
   const [editTarget, setEditTarget] = useState<MTOLine | null>(null)
   // Per-status totals for the whole revision (drive the tab badges); set by the fetcher.
   const [counts, setCounts] = useState<Record<string, number>>({ all: 0, 'po-raised': 0, rfq: 0, 'not-started': 0 })
-  const rt = useResizableTable('mto_lines', MTO_LINE_W, MTO_LINE_MIN)
+  const rt = useResizableTable('mto_lines_v2', MTO_LINE_W, MTO_LINE_MIN)
 
   const col  = dark ? '#f1f5f9' : '#0f172a'
   const sub  = dark ? '#94a3b8' : '#64748b'
@@ -450,8 +462,6 @@ const LineItemsTab = ({
                   { label: 'QTY', key: 'quantity', align: 'right' },
                   { label: 'UOM' },
                   { label: 'ROS', key: 'ros_date' },
-                  { label: 'INSP' },
-                  { label: 'VDRL', align: 'center' },
                   { label: 'PO REF' },
                   { label: 'STATUS', key: 'status' },
                   { label: '' },
@@ -468,7 +478,7 @@ const LineItemsTab = ({
             </thead>
             <tbody>
               {lines.length === 0 ? (
-                <tr><td colSpan={12} style={{ padding: 28, textAlign: 'center', color: sub, fontSize: 13 }}>No lines match the filter.</td></tr>
+                <tr><td colSpan={10} style={{ padding: 28, textAlign: 'center', color: sub, fontSize: 13 }}>No lines match the filter.</td></tr>
               ) : lines.map((l, i) => {
                 const locked = l.status === 'po-raised'
                 const tdS: React.CSSProperties = {
@@ -483,10 +493,6 @@ const LineItemsTab = ({
                     <td style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', textAlign: 'right' }}>{l.quantity != null ? l.quantity : '—'}</td>
                     <td style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', color: sub }}>{l.uom ?? '—'}</td>
                     <td style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', fontSize: 11, whiteSpace: 'nowrap' }}>{fmtDate(l.ros_date)}</td>
-                    <td style={{ ...tdS, fontSize: 11, whiteSpace: 'nowrap', color: sub }}>{l.inspection_class}</td>
-                    <td style={{ ...tdS, textAlign: 'center' }}>
-                      {l.vdrl_required ? <span style={{ color: '#2563eb', fontSize: 14 }}>✓</span> : <span style={{ color: sub }}>—</span>}
-                    </td>
                     <td style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{l.po_ref ?? '—'}</td>
                     <td style={tdS}><LinePill s={l.status} /></td>
                     {/* Edit */}
@@ -801,9 +807,7 @@ const MTODetailInner = ({
 
   useEffect(() => { load() }, [load])
 
-  const nextRevChar = mto
-    ? String.fromCharCode(mto.current_revision.charCodeAt(mto.current_revision.length - 1) + 1)
-    : '?'
+  const nextRevChar = mto ? suggestRev(mto.current_revision) : '?'
 
   const tabs = [
     { key: 'lines',      label: 'Line Items' },

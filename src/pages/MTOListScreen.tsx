@@ -46,9 +46,6 @@ interface NewLineRow {
   quantity: string
   uom: string
   ros_date: string
-  inspection_class: string
-  vdrl_required: boolean
-  heat_no_required: boolean
 }
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
@@ -66,9 +63,6 @@ const newRow = (): NewLineRow => ({
   quantity: '',
   uom: 'EA',
   ros_date: '',
-  inspection_class: 'Class II',
-  vdrl_required: false,
-  heat_no_required: false,
 })
 
 // ─── STATUS PILL ─────────────────────────────────────────────────────────────
@@ -143,9 +137,6 @@ const NewMTOModal = ({
           quantity:         l.quantity     ? parseFloat(l.quantity) : null,
           uom:              l.uom          || null,
           ros_date:         l.ros_date     || null,
-          inspection_class: l.inspection_class,
-          vdrl_required:    l.vdrl_required ? 1 : 0,
-          heat_no_required: l.heat_no_required ? 1 : 0,
         })
       }
 
@@ -177,7 +168,6 @@ const NewMTOModal = ({
     setLines(prev => prev.map(l => l.key === key ? { ...l, [field]: value } : l))
   }
 
-  const revOptions = ['A','B','C','D','E','F']
 
   // ─── Helper: auto-generate line number for a new row ──────────────────────
   function addLine() {
@@ -218,9 +208,9 @@ const NewMTOModal = ({
             </div>
             <div>
               <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4 }}>Revision</label>
-              <select value={revision} onChange={e => setRevision(e.target.value)} style={inp}>
-                {revOptions.map(r => <option key={r} value={r}>Rev {r}</option>)}
-              </select>
+              <input value={revision} onChange={e => setRevision(e.target.value.slice(0, 10))}
+                placeholder="e.g. A, 1, 2A, R0" style={inp} maxLength={10} />
+              <div style={{ fontSize: 10, color: sub, marginTop: 3 }}>Letters, numbers or a mix.</div>
             </div>
             <div>
               <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4 }}>Owner</label>
@@ -336,9 +326,6 @@ const NewMTOModal = ({
               <col style={{ width: 75 }} />  {/* QTY */}
               <col style={{ width: 80 }} />  {/* UOM */}
               <col style={{ width: 130 }} /> {/* ROS DATE */}
-              <col style={{ width: 120 }} /> {/* INSP CLASS */}
-              <col style={{ width: 64 }} />  {/* VDRL */}
-              <col style={{ width: 80 }} />  {/* HEAT NO */}
               <col style={{ width: 40 }} />  {/* × */}
             </colgroup>
             <thead>
@@ -349,9 +336,6 @@ const NewMTOModal = ({
                 <th style={thStyle}>Qty</th>
                 <th style={thStyle}>UOM</th>
                 <th style={thStyle}>ROS Date</th>
-                <th style={thStyle}>Inspection Class</th>
-                <th style={{ ...thStyle, textAlign: 'center' }}>VDRL</th>
-                <th style={{ ...thStyle, textAlign: 'center' }}>Heat No.</th>
                 <th style={thStyle} />
               </tr>
             </thead>
@@ -394,24 +378,6 @@ const NewMTOModal = ({
                   <td style={cellPad}>
                     <input value={l.ros_date} onChange={e => updateLine(l.key,'ros_date',e.target.value)}
                       type="date" style={{ ...cellInp, fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }} />
-                  </td>
-                  {/* INSP CLASS */}
-                  <td style={cellPad}>
-                    <select value={l.inspection_class} onChange={e => updateLine(l.key,'inspection_class',e.target.value)} style={cellInp}>
-                      {['Class I','Class II','Class III'].map(c => <option key={c}>{c}</option>)}
-                    </select>
-                  </td>
-                  {/* VDRL */}
-                  <td style={{ ...cellPad, textAlign: 'center' }}>
-                    <input type="checkbox" checked={l.vdrl_required}
-                      onChange={e => updateLine(l.key,'vdrl_required',e.target.checked)}
-                      style={{ width: 16, height: 16, cursor: 'pointer', accentColor: '#2563eb' }} />
-                  </td>
-                  {/* HEAT NO */}
-                  <td style={{ ...cellPad, textAlign: 'center' }}>
-                    <input type="checkbox" checked={l.heat_no_required}
-                      onChange={e => updateLine(l.key,'heat_no_required',e.target.checked)}
-                      style={{ width: 16, height: 16, cursor: 'pointer', accentColor: '#2563eb' }} />
                   </td>
                   {/* DELETE */}
                   <td style={{ ...cellPad, textAlign: 'center' }}>
@@ -477,6 +443,8 @@ const NewMTOModal = ({
 // ─── PARSE RESULT TYPE ───────────────────────────────────────────────────────
 interface ParseWarning { row: number; message: string; severity: 'warning' | 'error' }
 interface ParseResult {
+  // MTO header read from the file's "MTO Details" tab (any field may be null).
+  mto?: { name: string | null; reference: string | null; revision: string | null; owner: string | null; description: string | null }
   linesFound: number
   linesValid: number
   linesSkipped: number
@@ -518,7 +486,6 @@ const UploadNewMTOModal = ({
                 borderRadius: 6, padding: '7px 10px', fontSize: 13,
                 fontFamily: 'IBM Plex Sans, sans-serif', width: '100%', boxSizing: 'border-box' as const }
 
-  const revOptions = ['A','B','C','D','E','F']
 
   const handleParseFile = async () => {
     if (!file) return
@@ -526,6 +493,15 @@ const UploadNewMTOModal = ({
     try {
       const fd = new FormData(); fd.append('file', file)
       const { data } = await axios.post<ParseResult>(`${API}/mto/${projectId}/parse-file`, fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+      // Pull MTO header from the file's "MTO Details" tab — fill any field the
+      // user left blank so the whole MTO can be defined in the spreadsheet.
+      if (data.mto) {
+        if (data.mto.name && !name.trim())        setName(data.mto.name)
+        if (data.mto.reference && !ref.trim())    setRef(data.mto.reference)
+        if (data.mto.revision)                    setRevision(data.mto.revision.slice(0, 10))
+        if (data.mto.owner && !owner.trim())      setOwner(data.mto.owner)
+        if (data.mto.description && !notes.trim()) setNotes(data.mto.description)
+      }
       setParseResult(data); setStep(3)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
@@ -606,9 +582,9 @@ const UploadNewMTOModal = ({
               </div>
               <div>
                 <label style={{ fontSize: 12, color: sub, fontFamily: 'IBM Plex Sans, sans-serif', display: 'block', marginBottom: 4 }}>Revision</label>
-                <select value={revision} onChange={e => setRevision(e.target.value)} style={inp}>
-                  {revOptions.map(r => <option key={r} value={r}>Rev {r}</option>)}
-                </select>
+                <input value={revision} onChange={e => setRevision(e.target.value.slice(0, 10))}
+                  placeholder="e.g. A, 1, 2A, R0" style={inp} maxLength={10} />
+                <div style={{ fontSize: 10, color: sub, marginTop: 3 }}>Letters, numbers or a mix.</div>
               </div>
               <div>
                 <label style={{ fontSize: 12, color: sub, fontFamily: 'IBM Plex Sans, sans-serif', display: 'block', marginBottom: 4 }}>Owner</label>

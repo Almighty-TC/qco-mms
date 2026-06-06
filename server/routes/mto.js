@@ -88,6 +88,23 @@ function compareRev(a, b) {
   return 0
 }
 
+// Parse a spreadsheet cell into a YYYY-MM-DD string without timezone drift.
+// Handles Date objects, Excel serials, ISO, "31-Aug-2025" and DD/MM/YYYY.
+const _MONTHS = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 }
+function parseSheetDate(v, XLSX) {
+  if (v == null || v === '') return null
+  const ymd = (y, m, d) => `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
+  if (v instanceof Date) return ymd(v.getFullYear(), v.getMonth() + 1, v.getDate())  // local components — no UTC shift
+  if (typeof v === 'number') { const e = XLSX.SSF.parse_date_code(v); return e ? ymd(e.y, e.m, e.d) : null }
+  const s = String(v).trim()
+  if (/^\d{4}-\d{1,2}-\d{1,2}/.test(s)) { const [y,m,d] = s.slice(0,10).split('-'); return ymd(y, Number(m), Number(d)) }
+  let m = s.match(/^(\d{1,2})[-/\s]([A-Za-z]{3,})[-/\s](\d{4})$/)   // 31-Aug-2025
+  if (m && _MONTHS[m[2].slice(0,3).toLowerCase()]) return ymd(m[3], _MONTHS[m[2].slice(0,3).toLowerCase()], Number(m[1]))
+  m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/)                // DD/MM/YYYY (AU)
+  if (m) return ymd(m[3], Number(m[2]), Number(m[1]))
+  const d = new Date(s); return isNaN(d.getTime()) ? null : ymd(d.getFullYear(), d.getMonth() + 1, d.getDate())
+}
+
 // True when an uploaded line set is content-identical to an existing revision's
 // lines (so a "new" revision would change nothing). Compares the substantive MTO
 // fields, normalised the way they'd be stored; order-independent.
@@ -106,8 +123,6 @@ function sameMtoContent(uploaded, existing) {
     String(l.uom ?? '').trim().toLowerCase(),
     String(l.wbs_code ?? '').trim().toLowerCase(),
     ymd(l.ros_date),
-    String(l.inspection_class || 'Class II').trim().toLowerCase(),
-    vd(l.vdrl_required),
   ].join('|')
   const valid = a => a.filter(l => l.line_number != null && l.line_number !== '' && l.description)
   const u = valid(uploaded).map(sig).sort()
@@ -189,20 +204,54 @@ router.get('/:projectId/template', async (req, res) => {
   wb.creator = 'QCO MMS'
   wb.created = new Date()
 
+  // ── Sheet 1: MTO Details (header fields the register needs) ───────────────
+  const wsd = wb.addWorksheet('MTO Details')
+  wsd.getColumn(1).width = 22
+  wsd.getColumn(2).width = 60
+  wsd.mergeCells('A1:B1')
+  const dTitle = wsd.getCell('A1')
+  dTitle.value = 'QCO MMS — MTO Details'
+  dTitle.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 13, name: 'Calibri' }
+  dTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE84E0F' } }
+  dTitle.alignment = { vertical: 'middle', horizontal: 'center' }
+  wsd.getRow(1).height = 28
+  wsd.addRow([])
+  // label → value rows; the user fills column B. Labels here MUST match the
+  // labels parse-file scans for (case-insensitive).
+  const detailRows = [
+    ['MTO Name *', ''],
+    ['MTO Reference *', ''],
+    ['Revision', 'A'],
+    ['Owner', ''],
+    ['Description', ''],
+  ]
+  detailRows.forEach(([label, val]) => {
+    const r = wsd.addRow([label, val])
+    r.getCell(1).font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10, name: 'Calibri' }
+    r.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1e3a5f' } }
+    r.getCell(1).alignment = { vertical: 'middle' }
+    r.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF7ED' } }
+    r.getCell(2).border = { bottom: { style: 'thin', color: { argb: 'FFcbd5e1' } } }
+    r.height = 20
+  })
+  wsd.addRow([])
+  wsd.addRow(['Notes:', 'Name & Reference are required. Revision may be letters, numbers or a mix (e.g. A, 1, 2A, R0).'])
+    .getCell(2).font = { italic: true, color: { argb: 'FF64748b' }, size: 10 }
+
+  // ── Sheet 2: MTO Lines ────────────────────────────────────────────────────
   const ws = wb.addWorksheet('MTO Lines', { views: [{ state: 'frozen', ySplit: 3 }] })
   ws.columns = [
     { key: 'line_number', width: 12 }, { key: 'wbs_code', width: 14 },
     { key: 'description', width: 52 }, { key: 'quantity', width: 10 },
     { key: 'uom', width: 8 }, { key: 'ros_date', width: 14 },
-    { key: 'inspection_class', width: 18 }, { key: 'vdrl_required', width: 16 },
-    { key: 'heat_number_required', width: 20 }, { key: 'unit_rate', width: 12 },
-    { key: 'total_value', width: 12 }, { key: 'notes', width: 30 },
+    { key: 'unit_rate', width: 12 }, { key: 'total_value', width: 12 },
+    { key: 'notes', width: 30 },
   ]
 
   // Row 1: orange title banner
-  ws.mergeCells('A1:L1')
+  ws.mergeCells('A1:I1')
   const titleCell = ws.getCell('A1')
-  titleCell.value = 'QCO MMS — MTO Import Template'
+  titleCell.value = 'QCO MMS — MTO Import Template (line items)'
   titleCell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 13, name: 'Calibri' }
   titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE84E0F' } }
   titleCell.alignment = { vertical: 'middle', horizontal: 'center' }
@@ -212,7 +261,7 @@ router.get('/:projectId/template', async (req, res) => {
   ws.getRow(2).height = 6
 
   // Row 3: column headers (dark blue background)
-  const headers = ['Line Number','WBS Code','Description','Quantity','UOM','ROS Date','Inspection Class','VDRL Required','Heat Number Required','Unit Rate','Total Value','Notes']
+  const headers = ['Line Number','WBS Code','Description','Quantity','UOM','ROS Date','Unit Rate','Total Value','Notes']
   const headerRow = ws.getRow(3)
   headers.forEach((h, i) => {
     const cell = headerRow.getCell(i + 1)
@@ -231,9 +280,9 @@ router.get('/:projectId/template', async (req, res) => {
 
   // Rows 4-6: example rows
   const examples = [
-    ['L-001','02.01.01','HP Separator Vessel — 3-phase horizontal',1,'EA','31-Aug-2025','Class I','Y','Y','','','Delete before uploading'],
-    ['L-002','02.02.01','Centrifugal Feed Pump P-101A',2,'EA','31-Oct-2025','Class II','N','N','','','Delete before uploading'],
-    ['L-003','03.01.01','HV Cable 11kV 3C×150mm² XLPE',250,'m','15-Dec-2025','Class III','Y','N','','','Delete before uploading'],
+    ['L-001','02.01.01','HP Separator Vessel — 3-phase horizontal',1,'EA','31-Aug-2025','','','Delete before uploading'],
+    ['L-002','02.02.01','Centrifugal Feed Pump P-101A',2,'EA','31-Oct-2025','','','Delete before uploading'],
+    ['L-003','03.01.01','HV Cable 11kV 3C×150mm² XLPE',250,'m','15-Dec-2025','','','Delete before uploading'],
   ]
   examples.forEach((ex, i) => {
     const row = ws.getRow(4 + i)
@@ -244,50 +293,10 @@ router.get('/:projectId/template', async (req, res) => {
   // Rows 7-53: blank data rows
   for (let r = 7; r <= 53; r++) ws.getRow(r).height = 18
 
-  // ─── DROPDOWN VALIDATIONS (rows 4–500, showErrorMessage: false = guide only) ─
-  // col E (5) — UOM
+  // col E (5) — UOM (guide only)
   ws.dataValidations.add('E4:E500', {
     type: 'list', allowBlank: true, showErrorMessage: false,
     formulae: ['"EA,NR,KG,T,M,MM,M2,M3,L,KL,SET,LOT,PR,LM,KN"'],
-  })
-  // col G (7) — Inspection Class
-  ws.dataValidations.add('G4:G500', {
-    type: 'list', allowBlank: true, showErrorMessage: false,
-    formulae: ['"Class I,Class II,Class III,Class IV"'],
-  })
-  // col H (8) — VDRL Required
-  ws.dataValidations.add('H4:H500', {
-    type: 'list', allowBlank: true, showErrorMessage: false,
-    formulae: ['"Yes,No"'],
-  })
-  // col I (9) — Heat Number Required
-  ws.dataValidations.add('I4:I500', {
-    type: 'list', allowBlank: true, showErrorMessage: false,
-    formulae: ['"Yes,No"'],
-  })
-
-  // ── Reference sheet (valid values legend) ─────────────────────────────────
-  const wsRef = wb.addWorksheet('Reference')
-  wsRef.getColumn(1).width = 32
-  wsRef.getColumn(2).width = 65
-  const refTitleCell = wsRef.getCell('A1')
-  refTitleCell.value = 'QCO MMS — MTO Template: Valid Values Reference'
-  refTitleCell.font = { bold: true, size: 12, color: { argb: 'FFE84E0F' } }
-  wsRef.getRow(1).height = 22
-  wsRef.addRow([])
-  wsRef.addRow(['Note: These values are suggestions. You may type any value not in this list.'])
-    .getCell(1).font = { italic: true, color: { argb: 'FF64748b' }, size: 10 }
-  wsRef.addRow([])
-  const refRows = [
-    ['COLUMN', 'VALID VALUES'],
-    ['UOM (col E)',                'EA, NR, KG, T, M, MM, M2, M3, L, KL, SET, LOT, PR, LM, KN'],
-    ['Inspection Class (col G)',   'Class I, Class II, Class III, Class IV'],
-    ['VDRL Required (col H)',      'Yes, No'],
-    ['Heat Number Required (col I)', 'Yes, No'],
-  ]
-  refRows.forEach((row, i) => {
-    const r = wsRef.addRow(row)
-    if (i === 0) r.eachCell(c => { c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1e3a5f' } } })
   })
 
   // Instructions sheet
@@ -296,22 +305,25 @@ router.get('/:projectId/template', async (req, res) => {
   const instrLines = [
     ['QCO MMS — MTO Template Instructions', true, 'FFE84E0F', 13],
     ['', false, null, 11],
-    ['COLUMN GUIDE', true, 'FF1e3a5f', 11],
+    ['MTO DETAILS (first tab)', true, 'FF1e3a5f', 11],
+    ['MTO Name — Required.', false, null, 10],
+    ['MTO Reference — Required. Must be unique within the project.', false, null, 10],
+    ['Revision — Optional (defaults A). Letters, numbers or a mix: A, B, 1, 2, 2A, R0…', false, null, 10],
+    ['Owner / Description — Optional.', false, null, 10],
+    ['', false, null, 10],
+    ['LINE ITEMS (second tab)', true, 'FF1e3a5f', 11],
     ['Line Number — Required. Format: L-001. Must be unique.', false, null, 10],
     ['WBS Code — Must match a WBS code in your project (e.g. 02.01.01).', false, null, 10],
     ['Description — Required for every line.', false, null, 10],
     ['Quantity — Numeric.', false, null, 10],
     ['UOM — Select from dropdown (guide only): EA, NR, KG, T, M, MM, M2, M3, L, KL, SET, LOT, PR, LM, KN', false, null, 10],
     ['ROS Date — Format: DD-MMM-YYYY (e.g. 31-Aug-2025)', false, null, 10],
-    ['Inspection Class — Select from dropdown: Class I | Class II | Class III | Class IV', false, null, 10],
-    ['VDRL Required — Select Yes or No. Yes = vendor documents required.', false, null, 10],
-    ['Heat Number Required — Select Yes or No. Yes for steel, pipe, valves, pressure parts.', false, null, 10],
     ['', false, null, 10],
     ['UPLOAD RULES', true, 'FF1e3a5f', 11],
-    ['1. Delete example rows (4–6) before uploading.', false, null, 10],
-    ['2. Do not change the column headers in row 3.', false, null, 10],
-    ['3. Rows with blank Description are skipped on import.', false, null, 10],
-    ['4. Lines on a raised PO cannot have Qty/WBS/Description changed.', false, null, 10],
+    ['1. Fill the MTO Details tab, then the line items on the MTO Lines tab.', false, null, 10],
+    ['2. Delete example rows (4–6) before uploading.', false, null, 10],
+    ['3. Do not change the column headers in row 3 of MTO Lines.', false, null, 10],
+    ['4. Rows with blank Description are skipped on import.', false, null, 10],
     ['5. Save as .xlsx or .csv before uploading.', false, null, 10],
   ]
   instrLines.forEach(([text, bold, color, size], i) => {
@@ -336,26 +348,46 @@ router.post('/:projectId/parse-file', upload.single('file'), async (req, res) =>
     const validWBS = new Set(wbsRows.map(r => r.code))
     const XLSX_LIB = require('xlsx')
     const wb = XLSX_LIB.read(req.file.buffer, { type: 'buffer', cellDates: true })
+
+    // ── MTO header details (optional "MTO Details" sheet: label col A, value col B) ──
+    const mtoHeader = { name: null, reference: null, revision: null, owner: null, description: null }
+    if (wb.SheetNames.includes('MTO Details')) {
+      const drows = XLSX_LIB.utils.sheet_to_json(wb.Sheets['MTO Details'], { header: 1, defval: null })
+      const grab = (re) => { for (const r of drows) { if (r && r[0] && re.test(String(r[0])) && r[1] != null && String(r[1]).trim() !== '') return String(r[1]).trim() } return null }
+      mtoHeader.name        = grab(/mto\s*name/i)
+      mtoHeader.reference   = grab(/reference/i)
+      mtoHeader.revision    = grab(/revision/i)
+      mtoHeader.owner       = grab(/owner/i)
+      mtoHeader.description = grab(/description/i)
+    }
     const sheetName = wb.SheetNames.includes('MTO Lines') ? 'MTO Lines' : wb.SheetNames[0]
     const ws = wb.Sheets[sheetName]
-    const rawRows = XLSX_LIB.utils.sheet_to_json(ws, { defval: null })
+    function norm(k) { return String(k).trim().toLowerCase().replace(/\s+/g, '_') }
+    // The line sheet has a title banner on row 1, so the real column headers are
+    // a few rows down. Find the header row dynamically (the row carrying both
+    // "Description" and a "Line Number"-style column), then parse from there.
+    const aoa = XLSX_LIB.utils.sheet_to_json(ws, { header: 1, defval: null })
+    let hdrIdx = aoa.findIndex(r => Array.isArray(r)
+      && r.some(c => norm(c ?? '') === 'description')
+      && r.some(c => /^line_(number|#|no)$/.test(norm(c ?? ''))))
+    if (hdrIdx < 0) hdrIdx = 2   // fallback: template's row 3
+    const rawRows = XLSX_LIB.utils.sheet_to_json(ws, { range: hdrIdx, defval: null })
     if (!rawRows.length) return res.status(400).json({ error: 'File is empty or unreadable', hasErrors: true })
 
-    function norm(k) { return k.trim().toLowerCase().replace(/\s+/g, '_') }
     const firstRow = rawRows[0]
     const normKeys = Object.keys(firstRow).map(norm)
     if (!normKeys.includes('description'))
-      return res.status(400).json({ error: 'Required column "Description" not found. Check headers match the template.', hasErrors: true })
+      return res.status(400).json({ error: 'Required column "Description" not found. Check headers match the template (MTO Lines tab).', hasErrors: true })
     const hasLineNum = normKeys.includes('line_number') || normKeys.includes('line_#') || normKeys.includes('line_no')
     if (!hasLineNum)
-      return res.status(400).json({ error: 'Required column "Line Number" not found. Check headers match the template.', hasErrors: true })
+      return res.status(400).json({ error: 'Required column "Line Number" not found. Check headers match the template (MTO Lines tab).', hasErrors: true })
 
     const rows = rawRows.map((row, idx) => {
       const n = {}
       for (const [k, v] of Object.entries(row)) n[norm(k)] = v
       if (!n.line_number && n['line_#']) n.line_number = n['line_#']
       if (!n.line_number && n.line_no) n.line_number = n.line_no
-      n._rowNum = idx + 4
+      n._rowNum = idx + hdrIdx + 2   // 1-based sheet row of this data row
       return n
     })
 
@@ -363,28 +395,8 @@ router.post('/:projectId/parse-file', upload.single('file'), async (req, res) =>
     let linesSkipped = 0
     const lineNumbers = new Map()
     const VALID_UOM = new Set(['EA','m','m2','m3','kg','t','LT','SET','LOT'])
-    const VALID_INSP = new Set(['class i','class ii','class iii'])
 
-    function normYN(v) {
-      if (v == null || v === '') return 0
-      const s = String(v).trim().toLowerCase()
-      if (['y','yes','1','true'].includes(s)) return 1
-      if (['n','no','0','false'].includes(s)) return 0
-      return null
-    }
-
-    function parseDate(v) {
-      if (v == null || v === '') return null
-      if (v instanceof Date) return v.toISOString().slice(0,10)
-      if (typeof v === 'number') {
-        const d = XLSX_LIB.SSF.parse_date_code(v)
-        if (d) return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`
-      }
-      const s = String(v).trim()
-      const parsed = new Date(s)
-      if (!isNaN(parsed.getTime())) return parsed.toISOString().slice(0,10)
-      return null
-    }
+    const parseDate = (v) => parseSheetDate(v, XLSX_LIB)
 
     for (const row of rows) {
       const rn = row._rowNum
@@ -405,14 +417,6 @@ router.post('/:projectId/parse-file', upload.single('file'), async (req, res) =>
 
       let uom = row.uom ? String(row.uom).trim() : ''
       if (uom && !VALID_UOM.has(uom)) { warnings.push({ row: rn, message: `UOM '${uom}' not recognised — defaulting to EA`, severity: 'warning' }); uom = 'EA' }
-      let insp = row.inspection_class ? String(row.inspection_class).trim() : 'Class II'
-      if (!VALID_INSP.has(insp.toLowerCase())) { warnings.push({ row: rn, message: `Inspection class '${insp}' not recognised — defaulting to Class II`, severity: 'warning' }); insp = 'Class II' }
-
-      let vdrl = normYN(row.vdrl_required)
-      if (vdrl === null) { warnings.push({ row: rn, message: `VDRL value not recognised — defaulting to N`, severity: 'warning' }); vdrl = 0 }
-      let heatReq = normYN(row.heat_number_required)
-      if (heatReq === null) { warnings.push({ row: rn, message: `Heat Number Required value not recognised — defaulting to N`, severity: 'warning' }); heatReq = 0 }
-
       const wbsCode = row.wbs_code ? String(row.wbs_code).trim() : null
       if (wbsCode && validWBS.size > 0 && !validWBS.has(wbsCode))
         warnings.push({ row: rn, message: `WBS '${wbsCode}' not found in project — imported as-is`, severity: 'warning' })
@@ -428,10 +432,11 @@ router.post('/:projectId/parse-file', upload.single('file'), async (req, res) =>
       if (row.ros_date != null && row.ros_date !== '' && !rosDate)
         warnings.push({ row: rn, message: `ROS date '${row.ros_date}' could not be parsed — left blank`, severity: 'warning' })
 
-      validLines.push({ line_number: lineNum, wbs_code: wbsCode, description: String(row.description).trim(), quantity: qty, uom: uom || null, ros_date: rosDate, inspection_class: insp, vdrl_required: vdrl, heat_number_required: heatReq })
+      validLines.push({ line_number: lineNum, wbs_code: wbsCode, description: String(row.description).trim(), quantity: qty, uom: uom || null, ros_date: rosDate })
     }
 
     res.json({
+      mto: mtoHeader,
       linesFound: rows.length, linesValid: validLines.length, linesSkipped,
       warnings, hasErrors: warnings.some(w => w.severity === 'error'),
       preview: validLines.slice(0, 15)
@@ -789,13 +794,19 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
     // regress current_revision and the live line set. We compare against the
     // highest existing revision (current_revision can be stale).
     const [allRevs] = await db.query('SELECT revision FROM mto_revisions WHERE mto_id = ?', [mtoId])
-    if (allRevs.some(r => compareRev(r.revision, newRev) === 0)) {
+    // A freshly-created MTO seeds its initial revision with no lines; the very
+    // first upload populates THAT revision (same label) rather than adding a new
+    // one. So only block a same-label upload if that revision already has lines.
+    const [[{ c: revLineCount }]] = await db.query(
+      'SELECT COUNT(*) c FROM mto_lines WHERE mto_id=? AND revision=? AND is_deleted=0', [mtoId, newRev])
+    const isInitialPopulation = revLineCount === 0
+    if (!isInitialPopulation && allRevs.some(r => compareRev(r.revision, newRev) === 0)) {
       return res.status(409).json({
         error: `Revision ${newRev} already exists for this MTO. Upload a new revision number.`
       })
     }
     const latest = allRevs.reduce((a, r) => (a === '' || compareRev(r.revision, a) > 0) ? r.revision : a, '')
-    if (latest && compareRev(newRev, latest) <= 0) {
+    if (!isInitialPopulation && latest && compareRev(newRev, latest) <= 0) {
       return res.status(409).json({
         error: `Revision ${newRev} is older than the latest revision ${latest} already in the system. Uploads must be a later revision.`
       })
@@ -805,13 +816,19 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
 
     // ─── Parse workbook ───────────────────────────────────────────
     const wb   = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true })
-    const ws   = wb.Sheets[wb.SheetNames[0]]
-    const rows = XLSX.utils.sheet_to_json(ws, { defval: null })
+    const ws   = wb.Sheets[wb.SheetNames.includes('MTO Lines') ? 'MTO Lines' : wb.SheetNames[0]]
+    function norm(key) { return String(key).trim().toLowerCase().replace(/\s+/g, '_') }
+    // Locate the real header row (past the title banner), then parse from there.
+    const aoaU = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null })
+    let hdrIdxU = aoaU.findIndex(r => Array.isArray(r)
+      && r.some(c => norm(c ?? '') === 'description')
+      && r.some(c => /^line_(number|#|no)$/.test(norm(c ?? ''))))
+    if (hdrIdxU < 0) hdrIdxU = 2
+    const rows = XLSX.utils.sheet_to_json(ws, { range: hdrIdxU, defval: null })
 
     if (!rows.length) return res.status(400).json({ error: 'File is empty or unreadable' })
 
     // ─── Normalise header keys ─────────────────────────────────────
-    function norm(key) { return key.trim().toLowerCase().replace(/\s+/g, '_') }
     const lines = rows.map(row => {
       const n = {}
       for (const [k, v] of Object.entries(row)) n[norm(k)] = v
@@ -884,52 +901,69 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
     fs.writeFileSync(path.join(mtoDir, storedName), req.file.buffer)
     const relPath = path.join('uploads', 'mto-revisions', storedName)   // relative to server root
 
-    // ─── Insert new revision record ───────────────────────────────
-    const [revIns] = await db.query(
-      `INSERT INTO mto_revisions (mto_id, revision, uploaded_by, notes, line_count)
-       VALUES (?, ?, ?, ?, ?)`,
-      [mto.id, newRev, req.user.id, notes, lines.length]
-    )
+    // ─── Revision record ──────────────────────────────────────────
+    // Initial population fills the seeded row in place; a new revision inserts.
+    let revRowId
+    if (isInitialPopulation) {
+      const [[seed]] = await db.query('SELECT id FROM mto_revisions WHERE mto_id=? AND revision=? ORDER BY id LIMIT 1', [mto.id, newRev])
+      if (seed) {
+        await db.query('UPDATE mto_revisions SET uploaded_by=?, notes=?, line_count=? WHERE id=?', [req.user.id, notes, lines.length, seed.id])
+        revRowId = seed.id
+      }
+    }
+    if (revRowId == null) {
+      const [revIns] = await db.query(
+        `INSERT INTO mto_revisions (mto_id, revision, uploaded_by, notes, line_count)
+         VALUES (?, ?, ?, ?, ?)`,
+        [mto.id, newRev, req.user.id, notes, lines.length]
+      )
+      revRowId = revIns.insertId
+    }
     // Record the stored file — gated on the migration so this never regresses
     // the upload flow if the file columns aren't present yet (see schemaColumns).
     if (await fileColumnsReady('mto_revisions')) {
       await db.query(
         `UPDATE mto_revisions SET file_name=?, file_path=?, file_size=?, mime_type=? WHERE id=?`,
-        [req.file.originalname, relPath, req.file.size, req.file.mimetype, revIns.insertId])
+        [req.file.originalname, relPath, req.file.size, req.file.mimetype, revRowId])
     }
 
     // ─── Insert lines ──────────────────────────────────────────────
+    const upDate = (v) => parseSheetDate(v, XLSX)
+    let imported = 0
     for (const l of lines) {
       if (!l.line_number || !l.description) continue
+      const note = String(l.notes || '').toLowerCase()
+      if (note.includes('delete before uploading') || note.includes('example')) continue   // skip template examples
+      const qty = (l.quantity != null && l.quantity !== '' && !isNaN(parseFloat(l.quantity))) ? parseFloat(l.quantity) : null
+      // inspection_class / vdrl_required omitted — DB defaults apply (removed from MTO input).
       await db.query(
         `INSERT INTO mto_lines
-         (mto_id, revision, line_number, wbs_code, description, quantity, uom,
-          ros_date, inspection_class, vdrl_required, po_ref, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (mto_id, revision, line_number, wbs_code, description, quantity, uom, ros_date, po_ref, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [mto.id, newRev,
          String(l.line_number),
          l.wbs_code     || null,
          String(l.description),
-         l.quantity     || null,
+         qty,
          l.uom          || null,
-         l.ros_date     || null,
-         l.inspection_class || 'Class II',
-         l.vdrl_required ? 1 : 0,
+         upDate(l.ros_date),
          l.po_ref       || null,
          l.status       || 'not-started']
       )
+      imported++
     }
 
-    // ─── Promote current revision on register ─────────────────────
+    // ─── Reconcile line counts + promote current revision ─────────
+    await db.query('UPDATE mto_revisions SET line_count = ? WHERE id = ?', [imported, revRowId])
     await db.query(
       `UPDATE mto_registers
        SET current_revision = ?, line_count = ?, updated_at = NOW()
        WHERE id = ?`,
-      [newRev, lines.length, mto.id]
+      [newRev, imported, mto.id]
     )
 
     audit(req, 'UPLOAD_REVISION', 'mto_register', mto.id, { revision: mto.current_revision }, { revision: newRev })
-    res.json({ ok: true, revision: newRev, linesImported: lines.length })
+    res.json({ ok: true, revision: newRev, linesImported: imported })
   } catch (e) {
     console.error('POST /mto/:projectId/:mtoId/upload', e.message)
     dbError(res, e, 'Upload failed')
