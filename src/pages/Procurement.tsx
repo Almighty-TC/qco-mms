@@ -385,6 +385,24 @@ const PODrawer = ({ po, dark, users, onClose, onUpdated, onNavigateToPO }: Drawe
     } finally { setBusyExp(false) }
   }
 
+  // ── Owner reassignment (single owner per PO; admin / procurement_manager) ────
+  const [editingOwner, setEditingOwner] = useState(false)
+  const [ownerSel, setOwnerSel]         = useState(String(po.owner_id ?? ''))
+  const [savingOwner, setSavingOwner]   = useState(false)
+  const saveOwner = async () => {
+    setSavingOwner(true)
+    try {
+      const newId = ownerSel ? Number(ownerSel) : null
+      const { data } = await axios.put(`${API}/procurement/pos/${po.id}/owner`, { owner_id: newId })
+      onUpdated({ owner_id: data.owner_id, owner_name: data.owner_name })
+      addToast('success', data.owner_name ? `Owner set to ${data.owner_name}` : 'Owner cleared')
+      setEditingOwner(false)
+    } catch (e: unknown) {
+      const er = e as { response?: { data?: { error?: string } } }
+      addToast('error', er.response?.data?.error ?? 'Could not change owner')
+    } finally { setSavingOwner(false) }
+  }
+
   const col = dark ? '#f1f5f9' : '#0f172a'
   const borderCol = dark ? '#334155' : '#dde3ed'
 
@@ -473,7 +491,25 @@ const PODrawer = ({ po, dark, users, onClose, onUpdated, onNavigateToPO }: Drawe
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 18 }}>
             <div style={{ padding: '10px 12px', borderRadius: 6, background: dark ? '#0f172a' : '#f4f7fb', border: `1px solid ${dark ? '#334155' : '#e8ecf2'}` }}>
               <div style={{ fontSize: 10, fontWeight: 600, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 3 }}>Owner</div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: col }}>{po.owner_name ?? '—'}</div>
+              {editingOwner ? (
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <select value={ownerSel} onChange={e => setOwnerSel(e.target.value)} style={{ ...inp(dark), height: 28, fontSize: 11 }}>
+                    <option value="">— None —</option>
+                    {users.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
+                  </select>
+                  <button onClick={saveOwner} disabled={savingOwner}
+                    style={{ padding: '3px 8px', borderRadius: 5, border: 'none', background: '#E84E0F', color: '#fff', fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    {savingOwner ? '…' : 'Save'}
+                  </button>
+                  <button onClick={() => { setEditingOwner(false); setOwnerSel(String(po.owner_id ?? '')) }}
+                    style={{ padding: '3px 6px', borderRadius: 5, border: `1px solid ${borderCol}`, background: 'none', color: '#64748b', fontSize: 11, cursor: 'pointer' }}>✕</button>
+                </div>
+              ) : (
+                <button onClick={() => setEditingOwner(true)} title="Click to change owner"
+                  style={{ background: 'none', border: 'none', fontSize: 13, fontWeight: 600, color: po.owner_name ? col : '#2563eb', cursor: 'pointer', padding: 0, fontFamily: 'inherit', textAlign: 'left' }}>
+                  {po.owner_name ?? '— Assign'}
+                </button>
+              )}
             </div>
             <div style={{ padding: '10px 12px', borderRadius: 6, background: dark ? '#0f172a' : '#f4f7fb', border: `1px solid ${dark ? '#334155' : '#e8ecf2'}` }}>
               <div style={{ fontSize: 10, fontWeight: 600, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 4 }}>
@@ -1079,7 +1115,7 @@ const HelpModal = ({ dark, onClose }: { dark: boolean; onClose: () => void }) =>
       <div style={row}><span style={key}>Milestones</span><span style={val}>5 dots: green = complete, orange = pending, grey = not set. Hover for dates.</span></div>
       <div style={row}><span style={key}>CDD</span><span style={val}>Earliest Contract Delivery Date across all line items.</span></div>
       <div style={row}><span style={key}>ROS Date</span><span style={val}>Required On Site date. Optional at creation — required before expediting begins.</span></div>
-      <div style={row}><span style={key}>Owner/Expeditor</span><span style={val}>Owner is set at creation. Expeditor can be assigned from the drawer.</span></div>
+      <div style={row}><span style={key}>Owner/Expeditor</span><span style={val}>Owner is set at creation and can be reassigned from the drawer (one owner). Expeditors are co-assignable from the drawer or the row.</span></div>
 
       <div style={sec}>Actions</div>
       <div style={row}><span style={key}>Row click</span><span style={val}>Opens slide-in drawer with summary, milestones, signed PO, and expeditor assignment.</span></div>

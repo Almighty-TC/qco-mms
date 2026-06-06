@@ -53,6 +53,7 @@ const uploadBulk = multer({
 // ─── ALLOWED ROLES ────────────────────────────────────────────────────────────
 // C-d #1: expeditor-assign was module-moved to `expediting`; procurement_manager dropped (stale).
 const EXPEDITOR_ASSIGN_ROLES  = new Set(['admin', 'expediting_manager'])
+const OWNER_ASSIGN_ROLES      = new Set(['admin', 'procurement_manager'])
 const CRITICAL_PATH_ROLES     = new Set(['admin', 'project_manager', 'procurement_manager'])
 const APPROVAL_ROLES          = new Set(['admin', 'procurement_manager', 'procurement_officer'])
 const DOC_UPLOAD_ROLES        = new Set(['admin', 'procurement_manager', 'procurement_officer'])
@@ -647,6 +648,41 @@ router.put('/pos/:id/expeditor', async (req, res) => {
     res.json({ expeditor_id: newExpId, expeditor_name: expeditorName, expeditors: await listExpeditors(id) })
   } catch (e) {
     console.error('[procurement:assign-expeditor]', e.message)
+    dbError(res, e)
+  }
+})
+
+// ─── REASSIGN OWNER ───────────────────────────────────────────────────────────
+// The PO owner is set at creation; this lets admin / procurement_manager change
+// it afterwards (works on locked POs too, unlike the full PO edit). One owner per
+// PO. Audited.
+router.put('/pos/:id/owner', async (req, res) => {
+  try {
+    const id = Number(req.params.id)
+    if (!OWNER_ASSIGN_ROLES.has(req.user.role)) {
+      return res.status(403).json({ error: 'Your role cannot change the PO owner' })
+    }
+    const { owner_id } = req.body
+    const [[existing]] = await db.query('SELECT id, owner_id FROM purchase_orders WHERE id=?', [id])
+    if (!existing) return res.status(404).json({ error: 'PO not found' })
+
+    const newOwnerId = owner_id ? Number(owner_id) : null
+    if (newOwnerId) {
+      const [[u]] = await db.query('SELECT id FROM users WHERE id=?', [newOwnerId])
+      if (!u) return res.status(404).json({ error: 'User not found' })
+    }
+    await db.query('UPDATE purchase_orders SET owner_id=? WHERE id=?', [newOwnerId, id])
+    audit(req, 'owner_assigned', `purchase_orders/${id}`,
+      { owner_id: existing.owner_id }, { owner_id: newOwnerId })
+
+    let ownerName = null
+    if (newOwnerId) {
+      const [[u]] = await db.query('SELECT full_name FROM users WHERE id=?', [newOwnerId])
+      ownerName = u?.full_name ?? null
+    }
+    res.json({ owner_id: newOwnerId, owner_name: ownerName })
+  } catch (e) {
+    console.error('[procurement:assign-owner]', e.message)
     dbError(res, e)
   }
 })
