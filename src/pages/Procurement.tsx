@@ -1660,7 +1660,7 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
   const totalPages = Math.ceil(total / PAGE_SIZE)
 
   return (
-    <div style={{ fontFamily: 'IBM Plex Sans, sans-serif', display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, boxSizing: 'border-box' }}>
+    <div style={{ fontFamily: 'IBM Plex Sans, sans-serif', paddingBottom: 32 }}>
       <ToastContainer />
 
       {/* ── Back row ──────────────────────────────────────────────────────────── */}
@@ -1809,10 +1809,8 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
         background: dark ? '#1e293b' : '#fff',
         border: `1px solid ${dark ? '#334155' : '#dde3ed'}`,
         borderRadius: 10,
-        overflowX: 'auto',
-        overflowY: 'auto',
-        flex: 1,
-        minHeight: 120,
+        // No inner scroll — the whole page scrolls; the table thead sticks to the
+        // page so the column headers stay visible as you scroll the screen down.
         boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
       }}>
         <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed' }}>
