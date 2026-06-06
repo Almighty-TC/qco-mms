@@ -204,65 +204,50 @@ router.get('/:projectId/template', async (req, res) => {
   wb.creator = 'QCO MMS'
   wb.created = new Date()
 
-  // ── Sheet 1: MTO Details (header fields the register needs) ───────────────
-  const wsd = wb.addWorksheet('MTO Details')
-  wsd.getColumn(1).width = 22
-  wsd.getColumn(2).width = 60
-  wsd.mergeCells('A1:B1')
-  const dTitle = wsd.getCell('A1')
-  dTitle.value = 'QCO MMS — MTO Details'
-  dTitle.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 13, name: 'Calibri' }
-  dTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE84E0F' } }
-  dTitle.alignment = { vertical: 'middle', horizontal: 'center' }
-  wsd.getRow(1).height = 28
-  wsd.addRow([])
-  // label → value rows; the user fills column B. Labels here MUST match the
-  // labels parse-file scans for (case-insensitive).
-  const detailRows = [
-    ['MTO Name *', ''],
-    ['MTO Reference *', ''],
-    ['Revision', 'A'],
-    ['Owner', ''],
-    ['Description', ''],
-  ]
-  detailRows.forEach(([label, val]) => {
-    const r = wsd.addRow([label, val])
-    r.getCell(1).font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10, name: 'Calibri' }
-    r.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1e3a5f' } }
-    r.getCell(1).alignment = { vertical: 'middle' }
-    r.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF7ED' } }
-    r.getCell(2).border = { bottom: { style: 'thin', color: { argb: 'FFcbd5e1' } } }
-    r.height = 20
-  })
-  wsd.addRow([])
-  wsd.addRow(['Notes:', 'Name & Reference are required. Revision may be letters, numbers or a mix (e.g. A, 1, 2A, R0).'])
-    .getCell(2).font = { italic: true, color: { argb: 'FF64748b' }, size: 10 }
-
-  // ── Sheet 2: MTO Lines ────────────────────────────────────────────────────
-  const ws = wb.addWorksheet('MTO Lines', { views: [{ state: 'frozen', ySplit: 3 }] })
+  // ── ONE sheet: MTO Details (top) + line-items table (below) ───────────────
+  const ws = wb.addWorksheet('MTO Lines', { views: [{ state: 'frozen', ySplit: 8 }] })
   ws.columns = [
-    { key: 'line_number', width: 12 }, { key: 'wbs_code', width: 14 },
-    { key: 'description', width: 52 }, { key: 'quantity', width: 10 },
-    { key: 'uom', width: 8 }, { key: 'ros_date', width: 14 },
-    { key: 'unit_rate', width: 12 }, { key: 'total_value', width: 12 },
-    { key: 'notes', width: 30 },
+    { width: 18 }, { width: 16 }, { width: 50 }, { width: 10 },
+    { width: 8 }, { width: 14 }, { width: 12 }, { width: 12 }, { width: 30 },
   ]
 
   // Row 1: orange title banner
   ws.mergeCells('A1:I1')
   const titleCell = ws.getCell('A1')
-  titleCell.value = 'QCO MMS — MTO Import Template (line items)'
+  titleCell.value = 'QCO MMS — MTO Import Template'
   titleCell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 13, name: 'Calibri' }
   titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE84E0F' } }
   titleCell.alignment = { vertical: 'middle', horizontal: 'center' }
-  ws.getRow(1).height = 30
+  ws.getRow(1).height = 28
 
-  // Row 2: spacer
-  ws.getRow(2).height = 6
+  // Rows 2-6: MTO Details (label in col A, value merged B:E). Labels MUST match
+  // the labels parse-file scans for (case-insensitive).
+  const detailRows = [['MTO Name *', ''], ['MTO Reference *', ''], ['Revision', 'A'], ['Owner', ''], ['Description', '']]
+  detailRows.forEach(([label, val], i) => {
+    const rn = 2 + i
+    ws.mergeCells(`B${rn}:E${rn}`)
+    const lc = ws.getCell(`A${rn}`)
+    lc.value = label
+    lc.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10, name: 'Calibri' }
+    lc.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1e3a5f' } }
+    lc.alignment = { vertical: 'middle' }
+    const vc = ws.getCell(`B${rn}`)
+    vc.value = val
+    vc.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF7ED' } }
+    vc.border = { bottom: { style: 'thin', color: { argb: 'FFcbd5e1' } } }
+    ws.getRow(rn).height = 20
+  })
 
-  // Row 3: column headers (dark blue background)
+  // Row 7: guidance note across the sheet
+  ws.mergeCells('A7:I7')
+  const note = ws.getCell('A7')
+  note.value = '↓  Line items — enter one row per item below. Delete the grey example rows before uploading.'
+  note.font = { italic: true, color: { argb: 'FF64748b' }, size: 10 }
+  ws.getRow(7).height = 18
+
+  // Row 8: line column headers (dark blue)
   const headers = ['Line Number','WBS Code','Description','Quantity','UOM','ROS Date','Unit Rate','Total Value','Notes']
-  const headerRow = ws.getRow(3)
+  const headerRow = ws.getRow(8)
   headers.forEach((h, i) => {
     const cell = headerRow.getCell(i + 1)
     cell.value = h
@@ -273,28 +258,23 @@ router.get('/:projectId/template', async (req, res) => {
   })
   headerRow.height = 22
 
-  // Helper: grey italic for example rows
-  function exStyle(cell) {
-    cell.font = { italic: true, color: { argb: 'FF94a3b8' }, size: 10, name: 'Calibri' }
-  }
-
-  // Rows 4-6: example rows
+  // Rows 9-11: example rows (grey italic)
   const examples = [
     ['L-001','02.01.01','HP Separator Vessel — 3-phase horizontal',1,'EA','31-Aug-2025','','','Delete before uploading'],
     ['L-002','02.02.01','Centrifugal Feed Pump P-101A',2,'EA','31-Oct-2025','','','Delete before uploading'],
     ['L-003','03.01.01','HV Cable 11kV 3C×150mm² XLPE',250,'m','15-Dec-2025','','','Delete before uploading'],
   ]
   examples.forEach((ex, i) => {
-    const row = ws.getRow(4 + i)
-    ex.forEach((val, j) => { const c = row.getCell(j+1); c.value = val; exStyle(c) })
+    const row = ws.getRow(9 + i)
+    ex.forEach((val, j) => { const c = row.getCell(j + 1); c.value = val; c.font = { italic: true, color: { argb: 'FF94a3b8' }, size: 10, name: 'Calibri' } })
     row.height = 18
   })
 
-  // Rows 7-53: blank data rows
-  for (let r = 7; r <= 53; r++) ws.getRow(r).height = 18
+  // Rows 12-60: blank data rows
+  for (let r = 12; r <= 60; r++) ws.getRow(r).height = 18
 
-  // col E (5) — UOM (guide only)
-  ws.dataValidations.add('E4:E500', {
+  // col E (5) — UOM (guide only), from the first data row
+  ws.dataValidations.add('E9:E500', {
     type: 'list', allowBlank: true, showErrorMessage: false,
     formulae: ['"EA,NR,KG,T,M,MM,M2,M3,L,KL,SET,LOT,PR,LM,KN"'],
   })
@@ -305,13 +285,13 @@ router.get('/:projectId/template', async (req, res) => {
   const instrLines = [
     ['QCO MMS — MTO Template Instructions', true, 'FFE84E0F', 13],
     ['', false, null, 11],
-    ['MTO DETAILS (first tab)', true, 'FF1e3a5f', 11],
+    ['MTO DETAILS (top of the sheet)', true, 'FF1e3a5f', 11],
     ['MTO Name — Required.', false, null, 10],
     ['MTO Reference — Required. Must be unique within the project.', false, null, 10],
     ['Revision — Optional (defaults A). Letters, numbers or a mix: A, B, 1, 2, 2A, R0…', false, null, 10],
     ['Owner / Description — Optional.', false, null, 10],
     ['', false, null, 10],
-    ['LINE ITEMS (second tab)', true, 'FF1e3a5f', 11],
+    ['LINE ITEMS (table below the details)', true, 'FF1e3a5f', 11],
     ['Line Number — Required. Format: L-001. Must be unique.', false, null, 10],
     ['WBS Code — Must match a WBS code in your project (e.g. 02.01.01).', false, null, 10],
     ['Description — Required for every line.', false, null, 10],
@@ -320,9 +300,9 @@ router.get('/:projectId/template', async (req, res) => {
     ['ROS Date — Format: DD-MMM-YYYY (e.g. 31-Aug-2025)', false, null, 10],
     ['', false, null, 10],
     ['UPLOAD RULES', true, 'FF1e3a5f', 11],
-    ['1. Fill the MTO Details tab, then the line items on the MTO Lines tab.', false, null, 10],
-    ['2. Delete example rows (4–6) before uploading.', false, null, 10],
-    ['3. Do not change the column headers in row 3 of MTO Lines.', false, null, 10],
+    ['1. Fill the MTO Details at the top, then the line items in the table below.', false, null, 10],
+    ['2. Delete the grey example rows before uploading.', false, null, 10],
+    ['3. Do not change the line-item column headers.', false, null, 10],
     ['4. Rows with blank Description are skipped on import.', false, null, 10],
     ['5. Save as .xlsx or .csv before uploading.', false, null, 10],
   ]
@@ -349,17 +329,7 @@ router.post('/:projectId/parse-file', upload.single('file'), async (req, res) =>
     const XLSX_LIB = require('xlsx')
     const wb = XLSX_LIB.read(req.file.buffer, { type: 'buffer', cellDates: true })
 
-    // ── MTO header details (optional "MTO Details" sheet: label col A, value col B) ──
     const mtoHeader = { name: null, reference: null, revision: null, owner: null, description: null }
-    if (wb.SheetNames.includes('MTO Details')) {
-      const drows = XLSX_LIB.utils.sheet_to_json(wb.Sheets['MTO Details'], { header: 1, defval: null })
-      const grab = (re) => { for (const r of drows) { if (r && r[0] && re.test(String(r[0])) && r[1] != null && String(r[1]).trim() !== '') return String(r[1]).trim() } return null }
-      mtoHeader.name        = grab(/mto\s*name/i)
-      mtoHeader.reference   = grab(/reference/i)
-      mtoHeader.revision    = grab(/revision/i)
-      mtoHeader.owner       = grab(/owner/i)
-      mtoHeader.description = grab(/description/i)
-    }
     const sheetName = wb.SheetNames.includes('MTO Lines') ? 'MTO Lines' : wb.SheetNames[0]
     const ws = wb.Sheets[sheetName]
     function norm(k) { return String(k).trim().toLowerCase().replace(/\s+/g, '_') }
@@ -370,7 +340,18 @@ router.post('/:projectId/parse-file', upload.single('file'), async (req, res) =>
     let hdrIdx = aoa.findIndex(r => Array.isArray(r)
       && r.some(c => norm(c ?? '') === 'description')
       && r.some(c => /^line_(number|#|no)$/.test(norm(c ?? ''))))
-    if (hdrIdx < 0) hdrIdx = 2   // fallback: template's row 3
+    if (hdrIdx < 0) hdrIdx = 7   // fallback: combined template's line-header row
+    // MTO header details sit in the rows ABOVE the line header (label col A,
+    // value col B). Also honour a separate "MTO Details" sheet for older files.
+    const detailAoa = wb.SheetNames.includes('MTO Details')
+      ? XLSX_LIB.utils.sheet_to_json(wb.Sheets['MTO Details'], { header: 1, defval: null })
+      : aoa.slice(0, hdrIdx)
+    const grab = (re) => { for (const r of detailAoa) { if (r && r[0] != null && re.test(String(r[0])) && r[1] != null && String(r[1]).trim() !== '') return String(r[1]).trim() } return null }
+    mtoHeader.name        = grab(/mto\s*name/i)
+    mtoHeader.reference   = grab(/reference/i)
+    mtoHeader.revision    = grab(/revision/i)
+    mtoHeader.owner       = grab(/owner/i)
+    mtoHeader.description = grab(/description/i)
     const rawRows = XLSX_LIB.utils.sheet_to_json(ws, { range: hdrIdx, defval: null })
     if (!rawRows.length) return res.status(400).json({ error: 'File is empty or unreadable', hasErrors: true })
 
@@ -823,7 +804,7 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
     let hdrIdxU = aoaU.findIndex(r => Array.isArray(r)
       && r.some(c => norm(c ?? '') === 'description')
       && r.some(c => /^line_(number|#|no)$/.test(norm(c ?? ''))))
-    if (hdrIdxU < 0) hdrIdxU = 2
+    if (hdrIdxU < 0) hdrIdxU = 7
     const rows = XLSX.utils.sheet_to_json(ws, { range: hdrIdxU, defval: null })
 
     if (!rows.length) return res.status(400).json({ error: 'File is empty or unreadable' })
