@@ -10,8 +10,9 @@ import { usePagedList } from '../hooks/usePagedList'
 import { useResizableTable, ResetColumnsButton } from '../components/colResize'
 
 // Resizable column defaults — Expediting PO register (10 cols).
-const EXP_W   = [36, 30, 130, 160, 200, 150, 140, 110, 120, 80]
-const EXP_MIN = [32, 28, 90, 100, 120, 100, 100, 80, 90, 60]
+// Col 1 is just the thin RAG colour stripe — it needs ~7px, not 30.
+const EXP_W   = [34, 14, 130, 160, 200, 150, 150, 110, 120, 60]
+const EXP_MIN = [30, 10, 90, 100, 120, 100, 110, 80, 90, 48]
 import { HelpButton } from '../components/HelpDrawer'
 import { MilestoneTimeline } from '../components/MilestoneTimeline'
 import { MilestoneLegend } from '../components/MilestoneLegend'
@@ -516,7 +517,8 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
     pageSize: 50, initialSortCol: 'po_number', initialSortDir: 'asc',
   })
   const sortArrow = (k: string) => sortCol === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
-  const rt = useResizableTable('expediting_pos', EXP_W, EXP_MIN)
+  // v2: bump the id so the corrected default widths replace any stale saved set.
+  const rt = useResizableTable('expediting_pos_v2', EXP_W, EXP_MIN)
 
   // ─── VDRL DATA LOAD ───────────────────────────────────────
   // Loads stats and packages when VDRL tab is activated.
@@ -685,11 +687,13 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
           ) : (
             <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 320px)' }}>
               <table style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 12 }}>
-                <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: dark ? '#162032' : '#f8fafc' }}>
+                <thead style={{ position: 'sticky', top: 0, zIndex: 20, backgroundColor: dark ? '#162032' : '#f8fafc' }}>
                   <tr style={{ borderBottom: bd }}>
                     {([['★'], [''], ['PO Ref', 'po_number'], ['Vendor / Group', 'vendor'], ['Material'], ['Owner / Expeditor'], ['Milestones'], ['ROS', 'ros_date'], ['Status', 'status'], ['']] as [string, string?][]).map(([h, key], i) => (
                       <th key={i} onClick={key ? () => toggleSort(key) : undefined}
-                        style={{ ...rt.thStyle(i), padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>
+                        style={{ ...rt.thStyle(i), padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none',
+                          // opaque cell bg so rows (incl. the milestone graph) scroll BEHIND the sticky header
+                          background: dark ? '#162032' : '#f8fafc' }}>
                         {h}{key ? sortArrow(key) : ''}
                         {rt.handle(i, dark)}
                       </th>
