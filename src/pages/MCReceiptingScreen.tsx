@@ -502,7 +502,7 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
 
       {/* Content — table steps (1, 2) get the full width so the grid breathes;
           the form steps (3–5) stay in a comfortable reading column. */}
-      <div style={{ maxWidth: step === 1 ? 1000 : step === 2 ? 1360 : 700, margin: '24px auto', padding: '0 24px', transition: 'max-width 150ms ease' }}>
+      <div style={{ maxWidth: step === 5 ? 720 : step === 4 ? 1000 : step === 1 ? 1200 : 'min(1600px, 94vw)', width: '100%', margin: '24px auto', padding: '0 32px', boxSizing: 'border-box', transition: 'max-width 150ms ease' }}>
 
         {/* ── STEP 1 ── */}
         {step === 1 && (
