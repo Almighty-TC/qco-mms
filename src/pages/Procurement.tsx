@@ -12,6 +12,8 @@ import { HelpButton } from '../components/HelpDrawer'
 import { PO_REGISTER_HELP } from '../helpContent'
 import { BackButton } from '../components/BackButton'
 import { Pager } from '../components/Pager'
+import { useExpand, ExpandBtn } from '../components/ExpandToggle'
+import { PODetailScreen } from './PODetailScreen'
 
 const API = 'http://localhost:3001/api'
 
@@ -336,13 +338,17 @@ interface DrawerProps {
   po:              PO
   dark:            boolean
   users:           UserItem[]
+  projectId:       number
+  projectName:     string
   onClose:         () => void
   onUpdated:       (updated: Partial<PO>) => void
   onNavigateToPO?: (poId: number) => void  // Phase 3: navigate to full PO Detail Screen
 }
 
-const PODrawer = ({ po, dark, users, onClose, onUpdated, onNavigateToPO }: DrawerProps) => {
+const PODrawer = ({ po, dark, users, projectId, projectName, onClose, onUpdated, onNavigateToPO }: DrawerProps) => {
   const { addToast } = useToast()
+  // Expand the drawer to a full-screen view that embeds the complete PO detail.
+  const [expanded, toggleExpand] = useExpand()
   // ── Expeditor co-assignment ─────────────────────────────────────────────────
   // A PO can have several assigned expeditors; all of them see/work on it in
   // Expediting. The first (earliest-assigned) is the lead, kept as expeditor_id.
@@ -419,9 +425,10 @@ const PODrawer = ({ po, dark, users, onClose, onUpdated, onNavigateToPO }: Drawe
       {/* Overlay — clicking outside closes drawer */}
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 8000 }} />
 
-      {/* ── Drawer panel ────────────────────────────────────────────────────── */}
+      {/* ── Drawer panel — widens to full screen when expanded ──────────────── */}
       <div style={{
-        position: 'fixed', top: 0, right: 0, bottom: 0, width: 620,
+        position: 'fixed', top: 0, right: 0, bottom: 0,
+        width: expanded ? '100vw' : 620, maxWidth: '100vw',
         background: dark ? '#1e293b' : '#fff',
         borderLeft: `1px solid ${borderCol}`,
         boxShadow: '-8px 0 32px rgba(0,0,0,0.2)',
@@ -429,10 +436,14 @@ const PODrawer = ({ po, dark, users, onClose, onUpdated, onNavigateToPO }: Drawe
         display: 'flex', flexDirection: 'column',
         fontFamily: 'IBM Plex Sans, sans-serif',
         overflow: 'hidden',
+        transition: 'width 160ms ease',
       }}>
 
         {/* ── Drawer header ─────────────────────────────────────────────────── */}
-        <div style={{ padding: '16px 20px', borderBottom: `1px solid ${borderCol}`, flexShrink: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div style={{ padding: expanded ? '8px 16px' : '16px 20px', borderBottom: `1px solid ${borderCol}`, flexShrink: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          {expanded ? (
+            <div style={{ fontSize: 12, color: '#94a3b8', alignSelf: 'center' }}>Full PO view — use ← Back or shrink to return to the summary</div>
+          ) : (
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
               {/* PO Ref — navigates to full PO Detail Screen (Phase 3) */}
@@ -451,9 +462,22 @@ const PODrawer = ({ po, dark, users, onClose, onUpdated, onNavigateToPO }: Drawe
             </div>
             <div style={{ fontSize: 13, fontWeight: 600, color: col }}>{po.supplier_name ?? po.vendor_name}</div>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, color: '#94a3b8', cursor: 'pointer', lineHeight: 1, flexShrink: 0 }}>×</button>
+          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+            <ExpandBtn expanded={expanded} onToggle={toggleExpand} />
+            <button onClick={onClose} title="Close" style={{ background: 'none', border: 'none', fontSize: 22, color: '#94a3b8', cursor: 'pointer', lineHeight: 1 }}>×</button>
+          </div>
         </div>
 
+        {expanded ? (
+          /* ── Expanded: full-screen, complete PO detail (lines, dates, ITP,
+             documents, notes, variations, audit) — reuses the PO Detail screen.
+             Its "← Back" collapses back to the drawer. ── */
+          <div style={{ overflowY: 'auto', flex: 1, padding: '0 24px' }}>
+            <PODetailScreen dark={dark} projectId={projectId} projectName={projectName} poId={po.id} onBack={toggleExpand} />
+          </div>
+        ) : (
+        <>
         {/* ── Action buttons ────────────────────────────────────────────────── */}
         <div style={{ padding: '10px 20px', borderBottom: `1px solid ${borderCol}`, display: 'flex', gap: 8, flexShrink: 0 }}>
           <button disabled style={{ padding: '6px 14px', borderRadius: 6, border: `1px solid ${borderCol}`, background: 'none', color: '#94a3b8', fontSize: 12, cursor: 'not-allowed', fontFamily: 'inherit' }} title="Phase 2: Create SCN">
@@ -561,6 +585,8 @@ const PODrawer = ({ po, dark, users, onClose, onUpdated, onNavigateToPO }: Drawe
           <SectionHdr dark={dark}>Signed PO</SectionHdr>
           <SignedPOSection poId={po.id} dark={dark} />
         </div>
+        </>
+        )}
       </div>
     </>,
     document.body
@@ -1898,6 +1924,7 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
       {/* Slide-in drawer for row click */}
       {drawerPO && (
         <PODrawer po={drawerPO} dark={dark} users={users}
+          projectId={projectId} projectName={projectName}
           onClose={() => setDrawerPO(null)}
           onUpdated={handleExpeditorUpdate}
           onNavigateToPO={onNavigateToPO}
