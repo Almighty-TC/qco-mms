@@ -1660,7 +1660,7 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
   const totalPages = Math.ceil(total / PAGE_SIZE)
 
   return (
-    <div style={{ fontFamily: 'IBM Plex Sans, sans-serif', paddingBottom: 32 }}>
+    <div style={{ fontFamily: 'IBM Plex Sans, sans-serif', display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, boxSizing: 'border-box' }}>
       <ToastContainer />
 
       {/* ── Back row ──────────────────────────────────────────────────────────── */}
@@ -1706,7 +1706,7 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
       </div>
 
       {/* ── Summary cards ─────────────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap', flexShrink: 0 }}>
         {/* FIX 2: each card is clickable — sets cardFilter; clicking active card clears it */}
         <StatCard dark={dark} label="Total POs" value={stats?.total ?? '—'}
           active={cardFilter === 'total'}
@@ -1739,7 +1739,7 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
       </div>
 
       {/* ── View tabs ──────────────────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 12, overflowX: 'auto', paddingBottom: 2 }}>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 12, overflowX: 'auto', paddingBottom: 2, flexShrink: 0 }}>
         <button style={tabSty(activeTab === 'all')}       onClick={() => setActiveTab('all')}>All POs</button>
         <button style={tabSty(activeTab === 'approved')}  onClick={() => setActiveTab('approved')}>Approved</button>
         <button style={tabSty(activeTab === 'pending')}   onClick={() => setActiveTab('pending')}>Pending approval</button>
@@ -1747,7 +1747,7 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
       </div>
 
       {/* ── Filter toolbar ─────────────────────────────────────────────────────── */}
-      <div ref={toolbarRef} className="procurement-toolbar" style={{ display: 'flex', gap: 8, marginBottom: 14, alignItems: 'center', flexWrap: 'wrap', position: 'sticky', top: 108, zIndex: 19, background: dark ? '#0f172a' : '#f1f4f8', paddingBottom: 8 }}>
+      <div ref={toolbarRef} className="procurement-toolbar" style={{ display: 'flex', gap: 8, marginBottom: 14, alignItems: 'center', flexWrap: 'wrap', flexShrink: 0, background: dark ? '#0f172a' : '#f1f4f8', paddingBottom: 8 }}>
         {/* Search */}
         <input
           value={search}
@@ -1811,7 +1811,8 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
         borderRadius: 10,
         overflowX: 'auto',
         overflowY: 'auto',
-        maxHeight: 'calc(100vh - 380px)',
+        flex: 1,
+        minHeight: 120,
         boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
       }}>
         <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed' }}>
@@ -1900,7 +1901,7 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
       </div>
 
       {/* ── Item 2: Colour legend — pinned below table, above pagination ────────── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 18, marginTop: 8, fontSize: 11, color: '#94a3b8', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 18, marginTop: 8, fontSize: 11, color: '#94a3b8', flexWrap: 'wrap', flexShrink: 0 }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
           <span style={{ display: 'inline-block', width: 3, height: 14, borderRadius: 2, background: '#2E7D32', flexShrink: 0 }} />
           CDD &gt; {stats?.atRiskDays ?? 30} days away or complete
