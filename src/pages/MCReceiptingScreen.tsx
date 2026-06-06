@@ -928,6 +928,15 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
             setLineLoc(p => { const n = { ...p }; selIds.forEach((id: number) => { if (!isSplit3(recv.find((l:any)=>l.id===id))) n[id] = v }); return n })
             setSplitLines(p => { const n = { ...p }; selIds.forEach((id: number) => { if (n[id]) n[id] = n[id].map(s => ({ ...s, grid_location: v })) }); return n })
           }
+          // Clear every bin entry (default + per-line + per-portion) — keeps the
+          // line/heat splits intact, just wipes the typed bins so you can redo them.
+          const resetBins = () => {
+            setLocation('')
+            setLineLoc({})
+            setBulkLoc('')
+            setLocSel({})
+            setSplitLines(p => { const n: Record<number, SubLine[]> = {}; for (const k in p) n[k] = p[k].map(s => ({ ...s, grid_location: '' })); return n })
+          }
           // Reconcile gate: every split line's allocation quantities must sum to its total.
           const splitsOk = recv.every((l: any) => !isSplit3(l) || subSum3(l) === recOf3(l))
           const canNext = location.trim().length > 0 && splitsOk
@@ -960,6 +969,11 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
               <button onClick={applyBulk} disabled={!bulkLoc.trim() || selIds.length === 0}
                 style={{ padding: '7px 12px', borderRadius: 6, border: 'none', background: (bulkLoc.trim() && selIds.length) ? '#2563eb' : '#94a3b8', color: '#fff', cursor: (bulkLoc.trim() && selIds.length) ? 'pointer' : 'not-allowed', fontSize: 12, fontWeight: 600 }}>
                 Assign to bin ({selIds.length})
+              </button>
+              <div style={{ flex: 1 }} />
+              <button onClick={resetBins} title="Clear all bin entries (keeps quantities & splits)"
+                style={{ padding: '7px 12px', borderRadius: 6, border: bd, background: 'none', color: sub, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+                ↺ Reset bins
               </button>
             </div>
 
