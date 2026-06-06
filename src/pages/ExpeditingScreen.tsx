@@ -192,16 +192,20 @@ const VDRLSwitchPackageModal: React.FC<{dark:boolean;packages:any[];activeId:num
   const sub = '#94a3b8'
   return (
     <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:9000,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'IBM Plex Sans, sans-serif'}}>
-      <div onClick={e=>e.stopPropagation()} style={{background:cardBg,border:bd,borderRadius:10,padding:24,width:480,boxShadow:'0 16px 48px rgba(0,0,0,0.4)'}}>
-        <div style={{fontSize:15,fontWeight:700,color:col,marginBottom:16}}>Switch Package</div>
-        {(packages||[]).map(p=>(
-          <div key={p.id} onClick={()=>{onSelect(p.id);onClose()}}
-            style={{padding:'10px 14px',borderRadius:8,border:p.id===activeId?'1px solid #2563eb':bd,background:p.id===activeId?'rgba(37,99,235,0.06)':'none',cursor:'pointer',marginBottom:8}}>
-            <div style={{fontWeight:600,fontSize:13,color:col}}>{p.name}</div>
-            <div style={{fontSize:11,color:sub}}>{p.po_number||''} · {p.vendor_name||''} · {p.doc_count||0} docs</div>
-          </div>
-        ))}
-        <div style={{display:'flex',justifyContent:'flex-end',marginTop:8}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:cardBg,border:bd,borderRadius:10,padding:24,width:480,maxHeight:'85vh',display:'flex',flexDirection:'column',boxShadow:'0 16px 48px rgba(0,0,0,0.4)'}}>
+        <div style={{fontSize:15,fontWeight:700,color:col,marginBottom:16,flexShrink:0}}>Switch Package</div>
+        {/* Scrollable list so a long package set is fully reachable */}
+        <div style={{overflowY:'auto',flex:1,margin:'0 -4px',padding:'0 4px'}}>
+          {(packages||[]).map(p=>(
+            <div key={p.id} onClick={()=>{onSelect(p.id);onClose()}}
+              style={{padding:'10px 14px',borderRadius:8,border:p.id===activeId?'1px solid #2563eb':bd,background:p.id===activeId?'rgba(37,99,235,0.06)':'none',cursor:'pointer',marginBottom:8}}>
+              <div style={{fontWeight:600,fontSize:13,color:col}}>{p.name}</div>
+              <div style={{fontSize:11,color:sub}}>{p.po_number||''} · {p.vendor_name||''} · {p.doc_count||0} docs</div>
+            </div>
+          ))}
+          {(packages||[]).length===0 && <div style={{fontSize:12,color:sub,padding:'8px 0'}}>No packages.</div>}
+        </div>
+        <div style={{display:'flex',justifyContent:'flex-end',marginTop:12,flexShrink:0}}>
           <button onClick={onClose} style={{padding:'7px 14px',borderRadius:6,border:bd,background:'none',color:sub,fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>Close</button>
         </div>
       </div>
