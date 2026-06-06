@@ -104,13 +104,19 @@ router.get('/:projectId/queue', async (req, res) => {
 })
 
 // ─── helper: apply one staged change to the real table (within a txn) ─────────
-async function applyChange(conn, row) {
+async function applyChange(conn, row, fallbackProjectId) {
   if (!ALLOWED_TABLES.has(row.entity_type)) throw new Error('blocked entity_type')
   if (row.action === 'create') {
-    const payload = typeof row.proposed === 'string' ? JSON.parse(row.proposed) : { ...row.proposed }
-    // carry the authoritative project scope from the pending_changes row — the proposer
-    // payload omits project_id (NOT NULL, no default), which fails the INSERT otherwise.
-    if (PROJECT_SCOPED.has(row.entity_type) && payload.project_id == null) payload.project_id = row.project_id
+    const payload = typeof row.proposed === 'string' ? JSON.parse(row.proposed) : { ...(row.proposed || {}) }
+    // Carry the authoritative project scope into the INSERT. The proposer payload
+    // never carries project_id (NOT NULL, no default → INSERT fails without it), so
+    // we ALWAYS stamp it from the pending_changes row, falling back to the route's
+    // projectId. A clear error beats the raw "doesn't have a default value".
+    if (PROJECT_SCOPED.has(row.entity_type)) {
+      const pid = row.project_id ?? fallbackProjectId
+      if (pid == null) { const e = new Error('This change is missing its project and cannot be applied.'); e.http = 422; throw e }
+      payload.project_id = pid
+    }
     const [r] = await conn.query('INSERT INTO ?? SET ?', [row.entity_type, payload])
     return r.insertId
   }
@@ -136,7 +142,7 @@ router.post('/:projectId/confirm/:id', async (req, res) => {
     if (!row) { await conn.rollback(); return res.status(404).json({ error: 'Pending change not found' }) }
     const err = authorityError(row, req.user)
     if (err) { await conn.rollback(); return res.status(403).json({ error: err }) }
-    const appliedId = await applyChange(conn, row)
+    const appliedId = await applyChange(conn, row, Number(req.params.projectId))
     await conn.query("UPDATE pending_changes SET status='confirmed', confirmed_by=?, confirmed_at=NOW(), confirm_comment=? WHERE id=?", [req.user.id, req.body.comment || null, row.id])
     // audit inside txn (correct columns + project_id)
     await conn.query(
@@ -178,7 +184,7 @@ router.post('/:projectId/batch/:batchId/confirm', async (req, res) => {
     }
     let applied = 0
     for (const row of rows) {
-      const appliedId = await applyChange(conn, row)
+      const appliedId = await applyChange(conn, row, Number(req.params.projectId))
       await conn.query("UPDATE pending_changes SET status='confirmed', confirmed_by=?, confirmed_at=NOW() WHERE id=?", [req.user.id, row.id])
       await conn.query(`INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, after_value, resource, ip) VALUES (?,?,?,?,?,?,?,?)`,
         [req.user.id, `${row.module}_${row.action}_confirmed`, row.entity_type, appliedId, row.project_id, row.proposed == null ? null : JSON.stringify(row.proposed), (req.originalUrl||'').split('?')[0].replace(/^\/api(?=\/)/,''), req.ip])
