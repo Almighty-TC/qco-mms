@@ -2,12 +2,14 @@
 // Slide-in right panel (400px) showing PO summary, milestones,
 // and line item allocation status. Launched from ExpeditingScreen
 // "View →" button; offers quick "Create SCN" and line-level assign.
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, Suspense, lazy } from 'react'
 import { createPortal } from 'react-dom'
 import axios from 'axios'
 import { MilestoneTimeline } from './MilestoneTimeline'
 import { ExpandBtn } from './ExpandToggle'
-import { ExpPODetailScreen } from '../pages/ExpPODetailScreen'
+// Lazy-loaded so this component doesn't statically import a full page (keeps the
+// HMR boundary clean + code-splits the detail view out of the main bundle).
+const ExpPODetailScreen = lazy(() => import('../pages/ExpPODetailScreen').then(m => ({ default: m.ExpPODetailScreen })))
 
 const API = 'http://localhost:3001/api'
 
@@ -87,7 +89,9 @@ export const ExpPODrawer: React.FC<Props> = ({
             </div>
           </div>
           <div style={{ flex: 1, overflowY: 'auto', padding: '0 24px' }}>
-            <ExpPODetailScreen dark={dark} projectId={projectId} projectName={projectName} poId={poId} userRole={userRole} onBack={() => setExpanded(false)} />
+            <Suspense fallback={<div style={{ padding: 40, color: '#94a3b8', fontSize: 13 }}>Loading PO…</div>}>
+              <ExpPODetailScreen dark={dark} projectId={projectId} projectName={projectName} poId={poId} userRole={userRole} onBack={() => setExpanded(false)} />
+            </Suspense>
           </div>
         </>
       ) : (

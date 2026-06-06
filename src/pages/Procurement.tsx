@@ -2,7 +2,7 @@
 // List view with stat cards, resizable columns, RAG row stripe, milestone dots,
 // slide-in drawer, expeditor assignment, critical-path toggle, pagination.
 // Phase 2 (New PO Wizard) and Phase 3 (PO Detail) are stubbed below.
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef, Suspense, lazy } from 'react'
 import { createPortal } from 'react-dom'
 import axios from 'axios'
 import { ToastProvider, useToast } from '../hooks/useToast'
@@ -13,7 +13,9 @@ import { PO_REGISTER_HELP } from '../helpContent'
 import { BackButton } from '../components/BackButton'
 import { Pager } from '../components/Pager'
 import { useExpand, ExpandBtn } from '../components/ExpandToggle'
-import { PODetailScreen } from './PODetailScreen'
+// Lazy-loaded so this page doesn't statically import another full page (keeps the
+// HMR boundary clean + code-splits the detail view out of the main bundle).
+const PODetailScreen = lazy(() => import('./PODetailScreen').then(m => ({ default: m.PODetailScreen })))
 
 const API = 'http://localhost:3001/api'
 
@@ -474,7 +476,9 @@ const PODrawer = ({ po, dark, users, projectId, projectName, onClose, onUpdated,
              documents, notes, variations, audit) — reuses the PO Detail screen.
              Its "← Back" collapses back to the drawer. ── */
           <div style={{ overflowY: 'auto', flex: 1, padding: '0 24px' }}>
-            <PODetailScreen dark={dark} projectId={projectId} projectName={projectName} poId={po.id} onBack={toggleExpand} />
+            <Suspense fallback={<div style={{ padding: 40, color: '#94a3b8', fontSize: 13 }}>Loading PO…</div>}>
+              <PODetailScreen dark={dark} projectId={projectId} projectName={projectName} poId={po.id} onBack={toggleExpand} />
+            </Suspense>
           </div>
         ) : (
         <>
