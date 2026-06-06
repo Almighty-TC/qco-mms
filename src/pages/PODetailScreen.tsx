@@ -29,6 +29,7 @@ interface PO {
   isCriticalPath: boolean; isLocked: boolean; group_category: string | null
   owner_id: number | null; owner_name: string | null
   expeditor_id: number | null; expeditor_name: string | null
+  expeditor_names?: string[]   // all assigned expeditors (co-assignment)
   project_id: number; created_at: string; created_by: number | null
   milestone_po_date: string | null; milestone_fat_date: string | null
   milestone_esd_date: string | null; milestone_eta_date: string | null
@@ -1131,7 +1132,8 @@ const PODetailInner = ({ dark, poId, projectName, onBack }: PODetailInnerProps) 
         <MetaItem dark={dark} label="WBS"            value={po.wbs_code} mono />
         <MetaItem dark={dark} label="Vendor"         value={po.supplier_name ?? po.vendor_name} />
         <MetaItem dark={dark} label="Owner"          value={po.owner_name} />
-        <MetaItem dark={dark} label="Expeditor"      value={po.expeditor_name} />
+        <MetaItem dark={dark} label={(po.expeditor_names && po.expeditor_names.length > 1) ? 'Expeditors' : 'Expeditor'}
+          value={(po.expeditor_names && po.expeditor_names.length) ? po.expeditor_names.join(', ') : po.expeditor_name} />
         <MetaItem dark={dark} label="Group"          value={po.group_category?.replace(/_/g, ' ')} />
         <MetaItem dark={dark} label="ROS Date"       value={fmtDate(po.ros_date)} />
         {/* FIX 2: CDD added to meta grid per wireframe */}

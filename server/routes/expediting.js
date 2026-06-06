@@ -225,6 +225,10 @@ router.get('/:projectId/po/:poId', async (req, res) => {
         s.contact_name AS supplier_contact,
         own.full_name AS owner_name,
         exp.full_name AS expeditor_name,
+        -- All assigned expeditors (co-assignment), lead first.
+        (SELECT GROUP_CONCAT(u2.full_name ORDER BY pe.assigned_at SEPARATOR '||')
+           FROM po_expeditors pe JOIN users u2 ON u2.id = pe.user_id
+           WHERE pe.po_id = po.id) AS expeditor_names_all,
         po.created_at, po.updated_at
        FROM purchase_orders po
        LEFT JOIN suppliers s   ON s.id   = po.supplier_id
@@ -233,6 +237,11 @@ router.get('/:projectId/po/:poId', async (req, res) => {
        WHERE po.id=? AND po.project_id=?`,
       [poId, projectId]
     )
+    if (po) {
+      po.expeditor_names = po.expeditor_names_all ? po.expeditor_names_all.split('||')
+        : (po.expeditor_name ? [po.expeditor_name] : [])
+      delete po.expeditor_names_all
+    }
     if (!po) return res.status(404).json({ error: 'PO not found' })
 
     // ─── MILESTONES ───────────────────────────────────────────

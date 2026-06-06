@@ -474,7 +474,10 @@ router.get('/pos/:id', async (req, res) => {
     const id = Number(req.params.id)
     const [[po]] = await db.query(`
       SELECT po.*, own.full_name AS owner_name, exp.full_name AS expeditor_name,
-        s.name AS supplier_name, s.code AS supplier_code, w.description AS wbs_name
+        s.name AS supplier_name, s.code AS supplier_code, w.description AS wbs_name,
+        (SELECT GROUP_CONCAT(u2.full_name ORDER BY pe.assigned_at SEPARATOR '||')
+           FROM po_expeditors pe JOIN users u2 ON u2.id = pe.user_id
+           WHERE pe.po_id = po.id) AS expeditor_names_all
       FROM purchase_orders po
       LEFT JOIN users     own ON own.id = po.owner_id
       LEFT JOIN users     exp ON exp.id = po.expeditor_id
@@ -484,6 +487,9 @@ router.get('/pos/:id', async (req, res) => {
     `, [id])
 
     if (!po) return res.status(404).json({ error: 'PO not found' })
+    po.expeditor_names = po.expeditor_names_all ? po.expeditor_names_all.split('||')
+      : (po.expeditor_name ? [po.expeditor_name] : [])
+    delete po.expeditor_names_all
     if (req.user.role === 'vendor' && po.supplier_id !== req.user.supplier_id) {
       return res.status(403).json({ error: 'Access denied' })
     }

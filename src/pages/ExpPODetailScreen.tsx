@@ -64,6 +64,7 @@ interface PODetail {
   material_description?: string | null; vendor_display: string
   vendor_name?: string | null; group_category?: string | null
   owner_name?: string | null; expeditor_name?: string | null
+  expeditor_names?: string[]   // all assigned expeditors (co-assignment)
   ros_date?: string | null; contract_delivery_date?: string | null
   is_critical_path?: number; is_locked?: number; status: string
   currency?: string | null; value?: number | null; incoterms?: string | null
@@ -365,7 +366,8 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
               ['Vendor', po.vendor_display || po.vendor_name || '—'],
               ['Group', po.group_category || '—'],
               ['Owner', po.owner_name || '—'],
-              ['Expeditor', po.expeditor_name || '—'],
+              [(po.expeditor_names && po.expeditor_names.length > 1) ? 'Expeditors' : 'Expeditor',
+               (po.expeditor_names && po.expeditor_names.length) ? po.expeditor_names.join(', ') : (po.expeditor_name || '—')],
               ['PO Award', fmt(po.milestone_po_date)],
               ['Contract Del.', fmt(po.contract_delivery_date)],
               ['ROS', fmt(po.ros_date)],
