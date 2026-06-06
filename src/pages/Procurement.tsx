@@ -1274,7 +1274,7 @@ const POTableRow = ({
       </td>
 
       {/* ── Value (index 5) — FIX 2: "AUD 1,420,000" format ────────── */}
-      <td style={{ ...tdBase, width: colWidths[5], textAlign: 'right' }}>
+      <td style={{ ...tdBase, width: colWidths[5], textAlign: 'left' }}>
         <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, fontWeight: 600, color: col }}>
           {fmtValueCode(po.value, po.currency)}
         </span>
