@@ -309,6 +309,12 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
   const [splitLines, setSplitLines] = useState<Record<number, SubLine[]>>({})
   const [hasDiscrepancy, setHasDiscrepancy] = useState(false)
   const [location, setLocation] = useState('')
+  // Step 3 — per-line bin assignment. `lineLoc` is the bin for an UN-split line;
+  // a split line's bins live on each allocation (SubLine.grid_location). `locSel`
+  // + `bulkLoc` drive "assign selected lines to one bin".
+  const [lineLoc, setLineLoc] = useState<Record<number, string>>({})
+  const [locSel, setLocSel]   = useState<Record<number, boolean>>({})
+  const [bulkLoc, setBulkLoc] = useState('')
   const [cargoCondition, setCargo] = useState('')
   const [notes, setNotes]       = useState('')
   const [saving, setSaving]     = useState(false)
@@ -418,6 +424,8 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
           heat_number: (heat[l.id] || '').trim() || null,
           heat_off_list: heatOffList[l.id] ? 1 : 0,
           heat_off_list_reason: heatOffList[l.id] ? ((heatReason[l.id] || '').trim() || null) : null,
+          // Per-line bin — blank falls back to the receipt default location server-side.
+          location_code: (lineLoc[l.id] || '').trim() || null,
         }]
       })
       await axios.post(`${API}/mc/${projectId}/receipting/${scn.id}/complete`, {
@@ -431,7 +439,23 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
     } finally { setSaving(false) }
   }
 
-  const STEPS = ['Review expected','Physical check','Assign location','TCCC sign-off','Complete']
+  // ─── Split helpers (shared by step 3 bin assignment) ─────────
+  // A line can be split into allocations (SubLine[]); each = qty + heat + bin.
+  // The SAME structure backs heat splitting (step 2) and bin splitting (step 3).
+  const recOf3   = (l: any) => actuals[l.id] ?? lineExpected(l)
+  const subsOf3  = (l: any): SubLine[] | undefined => splitLines[l.id]
+  const isSplit3 = (l: any) => Array.isArray(subsOf3(l)) && (subsOf3(l) as SubLine[]).length > 0
+  const subSum3  = (l: any) => (subsOf3(l) || []).reduce((t, s) => t + (Number(s.received_qty) || 0), 0)
+  const startSplit3 = (l: any) => setSplitLines(p => ({ ...p, [l.id]: [
+    { received_qty: Number(recOf3(l)) || 0, damaged_qty: Number(damaged[l.id] || 0), heat_number: heat[l.id] || '', heat_off_list: !!heatOffList[l.id], heat_off_list_reason: heatReason[l.id] || '', grid_location: lineLoc[l.id] || '' },
+    { received_qty: 0, damaged_qty: 0, heat_number: '', heat_off_list: false, heat_off_list_reason: '', grid_location: '' },
+  ] }))
+  const endSplit3 = (id: number) => setSplitLines(p => { const n = { ...p }; delete n[id]; return n })
+  const addSub3   = (id: number) => setSplitLines(p => ({ ...p, [id]: [...(p[id] || []), { received_qty: 0, damaged_qty: 0, heat_number: '', heat_off_list: false, heat_off_list_reason: '', grid_location: '' }] }))
+  const removeSub3 = (id: number, i: number) => setSplitLines(p => { const arr = (p[id] || []).filter((_, idx) => idx !== i); if (arr.length <= 1) { const n = { ...p }; delete n[id]; return n } return { ...p, [id]: arr } })
+  const updateSub3 = (id: number, i: number, field: keyof SubLine, val: any) => setSplitLines(p => ({ ...p, [id]: (p[id] || []).map((s, idx) => idx === i ? { ...s, [field]: val } : s) }))
+
+  const STEPS = ['Review expected','Physical check','Assign bins','TCCC sign-off','Complete']
 
   return createPortal(
     <div style={{ position: 'fixed', inset: 0, background: bg, zIndex: 5000, overflow: 'auto', fontFamily: 'IBM Plex Sans, sans-serif' }}>
@@ -782,13 +806,8 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                           <tr key={`${l.id}-sub-${i}`} style={{ background: dark ? '#0f1626' : '#fafbff', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
                             <td style={{ padding: '6px 12px' }} />
                             <td colSpan={4} style={{ padding: '6px 12px 6px 28px', color: sub, fontSize: 11 }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                                <span style={{ whiteSpace: 'nowrap' }}>↳ heat allocation {i + 1}</span>
-                                <input value={s.grid_location || ''} onChange={e => updateSub(l.id, i, 'grid_location', e.target.value)}
-                                  placeholder="Grid location (optional)"
-                                  title="Bin for THIS heat allocation — blank uses the receipt's default location (step 3)"
-                                  style={{ ...inputSt, width: 180, fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }} />
-                              </div>
+                              ↳ heat allocation {i + 1}
+                              <span style={{ marginLeft: 8, color: sub, opacity: 0.7 }}>· assign its bin in the next step</span>
                             </td>
                             <td style={{ padding: '6px 12px' }}>
                               <input type="number" min={0} value={s.received_qty}
@@ -895,40 +914,123 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
           )
         })()}
 
-        {/* ── STEP 3 ── Assign location + Back button ── */}
-        {step === 3 && (
+        {/* ── STEP 3 ── Assign bins (per line, split across bins) ── */}
+        {step === 3 && (() => {
+          const recv = (detail?.lines || []).filter((l: any) => recOf3(l) > 0)
+          const selIds = recv.filter((l: any) => locSel[l.id]).map((l: any) => l.id)
+          const allSel = recv.length > 0 && recv.every((l: any) => locSel[l.id])
+          const toggleSel = (id: number) => setLocSel(p => ({ ...p, [id]: !p[id] }))
+          const toggleSelAll = () => setLocSel(() => allSel ? {} : Object.fromEntries(recv.map((l: any) => [l.id, true])))
+          // Apply the typed bin to every selected line (split → all its allocations).
+          const applyBulk = () => {
+            if (!bulkLoc.trim() || selIds.length === 0) return
+            const v = bulkLoc.trim()
+            setLineLoc(p => { const n = { ...p }; selIds.forEach((id: number) => { if (!isSplit3(recv.find((l:any)=>l.id===id))) n[id] = v }); return n })
+            setSplitLines(p => { const n = { ...p }; selIds.forEach((id: number) => { if (n[id]) n[id] = n[id].map(s => ({ ...s, grid_location: v })) }); return n })
+          }
+          // Reconcile gate: every split line's allocation quantities must sum to its total.
+          const splitsOk = recv.every((l: any) => !isSplit3(l) || subSum3(l) === recOf3(l))
+          const canNext = location.trim().length > 0 && splitsOk
+
+          return (
           <div>
-            <p style={{ color: sub, fontSize: 13, marginBottom: 16 }}>Assign the default warehouse grid location for this receipt. Any heat allocation you gave its own bin in the physical-check step keeps that location; everything else lands here.</p>
-            <div style={{ background: cardBg, border: bd, borderRadius: 8, padding: 20 }}>
-              <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 8, fontWeight: 600 }}>Default grid location</label>
-              <input value={location} onChange={e => setLocation(e.target.value)}
-                placeholder="e.g. WH-B · B-02-01"
-                style={{ ...inputSt, fontSize: 14 }} />
-              <div style={{ fontSize: 11, color: sub, marginTop: 4 }}>Format: WH-[code] · [row]-[bay]-[level]</div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+            <p style={{ color: sub, fontSize: 13, marginBottom: 14 }}>
+              Assign a warehouse bin to each line. Tick lines and use <strong style={{ color: col }}>Assign to bin</strong> to send several to the same bin, or
+              <strong style={{ color: col }}> ⊕ Split across bins</strong> to send portions of a line to different bins. Anything left blank lands in the default bin below.
+            </p>
+
+            {/* Default / fallback bin */}
+            <div style={{ background: cardBg, border: bd, borderRadius: 8, padding: 16, marginBottom: 14 }}>
+              <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 6, fontWeight: 600 }}>Default bin * — for any line/portion left unassigned</label>
+              <input value={location} onChange={e => setLocation(e.target.value)} placeholder="e.g. WH-B · B-02-01" style={{ ...inputSt, fontSize: 14 }} />
+              <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
                 {SUGGESTED_LOCS.map(l => (
-                  <button key={l}
-                    onClick={() => setLocation(l)}
-                    style={{ padding: '5px 12px', borderRadius: 6, border: bd, background: location === l ? 'rgba(37,99,235,0.08)' : 'none', color: location === l ? '#2563eb' : col, cursor: 'pointer', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}>
-                    {l}
-                  </button>
+                  <button key={l} onClick={() => setLocation(l)}
+                    style={{ padding: '5px 12px', borderRadius: 6, border: bd, background: location === l ? 'rgba(37,99,235,0.08)' : 'none', color: location === l ? '#2563eb' : col, cursor: 'pointer', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}>{l}</button>
                 ))}
               </div>
             </div>
-            <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 10 }}>
-              {/* ← Back (left, preserves actuals + discrepancy data) */}
-              <button onClick={goBack}
-                style={{ padding: '8px 18px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 13 }}>
-                ← Back
+
+            {/* Bulk assign selected → one bin */}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: sub, cursor: 'pointer' }}>
+                <input type="checkbox" checked={allSel} onChange={toggleSelAll} style={{ accentColor: '#2563eb' }} /> Select all
+              </label>
+              <input value={bulkLoc} onChange={e => setBulkLoc(e.target.value)} placeholder="Bin for selected…" style={{ ...inputSt, width: 220, fontFamily: 'JetBrains Mono, monospace' }} />
+              <button onClick={applyBulk} disabled={!bulkLoc.trim() || selIds.length === 0}
+                style={{ padding: '7px 12px', borderRadius: 6, border: 'none', background: (bulkLoc.trim() && selIds.length) ? '#2563eb' : '#94a3b8', color: '#fff', cursor: (bulkLoc.trim() && selIds.length) ? 'pointer' : 'not-allowed', fontSize: 12, fontWeight: 600 }}>
+                Assign to bin ({selIds.length})
               </button>
+            </div>
+
+            {/* Per-line bin cards */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {recv.length === 0 && <div style={{ fontSize: 13, color: sub, padding: 12 }}>No received quantities to place.</div>}
+              {recv.map((l: any) => {
+                const total = recOf3(l)
+                const split = isSplit3(l)
+                const subs = subsOf3(l) || []
+                const allocated = subSum3(l)
+                const reconciled = allocated === total
+                return (
+                  <div key={l.id} style={{ background: cardBg, border: bd, borderRadius: 8, padding: '12px 14px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <input type="checkbox" checked={!!locSel[l.id]} onChange={() => toggleSel(l.id)} style={{ accentColor: '#2563eb', cursor: 'pointer' }} />
+                      <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#E84E0F' }}>L-{String(l.line_number || l.id).padStart(3,'0')}</span>
+                      <span style={{ flex: 1, color: col, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.description || 'Line item'}</span>
+                      <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: sub }}>{total} {l.uom || 'EA'}</span>
+                      {!split ? (
+                        <button onClick={() => startSplit3(l)} style={{ background: 'none', border: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit' }}>⊕ Split across bins</button>
+                      ) : (
+                        <button onClick={() => endSplit3(l.id)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit' }}>✕ Unsplit</button>
+                      )}
+                    </div>
+
+                    {!split ? (
+                      <div style={{ marginTop: 8, paddingLeft: 28 }}>
+                        <input value={lineLoc[l.id] || ''} onChange={e => setLineLoc(p => ({ ...p, [l.id]: e.target.value }))}
+                          placeholder="Bin (blank → default)" style={{ ...inputSt, width: 280, fontFamily: 'JetBrains Mono, monospace' }} />
+                      </div>
+                    ) : (
+                      <div style={{ marginTop: 8, paddingLeft: 28, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {subs.map((s, i) => (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 11, color: sub, whiteSpace: 'nowrap' }}>↳ portion {i + 1}</span>
+                            <input type="number" min={0} value={s.received_qty}
+                              onChange={e => updateSub3(l.id, i, 'received_qty', Number(e.target.value) || 0)}
+                              style={{ ...inputSt, width: 80, textAlign: 'center' }} title="quantity" />
+                            <span style={{ fontSize: 11, color: sub }}>{l.uom || 'EA'}</span>
+                            {(s.heat_number || s.heat_off_list) && <span style={{ fontSize: 10, color: sub, fontFamily: 'JetBrains Mono, monospace' }}>heat {s.heat_number || '—'}</span>}
+                            <input value={s.grid_location || ''} onChange={e => updateSub3(l.id, i, 'grid_location', e.target.value)}
+                              placeholder="Bin (blank → default)" style={{ ...inputSt, width: 220, fontFamily: 'JetBrains Mono, monospace' }} />
+                            <button onClick={() => removeSub3(l.id, i)} title="Remove portion" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 14 }}>×</button>
+                          </div>
+                        ))}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                          <button onClick={() => addSub3(l.id)} style={{ background: 'none', border: `1px dashed ${dark ? '#334155' : '#cbd5e1'}`, borderRadius: 6, color: '#2563eb', cursor: 'pointer', fontSize: 11, padding: '4px 10px', fontFamily: 'inherit' }}>+ Add bin</button>
+                          <span style={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', color: reconciled ? '#22c55e' : '#ef4444' }}>
+                            {reconciled ? `✓ allocated ${allocated}` : `allocated ${allocated} of ${total} — must match`}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <button onClick={goBack} style={{ padding: '8px 18px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 13 }}>← Back</button>
               <div style={{ flex: 1 }} />
-              <button onClick={() => setStep(4)} disabled={!location.trim()}
-                style={{ padding: '8px 20px', borderRadius: 6, border: 'none', background: location.trim() ? '#2563eb' : '#94a3b8', color: '#fff', cursor: location.trim() ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
+              {!splitsOk && <span style={{ fontSize: 11, color: '#ef4444' }}>Split portions must add up to each line's quantity</span>}
+              <button onClick={() => setStep(4)} disabled={!canNext}
+                style={{ padding: '8px 20px', borderRadius: 6, border: 'none', background: canNext ? '#2563eb' : '#94a3b8', color: '#fff', cursor: canNext ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
                 Next → TCCC sign-off →
               </button>
             </div>
           </div>
-        )}
+          )
+        })()}
 
         {/* ── STEP 4 ── */}
         {step === 4 && (

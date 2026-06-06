@@ -869,10 +869,21 @@ export const RECEIPTING_HELP: HelpSection[] = [
       {Steps([
         <>Click {B('Receive')} (or {B('Begin inspection')}) on a queued SCN.</>,
         <>Confirm the expected contents, then enter received and damaged quantities per line.</>,
-        <>Set the destination location and cargo condition, then complete.</>,
+        <>On {B('Assign bins')}, place each line into a warehouse bin (see below), set the cargo condition, then complete.</>,
       ])}
       {P(<>Completing the receipt sets the SCN to {B('Delivered')} in Logistics — a shipment is delivered once
         receipted, never "partially delivered". Any outstanding PO balance arrives on a new SCN.</>)}
+    </>,
+  },
+  {
+    title: 'Assigning bins (one or many locations)',
+    content: <>
+      {P(<>On the {B('Assign bins')} step, every received line gets a warehouse bin. Set a {B('Default bin')} for
+        the whole receipt, then override individual lines as needed.</>)}
+      {P(<>Tick several lines and use {B('Assign to bin')} to send them all to the same location at once, or use
+        {B(' ⊕ Split across bins')} on a line to send {B('portions')} of it to different bins (the portion
+        quantities must add up to the line's quantity). Anything left blank lands in the default bin.</>)}
+      {P(<>Each line/portion becomes its own warehouse-stock row, with its heat number and bin preserved for traceability.</>)}
     </>,
   },
   {
@@ -881,9 +892,8 @@ export const RECEIPTING_HELP: HelpSection[] = [
       {P(<>One line can arrive against several heat/lot certificates. On the {B('Physical check')} step use
         {B(' ⊕ Split across heats')} to break the line into allocations — e.g. 100 pipes as 5 × 20, each tied to
         its own heat number. The allocation quantities must add up to the line total.</>)}
-      {P(<>Each allocation can also be given its {B('own grid location')}, so different heats can land in
-        different bins. Leave it blank to use the receipt's default location from the {B('Assign location')} step.</>)}
-      {P(<>Every allocation becomes its own warehouse-stock row (heat + bin preserved) for full traceability.</>)}
+      {P(<>Those same allocations carry through to the {B('Assign bins')} step, where you give each its bin — so a
+        line can be split by heat and by location together.</>)}
     </>,
   },
 ]
