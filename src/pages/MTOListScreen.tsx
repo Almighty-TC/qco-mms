@@ -248,7 +248,7 @@ const NewMTOModal = ({
     color: dark ? '#f1f5f9' : '#0f172a', padding: '0 8px', fontFamily: 'IBM Plex Sans, sans-serif',
   }
   const thStyle: React.CSSProperties = {
-    padding: '0 6px', height: 40, textAlign: 'left', fontWeight: 700, fontSize: 11,
+    padding: '0 6px', height: 40, textAlign: 'center', fontWeight: 700, fontSize: 11,
     color: dark ? '#94a3b8' : '#475569', whiteSpace: 'nowrap', userSelect: 'none',
     background: dark ? '#0f172a' : '#f1f5f9', letterSpacing: '0.06em', textTransform: 'uppercase',
     borderBottom: `2px solid ${dark ? '#334155' : '#e2e8f0'}`,
@@ -704,7 +704,7 @@ const UploadNewMTOModal = ({
                 <thead>
                   <tr style={{ background: dark ? '#1e293b' : '#f1f5f9', borderBottom: bd }}>
                     {['LINE','WBS','DESCRIPTION','QTY','UOM'].map(h => (
-                      <th key={h} style={{ padding: '6px 8px', textAlign: 'left', color: sub, fontFamily: 'IBM Plex Sans, sans-serif', fontWeight: 600, fontSize: 10, letterSpacing: '0.05em', textTransform: 'uppercase' }}>{h}</th>
+                      <th key={h} style={{ padding: '6px 8px', textAlign: 'center', color: sub, fontFamily: 'IBM Plex Sans, sans-serif', fontWeight: 600, fontSize: 10, letterSpacing: '0.05em', textTransform: 'uppercase' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -805,7 +805,7 @@ const MTOListInner = ({
 
   const rt = useResizableTable('mto_register', MTO_REG_W, MTO_REG_MIN)
   const thStyle: React.CSSProperties = {
-    padding: '10px 14px', textAlign: 'left', fontSize: 11,
+    padding: '10px 14px', textAlign: 'center', fontSize: 11,
     fontWeight: 700, color: sub, fontFamily: 'IBM Plex Sans, sans-serif',
     textTransform: 'uppercase', letterSpacing: '0.05em',
     position: 'sticky', top: 0, background: dark ? '#111827' : '#fff', zIndex: 2,

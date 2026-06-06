@@ -303,7 +303,7 @@ export const FoundEquipmentScreen = ({ dark, projectId, projectName, onBack }: {
 
   const thStyle = (c: string): React.CSSProperties => ({
     padding: '8px 10px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em',
-    textTransform: 'uppercase', textAlign: 'left', cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none',
+    textTransform: 'uppercase', textAlign: 'center', cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none',
     borderBottom: bd,
   })
 
@@ -340,7 +340,7 @@ export const FoundEquipmentScreen = ({ dark, projectId, projectName, onBack }: {
         {[['tag','Tag'],['description','Description'],['spec','Spec'],['trace_class','Trace'],['wbs_code','WBS'],['vendor','Vendor'],['status','Status']].map(([k,l], i) => (
           <th key={k} style={{ ...rt.thStyle(i), ...thStyle(k) }} onClick={() => toggleSort(k)}>{l}{sortArrow(k)}{rt.handle(i, dark)}</th>
         ))}
-        <th style={{ ...rt.thStyle(7), padding: '8px 10px', borderBottom: bd, textAlign: 'left', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Actions</th>
+        <th style={{ ...rt.thStyle(7), padding: '8px 10px', borderBottom: bd, textAlign: 'center', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Actions</th>
       </tr>
     </thead>
   )

@@ -104,7 +104,7 @@ const VDRLDocTable: React.FC<{docs:any[];dark:boolean;onRowClick:(d:any)=>void}>
         <thead>
           <tr style={{background:dark?'#162032':'#f8fafc',borderBottom:bd}}>
             {['DOC NO','TITLE','TYPE','REV','REQUIRED','PROMISED','SUBMITTED','STATUS','ABF'].map(h=>(
-              <th key={h} style={{padding:'7px 10px',textAlign:'left',fontSize:10,fontWeight:600,color:sub,textTransform:'uppercase',letterSpacing:'0.06em',whiteSpace:'nowrap'}}>{h}</th>
+              <th key={h} style={{padding:'7px 10px',textAlign: 'center',fontSize:10,fontWeight:600,color:sub,textTransform:'uppercase',letterSpacing:'0.06em',whiteSpace:'nowrap'}}>{h}</th>
             ))}
           </tr>
         </thead>
@@ -382,7 +382,7 @@ const VDRLUploadModal: React.FC<{dark:boolean;projectId:number;onClose:()=>void;
                 <thead>
                   <tr style={{background:dark?'#0f172a':'#f8fafc'}}>
                     {['Row','Status','PO Ref','Doc Number','Title'].map(h=>(
-                      <th key={h} style={{padding:'7px 10px',textAlign:'left',fontSize:10,fontWeight:600,color:sub,textTransform:'uppercase',letterSpacing:'0.06em',borderBottom:bd}}>{h}</th>
+                      <th key={h} style={{padding:'7px 10px',textAlign: 'center',fontSize:10,fontWeight:600,color:sub,textTransform:'uppercase',letterSpacing:'0.06em',borderBottom:bd}}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -698,7 +698,7 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, userRole = '', on
                   <tr style={{ borderBottom: bd }}>
                     {([['★'], ['PO Ref', 'po_number'], ['Vendor / Group', 'vendor'], ['Material'], ['Owner / Expeditor'], ['Milestones'], ['ROS', 'ros_date'], ['Status', 'status'], ['']] as [string, string?][]).map(([h, key], i) => (
                       <th key={i} onClick={key ? () => toggleSort(key) : undefined}
-                        style={{ ...rt.thStyle(i), padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none',
+                        style={{ ...rt.thStyle(i), padding: '8px 12px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none',
                           // opaque cell bg so rows (incl. the milestone graph) scroll BEHIND the sticky header
                           background: dark ? '#162032' : '#f8fafc' }}>
                         {h}{key ? sortArrow(key) : ''}
@@ -834,7 +834,7 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, userRole = '', on
                       <thead>
                         <tr style={{background:dark?'#0f172a':'#f8fafc',borderBottom:bd}}>
                           {['PO REF','PO NAME','VENDOR','PACKAGES','TOTAL DOCS','SUBMITTED','OVERDUE','PROGRESS',''].map(h=>(
-                            <th key={h} style={{padding:'8px 12px',textAlign:'left',fontSize:10,fontWeight:600,color:sub,textTransform:'uppercase',letterSpacing:'0.06em',whiteSpace:'nowrap'}}>{h}</th>
+                            <th key={h} style={{padding:'8px 12px',textAlign: 'center',fontSize:10,fontWeight:600,color:sub,textTransform:'uppercase',letterSpacing:'0.06em',whiteSpace:'nowrap'}}>{h}</th>
                           ))}
                         </tr>
                       </thead>

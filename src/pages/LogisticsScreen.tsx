@@ -303,7 +303,7 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
                     ['ROUTE','160px','origin'],['MODE','90px','mode'],['ETD','100px','etd'],['ETA','100px','eta'],
                     ['PKGS','60px'],['WEIGHT','90px'],['STATUS','130px','status'],['RAG','50px']] as [string,string,string?][]).map(([h,w,key], i) => (
                     <th key={h} onClick={key ? () => toggleSort(key) : undefined}
-                      style={{ ...rt.thStyle(i), padding: '8px 10px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>
+                      style={{ ...rt.thStyle(i), padding: '8px 10px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>
                       {h}{key ? sortArrow(key) : ''}
                       {rt.handle(i, dark)}
                     </th>
@@ -698,7 +698,7 @@ const OverviewTab = ({ dark, scn, onRefresh, addToast }: {
             <thead>
               <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}` }}>
                 {([['Line #','left'],['Description','left'],['Qty','right'],['Assigned','right'],['UOM','left']] as [string, 'left'|'right'][]).map(([h, align]) => (
-                  <th key={h} style={{ padding: '7px 10px', textAlign: align, fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
+                  <th key={h} style={{ padding: '7px 10px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -832,7 +832,7 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast }: {
           <thead>
             <tr style={{ background: theadBg, borderBottom: bd }}>
               {['#','Description','L × W × H (mm)','Gross kg','Net kg','DG','Class','Marks','Actions'].map(h => (
-                <th key={h} style={{ padding: '7px 8px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
+                <th key={h} style={{ padding: '7px 8px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -1025,7 +1025,7 @@ const DocumentsTab = ({ dark, scn, onRefresh, addToast }: {
           <thead>
             <tr style={{ background: theadBg, borderBottom: bd }}>
               {['Type','File Name','Uploaded By','Date','Notes','Actions'].map(h => (
-                <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
+                <th key={h} style={{ padding: '7px 10px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
               ))}
             </tr>
           </thead>

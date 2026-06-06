@@ -524,7 +524,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                               <thead>
                                 <tr style={{ borderBottom: bd }}>
                                   {['#', 'Description', 'Qty', 'UOM', 'Status'].map(h => (
-                                    <th key={h} style={{ padding: '4px 8px', textAlign: 'left', color: sub, fontWeight: 600, fontSize: 9, textTransform: 'uppercase' }}>{h}</th>
+                                    <th key={h} style={{ padding: '4px 8px', textAlign: 'center', color: sub, fontWeight: 600, fontSize: 9, textTransform: 'uppercase' }}>{h}</th>
                                   ))}
                                 </tr>
                               </thead>
@@ -825,7 +825,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                                         <thead>
                                           <tr>
                                             {['Changed at','Changed by','From','To','Reason'].map(h => (
-                                              <th key={h} style={{ padding: '4px 12px', textAlign: 'left', color: sub, fontWeight: 600, fontSize: 10, textTransform: 'uppercase' }}>{h}</th>
+                                              <th key={h} style={{ padding: '4px 12px', textAlign: 'center', color: sub, fontWeight: 600, fontSize: 10, textTransform: 'uppercase' }}>{h}</th>
                                             ))}
                                           </tr>
                                         </thead>
@@ -921,7 +921,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                         <thead>
                           <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
                             {['DOC NO','TITLE','TYPE','REV','REQUIRED','PROMISED','SUBMITTED','STATUS','ABF'].map(h => (
-                              <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
+                              <th key={h} style={{ padding: '7px 10px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
                             ))}
                           </tr>
                         </thead>
@@ -1016,7 +1016,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                   <thead>
                     <tr style={{ background: dark?'#0f172a':'#f8fafc', borderBottom: bd }}>
                       {['Timestamp','User','Action','Old Value','New Value'].map(h => (
-                        <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{h}</th>
+                        <th key={h} style={{ padding: '7px 10px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{h}</th>
                       ))}
                     </tr>
                   </thead>

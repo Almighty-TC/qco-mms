@@ -95,7 +95,7 @@ function MeetingRFIInner({ dark, projectId, projectName, userRole, userId, onBac
   const STATUSES = ['draft', 'open', 'assigned', 'answered', 'scheduled', 'held', 'actions_open', 'closed', 'cancelled']
   const sortArrow = (c: string) => sortCol === c ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''
   const rt = useResizableTable('meeting_rfi', [110, 90, 240, 90, 140, 110, 110, 110], [80, 60, 120, 60, 100, 80, 90, 90])
-  const thStyle = { padding: '8px 10px', borderBottom: bd, textAlign: 'left' as const, fontSize: 10,
+  const thStyle = { padding: '8px 10px', borderBottom: bd, textAlign: 'center' as const, fontSize: 10,
     fontWeight: 700, color: sub, letterSpacing: '0.08em', textTransform: 'uppercase' as const, whiteSpace: 'nowrap' as const, cursor: 'pointer' as const }
   const td = { padding: '9px 10px', borderBottom: bd, fontSize: 13, color: col, verticalAlign: 'middle' as const }
   const inp = { height: 32, padding: '0 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 12, fontFamily: 'inherit', outline: 'none' }

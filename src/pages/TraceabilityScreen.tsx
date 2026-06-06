@@ -135,7 +135,7 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
 
   // ── Styles ──────────────────────────────────────────────────
   const inputSt: React.CSSProperties = { fontSize: 12, padding: '7px 10px', borderRadius: 6, border: t.bd, background: t.inputBg, color: t.col, fontFamily: 'inherit' }
-  const thSt: React.CSSProperties = { padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: t.sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }
+  const thSt: React.CSSProperties = { padding: '8px 12px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: t.sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }
   const rtVdrl = useResizableTable('trace_vdrl', [110, 130, 110, 200, 110, 110, 110, 80], [80, 90, 80, 120, 80, 80, 80, 60])
   const rtCert = useResizableTable('trace_cert', [200, 90, 180, 180, 120, 100, 90], [120, 60, 120, 120, 90, 80, 70])
   const tdSt: React.CSSProperties = { padding: '9px 12px', fontSize: 12, color: t.col }

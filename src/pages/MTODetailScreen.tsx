@@ -469,7 +469,7 @@ const LineItemsTab = ({
                 ] as { label: string; key?: string; align?: React.CSSProperties['textAlign'] }[]).map((c, i) => (
                   <th key={i}
                     onClick={c.key ? () => toggleSort(c.key!) : undefined}
-                    style={{ ...rt.thStyle(i), ...thStyle, textAlign: c.align ?? 'left', cursor: c.key ? 'pointer' : 'default', userSelect: 'none' }}>
+                    style={{ ...rt.thStyle(i), ...thStyle, textAlign: 'center', cursor: c.key ? 'pointer' : 'default', userSelect: 'none' }}>
                     {c.label}{c.key && sortCol === c.key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
                     {rt.handle(i, dark)}
                   </th>
@@ -560,7 +560,7 @@ const VersionHistoryTab = ({
   }, [projectId, mtoId])
 
   const thS: React.CSSProperties = {
-    padding: '9px 14px', textAlign: 'left', fontSize: 11,
+    padding: '9px 14px', textAlign: 'center', fontSize: 11,
     fontWeight: 700, color: sub, fontFamily: 'IBM Plex Sans, sans-serif',
     textTransform: 'uppercase', letterSpacing: '0.05em',
     borderBottom: bd, background: dark ? '#111827' : '#fff',
@@ -648,7 +648,7 @@ const RevDiffTab = ({
   }
 
   const thS: React.CSSProperties = {
-    padding: '9px 14px', textAlign: 'left', fontSize: 11,
+    padding: '9px 14px', textAlign: 'center', fontSize: 11,
     fontWeight: 700, color: sub, fontFamily: 'IBM Plex Sans, sans-serif',
     textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: bd,
     background: dark ? '#111827' : '#fff',

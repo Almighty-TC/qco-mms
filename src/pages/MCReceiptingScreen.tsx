@@ -200,7 +200,7 @@ const MCReceiptingInner = ({ dark, projectId, projectName, onBack }: {
               <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                 <tr style={{ borderBottom: bd }}>
                   {['REFERENCE','TYPE','ITEM / DESCRIPTION','QTY','WBS','SOURCE / VENDOR','ETA','DESTINATION','STATUS',''].map((h, i) => (
-                    <th key={h || i} style={{ ...rt.thStyle(i), padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}{rt.handle(i, dark)}</th>
+                    <th key={h || i} style={{ ...rt.thStyle(i), padding: '8px 12px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}{rt.handle(i, dark)}</th>
                   ))}
                 </tr>
               </thead>
@@ -516,7 +516,7 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
               <thead>
                 <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
                   {['LINE','DESCRIPTION','EXP. QTY','UOM'].map((h, i) => (
-                    <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', ...rvTable.thStyle(i) }}>{h}{rvTable.handle(i, dark)}</th>
+                    <th key={h} style={{ padding: '8px 12px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', ...rvTable.thStyle(i) }}>{h}{rvTable.handle(i, dark)}</th>
                   ))}
                 </tr>
               </thead>
@@ -677,7 +677,7 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                       {pcHandle(0)}
                     </th>
                     {['LINE','DESCRIPTION','EXPECTED','UOM','ACTUAL','DAMAGED','MATCH','HEAT', ...(anyIssue ? ['DISCREPANCY TYPE'] : [])].map((h, i) => (
-                      <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', ...pcTable.thStyle(i + 1) }}>{h}{pcHandle(i + 1)}</th>
+                      <th key={h} style={{ padding: '8px 12px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', ...pcTable.thStyle(i + 1) }}>{h}{pcHandle(i + 1)}</th>
                     ))}
                   </tr>
                 </thead>

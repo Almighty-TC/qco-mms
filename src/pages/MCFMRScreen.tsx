@@ -311,7 +311,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
                 <tr style={{ borderBottom: bd }}>
                   {([['FMR REF','fmr_ref'],['ITEMS'],['WBS','wbs_code'],['WAREHOUSE','warehouse'],['QTY'],['REQUESTED BY','requested_by'],['REQ. DATE','required_date'],['STATUS','status'],['']] as [string,string?][]).map(([h,key], i) => (
                     <th key={h || i} onClick={key ? () => toggleSort(key) : undefined}
-                      style={{ position: 'relative', padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>
+                      style={{ position: 'relative', padding: '8px 12px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>
                       {h}{key ? sortArrow(key) : ''}
                       {i < colW.length - 1 && <ColResizeHandle onMouseDown={e => onColResize(i, e)} dark={dark} />}
                     </th>
@@ -426,7 +426,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
                               <thead>
                                 <tr style={{ color: sub }}>
                                   {['ITEM', 'DESCRIPTION', 'WBS', 'QTY REQ', 'APPROVED', 'ISSUED', 'STATUS'].map(h => (
-                                    <th key={h} style={{ textAlign: 'left', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', padding: '5px 8px', borderBottom: bd }}>{h}</th>
+                                    <th key={h} style={{ textAlign: 'center', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', padding: '5px 8px', borderBottom: bd }}>{h}</th>
                                   ))}
                                 </tr>
                               </thead>
@@ -998,7 +998,7 @@ const RaiseFMRModal = ({ dark, projectId, onClose, onSaved, addToast }: {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
                 <thead>
                   <tr style={{ background: dark ? '#162032' : '#f8fafc' }}>
-                    {['ITEM','WBS','QTY','UOM',''].map(h => <th key={h} style={{ padding: '6px 8px', textAlign: 'left', fontSize: 9, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>)}
+                    {['ITEM','WBS','QTY','UOM',''].map(h => <th key={h} style={{ padding: '6px 8px', textAlign: 'center', fontSize: 9, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>)}
                   </tr>
                 </thead>
                 <tbody>
@@ -1119,7 +1119,7 @@ const FMRDetailModal = ({ dark, projectId, fmr, onClose, addToast }: {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
-                    {['ITEM','TYPE','DESCRIPTION','WBS','QTY REQ','APPROVED','ISSUED','STATUS'].map(h => <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 9, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>)}
+                    {['ITEM','TYPE','DESCRIPTION','WBS','QTY REQ','APPROVED','ISSUED','STATUS'].map(h => <th key={h} style={{ padding: '7px 10px', textAlign: 'center', fontSize: 9, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>)}
                   </tr>
                 </thead>
                 <tbody>
@@ -1324,7 +1324,7 @@ const IssuePickerModal = ({ dark, projectId, fmr, onClose, onIssued, addToast }:
                   ) : (
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
                       <thead><tr style={{ color: sub }}>
-                        {['HEAT', 'LOCATION', 'AVAILABLE', 'ISSUE QTY'].map(h => <th key={h} style={{ textAlign: 'left', fontWeight: 600, padding: '2px 6px', fontSize: 9, textTransform: 'uppercase' }}>{h}</th>)}
+                        {['HEAT', 'LOCATION', 'AVAILABLE', 'ISSUE QTY'].map(h => <th key={h} style={{ textAlign: 'center', fontWeight: 600, padding: '2px 6px', fontSize: 9, textTransform: 'uppercase' }}>{h}</th>)}
                       </tr></thead>
                       <tbody>
                         {l.holdings.map((h: any) => (

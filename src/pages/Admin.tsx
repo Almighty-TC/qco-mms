@@ -1055,7 +1055,7 @@ function AllRolesOverview({ dark, perms }: { dark: boolean; perms: RolePerm[] })
           </colgroup>
           <thead style={{ position: 'sticky', zIndex: 10, background: headerBg }}>
             <tr>
-              <th style={{ height: 36, padding: '0 12px', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase', fontFamily: 'IBM Plex Sans, sans-serif', textAlign: 'left', position: 'relative', overflow: 'hidden', whiteSpace: 'nowrap', boxSizing: 'border-box', borderBottom: `1px solid ${borderCol}` }}>
+              <th style={{ height: 36, padding: '0 12px', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase', fontFamily: 'IBM Plex Sans, sans-serif', textAlign: 'center', position: 'relative', overflow: 'hidden', whiteSpace: 'nowrap', boxSizing: 'border-box', borderBottom: `1px solid ${borderCol}` }}>
                 ROLE
                 <OvDragHandle dark={dark} onMouseDown={e => ovDown(0, e)} />
               </th>

@@ -160,7 +160,7 @@ const MCTransferInner = ({ dark, projectId, projectName, onBack }: {
                 <tr style={{ borderBottom: bd }}>
                   {([['REF','transfer_ref'],['ITEM','item_code'],['DESCRIPTION'],['QTY'],['WBS','wbs_code'],['FROM → TO','from_warehouse'],['REQUESTED BY','requested_by'],['EST. PICKUP','est_pickup_date'],['STATUS','status'],['ACTION']] as [string,string?][]).map(([h,key], i) => (
                     <th key={h} onClick={key ? () => toggleSort(key) : undefined}
-                      style={{ ...rt.thStyle(i), padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>
+                      style={{ ...rt.thStyle(i), padding: '8px 12px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>
                       {h}{key ? sortArrow(key) : ''}
                       {rt.handle(i, dark)}
                     </th>

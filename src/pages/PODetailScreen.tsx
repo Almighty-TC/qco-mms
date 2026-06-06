@@ -361,7 +361,7 @@ const LineItemsTab = ({ po, dark, onRefresh }: { po: PO; dark: boolean; onRefres
     } finally { setSaving(false) }
   }
 
-  const thStyle: React.CSSProperties = { padding: '8px 10px', fontWeight: 700, fontSize: 10, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap', borderBottom: `1px solid ${borderCol}` }
+  const thStyle: React.CSSProperties = { padding: '8px 10px', fontWeight: 700, fontSize: 10, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase', textAlign: 'center', whiteSpace: 'nowrap', borderBottom: `1px solid ${borderCol}` }
   const rt = useResizableTable('po_lines', POL_W, POL_MIN)
   const tdStyle: React.CSSProperties = { padding: '0 10px', height: 44, verticalAlign: 'middle', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, fontSize: 13, color: col }
 

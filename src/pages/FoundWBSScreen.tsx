@@ -763,7 +763,7 @@ const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: numb
                 <thead>
                   <tr style={{ background: dark ? '#0f172a' : '#f8fafc', position: 'sticky', top: 0 }}>
                     {['Row','','Code','Description','Parent','ROS','Issues'].map(h => (
-                      <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, color: '#64748b', letterSpacing: '0.05em', textTransform: 'uppercase', fontSize: 10, borderBottom: `1px solid ${dark ? '#334155' : '#e8ecf2'}` }}>{h}</th>
+                      <th key={h} style={{ padding: '6px 10px', textAlign: 'center', fontWeight: 600, color: '#64748b', letterSpacing: '0.05em', textTransform: 'uppercase', fontSize: 10, borderBottom: `1px solid ${dark ? '#334155' : '#e8ecf2'}` }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -1098,8 +1098,8 @@ const BulkDeleteConfirmModal = ({ nodes, projectId, dark, onClose, onDeleted }: 
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ background: dark ? '#0f172a' : '#f4f7fb' }}>
-                <th style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Code</th>
-                <th style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Name</th>
+                <th style={{ padding: '7px 12px', textAlign: 'center', fontWeight: 600, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Code</th>
+                <th style={{ padding: '7px 12px', textAlign: 'center', fontWeight: 600, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Name</th>
                 <th style={{ padding: '7px 12px', textAlign: 'center', fontWeight: 600, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>RAG</th>
               </tr>
             </thead>
@@ -1162,8 +1162,8 @@ const BulkDeleteSafeConfirmModal = ({ safeNodes, totalSelected, blockedCount, da
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ background: dark ? '#0f172a' : '#f4f7fb' }}>
-                <th style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Code</th>
-                <th style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Name</th>
+                <th style={{ padding: '7px 12px', textAlign: 'center', fontWeight: 600, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Code</th>
+                <th style={{ padding: '7px 12px', textAlign: 'center', fontWeight: 600, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Name</th>
               </tr>
             </thead>
             <tbody>
@@ -1249,9 +1249,9 @@ const BulkDeleteBlockedModal = ({ allNodes, blockedNodes, safeNodes, dark, proje
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ background: 'rgba(239,68,68,0.1)' }}>
-                <th style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#ef4444', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Code</th>
-                <th style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#ef4444', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Name</th>
-                <th style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#ef4444', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Blocker</th>
+                <th style={{ padding: '7px 12px', textAlign: 'center', fontWeight: 600, color: '#ef4444', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Code</th>
+                <th style={{ padding: '7px 12px', textAlign: 'center', fontWeight: 600, color: '#ef4444', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Name</th>
+                <th style={{ padding: '7px 12px', textAlign: 'center', fontWeight: 600, color: '#ef4444', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Blocker</th>
               </tr>
             </thead>
             <tbody>
@@ -1276,9 +1276,9 @@ const BulkDeleteBlockedModal = ({ allNodes, blockedNodes, safeNodes, dark, proje
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: 'rgba(34,197,94,0.1)' }}>
-                    <th style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#22c55e', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Code</th>
-                    <th style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#22c55e', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Name</th>
-                    <th style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#22c55e', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Status</th>
+                    <th style={{ padding: '7px 12px', textAlign: 'center', fontWeight: 600, color: '#22c55e', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Code</th>
+                    <th style={{ padding: '7px 12px', textAlign: 'center', fontWeight: 600, color: '#22c55e', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Name</th>
+                    <th style={{ padding: '7px 12px', textAlign: 'center', fontWeight: 600, color: '#22c55e', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1437,7 +1437,7 @@ const WBSReadinessModal = ({ node, projectId, dark, onClose, onNoteSaved }: {
                   <thead>
                     <tr style={{ background: dark ? '#0f172a' : '#f4f7fb' }}>
                       {['PO Ref', 'Vendor', 'Status', 'CDD', 'Delivery RAG'].map(h => (
-                        <th key={h} style={{ padding: '7px 12px', textAlign: 'left', fontWeight: 600, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>{h}</th>
+                        <th key={h} style={{ padding: '7px 12px', textAlign: 'center', fontWeight: 600, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em' }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -1876,10 +1876,10 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
                       onChange={handleSelectAll}
                       style={{ cursor: 'pointer', accentColor: '#2563eb' }} />
                   </th>
-                  <th style={{ position: 'relative', padding: '8px 8px 8px 22px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap' }}>Code<ColResizeHandle onMouseDown={e => onColResize(0, e)} dark={dark} /></th>
-                  <th style={{ position: 'relative', padding: '8px 4px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left' }}>WBS Node<ColResizeHandle onMouseDown={e => onColResize(1, e)} dark={dark} /></th>
-                  <th style={{ position: 'relative', padding: '8px 12px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap' }}>ROS<ColResizeHandle onMouseDown={e => onColResize(2, e)} dark={dark} /></th>
-                  {!focusMode && <th style={{ position: 'relative', padding: '8px 12px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'left' }}>Notes<ColResizeHandle onMouseDown={e => onColResize(3, e)} dark={dark} /></th>}
+                  <th style={{ position: 'relative', padding: '8px 8px 8px 22px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'center', whiteSpace: 'nowrap' }}>Code<ColResizeHandle onMouseDown={e => onColResize(0, e)} dark={dark} /></th>
+                  <th style={{ position: 'relative', padding: '8px 4px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'center' }}>WBS Node<ColResizeHandle onMouseDown={e => onColResize(1, e)} dark={dark} /></th>
+                  <th style={{ position: 'relative', padding: '8px 12px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'center', whiteSpace: 'nowrap' }}>ROS<ColResizeHandle onMouseDown={e => onColResize(2, e)} dark={dark} /></th>
+                  {!focusMode && <th style={{ position: 'relative', padding: '8px 12px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'center' }}>Notes<ColResizeHandle onMouseDown={e => onColResize(3, e)} dark={dark} /></th>}
                   {!focusMode && <th style={{ position: 'relative', padding: '8px 8px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'right', whiteSpace: 'nowrap' }}>PO Qty<ColResizeHandle onMouseDown={e => onColResize(4, e)} dark={dark} /></th>}
                   {!focusMode && <th />}
                   <th />

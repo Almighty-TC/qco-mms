@@ -243,7 +243,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                         : [{ label: 'LOCATION', key: 'location' }, { label: 'ITEM/TAG', key: 'item_code' }, { label: 'DESCRIPTION', key: 'description' }, { label: 'HEAT' }, { label: 'WBS', key: 'wbs_code' }, { label: 'QTY', key: 'quantity' }, { label: 'UOM' }, { label: 'CONDITION', key: 'condition_status' }, { label: 'VENDOR', key: 'vendor_name' }, { label: 'HOLD' }, { label: '' }]
                       ).map((h, i) => (
                         <th key={h.label || 'actions'} onClick={h.key ? () => toggleSort(h.key!) : undefined}
-                          style={{ ...rt.thStyle(i), padding: '7px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap', cursor: h.key ? 'pointer' : 'default', userSelect: 'none' }}>
+                          style={{ ...rt.thStyle(i), padding: '7px 12px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap', cursor: h.key ? 'pointer' : 'default', userSelect: 'none' }}>
                           {h.label}{h.key ? sortArrow(h.key) : ''}
                           {rt.handle(i, dark)}
                         </th>
@@ -544,7 +544,7 @@ const StockTakeModal = ({ dark, stock, onClose }: { dark: boolean; stock: StockI
             <thead>
               <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
                 {['GRID','ITEM','DESCRIPTION','HEAT','UOM','SYSTEM','COUNTED','VARIANCE','NOTE'].map(h => (
-                  <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
+                  <th key={h} style={{ padding: '7px 10px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
                 ))}
               </tr>
             </thead>

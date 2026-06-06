@@ -140,7 +140,7 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
   }, [rows, groups, groupBy])
 
   const inputSt: React.CSSProperties = { fontSize: 12, padding: '7px 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontFamily: 'inherit' }
-  const thSt: React.CSSProperties = { padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }
+  const thSt: React.CSSProperties = { padding: '8px 12px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }
   const tdSt: React.CSSProperties = { padding: '9px 12px', fontSize: 12, color: col, verticalAlign: 'top' }
   const mono: React.CSSProperties = { fontFamily: 'JetBrains Mono, monospace' }
 
