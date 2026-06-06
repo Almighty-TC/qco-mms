@@ -1262,6 +1262,7 @@ function App() {
               Old /vdrl route maps to this screen with view=vdrl. */}
           {page === 'expediting' && selectedProjectId && (
             <ExpeditingScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
+              userRole={user?.role ?? ''}
               onBack={() => setPage('dashboard')}
               onNavigateToPODetail={(poId: number) => { setSelectedExpPOId(poId); setPage('expediting-po-detail') }} />
           )}

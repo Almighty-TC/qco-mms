@@ -6,6 +6,8 @@ import React, { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import axios from 'axios'
 import { MilestoneTimeline } from './MilestoneTimeline'
+import { ExpandBtn } from './ExpandToggle'
+import { ExpPODetailScreen } from '../pages/ExpPODetailScreen'
 
 const API = 'http://localhost:3001/api'
 
@@ -13,23 +15,28 @@ const API = 'http://localhost:3001/api'
 interface Props {
   poId: number | null
   projectId: number
+  projectName: string
   dark: boolean
+  userRole?: string
   onClose: () => void
-  onOpenFullScreen: (poId: number) => void
   onCreateSCN: (poId: number, preSelectedLineId?: number) => void
 }
 
 // ─── COMPONENT ────────────────────────────────────────────────
 export const ExpPODrawer: React.FC<Props> = ({
-  poId, projectId, dark, onClose, onOpenFullScreen, onCreateSCN,
+  poId, projectId, projectName, dark, userRole = '', onClose, onCreateSCN,
 }) => {
   const [po, setPO] = useState<any>(null)
   const [loading, setLoading] = useState(false)
+  // Expand the drawer to a full-screen view that embeds the complete PO detail.
+  const [expanded, setExpanded] = useState(false)
 
   // ─── FETCH PO DETAIL ──────────────────────────────────────
-  // Loads full PO detail when drawer opens; clears on close.
+  // Loads full PO detail when drawer opens; clears on close. Reset the expand
+  // state whenever a different PO is opened.
   useEffect(() => {
     if (!poId) { setPO(null); return }
+    setExpanded(false)
     setLoading(true)
     axios.get(`${API}/expediting/${projectId}/po/${poId}`)
       .then(r => setPO(r.data))
@@ -56,18 +63,35 @@ export const ExpPODrawer: React.FC<Props> = ({
         />
       )}
 
-      {/* Panel */}
+      {/* Panel — widens to full screen when expanded */}
       <div style={{
         position: 'fixed', top: 0, right: 0, bottom: 0,
-        width: 400, zIndex: 8001,
+        width: expanded ? '100vw' : 400, maxWidth: '100vw', zIndex: 8001,
         background: dark ? '#1e293b' : '#fff',
         borderLeft: border,
         boxShadow: '-4px 0 20px rgba(0,0,0,0.15)',
         transform: isOpen ? 'translateX(0)' : 'translateX(100%)',
-        transition: 'transform 200ms ease',
+        transition: 'transform 200ms ease, width 160ms ease',
         display: 'flex', flexDirection: 'column',
         fontFamily: 'IBM Plex Sans, sans-serif',
       }}>
+
+      {/* ── EXPANDED: full-screen embedded PO detail ── */}
+      {expanded && poId ? (
+        <>
+          <div style={{ padding: '8px 16px', borderBottom: border, flexShrink: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ fontSize: 12, color: '#94a3b8' }}>Full PO view — use ← Back or shrink to return to the summary</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <ExpandBtn expanded onToggle={() => setExpanded(false)} />
+              <button onClick={onClose} title="Close" style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer' }}>✕</button>
+            </div>
+          </div>
+          <div style={{ flex: 1, overflowY: 'auto', padding: '0 24px' }}>
+            <ExpPODetailScreen dark={dark} projectId={projectId} projectName={projectName} poId={poId} userRole={userRole} onBack={() => setExpanded(false)} />
+          </div>
+        </>
+      ) : (
+      <>
 
         {/* ── STICKY HEADER ── */}
         <div style={{
@@ -79,9 +103,10 @@ export const ExpPODrawer: React.FC<Props> = ({
             <div style={{ color: '#94a3b8', fontSize: 13 }}>Loading…</div>
           ) : (
             <>
-              {/* PO ref — click to open full screen */}
+              {/* PO ref — click to expand to the full detail in place */}
               <button
-                onClick={() => { onClose(); onOpenFullScreen(po.id) }}
+                onClick={() => setExpanded(true)}
+                title="Expand to full detail"
                 style={{
                   background: 'none', border: 'none',
                   color: '#E84E0F', fontSize: 11, cursor: 'pointer',
@@ -113,12 +138,15 @@ export const ExpPODrawer: React.FC<Props> = ({
                 }}>
                   {po.rag === 'red' ? 'Breached' : po.rag === 'amber' ? 'At Risk' : po.rag === 'complete' ? 'Complete' : 'On Track'}
                 </span>
-                <button
-                  onClick={onClose}
-                  style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer' }}
-                >
-                  ✕
-                </button>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <ExpandBtn expanded={false} onToggle={() => setExpanded(true)} />
+                  <button
+                    onClick={onClose}
+                    style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer' }}
+                  >
+                    ✕
+                  </button>
+                </span>
               </div>
             </>
           )}
@@ -286,15 +314,17 @@ export const ExpPODrawer: React.FC<Props> = ({
             textAlign: 'right', flexShrink: 0,
           }}>
             <button
-              onClick={() => { onClose(); onOpenFullScreen(po.id) }}
+              onClick={() => setExpanded(true)}
               style={{
                 background: 'none', border: 'none',
                 color: '#2563eb', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit',
               }}
             >
-              View full detail →
+              ⤢ Expand to full detail
             </button>
           </div>
+        )}
+        </>
         )}
       </div>
     </>,

@@ -49,6 +49,7 @@ interface ExpeditingScreenProps {
   dark: boolean
   projectId: number
   projectName: string
+  userRole?: string
   onBack: () => void
   onNavigateToPODetail: (poId: number) => void
 }
@@ -434,7 +435,7 @@ const fmt = (d?: string | null) =>
 
 // ─── INNER COMPONENT ──────────────────────────────────────────
 // Must be wrapped in ToastProvider; use the exported ExpeditingScreen below.
-const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigateToPODetail }: ExpeditingScreenProps) => {
+const ExpeditingScreenInner = ({ dark, projectId, projectName, userRole = '', onBack, onNavigateToPODetail }: ExpeditingScreenProps) => {
   const { addToast } = useToast()
   const [stats, setStats]     = useState<Stats>({ total_pos: 0, ongoing: 0, complete: 0, breached: 0, at_risk: 0 })
   const [activeTab, setTab]   = useState<ActiveTab>('pos')
@@ -720,9 +721,9 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
                             {po.is_critical_path ? '★' : '☆'}
                           </span>
                         </td>
-                        {/* PO Ref */}
+                        {/* PO Ref — opens the slide-in drawer (which can expand to full detail) */}
                         <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}
-                            onClick={e => { e.stopPropagation(); onNavigateToPODetail(po.id) }}>
+                            onClick={e => { e.stopPropagation(); setDrawerPoId(po.id) }}>
                           <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: '#E84E0F', fontWeight: 600, cursor: 'pointer' }}>
                             {po.po_number}
                           </div>
@@ -1043,9 +1044,10 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
       <ExpPODrawer
         poId={drawerPoId}
         projectId={projectId}
+        projectName={projectName}
         dark={dark}
+        userRole={userRole}
         onClose={() => setDrawerPoId(null)}
-        onOpenFullScreen={(id) => { setDrawerPoId(null); onNavigateToPODetail(id) }}
         onCreateSCN={(poId, lineId) => { setDrawerPoId(null); setSCNWizardState({ poId, lineId }) }}
       />
 
