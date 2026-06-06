@@ -1591,6 +1591,7 @@ router.post('/currencies', async (req, res) => {
     const [r] = await db.query('INSERT INTO currencies (code, name, symbol, is_active) VALUES (?,?,?,?)',
       [upperCode, name.trim(), symbol.trim(), is_active ? 1 : 0])
     const [[created]] = await db.query('SELECT * FROM currencies WHERE id=?', [r.insertId])
+    audit(req, 'currency.create', `code=${upperCode} name=${name.trim()}`)
     res.status(201).json(created)
   } catch (err) { dbError(res, err) }
 })
@@ -1603,6 +1604,7 @@ router.put('/currencies/:id', async (req, res) => {
     await db.query('UPDATE currencies SET name=?, symbol=?, is_active=?, updated_at=NOW() WHERE id=?',
       [name.trim(), symbol.trim(), is_active ? 1 : 0, req.params.id])
     const [[updated]] = await db.query('SELECT * FROM currencies WHERE id=?', [req.params.id])
+    audit(req, 'currency.update', `id=${req.params.id} name=${name.trim()}`)
     res.json(updated)
   } catch (err) { dbError(res, err) }
 })
@@ -1611,6 +1613,7 @@ router.patch('/currencies/:id/status', async (req, res) => {
   try {
     const { is_active } = req.body
     await db.query('UPDATE currencies SET is_active=?, updated_at=NOW() WHERE id=?', [is_active ? 1 : 0, req.params.id])
+    audit(req, 'currency.status', `id=${req.params.id} active=${is_active ? 1 : 0}`)
     res.json({ ok: true })
   } catch (err) { dbError(res, err) }
 })
@@ -1622,6 +1625,7 @@ router.delete('/currencies/:id', async (req, res) => {
     const [[inUse]] = await db.query('SELECT COUNT(*) AS n FROM purchase_orders WHERE currency=?', [curr.code])
     if (inUse.n > 0) return res.status(409).json({ error: `Cannot delete — currency ${curr.code} is used on ${inUse.n} purchase order(s)` })
     await db.query('DELETE FROM currencies WHERE id=?', [req.params.id])
+    audit(req, 'currency.delete', `code=${curr.code}`)
     res.json({ ok: true })
   } catch (err) { dbError(res, err) }
 })
