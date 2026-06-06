@@ -177,12 +177,13 @@ router.get('/:projectId/stats', async (req, res) => {
     `, [atRiskDays, pid])
 
     // ─── ADDITIONAL VALUE STATS ───────────────────────────────────────────────
-    // totalValue: sum of all non-cancelled POs; approvedValue: locked only; pendingCount: unlocked non-terminal
+    // totalValue: all non-cancelled; approvedValue: locked only; pendingCount must
+    // match the "Pending approval" tab filter exactly (pre-approval statuses).
     const [[valRow]] = await db.query(`
       SELECT
         SUM(CASE WHEN status NOT IN ('cancelled') THEN COALESCE(value, 0) ELSE 0 END)            AS total_value,
         SUM(CASE WHEN is_locked = 1 AND status NOT IN ('cancelled') THEN COALESCE(value, 0) ELSE 0 END) AS approved_value,
-        SUM(CASE WHEN is_locked = 0 AND status NOT IN ('cancelled','closed') THEN 1 ELSE 0 END)  AS pending_count
+        SUM(CASE WHEN status IN ('draft','rfq','loa','pending_approval','pending_director_approval') THEN 1 ELSE 0 END) AS pending_count
       FROM purchase_orders
       WHERE project_id = ?
     `, [pid])

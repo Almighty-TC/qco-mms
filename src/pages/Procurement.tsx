@@ -1183,8 +1183,12 @@ const PO_COLS = [
   { key: 'owner',     label: 'Owner',       width: 130, minWidth: 100 },
   { key: 'cdd',       label: 'CDD',         width: 100, minWidth: 80  },
   { key: 'status',    label: 'Status',      width: 120, minWidth: 100 },
-  { key: 'actions',   label: '',            width: 70,  minWidth: 70,  noResize: true },
+  { key: 'actions',   label: 'Actions',     width: 90,  minWidth: 80,  noResize: true },
 ]
+
+// A PO can still be approved only while it's in a pre-approval status — never
+// once approved/locked, in-flight, or in a terminal (complete/cancelled) state.
+const APPROVABLE_STATUSES = new Set(['draft','rfq','loa','pending_approval','pending_director_approval'])
 
 // ─── PO TABLE ROW ─────────────────────────────────────────────────────────────
 
@@ -1392,13 +1396,15 @@ const POTableRow = ({
 
       {/* ── Actions (index 13) ────────────────────────────────────────────── */}
       <td onClick={e => e.stopPropagation()} style={{ ...tdBase, width: colWidths[13], textAlign: 'center' }}>
-        {!po.isLocked && (
+        {!po.isLocked && APPROVABLE_STATUSES.has(po.status) ? (
           <button
             onClick={() => onApprove(po)}
             title="Approve & Lock"
             style={{ padding: '3px 8px', borderRadius: 5, border: 'none', background: 'rgba(34,197,94,0.12)', color: '#15803d', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
             Approve
           </button>
+        ) : (
+          <span style={{ color: '#cbd5e1', fontSize: 14 }}>—</span>
         )}
       </td>
     </tr>
