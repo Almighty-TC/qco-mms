@@ -397,6 +397,12 @@ router.get('/:projectId/pos', async (req, res) => {
         po.owner_id, po.expeditor_id, po.ros_date, po.created_at,
         own.full_name   AS owner_name,
         exp.full_name   AS expeditor_name,
+        -- All assigned expeditors (co-assignment); subqueries so GROUP BY is untouched.
+        (SELECT GROUP_CONCAT(pe.user_id ORDER BY pe.assigned_at)
+           FROM po_expeditors pe WHERE pe.po_id = po.id)                       AS expeditor_ids,
+        (SELECT GROUP_CONCAT(u2.full_name ORDER BY pe.assigned_at SEPARATOR '||')
+           FROM po_expeditors pe JOIN users u2 ON u2.id = pe.user_id
+           WHERE pe.po_id = po.id)                                             AS expeditor_names_all,
         s.name          AS supplier_name,
         w.id            AS wbs_node_id,
         w.description   AS wbs_name,
@@ -441,6 +447,9 @@ router.get('/:projectId/pos', async (req, res) => {
         group_category: r.group_category,
         owner_id: r.owner_id, owner_name: r.owner_name,
         expeditor_id: r.expeditor_id, expeditor_name: r.expeditor_name,
+        // Co-assignment: full list of assigned expeditors (lead = expeditor_id).
+        expeditor_ids:   r.expeditor_ids ? r.expeditor_ids.split(',').map(Number) : [],
+        expeditor_names: r.expeditor_names_all ? r.expeditor_names_all.split('||') : [],
         line_count: r.line_count,
         cdd:  r.earliest_cdd,
         rag:  computeRag(r.earliest_cdd, r.status, atRiskDays),
@@ -524,8 +533,83 @@ router.get('/pos/:id', async (req, res) => {
   }
 })
 
-// ─── ASSIGN EXPEDITOR ─────────────────────────────────────────────────────────
-// Item 9B: Assign/reassign expeditor — logged to audit_log.
+// ─── EXPEDITOR ASSIGNMENT (CO-ASSIGNMENT) ─────────────────────────────────────
+// A PO can have several assigned expeditors (po_expeditors); ALL of them see and
+// work on it in Expediting. purchase_orders.expeditor_id is kept as the "lead"
+// (earliest-assigned) for back-compat display. Only admin / expediting_manager
+// may change assignments. Every change is audited.
+
+// Recompute the lead expeditor from current membership (earliest assigned wins).
+async function syncLead(poId) {
+  const [[lead]] = await db.query(
+    'SELECT user_id FROM po_expeditors WHERE po_id=? ORDER BY assigned_at, id LIMIT 1', [poId])
+  await db.query('UPDATE purchase_orders SET expeditor_id=? WHERE id=?', [lead?.user_id ?? null, poId])
+  return lead?.user_id ?? null
+}
+
+// Current assigned expeditors for a PO.
+async function listExpeditors(poId) {
+  const [rows] = await db.query(
+    `SELECT pe.user_id, u.full_name, u.role, pe.assigned_at,
+            ab.full_name AS assigned_by_name
+       FROM po_expeditors pe
+       JOIN users u  ON u.id = pe.user_id
+       LEFT JOIN users ab ON ab.id = pe.assigned_by
+      WHERE pe.po_id=? ORDER BY pe.assigned_at, pe.id`, [poId])
+  return rows
+}
+
+// GET — list assigned expeditors (lead = first).
+router.get('/pos/:id/expeditors', async (req, res) => {
+  try {
+    const id = Number(req.params.id)
+    const [[po]] = await db.query('SELECT id, expeditor_id FROM purchase_orders WHERE id=?', [id])
+    if (!po) return res.status(404).json({ error: 'PO not found' })
+    res.json({ lead_id: po.expeditor_id, expeditors: await listExpeditors(id) })
+  } catch (e) { console.error('[procurement:list-expeditors]', e.message); dbError(res, e) }
+})
+
+// POST — ADD an expeditor (co-assign). Idempotent.
+router.post('/pos/:id/expeditors', async (req, res) => {
+  try {
+    const id = Number(req.params.id)
+    if (!EXPEDITOR_ASSIGN_ROLES.has(req.user.role)) {
+      return res.status(403).json({ error: 'Your role cannot assign expeditors' })
+    }
+    const userId = Number(req.body.user_id)
+    if (!userId) return res.status(400).json({ error: 'user_id is required' })
+    const [[po]] = await db.query('SELECT id FROM purchase_orders WHERE id=?', [id])
+    if (!po) return res.status(404).json({ error: 'PO not found' })
+    const [[u]] = await db.query('SELECT id FROM users WHERE id=?', [userId])
+    if (!u) return res.status(404).json({ error: 'User not found' })
+
+    await db.query(
+      'INSERT IGNORE INTO po_expeditors (po_id, user_id, assigned_by) VALUES (?,?,?)',
+      [id, userId, req.user.id])
+    const lead = await syncLead(id)
+    audit(req, 'expeditor_added', `purchase_orders/${id}`, null, { user_id: userId })
+    res.json({ lead_id: lead, expeditors: await listExpeditors(id) })
+  } catch (e) { console.error('[procurement:add-expeditor]', e.message); dbError(res, e) }
+})
+
+// DELETE — remove an expeditor from the PO.
+router.delete('/pos/:id/expeditors/:userId', async (req, res) => {
+  try {
+    const id = Number(req.params.id)
+    const userId = Number(req.params.userId)
+    if (!EXPEDITOR_ASSIGN_ROLES.has(req.user.role)) {
+      return res.status(403).json({ error: 'Your role cannot change expeditor assignments' })
+    }
+    await db.query('DELETE FROM po_expeditors WHERE po_id=? AND user_id=?', [id, userId])
+    const lead = await syncLead(id)
+    audit(req, 'expeditor_removed', `purchase_orders/${id}`, { user_id: userId }, null)
+    res.json({ lead_id: lead, expeditors: await listExpeditors(id) })
+  } catch (e) { console.error('[procurement:remove-expeditor]', e.message); dbError(res, e) }
+})
+
+// PUT — back-compat single set: REPLACE the whole assignment with one expeditor
+// (or clear). New UI uses POST/DELETE for co-assignment; this keeps older callers
+// and the quick "set sole expeditor" path working, kept consistent with the table.
 router.put('/pos/:id/expeditor', async (req, res) => {
   try {
     const id = Number(req.params.id)
@@ -533,16 +617,19 @@ router.put('/pos/:id/expeditor', async (req, res) => {
       return res.status(403).json({ error: 'Your role cannot assign expeditors' })
     }
     const { expeditor_id } = req.body
-    const [[existing]] = await db.query(
-      'SELECT id, po_number, expeditor_id FROM purchase_orders WHERE id = ?', [id]
-    )
+    const [[existing]] = await db.query('SELECT id, expeditor_id FROM purchase_orders WHERE id = ?', [id])
     if (!existing) return res.status(404).json({ error: 'PO not found' })
 
     const newExpId = expeditor_id ? Number(expeditor_id) : null
+    // Replace the membership set with exactly this one (or empty).
+    await db.query('DELETE FROM po_expeditors WHERE po_id=?', [id])
+    if (newExpId) {
+      await db.query('INSERT IGNORE INTO po_expeditors (po_id, user_id, assigned_by) VALUES (?,?,?)',
+        [id, newExpId, req.user.id])
+    }
     await db.query(
       'UPDATE purchase_orders SET expeditor_id=?, expeditor_assigned_by=?, expeditor_assigned_at=NOW() WHERE id=?',
-      [newExpId, req.user.id, id]
-    )
+      [newExpId, req.user.id, id])
     audit(req, 'expeditor_assigned', `purchase_orders/${id}`,
       { expeditor_id: existing.expeditor_id }, { expeditor_id: newExpId })
 
@@ -551,7 +638,7 @@ router.put('/pos/:id/expeditor', async (req, res) => {
       const [[u]] = await db.query('SELECT full_name FROM users WHERE id=?', [newExpId])
       expeditorName = u?.full_name ?? null
     }
-    res.json({ expeditor_id: newExpId, expeditor_name: expeditorName })
+    res.json({ expeditor_id: newExpId, expeditor_name: expeditorName, expeditors: await listExpeditors(id) })
   } catch (e) {
     console.error('[procurement:assign-expeditor]', e.message)
     dbError(res, e)

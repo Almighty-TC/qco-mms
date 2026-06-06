@@ -20,6 +20,27 @@ function canSeeAllPOs(role) {
   return ['admin','project_manager','project_director','procurement_manager','expediting_manager'].includes(role)
 }
 
+// True when the user is one of the PO's assigned expeditors (co-assignment).
+async function isAssignedExpeditor(userId, poId) {
+  if (!userId || !poId) return false
+  const [[m]] = await db.query('SELECT 1 FROM po_expeditors WHERE po_id=? AND user_id=? LIMIT 1', [Number(poId), Number(userId)])
+  return !!m
+}
+
+// ─── PER-PO ACCESS GUARD ──────────────────────────────────────
+// Every route carrying :poId is gated here in one place. Managers (canSeeAllPOs)
+// pass; everyone else must be an ASSIGNED expeditor on that PO, else 403. This
+// covers the detail view AND all milestone / action-note / ITP / line writes,
+// so an unassigned expeditor cannot open or edit another expeditor's PO even by
+// hitting the URL/API directly.
+router.param('poId', async (req, res, next, poId) => {
+  try {
+    if (canSeeAllPOs(req.user?.role)) return next()
+    if (await isAssignedExpeditor(req.user?.id, poId)) return next()
+    return res.status(403).json({ error: 'This PO is not assigned to you.' })
+  } catch (e) { next(e) }
+})
+
 // ─── RAG HELPERS ──────────────────────────────────────────────
 // Computes the milestone-level status based on date fields.
 function computeMilestoneStatus(m) {
@@ -50,9 +71,14 @@ function computePORag(milestones) {
 router.get('/:projectId/stats', async (req, res) => {
   try {
     const { projectId } = req.params
+    // Stats mirror the register's visibility: non-managers count only POs they're
+    // assigned to, so the headline figures match the list they can actually see.
+    const scoped = !canSeeAllPOs(req.user?.role)
     const [pos] = await db.query(
-      `SELECT po.id FROM purchase_orders po WHERE po.project_id=? AND po.is_locked=1`,
-      [projectId]
+      `SELECT po.id FROM purchase_orders po
+       WHERE po.project_id=? AND po.is_locked=1
+       ${scoped ? 'AND EXISTS (SELECT 1 FROM po_expeditors pe WHERE pe.po_id=po.id AND pe.user_id=?)' : ''}`,
+      scoped ? [projectId, req.user.id] : [projectId]
     )
     const counts = { total_pos: pos.length, ongoing: 0, complete: 0, breached: 0, at_risk: 0 }
 
@@ -86,7 +112,7 @@ router.get('/:projectId/register', async (req, res) => {
     // ─── FILTERS (server-side, whole-set) ───
     const filters = ['po.project_id=?', 'po.is_locked=1']
     const params  = [projectId]
-    if (!canSeeAllPOs(req.user?.role)) { filters.push('po.expeditor_id=?'); params.push(req.user.id) }
+    if (!canSeeAllPOs(req.user?.role)) { filters.push('EXISTS (SELECT 1 FROM po_expeditors pe WHERE pe.po_id=po.id AND pe.user_id=?)'); params.push(req.user.id) }
 
     const { search, critical_only, ros_from, ros_to, rag, sub_tab } = req.query
     if (search) {
@@ -790,6 +816,12 @@ router.post('/:projectId/scn', async (req, res) => {
   } = req.body
 
   if (!po_id) return res.status(400).json({ error: 'po_id required' })
+
+  // Per-PO access: only managers or an assigned expeditor can raise an SCN
+  // against this PO (the PO id arrives in the body, so router.param can't gate it).
+  if (!canSeeAllPOs(req.user?.role) && !(await isAssignedExpeditor(req.user?.id, po_id))) {
+    return res.status(403).json({ error: 'This PO is not assigned to you.' })
+  }
 
   // Logical date ordering: cargo ready → collected → departs → arrives.
   const dateErr = dateOrder([['CRD', crd], ['CCD', ccd], ['ETD', etd], ['ETA', eta]])

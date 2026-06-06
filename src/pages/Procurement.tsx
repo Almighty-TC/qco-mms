@@ -64,6 +64,9 @@ interface PO {
   owner_name:     string | null
   expeditor_id:   number | null
   expeditor_name: string | null
+  // Co-assignment: all assigned expeditors (lead = expeditor_id / first entry).
+  expeditor_ids?:   number[]
+  expeditor_names?: string[]
   line_count:     number
   cdd:            string | null
   rag:            RAG | null
@@ -340,23 +343,46 @@ interface DrawerProps {
 
 const PODrawer = ({ po, dark, users, onClose, onUpdated, onNavigateToPO }: DrawerProps) => {
   const { addToast } = useToast()
-  const [assigningExp, setAssigningExp] = useState(false)
-  const [expId, setExpId]               = useState(String(po.expeditor_id ?? ''))
-  const [savingExp, setSavingExp]        = useState(false)
+  // ── Expeditor co-assignment ─────────────────────────────────────────────────
+  // A PO can have several assigned expeditors; all of them see/work on it in
+  // Expediting. The first (earliest-assigned) is the lead, kept as expeditor_id.
+  const [assigned, setAssigned] = useState<{ id: number; name: string }[]>(
+    (po.expeditor_ids ?? []).map((id, i) => ({ id, name: (po.expeditor_names ?? [])[i] ?? `#${id}` }))
+  )
+  const [addId, setAddId]   = useState('')
+  const [busyExp, setBusyExp] = useState(false)
 
-  // ── Expeditor assignment ────────────────────────────────────────────────────
-  const saveExpeditor = async () => {
-    setSavingExp(true)
+  const propagate = (list: { id: number; name: string }[]) => {
+    onUpdated({
+      expeditor_ids: list.map(x => x.id), expeditor_names: list.map(x => x.name),
+      expeditor_id: list[0]?.id ?? null, expeditor_name: list[0]?.name ?? null,
+    })
+  }
+  const fromResp = (data: { expeditors?: { user_id: number; full_name: string }[] }) =>
+    (data.expeditors ?? []).map(e => ({ id: e.user_id, name: e.full_name }))
+
+  const addExpeditor = async () => {
+    if (!addId) return
+    setBusyExp(true)
     try {
-      const newId = expId ? Number(expId) : null
-      const { data } = await axios.put(`${API}/procurement/pos/${po.id}/expeditor`, { expeditor_id: newId })
-      onUpdated({ expeditor_id: data.expeditor_id, expeditor_name: data.expeditor_name })
-      addToast('success', `Expeditor ${data.expeditor_name ? 'assigned to ' + data.expeditor_name : 'cleared'}`)
-      setAssigningExp(false)
+      const { data } = await axios.post(`${API}/procurement/pos/${po.id}/expeditors`, { user_id: Number(addId) })
+      const list = fromResp(data); setAssigned(list); propagate(list); setAddId('')
+      addToast('success', 'Expeditor added')
     } catch (e: unknown) {
-      const er = e as { response?: { data?: { error?: string } }; message?: string }
-      addToast('error', er.response?.data?.error ?? 'Could not assign expeditor')
-    } finally { setSavingExp(false) }
+      const er = e as { response?: { data?: { error?: string } } }
+      addToast('error', er.response?.data?.error ?? 'Could not add expeditor')
+    } finally { setBusyExp(false) }
+  }
+  const removeExpeditor = async (uid: number) => {
+    setBusyExp(true)
+    try {
+      const { data } = await axios.delete(`${API}/procurement/pos/${po.id}/expeditors/${uid}`)
+      const list = fromResp(data); setAssigned(list); propagate(list)
+      addToast('success', 'Expeditor removed')
+    } catch (e: unknown) {
+      const er = e as { response?: { data?: { error?: string } } }
+      addToast('error', er.response?.data?.error ?? 'Could not remove expeditor')
+    } finally { setBusyExp(false) }
   }
 
   const col = dark ? '#f1f5f9' : '#0f172a'
@@ -450,31 +476,37 @@ const PODrawer = ({ po, dark, users, onClose, onUpdated, onNavigateToPO }: Drawe
               <div style={{ fontSize: 13, fontWeight: 600, color: col }}>{po.owner_name ?? '—'}</div>
             </div>
             <div style={{ padding: '10px 12px', borderRadius: 6, background: dark ? '#0f172a' : '#f4f7fb', border: `1px solid ${dark ? '#334155' : '#e8ecf2'}` }}>
-              <div style={{ fontSize: 10, fontWeight: 600, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 4 }}>Expeditor</div>
-              {assigningExp ? (
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <select
-                    value={expId}
-                    onChange={e => setExpId(e.target.value)}
-                    style={{ ...inp(dark), height: 28, fontSize: 11 }}>
-                    <option value="">— Clear —</option>
-                    {users.filter(u => ['expeditor','expediting_manager','admin','procurement_manager'].includes(u.role)).map(u => (
-                      <option key={u.id} value={u.id}>{u.full_name}</option>
-                    ))}
-                  </select>
-                  <button onClick={saveExpeditor} disabled={savingExp} style={{ padding: '3px 8px', borderRadius: 5, border: 'none', background: '#E84E0F', color: '#fff', fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                    {savingExp ? '…' : 'Save'}
-                  </button>
-                  <button onClick={() => setAssigningExp(false)} style={{ padding: '3px 6px', borderRadius: 5, border: `1px solid ${borderCol}`, background: 'none', color: '#64748b', fontSize: 11, cursor: 'pointer' }}>✕</button>
-                </div>
-              ) : (
-                <button
-                  onClick={() => setAssigningExp(true)}
-                  style={{ background: 'none', border: 'none', fontSize: 13, fontWeight: 600, color: po.expeditor_name ? col : '#2563eb', cursor: 'pointer', padding: 0, fontFamily: 'inherit', textAlign: 'left' }}
-                  title="Click to assign / change expeditor">
-                  {po.expeditor_name ?? '— Assign'}
+              <div style={{ fontSize: 10, fontWeight: 600, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 4 }}>
+                Expeditors {assigned.length > 1 && <span style={{ color: '#2563eb' }}>· {assigned.length}</span>}
+              </div>
+              {/* Assigned expeditor chips (first = lead). Remove with ×. */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: assigned.length ? 6 : 0 }}>
+                {assigned.length === 0 && <span style={{ fontSize: 12, color: '#94a3b8' }}>— None assigned</span>}
+                {assigned.map((a, i) => (
+                  <span key={a.id} title={i === 0 ? 'Lead expeditor' : 'Assigned expeditor'}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600, color: col,
+                      background: dark ? '#1e293b' : '#fff', border: `1px solid ${i === 0 ? '#2563eb' : borderCol}`, borderRadius: 12, padding: '2px 6px 2px 8px' }}>
+                    {i === 0 && <span style={{ color: '#2563eb', fontSize: 9 }}>★</span>}
+                    {a.name}
+                    <button onClick={() => removeExpeditor(a.id)} disabled={busyExp} title="Remove"
+                      style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: 0 }}>×</button>
+                  </span>
+                ))}
+              </div>
+              {/* Add another expeditor (co-assign) */}
+              <div style={{ display: 'flex', gap: 6 }}>
+                <select value={addId} onChange={e => setAddId(e.target.value)} style={{ ...inp(dark), height: 28, fontSize: 11 }}>
+                  <option value="">+ Add expeditor…</option>
+                  {users
+                    .filter(u => ['expeditor','expediting_manager','admin','procurement_manager'].includes(u.role))
+                    .filter(u => !assigned.some(a => a.id === u.id))
+                    .map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
+                </select>
+                <button onClick={addExpeditor} disabled={busyExp || !addId}
+                  style={{ padding: '3px 10px', borderRadius: 5, border: 'none', background: addId ? '#E84E0F' : '#94a3b8', color: '#fff', fontSize: 11, cursor: addId ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }}>
+                  {busyExp ? '…' : 'Add'}
                 </button>
-              )}
+              </div>
             </div>
           </div>
 
@@ -1105,21 +1137,19 @@ interface PORowProps {
   onClick:          (po: PO) => void   // opens the side drawer
   onApprove:        (po: PO) => void
   onNavigateToPO?:  (poId: number) => void  // FIX 1: navigate to full PO Detail Screen
-  // inline expeditor assignment props
+  // inline expeditor co-assignment props
   users:            UserItem[]
   isAssigningExp:   boolean
   onOpenAssignExp:  (po: PO) => void
   onCloseAssignExp: () => void
-  expAssignVal:     string
-  onExpAssignValChange: (v: string) => void
-  onExpAssignSave:  (poId: number, valueOverride?: string) => void
+  onToggleExp:      (poId: number, userId: number, isAssigned: boolean) => void
   expAssignSaving:  boolean
 }
 
 const POTableRow = ({
   po, dark, colWidths, onStar, onClick, onApprove, onNavigateToPO,
   users, isAssigningExp, onOpenAssignExp, onCloseAssignExp,
-  expAssignVal, onExpAssignValChange, onExpAssignSave, expAssignSaving,
+  onToggleExp, expAssignSaving,
 }: PORowProps) => {
   const [hov, setHov] = useState(false)
   const col     = dark ? '#f1f5f9' : '#0f172a'
@@ -1221,56 +1251,60 @@ const POTableRow = ({
           style={{ fontSize: 12, color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {po.owner_name ?? '—'}
         </div>
-        {po.expeditor_name ? (
-          /* Already assigned — show name with click to reassign */
-          <div
-            onClick={() => { onOpenAssignExp(po); onExpAssignValChange(String(po.expeditor_id ?? '')) }}
-            style={{ fontSize: 10, color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
-            title="Click to reassign expeditor">
-            {po.expeditor_name}
-          </div>
-        ) : (
-          /* FIX 5: "— Assign" link has tooltip explaining its purpose */
-          <div
-            onClick={() => { onOpenAssignExp(po); onExpAssignValChange('') }}
-            style={{ fontSize: 10, color: '#2563eb', cursor: 'pointer', userSelect: 'none' }}
-            title="Assign an expeditor to this PO">
-            — Assign
-          </div>
-        )}
+        {(() => {
+          const names = po.expeditor_names && po.expeditor_names.length ? po.expeditor_names
+            : (po.expeditor_name ? [po.expeditor_name] : [])
+          const extra = names.length - 1
+          return names.length ? (
+            /* Assigned expeditor(s) — lead first, "+N" if co-assigned. Click to manage. */
+            <div
+              onClick={() => onOpenAssignExp(po)}
+              style={{ fontSize: 10, color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
+              title={`Assigned: ${names.join(', ')} — click to manage`}>
+              {names[0]}{extra > 0 && <span style={{ color: '#2563eb', fontWeight: 600 }}> +{extra}</span>}
+            </div>
+          ) : (
+            <div
+              onClick={() => onOpenAssignExp(po)}
+              style={{ fontSize: 10, color: '#2563eb', cursor: 'pointer', userSelect: 'none' }}
+              title="Assign expeditor(s) to this PO">
+              — Assign
+            </div>
+          )
+        })()}
 
-        {/* Inline dropdown — shown only for this row's active assign state */}
-        {isAssigningExp && (
+        {/* Inline menu — toggle expeditors on/off (co-assignment). Stays open so
+            several can be assigned in a row; a ✓ marks those already assigned. */}
+        {isAssigningExp && (() => {
+          const assignedIds = po.expeditor_ids && po.expeditor_ids.length ? po.expeditor_ids
+            : (po.expeditor_id ? [po.expeditor_id] : [])
+          return (
           <div
             style={{
               position: 'absolute', top: '100%', left: 0, zIndex: 100,
               background: dark ? '#1e293b' : '#fff',
               border: `1px solid ${dark ? '#334155' : '#dde3ed'}`,
               borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
-              minWidth: 200, padding: '6px 0',
+              minWidth: 220, padding: '6px 0',
             }}>
-            {/* Clear option — passes '' directly so API gets null */}
-            <div
-              onClick={() => { onExpAssignValChange(''); onExpAssignSave(po.id, '') }}
-              style={{ padding: '6px 12px', fontSize: 12, color: '#94a3b8', cursor: 'pointer' }}
-              onMouseEnter={e => { e.currentTarget.style.background = dark ? '#334155' : '#f4f7fb' }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>
-              — Clear expeditor
+            <div style={{ padding: '4px 12px 6px', fontSize: 10, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Assign expeditors (tick to add)
             </div>
-            {/* Expeditor users — pass id directly so API fires immediately */}
             {users
               .filter(u => ['expeditor','expediting_manager','admin','procurement_manager'].includes(u.role))
-              .map(u => (
+              .map(u => {
+                const on = assignedIds.includes(u.id)
+                return (
                 <div
                   key={u.id}
-                  onClick={() => { onExpAssignValChange(String(u.id)); onExpAssignSave(po.id, String(u.id)) }}
-                  style={{ padding: '6px 12px', fontSize: 12, color: dark ? '#f1f5f9' : '#0f172a', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                  onClick={() => onToggleExp(po.id, u.id, on)}
+                  style={{ padding: '6px 12px', fontSize: 12, color: dark ? '#f1f5f9' : '#0f172a', cursor: 'pointer', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 8 }}
                   onMouseEnter={e => { e.currentTarget.style.background = dark ? '#334155' : '#f4f7fb' }}
                   onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>
-                  {u.full_name}
-                  <span style={{ fontSize: 10, color: '#94a3b8', marginLeft: 6 }}>{u.role.replace(/_/g, ' ')}</span>
+                  <span style={{ width: 14, color: '#22c55e', fontWeight: 700 }}>{on ? '✓' : ''}</span>
+                  <span>{u.full_name}<span style={{ fontSize: 10, color: '#94a3b8', marginLeft: 6 }}>{u.role.replace(/_/g, ' ')}</span></span>
                 </div>
-              ))}
+              )})}
             {expAssignSaving && (
               <div style={{ padding: '6px 12px', fontSize: 11, color: '#94a3b8' }}>Saving…</div>
             )}
@@ -1278,11 +1312,11 @@ const POTableRow = ({
               <button
                 onClick={onCloseAssignExp}
                 style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>
-                Cancel
+                Done
               </button>
             </div>
           </div>
-        )}
+        )})()}
       </td>
 
       {/* ── CDD (index 11) ────────────────────────────────────────────────── */}
@@ -1400,7 +1434,6 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
   const [groupBy,       setGroupBy]       = useState<'none' | 'vendor' | 'wbs'>('none')
   // FIX 2: inline expeditor assignment from the table row (separate from drawer)
   const [rowAssignPoId,  setRowAssignPoId]  = useState<number | null>(null)
-  const [rowAssignVal,   setRowAssignVal]   = useState('')
   const [rowAssignSaving,setRowAssignSaving]= useState(false)
 
   // ── Toolbar ref (for sticky positioning) ────────────────────────────────────
@@ -1509,31 +1542,28 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
     if (drawerPO) setDrawerPO(d => d ? { ...d, ...updated } : d)
   }
 
-  // ── FIX 2: Row-level expeditor assignment (inline dropdown in the table) ──────
-  // Separate from the drawer assign — this handles the "— Assign" click directly
-  // on the table row without opening the full drawer.
-  // valueOverride: passed directly from the option click so we don't wait for
-  // state to update before calling the API (React batches state updates).
-  const saveRowExpeditor = async (poId: number, valueOverride?: string) => {
+  // ── Row-level expeditor co-assignment (inline menu in the table) ──────────────
+  // Toggles an expeditor on/off the PO directly from the row (add → POST, remove
+  // → DELETE). The menu stays open so a manager can assign several in a row. Both
+  // the row and any open drawer are updated from the server's authoritative list.
+  const toggleRowExpeditor = async (poId: number, userId: number, isAssigned: boolean) => {
     setRowAssignSaving(true)
     try {
-      const raw   = valueOverride !== undefined ? valueOverride : rowAssignVal
-      const newId = raw ? Number(raw) : null
-      const { data } = await axios.put(`${API}/procurement/pos/${poId}/expeditor`, { expeditor_id: newId })
-      setPOs(prev => prev.map(p =>
-        p.id === poId
-          ? { ...p, expeditor_id: data.expeditor_id, expeditor_name: data.expeditor_name }
-          : p
-      ))
-      // Also update drawer if this PO is open
-      if (drawerPO?.id === poId) {
-        setDrawerPO(d => d ? { ...d, expeditor_id: data.expeditor_id, expeditor_name: data.expeditor_name } : d)
+      const { data } = isAssigned
+        ? await axios.delete(`${API}/procurement/pos/${poId}/expeditors/${userId}`)
+        : await axios.post(`${API}/procurement/pos/${poId}/expeditors`, { user_id: userId })
+      const ids:   number[] = (data.expeditors ?? []).map((e: { user_id: number }) => e.user_id)
+      const names: string[] = (data.expeditors ?? []).map((e: { full_name: string }) => e.full_name)
+      const patch: Partial<PO> = {
+        expeditor_ids: ids, expeditor_names: names,
+        expeditor_id: ids[0] ?? null, expeditor_name: names[0] ?? null,
       }
-      addToast('success', data.expeditor_name ? `Expeditor set to ${data.expeditor_name}` : 'Expeditor cleared')
-      setRowAssignPoId(null)
+      setPOs(prev => prev.map(p => p.id === poId ? { ...p, ...patch } : p))
+      if (drawerPO?.id === poId) setDrawerPO(d => d ? { ...d, ...patch } : d)
+      addToast('success', isAssigned ? 'Expeditor removed' : 'Expeditor added')
     } catch (e: unknown) {
       const er = e as { response?: { data?: { error?: string } } }
-      addToast('error', er.response?.data?.error ?? 'Could not assign expeditor')
+      addToast('error', er.response?.data?.error ?? 'Could not update expeditors')
     } finally { setRowAssignSaving(false) }
   }
 
@@ -1771,11 +1801,9 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
                   onNavigateToPO={onNavigateToPO}
                   users={users}
                   isAssigningExp={rowAssignPoId === po.id}
-                  onOpenAssignExp={p => { setRowAssignPoId(p.id); setRowAssignVal(String(p.expeditor_id ?? '')) }}
+                  onOpenAssignExp={p => setRowAssignPoId(p.id)}
                   onCloseAssignExp={() => setRowAssignPoId(null)}
-                  expAssignVal={rowAssignVal}
-                  onExpAssignValChange={setRowAssignVal}
-                  onExpAssignSave={saveRowExpeditor}
+                  onToggleExp={toggleRowExpeditor}
                   expAssignSaving={rowAssignSaving}
                 />
               )
