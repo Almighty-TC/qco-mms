@@ -1176,7 +1176,7 @@ const PO_COLS = [
   { key: 'desc',      label: 'Description', width: 180, minWidth: 100, flex: true },
   { key: 'ccy',       label: 'Currency',    width: 80,  minWidth: 60  },
   { key: 'value',     label: 'Value',       width: 110, minWidth: 90  },
-  { key: 'incoterms', label: 'Incoterms',   width: 90,  minWidth: 70  },
+  { key: 'incoterms', label: 'INCO TERMS',  width: 95,  minWidth: 75  },
   { key: 'wbs',       label: 'WBS',         width: 100, minWidth: 80  },
   { key: 'ros',       label: 'ROS',         width: 100, minWidth: 80  },
   { key: 'vendor',    label: 'Vendor',      width: 150, minWidth: 100 },
@@ -1281,7 +1281,7 @@ const POTableRow = ({
       </td>
 
       {/* ── Incoterms (index 6) ───────────────────────────────────────────── */}
-      <td style={{ ...tdBase, width: colWidths[6] }}>
+      <td style={{ ...tdBase, width: colWidths[6], textAlign: 'center' }}>
         <span style={{ fontSize: 11, color: '#64748b', fontFamily: 'JetBrains Mono, monospace' }}>{po.incoterms ?? '—'}</span>
       </td>
 
