@@ -10,9 +10,11 @@ import { usePagedList } from '../hooks/usePagedList'
 import { useResizableTable, ResetColumnsButton } from '../components/colResize'
 
 // Resizable column defaults — Expediting PO register (10 cols).
-// Col 0 is just the RAG colour stripe (3px bar) — as thin as the bar itself.
-const EXP_W   = [4, 34, 130, 160, 200, 150, 150, 110, 120, 60]
-const EXP_MIN = [4, 30, 90, 100, 120, 100, 110, 80, 90, 48]
+// No standalone stripe column — the RAG colour is a 4px accent on the first cell,
+// so it never takes column space. Columns: ★, PO Ref, Vendor, Material, Owner,
+// Milestones, ROS, Status, View.
+const EXP_W   = [28, 130, 160, 200, 150, 150, 110, 120, 60]
+const EXP_MIN = [24, 90, 100, 120, 100, 110, 80, 90, 48]
 import { HelpButton } from '../components/HelpDrawer'
 import { MilestoneTimeline } from '../components/MilestoneTimeline'
 import { MilestoneLegend } from '../components/MilestoneLegend'
@@ -517,8 +519,8 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
     pageSize: 50, initialSortCol: 'po_number', initialSortDir: 'asc',
   })
   const sortArrow = (k: string) => sortCol === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
-  // v5: stripe col trimmed to the bar width — bump id so old saved widths don't apply.
-  const rt = useResizableTable('expediting_pos_v5', EXP_W, EXP_MIN)
+  // v6: stripe column removed (now a cell accent) — bump id; column count changed.
+  const rt = useResizableTable('expediting_pos_v6', EXP_W, EXP_MIN)
 
   // ─── VDRL DATA LOAD ───────────────────────────────────────
   // Loads stats and packages when VDRL tab is activated.
@@ -689,7 +691,7 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
               <table style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead style={{ position: 'sticky', top: 0, zIndex: 20, backgroundColor: dark ? '#162032' : '#f8fafc' }}>
                   <tr style={{ borderBottom: bd }}>
-                    {([[''], ['★'], ['PO Ref', 'po_number'], ['Vendor / Group', 'vendor'], ['Material'], ['Owner / Expeditor'], ['Milestones'], ['ROS', 'ros_date'], ['Status', 'status'], ['']] as [string, string?][]).map(([h, key], i) => (
+                    {([['★'], ['PO Ref', 'po_number'], ['Vendor / Group', 'vendor'], ['Material'], ['Owner / Expeditor'], ['Milestones'], ['ROS', 'ros_date'], ['Status', 'status'], ['']] as [string, string?][]).map(([h, key], i) => (
                       <th key={i} onClick={key ? () => toggleSort(key) : undefined}
                         style={{ ...rt.thStyle(i), padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none',
                           // opaque cell bg so rows (incl. the milestone graph) scroll BEHIND the sticky header
@@ -709,12 +711,9 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, onBack, onNavigat
                         style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, cursor: 'pointer', opacity: po.rag === 'complete' ? 0.65 : 1 }}
                         onClick={() => setDrawerPoId(po.id)}
                       >
-                        {/* RAG stripe — first column, as thin as the bar itself */}
-                        <td style={{ padding: 0, width: 4 }}>
-                          <div style={{ width: 4, height: 36, background: RAG_COLORS[po.rag] || '#94a3b8' }} />
-                        </td>
-                        {/* BUG-3 FIX: ★ star column */}
-                        <td style={{ padding: '10px 6px', width: 28, textAlign: 'center' }}
+                        {/* ★ star — first cell, carries the RAG colour as a 4px left accent
+                            (inset shadow → no layout cost, so no wasted column space). */}
+                        <td style={{ padding: '10px 6px 10px 12px', textAlign: 'center', boxShadow: `inset 4px 0 0 0 ${RAG_COLORS[po.rag] || '#94a3b8'}` }}
                             onClick={e => e.stopPropagation()}>
                           <span title={po.is_critical_path ? 'Critical path' : 'Not critical path'}
                             style={{ fontSize: 16, color: po.is_critical_path ? '#E84E0F' : '#c4cedf', cursor: 'pointer', userSelect: 'none' }}>
