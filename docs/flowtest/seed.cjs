@@ -18,6 +18,7 @@
 // scripts/flowtest_teardown.sql as QCO_admin first (drops the audit append-only guards,
 // wipes ZZ FK-safe, re-arms guards byte-identical), THEN run this seed as QCO_admin.
 const db = require('../../server/db')
+const bcrypt = require('../../server/node_modules/bcryptjs')  // SAME hashing as the app (auth.js/admin.js)
 
 const MODE = process.argv[2] || 'full'
 const S = MODE === 'smoke'
@@ -179,8 +180,12 @@ async function teardown(conn, pid) {
 async function main() {
   const conn = await db.getConnection()
   try {
-    const [[pwrow]] = await conn.query("SELECT password_hash FROM users WHERE email='tchang@qcogroup.com.au'")
-    PW = pwrow.password_hash // reuse known hash → password = "password"
+    // Hash the literal "password" with the SAME bcrypt the app verifies against
+    // (auth.js: bcrypt.compare; app hashes at cost 12). Previously this copied
+    // tchang@qcogroup.com.au's hash assuming his password was "password" — it wasn't,
+    // so every ZZ user's hash was for a different password and login with "password"
+    // always failed. Hash it ourselves so the advertised credential actually works.
+    PW = await bcrypt.hash('password', 12)
     const [[cbase]] = await conn.query("SELECT COUNT(*) c FROM projects WHERE code<>'ZZ_FLOWTEST'")
     const [[ubase]] = await conn.query("SELECT COUNT(*) c FROM users WHERE email NOT LIKE '%@zzflowtest.example'")
 
