@@ -1,0 +1,33 @@
+{
+  "captured_at": "2026-06-07T10:20:59.398Z",
+  "projects": [
+    1,
+    2,
+    3,
+    4
+  ],
+  "counts": {
+    "audit_log": 7,
+    "commodity_library": 75,
+    "equipment_list": 70,
+    "fmr_requests": 9,
+    "foundational_certificates": 1,
+    "meeting_actions": 0,
+    "mto_registers": 6,
+    "pending_changes": 0,
+    "project_health_weights": 20,
+    "purchase_orders": 33,
+    "receipt_lines": 0,
+    "rfi_meeting_records": 0,
+    "shipment_control_notes": 32,
+    "traceability_certs": 15,
+    "traceability_holds": 3,
+    "traceability_trace_lifecycle": 24,
+    "user_wbs_access": 15,
+    "vdrl_packages": 27,
+    "warehouse_stock": 10,
+    "warehouse_transfers": 5,
+    "warehouses": 5,
+    "wbs_nodes": 177
+  }
+}
