@@ -268,7 +268,7 @@ async function main() {
     // Supplier shipping (pickup) addresses → the SCN wizard sources pickup location from here.
     const SUP_ORIGINS = [['Shanghai', 'Shanghai', '200000', 'China'], ['Houston', 'TX', '77002', 'USA'], ['Hamburg', 'HH', '20457', 'Germany'], ['Singapore', 'Singapore', '049315', 'Singapore'], ['Busan', 'Busan', '48058', 'South Korea'], ['Perth', 'WA', '6000', 'Australia'], ['Mumbai', 'MH', '400001', 'India'], ['Rotterdam', 'ZH', '3011', 'Netherlands']]
     const addrRows = supIds.map((sid, i) => { const o = SUP_ORIGINS[i % SUP_ORIGINS.length]; return [sid, 'shipping', `ZZ Supplier ${i + 1} Pty Ltd Works`, o[0], o[1], o[2], o[3], 1] })
-    await batchInsert(conn, 'supplier_addresses', ['supplier_id', 'type', 'line1', 'city', 'state', 'postcode', 'country', 'is_primary'], addrRows)
+    await batchInsert(conn, 'supplier_addresses', ['supplier_id', 'type', 'address_line1', 'city', 'state', 'postcode', 'country', 'is_primary'], addrRows)
 
     // ── COMMODITIES (linked to WBS) + EQUIPMENT ──
     const COMCAT = ['Pipe', 'Valve', 'Fitting', 'Flange', 'Gasket', 'Bolt Set', 'Cable', 'Instrument', 'Steel Section']

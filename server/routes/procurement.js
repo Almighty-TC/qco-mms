@@ -1723,8 +1723,8 @@ router.post('/pos/:id/variations', async (req, res) => {
     )
     const varNum = variation_number?.trim() || `VO-${String(maxv + 1).padStart(3, '0')}`
     const [r] = await db.query(
-      'INSERT INTO po_variations (po_id, variation_number, reason, requested_by, value_impact, schedule_impact_days, status, created_by, updated_by) VALUES (?,?,?,?,?,?,\'draft\',?,?)',
-      [id, varNum, reason.trim(), req.user.id, value_impact || null, schedule_impact_days || null, req.user.id, req.user.id]
+      'INSERT INTO po_variations (po_id, variation_number, reason, requested_by, value_impact, schedule_impact_days, status) VALUES (?,?,?,?,?,?,\'draft\')',
+      [id, varNum, reason.trim(), req.user.id, value_impact || null, schedule_impact_days || null]
     )
     audit(req, 'variation_raised', `purchase_orders/${id}`, null, { variation_number: varNum, reason })
     const [[variation]] = await db.query('SELECT * FROM po_variations WHERE id=?', [r.insertId])

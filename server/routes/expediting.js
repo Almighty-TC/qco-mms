@@ -334,7 +334,7 @@ router.get('/:projectId/po/:poId', async (req, res) => {
          ORDER BY is_primary DESC, id`, [po.supplier_id])
       supplier_addresses = addrs.map(a => ({
         ...a,
-        label: [a.line1, a.line2, a.city, a.state, a.postcode, a.country].filter(Boolean).join(', '),
+        label: [a.address_line1, a.address_line2, a.city, a.state, a.postcode, a.country].filter(Boolean).join(', '),
       }))
     }
     // Fallback: the suppliers.address one-liner, if no structured addresses exist.

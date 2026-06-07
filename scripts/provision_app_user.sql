@@ -42,13 +42,15 @@ GRANT SELECT, INSERT ON qmat.expediting_forecast_history TO 'qmat_app'@'%';
 GRANT SELECT, INSERT ON qmat.fmr_issue_lines TO 'qmat_app'@'%';
 GRANT SELECT, INSERT, UPDATE ON qmat.fmr_lines TO 'qmat_app'@'%';
 GRANT SELECT, INSERT, UPDATE ON qmat.fmr_requests TO 'qmat_app'@'%';
+GRANT SELECT, INSERT, DELETE ON qmat.fmr_packages TO 'qmat_app'@'%';  -- PASS A: app INSERT/DELETE, was missing from script
+GRANT SELECT, INSERT, UPDATE ON qmat.fmr_pickups TO 'qmat_app'@'%';   -- PASS A: app INSERT/UPDATE, was missing from script
 GRANT SELECT, INSERT, UPDATE, DELETE ON qmat.foundational_certificates TO 'qmat_app'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON qmat.inco_terms TO 'qmat_app'@'%';
 GRANT SELECT ON qmat.itp_items TO 'qmat_app'@'%';
 GRANT SELECT, INSERT, UPDATE ON qmat.itp_requirements TO 'qmat_app'@'%';
 GRANT SELECT, INSERT, UPDATE ON qmat.mto_lines TO 'qmat_app'@'%';
 GRANT SELECT, INSERT, UPDATE ON qmat.mto_registers TO 'qmat_app'@'%';
-GRANT SELECT, INSERT ON qmat.mto_revisions TO 'qmat_app'@'%';
+GRANT SELECT, INSERT, UPDATE ON qmat.mto_revisions TO 'qmat_app'@'%';  -- PASS A: added UPDATE (app updates revisions)
 GRANT SELECT, INSERT, UPDATE, DELETE ON qmat.notifications TO 'qmat_app'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON qmat.package_types TO 'qmat_app'@'%';
 GRANT SELECT, INSERT, DELETE ON qmat.password_history TO 'qmat_app'@'%';
@@ -59,6 +61,7 @@ GRANT SELECT, INSERT, UPDATE ON qmat.po_documents TO 'qmat_app'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON qmat.po_lines TO 'qmat_app'@'%';
 GRANT SELECT, UPDATE ON qmat.po_milestones TO 'qmat_app'@'%';
 GRANT SELECT, INSERT ON qmat.po_variations TO 'qmat_app'@'%';
+GRANT SELECT, INSERT, DELETE ON qmat.po_expeditors TO 'qmat_app'@'%';  -- PASS A: app INSERT/DELETE, was missing from script
 GRANT SELECT, INSERT, UPDATE, DELETE ON qmat.projects TO 'qmat_app'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON qmat.purchase_orders TO 'qmat_app'@'%';
 GRANT SELECT, INSERT ON qmat.receipt_lines TO 'qmat_app'@'%';
