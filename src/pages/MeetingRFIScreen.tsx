@@ -150,8 +150,10 @@ function MeetingRFIInner({ dark, projectId, projectName, userRole, userId, onBac
         <ResetColumnsButton onClick={rt.resetWidths} dark={dark} />
       </div>
 
-      {/* Table */}
+      {/* Table — inner scroll container gives the sticky <thead> a bounded
+          area to stick within (without it the header scrolls off with the page). */}
       <div style={{ background: cardBg, border: bd, borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 300px)' }}>
         <table className="app-grid" style={{ ...rt.tableStyle, borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ background: dark ? '#0f172a' : '#f4f7fb', position: 'sticky', top: 0, zIndex: 2 }}>
@@ -184,6 +186,7 @@ function MeetingRFIInner({ dark, projectId, projectName, userRole, userId, onBac
             ))}
           </tbody>
         </table>
+        </div>
       </div>
 
       <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} onPageSizeChange={setPageSize} />

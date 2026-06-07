@@ -214,7 +214,7 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
             </div>
 
             <div style={{ background: t.cardBg, border: t.bd, borderRadius: 8, overflow: 'hidden' }}>
-              <div style={{ overflowX: 'auto' }}>
+              <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 320px)' }}>
                 <table style={{ ...rtVdrl.tableStyle, borderCollapse: 'collapse' }}>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: t.theadBg }}>
                     <tr style={{ borderBottom: t.bd }}>
@@ -270,7 +270,7 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
               <ResetColumnsButton onClick={rtCert.resetWidths} dark={dark} />
             </div>
             <div style={{ background: t.cardBg, border: t.bd, borderRadius: 8, overflow: 'hidden' }}>
-              <div style={{ overflowX: 'auto' }}>
+              <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 320px)' }}>
                 <table className="app-grid" style={{ ...rtCert.tableStyle, borderCollapse: 'collapse' }}>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: t.theadBg }}>
                     <tr style={{ borderBottom: t.bd }}>
@@ -371,7 +371,7 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
               ⚠ {holdsTotal} active trace hold{holdsTotal !== 1 ? 's' : ''} — material cannot be released until certs are verified.
             </div>
             <div style={{ background: t.cardBg, border: t.bd, borderRadius: 8, overflow: 'hidden' }}>
-              <div style={{ overflowX: 'auto' }}>
+              <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 320px)' }}>
                 <table className="app-grid" style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: t.theadBg }}>
                     <tr style={{ borderBottom: t.bd }}>

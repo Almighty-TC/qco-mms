@@ -847,7 +847,7 @@ const MTOListInner = ({
             No MTOs found. Click <strong>+ New MTO</strong> to create one.
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
+          <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 320px)' }}>
             <table className="app-grid" style={{ ...rt.tableStyle, borderCollapse: 'collapse' }}>
               <thead>
                 <tr>

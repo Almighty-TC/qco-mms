@@ -451,7 +451,7 @@ const LineItemsTab = ({
         <div style={{ padding: 32, textAlign: 'center', color: '#ef4444', fontSize: 13 }}>{error}</div>
       ) : (
         <>
-        <div style={{ overflowX: 'auto', border: bd, borderRadius: 8, background: dark ? '#111827' : '#fff' }}>
+        <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 340px)', border: bd, borderRadius: 8, background: dark ? '#111827' : '#fff' }}>
           <table className="app-grid" style={{ ...rt.tableStyle, borderCollapse: 'collapse' }}>
             <thead>
               <tr>
