@@ -45,6 +45,64 @@ function pickStatus() {
   for (const [s, w] of PROG) { if ((r -= w) <= 0) return s } return 'received'
 }
 
+// ─── COHERENT LIFECYCLE TIMELINE (forward-chained; monotonic by construction) ──
+// Dates are derived DOWN the chain — each stage = prior stage + a realistic lag —
+// instead of generating each independently. The whole event chain is therefore
+// strictly increasing:
+//   raised ≤ PO-Issued ≤ Drawings ≤ Manufacture ≤ FAT ≤ Ship(cargo-ready) ≤
+//   collected ≤ ETD ≤ ATD ≤ ETA ≤ ATA ≤ receipt ≤ FMR-issue.
+// The whole chain is anchored relative to TODAY by the PO's furthest-reached rank,
+// so a 'received' PO sits in the past and an 'rfq' one is barely under way — which
+// makes the dashboard's status spread, overdue counts and ROS view all sensible.
+//
+// ros is a DEADLINE, NOT a chain stage. Real-world meaning (confirmed against
+// dashboard.js: a line is overdue when `ros_date < CURDATE() AND not received`):
+// the material must be received BY ros. So on-time items have receipt ≤ ros, and
+// deliberately-late ones have ros < receipt (or ros in the past while still pending
+// → these populate the Attention band). PO.ros ≤ MTO.ros: the PO delivery deadline
+// sits at/before the site need-by date (site-logistics buffer). This is the OPPOSITE
+// of the framework's `MTO.ros ≤ PO.ros` literal — the literal is backwards for ROS,
+// so we match the real-world meaning, not the assertion.
+const clampPast = (d) => (d > TODAY ? new Date(TODAY) : d)
+function buildTimeline(rank) {
+  const lag = { draw: ri(15, 45), mfg: ri(40, 120), fat: ri(10, 30), cargo: ri(5, 20),
+                coll: ri(1, 6), etd: ri(0, 4), atd: ri(0, 3), trans: ri(14, 50),
+                ata: ri(0, 6), rec: ri(2, 9), iss: ri(3, 25) }
+  const off = { poIssued: 0 }
+  off.draw  = off.poIssued + lag.draw
+  off.mfg   = off.draw + lag.mfg
+  off.fat   = off.mfg + lag.fat
+  off.cargo = off.fat + lag.cargo            // "Ship" milestone ≈ cargo-ready
+  off.coll  = off.cargo + lag.coll
+  off.etd   = off.coll + lag.etd
+  off.atd   = off.etd + lag.atd
+  off.eta   = off.atd + lag.trans
+  off.ata   = off.eta + lag.ata
+  off.rec   = off.ata + lag.rec
+  off.iss   = off.rec + lag.iss
+  off.onsite = off.iss + ri(1, 10)
+  // Place TODAY at the stage this PO has reached, so status ↔ dates are consistent.
+  const todayOff = {
+    0: -ri(2, 25),                                // not-started: anchor in the near future
+    1: ri(0, 15),                                 // rfq: just raised
+    2: ri(Math.floor(off.draw * 0.2), Math.floor(off.draw * 0.7)), // po-raised: into drawings
+    3: ri(off.draw, off.mfg),                     // in-production
+    4: ri(off.etd, Math.max(off.etd, off.eta)),   // shipped: in transit
+    5: off.rec + ri(2, 40),                       // received: recently
+    6: off.rec + ri(45, 200),                     // closed: a while ago
+  }[rank] ?? 0
+  const raised = addDays(TODAY, -todayOff)
+  const D = (k) => addDays(raised, off[k])
+  const late = chance(0.28)                       // deliberate exceptions for the Attention band
+  const ros = late ? addDays(D('rec'), -ri(5, 45)) : addDays(D('rec'), ri(10, 45))
+  return {
+    raised, late, ros,
+    ms: { poIssued: D('poIssued'), draw: D('draw'), mfg: D('mfg'), fat: D('fat'), ship: D('cargo'), onsite: D('onsite') },
+    cargoReady: D('cargo'), collected: D('coll'), etd: D('etd'), atd: D('atd'), eta: D('eta'), ata: D('ata'),
+    receipt: D('rec'), issue: D('iss'),
+  }
+}
+
 // ─── chunked batch insert (returns contiguous AUTO_INCREMENT ids) ─────────────
 async function batchInsert(conn, table, cols, rows, chunk = 200) {
   if (!rows.length) return []
@@ -252,47 +310,68 @@ async function main() {
     const mtoPoRef = new Map() // mtoLineId -> po_number (soft MTO→PO link)
     for (let i = 1; i <= S.po; i++) {
       const sup = ri(0, supIds.length - 1)
-      const poBase = addDays(TODAY, -ri(40, 380))
-      const ros = addDays(poBase, ri(60, 260))
       const poNum = `ZZ-PO-${pad(i, 4)}`
       const poStatus = rnd(['po-raised', 'po-raised', 'active', 'active', 'closed', 'rfq'])
+      const nLines = ri(MODE === 'smoke' ? 2 : 4, MODE === 'smoke' ? 4 : 12)
+      // Pre-pick each line's furthest-reached status FIRST, so the PO timeline can be
+      // anchored by how far the whole PO has actually progressed (status ↔ dates stay
+      // consistent: a 'received' PO sits in the past, an 'rfq' one barely under way).
+      const specs = []
+      for (let l = 1; l <= nLines; l++) {
+        const mIdx = ri(0, mtoLineMeta.length - 1)
+        const st = pickStatus()
+        specs.push({ l, mIdx, com: mtoLineMeta[mIdx].com, st, rank: PROG_RANK[st], heatReq: chance(0.5) ? 1 : 0 })
+      }
+      const maxRank = Math.max(PROG_RANK[poStatus] ?? 0, ...specs.map(s => s.rank))
+      const tl = buildTimeline(maxRank)
+      const ros = tl.ros
       const [r] = await conn.query(
         `INSERT INTO purchase_orders (project_id,po_number,po_name,wbs_code,group_category,ros_date,is_locked,vendor_name,vendor_code,supplier_id,description,value,currency,status,rag,incoterms,warehouse_id,contract_delivery_date,estimated_delivery_date,milestone_po_date,milestone_eta_date,milestone_ros_date,created_by,expeditor_id)
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [pid, poNum, `${rnd(EQT)} package ${i}`, rnd(leafCodes), rnd(GC), iso(ros), i % 4 === 0 ? 1 : 0, `ZZ Supplier ${sup + 1} Pty Ltd`, `ZZF-${pad(sup + 1, 3)}`, supIds[sup], `Supply & delivery package ${i}`, ri(20000, 1500000), 'AUD', poStatus, rnd(['green', 'amber', 'red']), rnd(INCO), rnd(whIds), iso(ros), iso(addDays(ros, ri(-10, 20))), iso(poBase), iso(addDays(ros, -ri(10, 40))), iso(ros), ADMIN, someExp])
+        [pid, poNum, `${rnd(EQT)} package ${i}`, rnd(leafCodes), rnd(GC), iso(ros), i % 4 === 0 ? 1 : 0, `ZZ Supplier ${sup + 1} Pty Ltd`, `ZZF-${pad(sup + 1, 3)}`, supIds[sup], `Supply & delivery package ${i}`, ri(20000, 1500000), 'AUD', poStatus, rnd(['green', 'amber', 'red']), rnd(INCO), rnd(whIds), iso(ros), iso(tl.receipt), iso(tl.ms.poIssued), iso(tl.eta), iso(ros), ADMIN, someExp])
       const poId = r.insertId
-      const nLines = ri(MODE === 'smoke' ? 2 : 4, MODE === 'smoke' ? 4 : 12)
-      poMeta.push({ id: poId, poNum, poBase, ros, sup, vendor: `ZZ Supplier ${sup + 1} Pty Ltd`, status: poStatus })
-      for (let l = 1; l <= nLines; l++) {
-        const mIdx = ri(0, mtoLineMeta.length - 1); const com = mtoLineMeta[mIdx].com
-        const st = pickStatus(); const heatReq = chance(0.5) ? 1 : 0
-        const lineRos = addDays(poBase, ri(50, 240))
-        const overdue = PROG_RANK[st] >= 2 && PROG_RANK[st] < 5 && chance(0.25)   // raised..shipped but ROS passed
-        const rosDate = overdue ? addDays(TODAY, -ri(5, 60)) : lineRos
+      poMeta.push({ id: poId, poNum, tl, ros, sup, vendor: `ZZ Supplier ${sup + 1} Pty Ltd`, status: poStatus })
+      for (const sp of specs) {
+        const { l, mIdx, com, st, rank, heatReq } = sp
+        // line ROS ≈ the PO deadline; a slice of mid-flight lines are deliberately
+        // overdue (ROS already passed, still not received) → populate the Attention band.
+        const overdue = rank >= 2 && rank < 5 && chance(0.25)
+        const rosDate = overdue ? addDays(TODAY, -ri(5, 60)) : addDays(ros, ri(-3, 3))
+        const cdd = addDays(rosDate, -ri(0, 14))   // contract delivery date ≤ required-on-site
         mtoPoRef.set(mtoLineIds[mIdx], poNum)
         poLineRows.push([poId, wbsIdByCode[com.wbs], `L${pad(l, 3)}`, `${com.name} — ${com.code}`, `TAG-${i}-${l}`, ri(1, 200), com.uom,
-          PROG_RANK[st] >= 5 ? ri(1, 200) : 0, +(ri(50, 9000) + Math.random()).toFixed(2), iso(addDays(rosDate, ri(-10, 10))), iso(rosDate), heatReq, com.wbs,
-          `ZZ Supplier ${poMeta[poMeta.length - 1].sup + 1} Pty Ltd`, rnd(['Class I', 'Class II', 'Class III']), heatReq ? 'Mill cert 3.1' : null, chance(0.4) ? 1 : 0, st,
-          (PROG_RANK[st] < 2 ? 'grey' : overdue ? 'red' : rnd(['green', 'amber'])), com.id])
-        poLineMeta.push({ poId, poNum, com, status: st, rank: PROG_RANK[st], heatReq, rosDate, vendor: poMeta[poMeta.length - 1].vendor, wh: rnd(whIds) })
+          rank >= 5 ? ri(1, 200) : 0, +(ri(50, 9000) + Math.random()).toFixed(2), iso(cdd), iso(rosDate), heatReq, com.wbs,
+          `ZZ Supplier ${sup + 1} Pty Ltd`, rnd(['Class I', 'Class II', 'Class III']), heatReq ? 'Mill cert 3.1' : null, chance(0.4) ? 1 : 0, st,
+          (rank < 2 ? 'grey' : overdue ? 'red' : rnd(['green', 'amber'])), com.id])
+        poLineMeta.push({ poId, poNum, com, status: st, rank, heatReq, rosDate, vendor: `ZZ Supplier ${sup + 1} Pty Ltd`, wh: rnd(whIds), tl })
       }
     }
     const poLineIds = await batchInsert(conn, 'po_lines', ['po_id', 'wbs_id', 'line_number', 'description', 'tag_number', 'qty', 'uom', 'qty_received', 'unit_price', 'cdd', 'ros_date', 'heat_number_required', 'wbs_code_snapshot', 'supplier_name_snapshot', 'insp_type', 'cert_required', 'vdrl_required', 'status', 'rag', 'commodity_id'], poLineRows)
     poLineMeta.forEach((m, i) => { m.id = poLineIds[i] })
-    // soft MTO→PO link (no FK exists): set mto_lines.po_ref = fulfilling PO number, grouped by PO
+    // soft MTO→PO link (no FK exists): set mto_lines.po_ref = fulfilling PO number, grouped
+    // by PO. Also re-stamp the MTO line's required-on-site date to sit at/after the PO
+    // deadline (site-logistics buffer) so PO.ros ≤ MTO.ros holds for every linked line.
+    const rosByPo = new Map(poMeta.map(p => [p.poNum, p.ros]))
     const byPo = new Map(); for (const [mlid, poNum] of mtoPoRef) { (byPo.get(poNum) || byPo.set(poNum, []).get(poNum)).push(mlid) }
-    for (const [poNum, ids] of byPo) await conn.query('UPDATE mto_lines SET po_ref=?, status=? WHERE id IN (?)', [poNum, 'po-raised', ids])
+    for (const [poNum, ids] of byPo) {
+      const mtoRos = iso(addDays(rosByPo.get(poNum), ri(7, 30)))
+      await conn.query('UPDATE mto_lines SET po_ref=?, status=?, ros_date=? WHERE id IN (?)', [poNum, 'po-raised', mtoRos, ids])
+    }
 
     // ── PO MILESTONES (planned ≤ forecast ≤ actual; some breached) + APPROVALS ──
     const STEPS = ['PO Issued', 'Drawings Approved', 'Manufacture', 'FAT', 'Ship', 'On Site']
     const msRows = [], apprRows = []
     for (const po of poMeta) {
+      // milestone planned dates come straight off the PO timeline (already monotonic):
+      // PO Issued ≤ Drawings ≤ Manufacture ≤ FAT ≤ Ship ≤ On Site.
+      const msDates = [po.tl.ms.poIssued, po.tl.ms.draw, po.tl.ms.mfg, po.tl.ms.fat, po.tl.ms.ship, po.tl.ms.onsite]
       STEPS.forEach((label, s) => {
-        const planned = addDays(po.poBase, Math.round((s + 1) / STEPS.length * ((po.ros - po.poBase) / 86400000)))
-        const forecast = addDays(planned, ri(0, 20))
-        const done = planned < TODAY && chance(0.7)
-        const breached = planned < TODAY && !done
-        msRows.push([po.id, s + 1, label, `${label} milestone`, iso(planned), iso(planned), iso(forecast), done ? iso(addDays(forecast, ri(-5, 8))) : null, done ? 'complete' : breached ? 'overdue' : 'not_started', 1, done ? ADMIN : null, ADMIN])
+        const planned = msDates[s]
+        const forecast = addDays(planned, ri(0, 15))               // forecast ≥ planned
+        const done = planned < TODAY && chance(0.85)
+        const breached = planned < TODAY && !done                  // passed but not done → overdue (Attention)
+        const actual = done ? clampPast(addDays(forecast, ri(0, 8))) : null  // actual ≥ forecast, ≤ today
+        msRows.push([po.id, s + 1, label, `${label} milestone`, iso(planned), iso(planned), iso(forecast), actual ? iso(actual) : null, done ? 'complete' : breached ? 'overdue' : 'not_started', 1, done ? ADMIN : null, ADMIN])
       })
       apprRows.push([po.id, ADMIN, 1, po.status === 'rfq' ? 'pending' : 'approved', po.status === 'rfq' ? null : 'Approved within delegation', po.status === 'rfq' ? null : new Date()])
     }
@@ -309,7 +388,7 @@ async function main() {
         [pid, po.id, `ZZ-VDRL-${po.poNum.slice(-4)}`, `VDRL ${po.poNum}`, po.vendor, po.poNum, 'active', ADMIN])
       const docRows = []
       for (let d = 1; d <= ri(2, 5); d++) {
-        const req = addDays(po.poBase, ri(30, 200)); const overdue = req < TODAY && chance(0.4)
+        const req = addDays(po.tl.ms.draw, ri(0, 90)); const overdue = req < TODAY && chance(0.4)  // docs due in the drawings/early-fab window
         docRows.push([vp.insertId, `DOC-${po.poNum.slice(-4)}-${pad(d, 2)}`, `${rnd(DT)} ${d}`, rnd(DT), rnd(DISC), 'A', rnd(['IFA', 'IFR', 'IFC']), overdue ? 'Overdue' : rnd(['Not submitted', 'Under review', 'Approved']), iso(req), iso(addDays(req, ri(-5, 10))), overdue ? null : iso(addDays(req, -ri(0, 5))), chance(0.5) ? 1 : 0, ADMIN])
         vdrlDocs++
       }
@@ -326,9 +405,12 @@ async function main() {
     for (let i = 0; i < shippablePos.length; i++) {
       const po = shippablePos[i]
       const lines = poLineMeta.filter(m => m.poId === po.id && m.rank >= 4)
-      const etd = addDays(po.ros, -ri(20, 50)), atd = addDays(etd, ri(0, 4)), eta = addDays(atd, ri(12, 45)), ata = addDays(eta, ri(0, 6)) // etd≤atd≤eta≤ata (strict)
+      // SCN dates come straight off the PO timeline (forward-chained, so
+      // cargo-ready ≤ collected ≤ ETD ≤ ATD ≤ ETA ≤ ATA, and all sit after the
+      // PO's fab/FAT milestones).
+      const tl = po.tl
+      const crd = tl.cargoReady, ccd = tl.collected, etd = tl.etd, atd = tl.atd, eta = tl.eta, ata = tl.ata
       const arrived = ata < TODAY
-      const crd = addDays(etd, -7), ccd = addDays(etd, -3) // cargo ready, then collected, before departure
       const [scn] = await conn.query(
         `INSERT INTO shipment_control_notes (project_id,scn_ref,po_id,vendor_name,supplier_id,forwarder_name,origin_location,destination_warehouse_id,incoterms,cargo_ready_date,cargo_collection_date,etd,atd,eta,ata,status,mode,bl_number,container_ref,total_packages,total_weight_kg,rag,created_by)
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -348,13 +430,16 @@ async function main() {
     // ── RECEIPTS + WAREHOUSE STOCK (po_lines that reached 'received'/'closed') ──
     const recRows = [], stockRows = [], stockMeta = []
     for (const m of poLineMeta.filter(x => x.rank >= 5)) {
-      const scn = scnByPo.get(m.poId); const recDate = scn ? addDays(scn.ata, ri(0, 6)) : addDays(m.rosDate, ri(-5, 5))
+      const scn = scnByPo.get(m.poId)
+      // receipt sits AFTER actual arrival and at/before today — straight off the PO
+      // timeline (receipt = ata + handling lag), so receipt ≥ ata always holds.
+      const recDate = clampPast(m.tl.receipt)
       const qty = ri(1, 100); const stockout = chance(0.06); const cond = chance(0.08) ? rnd(['minor_damage', 'major_damage', 'quarantine']) : 'good'
       // receipt_lines.scn_id is NOT NULL — only record a receipt when an SCN exists (it always
       // should now, every shipping PO has one); stock can still exist with a null scn_id.
-      if (scn) recRows.push([pid, scn.id, `ZZ-SCN-${pad(scnMeta.indexOf(scn) + 1, 4)}`, m.id, m.heat || null, `${m.com.name} received`, qty, qty - (chance(0.1) ? ri(1, 3) : 0), 0, m.com.uom, someWh, iso(recDate > TODAY ? TODAY : recDate)])
-      stockRows.push([pid, m.wh, scn ? scn.id : null, m.id, m.com.id, m.com.code, `${m.com.name} — ${m.com.code}`, m.com.wbs, stockout ? 0 : qty, stockout ? 0 : qty, m.com.uom, `Z${ri(1, 9)}-${ri(1, 99)}`, cond, cond === 'quarantine' ? 1 : 0, m.vendor, m.heat || null, iso(recDate > TODAY ? TODAY : recDate), someWh])
-      stockMeta.push({ poLineId: m.id, com: m.com, heat: m.heat, wh: m.wh })
+      if (scn) recRows.push([pid, scn.id, `ZZ-SCN-${pad(scnMeta.indexOf(scn) + 1, 4)}`, m.id, m.heat || null, `${m.com.name} received`, qty, qty - (chance(0.1) ? ri(1, 3) : 0), 0, m.com.uom, someWh, iso(recDate)])
+      stockRows.push([pid, m.wh, scn ? scn.id : null, m.id, m.com.id, m.com.code, `${m.com.name} — ${m.com.code}`, m.com.wbs, stockout ? 0 : qty, stockout ? 0 : qty, m.com.uom, `Z${ri(1, 9)}-${ri(1, 99)}`, cond, cond === 'quarantine' ? 1 : 0, m.vendor, m.heat || null, iso(recDate), someWh])
+      stockMeta.push({ poLineId: m.id, com: m.com, heat: m.heat, wh: m.wh, recDate })
     }
     await batchInsert(conn, 'receipt_lines', ['project_id', 'scn_id', 'scn_ref', 'po_line_id', 'heat_number', 'description', 'expected_qty', 'received_qty', 'damaged_qty', 'uom', 'received_by', 'received_date'], recRows)
     const stockIds = await batchInsert(conn, 'warehouse_stock', ['project_id', 'warehouse_id', 'scn_id', 'po_line_id', 'commodity_id', 'item_code', 'description', 'wbs_code', 'qty', 'qty_available', 'uom', 'location_code', 'condition_status', 'trace_hold', 'vendor_name', 'heat_number', 'received_date', 'received_by'], stockRows)
@@ -385,15 +470,18 @@ async function main() {
         const [fl] = await conn.query('INSERT INTO fmr_lines (fmr_id,item_code,item_type,description,wbs_code,qty_requested,qty_issued,qty_approved,uom,line_status) VALUES (?,?,?,?,?,?,?,?,?,?)',
           [fr.insertId, ld.m.com.code, 'commodity', ld.m.com.name, ld.m.com.wbs, ld.rq, ld.iq, ld.rq, ld.m.com.uom, lineStat])
         if (ld.iq > 0) await conn.query('INSERT INTO fmr_issue_lines (fmr_id,fmr_line_id,stock_id,qty,heat_number,location_code,item_code,wbs_code,issued_by,issued_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
-          [fr.insertId, fl.insertId, ld.m.id, ld.iq, ld.m.heat || null, `Z${ri(1, 9)}-${ri(1, 99)}`, ld.m.com.code, ld.m.com.wbs, someWh, new Date()])
+          // issued AFTER the stock was received (≥ receipt date) and at/before today
+          [fr.insertId, fl.insertId, ld.m.id, ld.iq, ld.m.heat || null, `Z${ri(1, 9)}-${ri(1, 99)}`, ld.m.com.code, ld.m.com.wbs, someWh, clampPast(addDays(ld.m.recDate, ri(1, 20)))])
       }
     }
 
     // ── TRACEABILITY certs (per heat → po_id from the heat's PO) + holds ──
     const certRows = []; const heatList = poLineMeta.filter(m => m.heat)
     for (const m of heatList) {
-      const issue = addDays(TODAY, -ri(0, 120)); const stat = rnd(['verified', 'received', 'pending', 'overdue', 'rejected'])
-      certRows.push([pid, 'approval', m.poId, m.poNum, m.vendor, `TAG-${m.poNum.slice(-4)}`, `MTC ${m.heat}`, 'MTC', m.heat, m.heat, iso(issue), iso(addDays(issue, 30)), stat === 'pending' || stat === 'overdue' ? null : iso(addDays(issue, ri(1, 20))), 1, stat, stat === 'overdue' || stat === 'rejected' ? 'high' : 'normal', ADMIN])
+      // mill cert issued around manufacture of that heat's PO; received after issue, ≤ today.
+      const issue = clampPast(addDays(m.tl.ms.mfg, ri(0, 30))); const stat = rnd(['verified', 'received', 'pending', 'overdue', 'rejected'])
+      const received = (stat === 'pending' || stat === 'overdue') ? null : iso(clampPast(addDays(issue, ri(1, 20))))
+      certRows.push([pid, 'approval', m.poId, m.poNum, m.vendor, `TAG-${m.poNum.slice(-4)}`, `MTC ${m.heat}`, 'MTC', m.heat, m.heat, iso(issue), iso(addDays(issue, 30)), received, 1, stat, stat === 'overdue' || stat === 'rejected' ? 'high' : 'normal', ADMIN])
     }
     const certIds = certRows.length ? await batchInsert(conn, 'traceability_certs', ['project_id', 'category', 'po_id', 'po_ref', 'vendor_name', 'tag', 'document_name', 'cert_type', 'heat_ref', 'applies_to', 'issue_date', 'due_date', 'received_date', 'is_required', 'status', 'priority', 'uploaded_by'], certRows) : []
     const holdRows = []
