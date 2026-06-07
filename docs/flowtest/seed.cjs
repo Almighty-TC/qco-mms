@@ -55,14 +55,14 @@ function pickStatus() {
 // so a 'received' PO sits in the past and an 'rfq' one is barely under way — which
 // makes the dashboard's status spread, overdue counts and ROS view all sensible.
 //
-// ros is a DEADLINE, NOT a chain stage. Real-world meaning (confirmed against
+// tl.ros is a DEADLINE, NOT a chain stage. Real-world meaning (confirmed against
 // dashboard.js: a line is overdue when `ros_date < CURDATE() AND not received`):
-// the material must be received BY ros. So on-time items have receipt ≤ ros, and
-// deliberately-late ones have ros < receipt (or ros in the past while still pending
-// → these populate the Attention band). PO.ros ≤ MTO.ros: the PO delivery deadline
-// sits at/before the site need-by date (site-logistics buffer). This is the OPPOSITE
-// of the framework's `MTO.ros ≤ PO.ros` literal — the literal is backwards for ROS,
-// so we match the real-world meaning, not the assertion.
+// the material must be received BY ros, so on-time items have receipt ≤ ros and
+// late ones have ros < receipt. tl.ros is used as the MTO line's demanded ROS, which
+// the PO then INHERITS (see the caller): most PO lines equal it exactly; a logged
+// minority is amended during the PO procedure. So this builder only fixes the
+// physical/event chain + a sensible default deadline — the ROS inheritance vs
+// tracked-amendment behaviour lives at the call site (with date_change_log rows).
 const clampPast = (d) => (d > TODAY ? new Date(TODAY) : d)
 function buildTimeline(rank) {
   const lag = { draw: ri(15, 45), mfg: ri(40, 120), fat: ri(10, 30), cargo: ri(5, 20),
@@ -168,6 +168,7 @@ async function teardown(conn, pid) {
     `DELETE FROM notifications WHERE user_id IN ${ZZU}`,
     `DELETE FROM user_permission_overrides WHERE user_id IN ${ZZU} OR overridden_by IN ${ZZU}`,
     `DELETE FROM delegated_permissions WHERE granted_to IN ${ZZU} OR granted_by IN ${ZZU}`,
+    `DELETE FROM date_change_log WHERE created_by IN ${ZZU}`,  // ROS amendment / forecast-slip log rows
   ]) await conn.query(sql).catch(() => {})
   await conn.query("DELETE FROM users WHERE email LIKE '%@zzflowtest.example'")
   await conn.query("DELETE sa FROM supplier_addresses sa JOIN suppliers s ON s.id=sa.supplier_id WHERE s.code LIKE 'ZZF-%'") // FK before suppliers
@@ -308,6 +309,9 @@ async function main() {
     const INCO = ['FOB', 'CIF', 'DAP', 'EXW', 'CFR']
     const poMeta = [], poLineRows = [], poLineMeta = []
     const mtoPoRef = new Map() // mtoLineId -> po_number (soft MTO→PO link)
+    const dclRows = []         // date_change_log: ROS amendments (procurement) + forecast slips (expediting)
+    const PROC_USER = (uidByRole['procurement_officer'] || uidByRole['procurement_manager'] || [ADMIN])[0]
+    const EXP_USER  = (uidByRole['expeditor'] || uidByRole['expediting_manager'] || [ADMIN])[0]
     for (let i = 1; i <= S.po; i++) {
       const sup = ri(0, supIds.length - 1)
       const poNum = `ZZ-PO-${pad(i, 4)}`
@@ -324,58 +328,77 @@ async function main() {
       }
       const maxRank = Math.max(PROG_RANK[poStatus] ?? 0, ...specs.map(s => s.rank))
       const tl = buildTimeline(maxRank)
-      const ros = tl.ros
+      // ── ROS inheritance + tracked amendment (Thomas's EPC rule) ─────────────
+      // The MTO line's ROS is the demand (required-on-site). The PO inherits it by
+      // default; a realistic MINORITY is amended during the PO procedure — the PO
+      // header/lines then carry the amended value while the MTO keeps the original.
+      // That PO≠MTO difference is legitimate ONLY because a date_change_log row
+      // records it. Separately, some in-flight POs are genuinely overdue (the
+      // inherited demand has already passed, still not received) — a real slip, not
+      // an amendment, so no log (PO still equals MTO).
+      const pending = maxRank < 5
+      const forceOverdue = pending && maxRank >= 2 && chance(0.30)
+      const mtoDemand = forceOverdue ? addDays(TODAY, -ri(5, 60)) : tl.ros   // the MTO line's ROS
+      const amended = chance(0.18)
+      const poRos = amended ? addDays(mtoDemand, (chance(0.5) ? 1 : -1) * ri(10, 50)) : mtoDemand
+      const cddHdr = addDays(poRos, -ri(0, 14))
       const [r] = await conn.query(
         `INSERT INTO purchase_orders (project_id,po_number,po_name,wbs_code,group_category,ros_date,is_locked,vendor_name,vendor_code,supplier_id,description,value,currency,status,rag,incoterms,warehouse_id,contract_delivery_date,estimated_delivery_date,milestone_po_date,milestone_eta_date,milestone_ros_date,created_by,expeditor_id)
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [pid, poNum, `${rnd(EQT)} package ${i}`, rnd(leafCodes), rnd(GC), iso(ros), i % 4 === 0 ? 1 : 0, `ZZ Supplier ${sup + 1} Pty Ltd`, `ZZF-${pad(sup + 1, 3)}`, supIds[sup], `Supply & delivery package ${i}`, ri(20000, 1500000), 'AUD', poStatus, rnd(['green', 'amber', 'red']), rnd(INCO), rnd(whIds), iso(ros), iso(tl.receipt), iso(tl.ms.poIssued), iso(tl.eta), iso(ros), ADMIN, someExp])
+        [pid, poNum, `${rnd(EQT)} package ${i}`, rnd(leafCodes), rnd(GC), iso(poRos), i % 4 === 0 ? 1 : 0, `ZZ Supplier ${sup + 1} Pty Ltd`, `ZZF-${pad(sup + 1, 3)}`, supIds[sup], `Supply & delivery package ${i}`, ri(20000, 1500000), 'AUD', poStatus, rnd(['green', 'amber', 'red']), rnd(INCO), rnd(whIds), iso(cddHdr), iso(tl.receipt), iso(tl.ms.poIssued), iso(tl.eta), iso(poRos), ADMIN, someExp])
       const poId = r.insertId
-      poMeta.push({ id: poId, poNum, tl, ros, sup, vendor: `ZZ Supplier ${sup + 1} Pty Ltd`, status: poStatus })
+      if (amended) dclRows.push(['purchase_order', poId, 'ros_date', iso(mtoDemand), iso(poRos), 'Procurement amendment — revised delivery date agreed with vendor at PO placement', PROC_USER])
+      poMeta.push({ id: poId, poNum, tl, mtoDemand, poRos, amended, maxRank, sup, vendor: `ZZ Supplier ${sup + 1} Pty Ltd`, status: poStatus })
       for (const sp of specs) {
         const { l, mIdx, com, st, rank, heatReq } = sp
-        // line ROS ≈ the PO deadline; a slice of mid-flight lines are deliberately
-        // overdue (ROS already passed, still not received) → populate the Attention band.
-        const overdue = rank >= 2 && rank < 5 && chance(0.25)
-        const rosDate = overdue ? addDays(TODAY, -ri(5, 60)) : addDays(ros, ri(-3, 3))
-        const cdd = addDays(rosDate, -ri(0, 14))   // contract delivery date ≤ required-on-site
+        // every line inherits the PO's ROS (amended or not); cdd ≤ ROS.
+        const rosDate = poRos
+        const cdd = addDays(rosDate, -ri(0, 14))
+        const lineOverdue = rosDate < TODAY && rank < 5
         mtoPoRef.set(mtoLineIds[mIdx], poNum)
         poLineRows.push([poId, wbsIdByCode[com.wbs], `L${pad(l, 3)}`, `${com.name} — ${com.code}`, `TAG-${i}-${l}`, ri(1, 200), com.uom,
           rank >= 5 ? ri(1, 200) : 0, +(ri(50, 9000) + Math.random()).toFixed(2), iso(cdd), iso(rosDate), heatReq, com.wbs,
           `ZZ Supplier ${sup + 1} Pty Ltd`, rnd(['Class I', 'Class II', 'Class III']), heatReq ? 'Mill cert 3.1' : null, chance(0.4) ? 1 : 0, st,
-          (rank < 2 ? 'grey' : overdue ? 'red' : rnd(['green', 'amber'])), com.id])
+          (rank < 2 ? 'grey' : lineOverdue ? 'red' : rnd(['green', 'amber'])), com.id])
         poLineMeta.push({ poId, poNum, com, status: st, rank, heatReq, rosDate, vendor: `ZZ Supplier ${sup + 1} Pty Ltd`, wh: rnd(whIds), tl })
       }
     }
     const poLineIds = await batchInsert(conn, 'po_lines', ['po_id', 'wbs_id', 'line_number', 'description', 'tag_number', 'qty', 'uom', 'qty_received', 'unit_price', 'cdd', 'ros_date', 'heat_number_required', 'wbs_code_snapshot', 'supplier_name_snapshot', 'insp_type', 'cert_required', 'vdrl_required', 'status', 'rag', 'commodity_id'], poLineRows)
     poLineMeta.forEach((m, i) => { m.id = poLineIds[i] })
     // soft MTO→PO link (no FK exists): set mto_lines.po_ref = fulfilling PO number, grouped
-    // by PO. Also re-stamp the MTO line's required-on-site date to sit at/after the PO
-    // deadline (site-logistics buffer) so PO.ros ≤ MTO.ros holds for every linked line.
-    const rosByPo = new Map(poMeta.map(p => [p.poNum, p.ros]))
+    // by PO. The MTO line keeps its ORIGINAL demanded ROS (the value the PO inherits); a PO
+    // whose ros was amended diverges from this — and only those carry a date_change_log.
+    const demandByPo = new Map(poMeta.map(p => [p.poNum, p.mtoDemand]))
     const byPo = new Map(); for (const [mlid, poNum] of mtoPoRef) { (byPo.get(poNum) || byPo.set(poNum, []).get(poNum)).push(mlid) }
     for (const [poNum, ids] of byPo) {
-      const mtoRos = iso(addDays(rosByPo.get(poNum), ri(7, 30)))
-      await conn.query('UPDATE mto_lines SET po_ref=?, status=?, ros_date=? WHERE id IN (?)', [poNum, 'po-raised', mtoRos, ids])
+      await conn.query('UPDATE mto_lines SET po_ref=?, status=?, ros_date=? WHERE id IN (?)', [poNum, 'po-raised', iso(demandByPo.get(poNum)), ids])
     }
 
     // ── PO MILESTONES (planned ≤ forecast ≤ actual; some breached) + APPROVALS ──
     const STEPS = ['PO Issued', 'Drawings Approved', 'Manufacture', 'FAT', 'Ship', 'On Site']
-    const msRows = [], apprRows = []
+    const msRows = [], apprRows = [], msSlip = []
     for (const po of poMeta) {
       // milestone planned dates come straight off the PO timeline (already monotonic):
       // PO Issued ≤ Drawings ≤ Manufacture ≤ FAT ≤ Ship ≤ On Site.
       const msDates = [po.tl.ms.poIssued, po.tl.ms.draw, po.tl.ms.mfg, po.tl.ms.fat, po.tl.ms.ship, po.tl.ms.onsite]
       STEPS.forEach((label, s) => {
         const planned = msDates[s]
-        const forecast = addDays(planned, ri(0, 15))               // forecast ≥ planned
+        // forecast == planned UNLESS expediting revised it — so a forecast ≠ planned is
+        // ALWAYS backed by a date_change_log row (expediting stage). Only POs that reached
+        // expediting (rank ≥ 3) on already-passed milestones can slip.
+        const slip = po.maxRank >= 3 && planned < TODAY && chance(0.18)
+        const forecast = slip ? addDays(planned, ri(5, 30)) : planned
         const done = planned < TODAY && chance(0.85)
         const breached = planned < TODAY && !done                  // passed but not done → overdue (Attention)
         const actual = done ? clampPast(addDays(forecast, ri(0, 8))) : null  // actual ≥ forecast, ≤ today
+        if (slip) msSlip.push({ idx: msRows.length, planned, forecast })
         msRows.push([po.id, s + 1, label, `${label} milestone`, iso(planned), iso(planned), iso(forecast), actual ? iso(actual) : null, done ? 'complete' : breached ? 'overdue' : 'not_started', 1, done ? ADMIN : null, ADMIN])
       })
       apprRows.push([po.id, ADMIN, 1, po.status === 'rfq' ? 'pending' : 'approved', po.status === 'rfq' ? null : 'Approved within delegation', po.status === 'rfq' ? null : new Date()])
     }
-    await batchInsert(conn, 'po_milestones', ['po_id', 'step_order', 'label', 'description', 'planned_date', 'target_date', 'forecast_date', 'actual_date', 'status', 'is_required', 'completed_by', 'created_by'], msRows)
+    const msIds = await batchInsert(conn, 'po_milestones', ['po_id', 'step_order', 'label', 'description', 'planned_date', 'target_date', 'forecast_date', 'actual_date', 'status', 'is_required', 'completed_by', 'created_by'], msRows)
+    for (const sl of msSlip) dclRows.push(['po_milestone', msIds[sl.idx], 'forecast_date', iso(sl.planned), iso(sl.forecast), 'Expediting — forecast revised after vendor progress review', EXP_USER])
+    if (dclRows.length) await batchInsert(conn, 'date_change_log', ['entity_type', 'entity_id', 'field_name', 'old_value', 'new_value', 'change_reason', 'created_by'], dclRows)
     await batchInsert(conn, 'po_approvals', ['po_id', 'approver_id', 'approval_level', 'status', 'comments', 'actioned_at'], apprRows)
 
     // ── VDRL packages + documents (for POs carrying vdrl-required lines) ──
