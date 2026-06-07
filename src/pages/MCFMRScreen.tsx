@@ -381,7 +381,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
                         {fmr.requested_by_name || '—'}
                         {fmr.requested_by_company && <div style={{ fontSize: 10, color: sub, overflow: 'hidden', textOverflow: 'ellipsis' }}>{fmr.requested_by_company}</div>}
                       </td>
-                      <td style={{ padding: '9px 12px', fontSize: 11 }}>
+                      <td data-align="center" style={{ padding: '9px 12px', fontSize: 11 }}>
                         <span style={{ color: overdue ? '#ef4444' : soon ? '#d97706' : col, fontWeight: overdue || soon ? 600 : 400 }}>
                           {fmt(fmr.required_date)}
                         </span>

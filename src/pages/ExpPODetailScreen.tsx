@@ -773,8 +773,8 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                               <td data-align="left" style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>
                                 {item.line_description ? <span style={{ color: col }}>{item.line_description}</span> : '—'}
                               </td>
-                              <td style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{fmtD(item.planned_date)}</td>
-                              <td style={{ padding: '8px 10px', fontSize: 11 }}>
+                              <td data-align="center" style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{fmtD(item.planned_date)}</td>
+                              <td data-align="center" style={{ padding: '8px 10px', fontSize: 11 }}>
                                 <div style={{ color: col }}>{fmtD(item.forecast_date)}</div>
                                 {(item.forecast_changed_count ?? 0) > 0 && (
                                   <button onClick={() => loadItpHistory(item.id)}
@@ -942,9 +942,9 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                                 <td data-align="left" style={{ padding: '8px 10px', color: col, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.title}>{d.title}</td>
                                 <td style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{d.doc_type || '—'}</td>
                                 <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{d.revision || '—'}</td>
-                                <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: d.required_date&&new Date(d.required_date)<new Date()&&!d.submitted_date?'#ef4444':sub, whiteSpace:'nowrap' }}>{fmtS(d.required_date)}</td>
-                                <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, whiteSpace:'nowrap' }}>{fmtS(d.promised_date)}</td>
-                                <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: d.submitted_date?'#22c55e':sub, whiteSpace:'nowrap' }}>{fmtS(d.submitted_date)}</td>
+                                <td data-align="center" style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: d.required_date&&new Date(d.required_date)<new Date()&&!d.submitted_date?'#ef4444':sub, whiteSpace:'nowrap' }}>{fmtS(d.required_date)}</td>
+                                <td data-align="center" style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, whiteSpace:'nowrap' }}>{fmtS(d.promised_date)}</td>
+                                <td data-align="center" style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: d.submitted_date?'#22c55e':sub, whiteSpace:'nowrap' }}>{fmtS(d.submitted_date)}</td>
                                 <td data-align="center" style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
                                   <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 9999, background: pill.bg, color: pill.color, fontWeight: 500 }}>{pill.label}</span>
                                 </td>

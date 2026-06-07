@@ -453,13 +453,13 @@ const LineItemsTab = ({ po, dark, onRefresh }: { po: PO; dark: boolean; onRefres
                   {l.qty != null && l.unit_price != null ? fmtCurrency(l.qty * l.unit_price, po.currency) : '—'}
                 </td>
                 <td data-align="left" style={{ ...tdStyle, fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#64748b' }}>{l.wbs_code ?? '—'}</td>
-                <td style={{ ...tdStyle, fontSize: 12, color: '#64748b', fontFamily: 'JetBrains Mono, monospace' }}>
+                <td data-align="center" style={{ ...tdStyle, fontSize: 12, color: '#64748b', fontFamily: 'JetBrains Mono, monospace' }}>
                   {editMode
                     ? <input type="date" value={l.cdd?.slice(0,10) ?? ''} onChange={e => updateLine(i, 'cdd', e.target.value || null)} style={{ ...inp(dark), width: 130 }} />
                     : fmtDate(l.cdd)
                   }
                 </td>
-                <td style={{ ...tdStyle, fontSize: 12, color: '#64748b', fontFamily: 'JetBrains Mono, monospace' }}>
+                <td data-align="center" style={{ ...tdStyle, fontSize: 12, color: '#64748b', fontFamily: 'JetBrains Mono, monospace' }}>
                   {editMode
                     ? <input type="date" value={l.ros_date?.slice(0,10) ?? ''} onChange={e => updateLine(i, 'ros_date', e.target.value || null)} style={{ ...inp(dark), width: 130 }} />
                     : fmtDate(l.ros_date)

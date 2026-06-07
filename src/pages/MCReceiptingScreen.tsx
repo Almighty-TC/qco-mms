@@ -239,7 +239,7 @@ const MCReceiptingInner = ({ dark, projectId, projectName, onBack }: {
                         {row.vendor_name || '—'}
                         <div style={{ fontSize: 10, color: sub }}>{row.origin_location}</div>
                       </td>
-                      <td style={{ padding: '9px 12px', color: sub, fontSize: 11 }}>{fmt(row.eta)}</td>
+                      <td data-align="center" style={{ padding: '9px 12px', color: sub, fontSize: 11 }}>{fmt(row.eta)}</td>
                       <td data-align="left" style={{ padding: '9px 12px', color: col, fontSize: 11 }}>{row.destination_name || '—'}</td>
                       <td data-align="center" style={{ padding: '9px 12px' }}>
                         <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, background: pill.bg, color: pill.color, fontWeight: 600, whiteSpace: 'nowrap' }}>

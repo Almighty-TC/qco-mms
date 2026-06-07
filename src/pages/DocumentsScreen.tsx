@@ -163,7 +163,7 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
         <td style={tdSt}><span style={{ fontSize: 11, fontWeight: 600 }}>{r.module}</span></td>
         <td style={{ ...tdSt, ...mono, fontSize: 11, color: '#2563eb' }}>{r.source_label}</td>
         <td style={{ ...tdSt, fontSize: 11 }}>{r.uploaded_by || '—'}</td>
-        <td style={{ ...tdSt, ...mono, fontSize: 11, color: sub }}>{fmtDate(r.uploaded_at)}</td>
+        <td data-align="center" style={{ ...tdSt, ...mono, fontSize: 11, color: sub }}>{fmtDate(r.uploaded_at)}</td>
         <td data-align="center" style={tdSt}><span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 6, background: pill.bg, color: pill.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{r.status}</span></td>
         <td data-align="center" style={tdSt} onClick={e => e.stopPropagation()}>
           {r.is_missing ? (

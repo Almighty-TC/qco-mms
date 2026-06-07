@@ -349,8 +349,8 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
                       <td style={{ padding: '8px 10px', fontSize: 12 }}>
                         {scn.mode ? <span title={scn.mode}>{MODE_ICON[scn.mode] || '?'} <span style={{ color: sub, fontSize: 10, textTransform: 'capitalize' }}>{scn.mode}</span></span> : '—'}
                       </td>
-                      <td style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{fmt(scn.etd)}</td>
-                      <td style={{ padding: '8px 10px', fontSize: 11, color: etaColour(scn.eta) || col, fontWeight: etaColour(scn.eta) ? 600 : undefined }}>{fmt(scn.eta)}</td>
+                      <td data-align="center" style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{fmt(scn.etd)}</td>
+                      <td data-align="center" style={{ padding: '8px 10px', fontSize: 11, color: etaColour(scn.eta) || col, fontWeight: etaColour(scn.eta) ? 600 : undefined }}>{fmt(scn.eta)}</td>
                       <td style={{ padding: '8px 10px', textAlign: 'center', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{scn.total_packages ?? '—'}</td>
                       <td style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{fmtW(scn.total_weight_kg)}</td>
                       <td data-align="center" style={{ padding: '8px 10px' }}>

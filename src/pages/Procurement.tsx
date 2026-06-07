@@ -1291,7 +1291,7 @@ const POTableRow = ({
       </td>
 
       {/* ── ROS Date (index 8) ────────────────────────────────────────────── */}
-      <td style={{ ...tdBase, width: colWidths[8] }}>
+      <td data-align="center" style={{ ...tdBase, width: colWidths[8] }}>
         {po.ros_date
           ? <span style={{ fontSize: 12, color: dark ? '#94a3b8' : '#475569', fontFamily: 'JetBrains Mono, monospace' }}>{fmtDate(po.ros_date)}</span>
           : <span style={{ fontSize: 11, color: '#94a3b8', fontStyle: 'italic' }}>— not set</span>
@@ -1383,7 +1383,7 @@ const POTableRow = ({
       </td>
 
       {/* ── CDD (index 11) ────────────────────────────────────────────────── */}
-      <td style={{ ...tdBase, width: colWidths[11] }}>
+      <td data-align="center" style={{ ...tdBase, width: colWidths[11] }}>
         <span style={{ fontSize: 12, color: po.rag === 'red' ? '#ef4444' : po.rag === 'amber' ? '#d97706' : (dark ? '#94a3b8' : '#475569'), fontFamily: 'JetBrains Mono, monospace' }}>
           {fmtDate(po.cdd)}
         </span>
