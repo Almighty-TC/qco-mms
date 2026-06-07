@@ -89,9 +89,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON qmat.warehouses TO 'qmat_app'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON qmat.wbs_nodes TO 'qmat_app'@'%';
 
 -- ─── C1: Meeting/RFI module (added by migrate-rfi-meeting.js) ──
-GRANT SELECT, INSERT, UPDATE, DELETE ON qmat.rfi_meeting_records TO 'qmat_app'@'%';
-GRANT SELECT, INSERT, UPDATE, DELETE ON qmat.meeting_attendees   TO 'qmat_app'@'%';
-GRANT SELECT, INSERT, UPDATE, DELETE ON qmat.meeting_actions     TO 'qmat_app'@'%';
+GRANT SELECT, INSERT, UPDATE ON qmat.rfi_meeting_records TO 'qmat_app'@'%';  -- PASS A A2c: app never DELETEs (records are cancelled, not deleted)
+GRANT SELECT, INSERT, DELETE ON qmat.meeting_attendees   TO 'qmat_app'@'%';  -- PASS A A2c: app INSERT/DELETE attendees, never UPDATE
+GRANT SELECT, INSERT, UPDATE ON qmat.meeting_actions     TO 'qmat_app'@'%';  -- PASS A A2c: app INSERT/UPDATE actions, never DELETE
 
 -- ─── Dashboard C1 (added by migrate-dashboard-weights.js) ──────
 GRANT SELECT, INSERT, UPDATE ON qmat.project_health_weights TO 'qmat_app'@'%';
