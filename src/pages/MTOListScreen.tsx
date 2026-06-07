@@ -848,7 +848,7 @@ const MTOListInner = ({
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ ...rt.tableStyle, borderCollapse: 'collapse' }}>
+            <table className="app-grid" style={{ ...rt.tableStyle, borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
                   <th style={{ ...rt.thStyle(0), ...thStyle }}>MTO / Reference{rt.handle(0, dark)}</th>
@@ -871,7 +871,7 @@ const MTOListInner = ({
                   return (
                     <tr key={m.id}
                       style={{ background: i % 2 === 0 ? 'transparent' : (dark ? 'rgba(255,255,255,0.015)' : 'rgba(0,0,0,0.015)') }}>
-                      <td style={tdStyle}>
+                      <td data-align="left" style={tdStyle}>
                         <div style={{ fontWeight: 600 }}>{m.name}</div>
                         <div style={{ fontSize: 11, color: sub, fontFamily: 'JetBrains Mono, monospace', marginTop: 2 }}>{m.reference}</div>
                       </td>

@@ -1264,7 +1264,7 @@ const POTableRow = ({
       </td>
 
       {/* ── Description (index 3) ─────────────────────────────────────────── */}
-      <td style={{ ...tdBase }} title={po.description ?? ''}>
+      <td data-align="left" style={{ ...tdBase }} title={po.description ?? ''}>
         <span style={{ fontSize: 13, color: dark ? '#94a3b8' : '#475569' }}>{po.description ?? '—'}</span>
       </td>
 
@@ -1286,7 +1286,7 @@ const POTableRow = ({
       </td>
 
       {/* ── WBS (index 7) ─────────────────────────────────────────────────── */}
-      <td style={{ ...tdBase, width: colWidths[7] }} title={po.wbs_name ?? po.wbs_code ?? ''}>
+      <td data-align="left" style={{ ...tdBase, width: colWidths[7] }} title={po.wbs_name ?? po.wbs_code ?? ''}>
         <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#64748b' }}>{po.wbs_code ?? '—'}</span>
       </td>
 
@@ -1299,7 +1299,7 @@ const POTableRow = ({
       </td>
 
       {/* ── Vendor (index 9) ──────────────────────────────────────────────── */}
-      <td style={{ ...tdBase, width: colWidths[9] }} title={`${po.supplier_name ?? po.vendor_name}${po.group_category ? ' · ' + po.group_category : ''}`}>
+      <td data-align="left" style={{ ...tdBase, width: colWidths[9] }} title={`${po.supplier_name ?? po.vendor_name}${po.group_category ? ' · ' + po.group_category : ''}`}>
         <div style={{ fontSize: 13, fontWeight: 500, color: col, overflow: 'hidden', textOverflow: 'ellipsis' }}>{po.supplier_name ?? po.vendor_name}</div>
         {po.group_category && <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'capitalize' }}>{po.group_category}</div>}
       </td>
@@ -1813,7 +1813,7 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
         // page so the column headers stay visible as you scroll the screen down.
         boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
       }}>
-        <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed' }}>
+        <table className="app-grid" style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed' }}>
           <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: dark ? '#0f172a' : '#f4f7fb' }}>
             <tr>
               {PO_COLS.map((c, i) => {

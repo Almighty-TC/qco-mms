@@ -232,7 +232,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
           ) : (
             <div style={{ background: cardBg, border: bd, borderRadius: 8, overflow: 'hidden' }}>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 12 }}>
+                <table className="app-grid" style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 12 }}>
                   <colgroup>
                     {rt.widths.map((w, i) => <col key={i} style={{ width: w }} />)}
                   </colgroup>
@@ -257,7 +257,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                         <tr key={item.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
                           {!isSubcontractor && <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, ...ellipsisCell }}>{item.location_code || '—'}</td>}
                           <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600, ...ellipsisCell }}>{item.item_code}</td>
-                          <td style={{ padding: '8px 12px', color: col, ...ellipsisCell }} title={item.description}>{item.description}</td>
+                          <td data-align="left" style={{ padding: '8px 12px', color: col, ...ellipsisCell }} title={item.description}>{item.description}</td>
                           <td style={{ padding: '8px 12px', fontSize: 11 }}>
                             {item.heat_number ? (
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start' }}>
@@ -271,13 +271,13 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                               </div>
                             ) : <span style={{ color: sub }}>—</span>}
                           </td>
-                          <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, ...ellipsisCell }}>{item.wbs_code || '—'}</td>
+                          <td data-align="left" style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, ...ellipsisCell }}>{item.wbs_code || '—'}</td>
                           <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col, fontWeight: 600, ...ellipsisCell }}>{Number(item.qty).toLocaleString()}</td>
                           <td style={{ padding: '8px 12px', color: sub, ...ellipsisCell }}>{item.uom}</td>
                           <td style={{ padding: '8px 12px' }}>
                             <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: cond.bg, color: cond.color, fontWeight: 600 }}>{cond.label}</span>
                           </td>
-                          <td style={{ padding: '8px 12px', color: sub, fontSize: 11, ...ellipsisCell }}>{item.vendor_name || '—'}</td>
+                          <td data-align="left" style={{ padding: '8px 12px', color: sub, fontSize: 11, ...ellipsisCell }}>{item.vendor_name || '—'}</td>
                           {!isSubcontractor && (
                             <td style={{ padding: '8px 12px' }}>
                               {item.trace_hold ? <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: 'rgba(239,68,68,0.1)', color: '#ef4444', fontWeight: 600 }}>hold</span> : <span style={{ color: sub }}>—</span>}

@@ -196,7 +196,7 @@ const MCReceiptingInner = ({ dark, projectId, projectName, onBack }: {
         {/* Table */}
         <div style={{ background: cardBg, border: bd, borderTop: 'none', borderRadius: '0 0 8px 8px', overflow: 'hidden' }}>
           <div ref={tableRef} style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 380px)' }}>
-            <table style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 12 }}>
+            <table className="app-grid" style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 12 }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                 <tr style={{ borderBottom: bd }}>
                   {['REFERENCE','TYPE','ITEM / DESCRIPTION','QTY','WBS','SOURCE / VENDOR','ETA','DESTINATION','STATUS',''].map((h, i) => (
@@ -228,19 +228,19 @@ const MCReceiptingInner = ({ dark, projectId, projectName, onBack }: {
                           {row.type}
                         </span>
                       </td>
-                      <td style={{ padding: '9px 12px', color: col, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <td data-align="left" style={{ padding: '9px 12px', color: col, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {row.type === 'TRANSFER' ? row.item_description : (row.notes || `SCN ${row.scn_ref}`)}
                       </td>
                       <td style={{ padding: '9px 12px', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>
                         {row.type === 'TRANSFER' ? `${row.qty} ${row.uom || ''}` : (row.total_packages ? `${row.total_packages} pkgs` : '—')}
                       </td>
-                      <td style={{ padding: '9px 12px', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>—</td>
-                      <td style={{ padding: '9px 12px', color: col }}>
+                      <td data-align="left" style={{ padding: '9px 12px', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>—</td>
+                      <td data-align="left" style={{ padding: '9px 12px', color: col }}>
                         {row.vendor_name || '—'}
                         <div style={{ fontSize: 10, color: sub }}>{row.origin_location}</div>
                       </td>
                       <td style={{ padding: '9px 12px', color: sub, fontSize: 11 }}>{fmt(row.eta)}</td>
-                      <td style={{ padding: '9px 12px', color: col, fontSize: 11 }}>{row.destination_name || '—'}</td>
+                      <td data-align="left" style={{ padding: '9px 12px', color: col, fontSize: 11 }}>{row.destination_name || '—'}</td>
                       <td style={{ padding: '9px 12px' }}>
                         <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, background: pill.bg, color: pill.color, fontWeight: 600, whiteSpace: 'nowrap' }}>
                           {pill.label}

@@ -111,3 +111,12 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
+/* ─── DATA-GRID CELL ALIGNMENT ───────────────────────────────
+   Standardised across every register: data cells are centred so the
+   numbers/statuses line up under their (already-centred) headers. Columns
+   whose content reads as prose — description, WBS path, vendor, address —
+   stay left-aligned by tagging the cell with data-align="left". The
+   !important wins over the per-cell inline textAlign the tables set today. */
+table.app-grid td { text-align: center !important; }
+table.app-grid td[data-align="left"] { text-align: left !important; }

@@ -304,7 +304,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
         {/* Table */}
         <div style={{ background: cardBg, border: bd, borderRadius: 8, overflow: 'hidden' }}>
           <div ref={tableRef} style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 420px)' }}>
-            <table style={{ width: colW.reduce((a, b) => a + b, 0), minWidth: '100%', borderCollapse: 'collapse', fontSize: 12, tableLayout: 'fixed' }}>
+            <table className="app-grid" style={{ width: colW.reduce((a, b) => a + b, 0), minWidth: '100%', borderCollapse: 'collapse', fontSize: 12, tableLayout: 'fixed' }}>
               {/* colgroup drives the resizable column widths (table-layout: fixed) */}
               <colgroup>{colW.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
               <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
@@ -344,7 +344,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
                           <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600 }}>{fmr.fmr_ref}</span>
                         </div>
                       </td>
-                      <td style={{ padding: '9px 12px', overflow: 'hidden' }}>
+                      <td data-align="left" style={{ padding: '9px 12px', overflow: 'hidden' }}>
                         {(() => {
                           const multi = (fmr.line_count ?? 1) > 1
                           const open = expandedRows.has(fmr.id)
@@ -368,16 +368,16 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
                         })()}
                         <div style={{ fontSize: 11, color: sub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fmr.description}</div>
                       </td>
-                      <td style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>
+                      <td data-align="left" style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>
                         {(fmr.line_count ?? 1) > 1 ? 'multiple' : (fmr.wbs_code || '—')}
                       </td>
-                      <td style={{ padding: '9px 12px', fontSize: 11, color: col, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      <td data-align="left" style={{ padding: '9px 12px', fontSize: 11, color: col, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {fmr.warehouse_code ? <><span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#2563eb' }}>{fmr.warehouse_code}</span> <span style={{ color: sub }}>· {fmr.warehouse_name}</span></> : '—'}
                       </td>
                       <td style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col }}>
                         {(fmr.line_count ?? 1) > 1 ? `${fmr.line_count} lines` : `${fmr.qty_requested} ${fmr.uom}`}
                       </td>
-                      <td style={{ padding: '9px 12px', color: col, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <td data-align="left" style={{ padding: '9px 12px', color: col, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {fmr.requested_by_name || '—'}
                         {fmr.requested_by_company && <div style={{ fontSize: 10, color: sub, overflow: 'hidden', textOverflow: 'ellipsis' }}>{fmr.requested_by_company}</div>}
                       </td>

@@ -708,7 +708,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                 </div>
               ) : (
                 <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <table className="app-grid" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                     <thead>
                       <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
                         {[
@@ -761,7 +761,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                           <React.Fragment key={item.id}>
                             <tr style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
                               <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{item.item_number}</td>
-                              <td style={{ padding: '8px 10px', color: col, maxWidth: 240 }}>
+                              <td data-align="left" style={{ padding: '8px 10px', color: col, maxWidth: 240 }}>
                                 <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.description}>{item.description}</div>
                               </td>
                               <td style={{ padding: '8px 10px' }}>
@@ -770,7 +770,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                               <td style={{ padding: '8px 10px' }}>
                                 <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 8, background: timingPill.bg, color: timingPill.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{timingPill.label}</span>
                               </td>
-                              <td style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>
+                              <td data-align="left" style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>
                                 {item.line_description ? <span style={{ color: col }}>{item.line_description}</span> : '—'}
                               </td>
                               <td style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{fmtD(item.planned_date)}</td>
@@ -917,7 +917,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                     <div style={{ textAlign: 'center', padding: 40, color: sub }}>Loading documents…</div>
                   ) : (
                     <div style={{ overflowX: 'auto' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <table className="app-grid" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                         <thead>
                           <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
                             {['DOC NO','TITLE','TYPE','REV','REQUIRED','PROMISED','SUBMITTED','STATUS','ABF'].map(h => (
@@ -939,7 +939,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                             return (
                               <tr key={d.id} style={{ borderBottom: `1px solid ${dark?'#1e293b':'#f1f5f9'}`, borderLeft: d.status==='Overdue'?'3px solid #f59e0b':'3px solid transparent' }}>
                                 <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', whiteSpace: 'nowrap' }}>{d.doc_number || '—'}</td>
-                                <td style={{ padding: '8px 10px', color: col, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.title}>{d.title}</td>
+                                <td data-align="left" style={{ padding: '8px 10px', color: col, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.title}>{d.title}</td>
                                 <td style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{d.doc_type || '—'}</td>
                                 <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{d.revision || '—'}</td>
                                 <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: d.required_date&&new Date(d.required_date)<new Date()&&!d.submitted_date?'#ef4444':sub, whiteSpace:'nowrap' }}>{fmtS(d.required_date)}</td>

@@ -152,7 +152,7 @@ function MeetingRFIInner({ dark, projectId, projectName, userRole, userId, onBac
 
       {/* Table */}
       <div style={{ background: cardBg, border: bd, borderRadius: 10, overflow: 'hidden' }}>
-        <table style={{ ...rt.tableStyle, borderCollapse: 'collapse' }}>
+        <table className="app-grid" style={{ ...rt.tableStyle, borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ background: dark ? '#0f172a' : '#f4f7fb', position: 'sticky', top: 0, zIndex: 2 }}>
               <th style={{ ...rt.thStyle(0), ...thStyle }} onClick={() => toggleSort('ref')}>Ref{sortArrow('ref')}{rt.handle(0, dark)}</th>
@@ -174,9 +174,9 @@ function MeetingRFIInner({ dark, projectId, projectName, userRole, userId, onBac
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                 <td style={{ ...td, fontWeight: 600 }}>{r.ref}</td>
                 <td style={td}><TypePill t={r.record_type} /></td>
-                <td style={td}>{r.title}</td>
+                <td data-align="left" style={td}>{r.title}</td>
                 <td style={td}><LinkChip r={r} dark={dark} /></td>
-                <td style={{ ...td, color: r.assigned_to_name ? col : sub }}>{r.assigned_to_name || 'Unassigned'}</td>
+                <td data-align="left" style={{ ...td, color: r.assigned_to_name ? col : sub }}>{r.assigned_to_name || 'Unassigned'}</td>
                 <td style={td}>{r.due_date ? <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: RAG_COLOR[r.rag] }} />{r.due_date}</span> : <span style={{ color: sub }}>—</span>}</td>
                 <td style={td}>{pill(r.status.replace('_', ' '), STATUS_COLOR[r.status] || '#94a3b8')}</td>
                 <td style={{ ...td, color: sub }}>{r.raised_date}</td>

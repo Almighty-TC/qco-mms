@@ -693,7 +693,7 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, userRole = '', on
             <div style={{ textAlign: 'center', color: sub, padding: '48px 0', fontSize: 13 }}>No POs match the filter.</div>
           ) : (
             <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 320px)' }}>
-              <table style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 12 }}>
+              <table className="app-grid" style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead style={{ position: 'sticky', top: 0, zIndex: 20, backgroundColor: dark ? '#162032' : '#f8fafc' }}>
                   <tr style={{ borderBottom: bd }}>
                     {([['★'], ['PO Ref', 'po_number'], ['Vendor / Group', 'vendor'], ['Material'], ['Owner / Expeditor'], ['Milestones'], ['ROS', 'ros_date'], ['Status', 'status'], ['']] as [string, string?][]).map(([h, key], i) => (
@@ -734,16 +734,16 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, userRole = '', on
                           {po.po_name && <div style={{ fontSize: 11, color: sub }}>{po.po_name}</div>}
                         </td>
                         {/* Vendor / Group */}
-                        <td style={{ padding: '10px 12px', maxWidth: 140 }}>
+                        <td data-align="left" style={{ padding: '10px 12px', maxWidth: 140 }}>
                           <div style={{ color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{po.vendor_display || '—'}</div>
                           {po.group_category && <div style={{ fontSize: 10, color: sub, textTransform: 'capitalize' }}>{po.group_category}</div>}
                         </td>
                         {/* Material */}
-                        <td style={{ padding: '10px 12px', maxWidth: 200 }}>
+                        <td data-align="left" style={{ padding: '10px 12px', maxWidth: 200 }}>
                           <div style={{ color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{po.material_description || '—'}</div>
                         </td>
                         {/* Owner / Expeditor — BUG-4 FIX: show "— Unassigned" for missing expeditor */}
-                        <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                        <td data-align="left" style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
                           <div style={{ color: col }}>{po.owner_name || '—'}</div>
                           <div style={{ fontSize: 10, color: po.expeditor_name ? sub : '#c4cedf', fontStyle: po.expeditor_name ? 'normal' : 'italic' }}>
                             {po.expeditor_name || '— Unassigned'}
@@ -830,7 +830,7 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, userRole = '', on
                   </div>
                 ) : (
                   <div style={{background:cardBg,border:bd,borderRadius:10,overflow:'hidden'}}>
-                    <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                    <table className="app-grid" style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
                       <thead>
                         <tr style={{background:dark?'#0f172a':'#f8fafc',borderBottom:bd}}>
                           {['PO REF','PO NAME','VENDOR','PACKAGES','TOTAL DOCS','SUBMITTED','OVERDUE','PROGRESS',''].map(h=>(
@@ -847,8 +847,8 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, userRole = '', on
                               onMouseEnter={e=>{(e.currentTarget as HTMLTableRowElement).style.background=dark?'#162032':'#f0f4ff'}}
                               onMouseLeave={e=>{(e.currentTarget as HTMLTableRowElement).style.background=''}}>
                               <td style={{padding:'10px 12px',fontFamily:'JetBrains Mono, monospace',fontSize:12,fontWeight:700,color:'#2563eb',whiteSpace:'nowrap'}}>{po.po_number}</td>
-                              <td style={{padding:'10px 12px',color:col,maxWidth:160,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{po.po_name||'—'}</td>
-                              <td style={{padding:'10px 12px',color:sub,maxWidth:120,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{po.vendor_name||'—'}</td>
+                              <td data-align="left" style={{padding:'10px 12px',color:col,maxWidth:160,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{po.po_name||'—'}</td>
+                              <td data-align="left" style={{padding:'10px 12px',color:sub,maxWidth:120,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{po.vendor_name||'—'}</td>
                               <td style={{padding:'10px 12px',textAlign:'center'}}>
                                 <span style={{fontSize:10,padding:'2px 8px',borderRadius:9999,background:'rgba(37,99,235,0.1)',color:'#1d4ed8',fontWeight:600}}>{po.package_count} pkg</span>
                               </td>

@@ -312,13 +312,13 @@ export const FoundEquipmentScreen = ({ dark, projectId, projectName, onBack }: {
       onMouseEnter={ev => { ev.currentTarget.style.background = dark ? '#1e2d4a' : '#f4f7fb' }}
       onMouseLeave={ev => { ev.currentTarget.style.background = dark ? '#1e293b' : '#fff' }}>
       <td style={{ padding: '9px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 12, fontWeight: 600, color: '#2563eb', whiteSpace: 'nowrap' }}>{e.tag}</td>
-      <td style={{ padding: '9px 10px', fontSize: 13, color: col, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={e.description}>{e.description}</td>
+      <td data-align="left" style={{ padding: '9px 10px', fontSize: 13, color: col, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={e.description}>{e.description}</td>
       <td style={{ padding: '9px 10px', fontSize: 11, color: '#64748b', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={e.spec ?? ''}>{e.spec ?? '—'}</td>
       <td style={{ padding: '9px 10px', whiteSpace: 'nowrap' }}>
         <span style={{ fontSize: 11, color: CRIT_COLORS[e.criticality] ?? '#64748b', fontWeight: 600 }}>{e.trace_class}</span>
       </td>
-      <td style={{ padding: '9px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#94a3b8', whiteSpace: 'nowrap' }}>{e.wbs_code ?? '—'}</td>
-      <td style={{ padding: '9px 10px', fontSize: 12, color: e.vendor ? '#64748b' : '#94a3b8', whiteSpace: 'nowrap' }}>{e.vendor ?? '—'}</td>
+      <td data-align="left" style={{ padding: '9px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#94a3b8', whiteSpace: 'nowrap' }}>{e.wbs_code ?? '—'}</td>
+      <td data-align="left" style={{ padding: '9px 10px', fontSize: 12, color: e.vendor ? '#64748b' : '#94a3b8', whiteSpace: 'nowrap' }}>{e.vendor ?? '—'}</td>
       <td style={{ padding: '9px 10px' }}><StatusPill status={e.status} /></td>
       <td style={{ padding: '9px 10px', whiteSpace: 'nowrap' }}>
         <button onClick={() => setCertsItem(e)}
@@ -413,7 +413,7 @@ export const FoundEquipmentScreen = ({ dark, projectId, projectName, onBack }: {
           {loading ? (
             <div style={{ padding: '32px', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>Loading…</div>
           ) : (
-            <table style={{ ...rt.tableStyle, borderCollapse: 'collapse' }}>
+            <table className="app-grid" style={{ ...rt.tableStyle, borderCollapse: 'collapse' }}>
               {tableHead}
               <tbody>
                 {effectiveGroupBy === 'none' ? (

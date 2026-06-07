@@ -155,7 +155,7 @@ const MCTransferInner = ({ dark, projectId, projectName, onBack }: {
         {/* Table */}
         <div style={{ background: cardBg, border: bd, borderRadius: 8, overflow: 'hidden' }}>
           <div ref={tableRef} style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 360px)' }}>
-            <table style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 12 }}>
+            <table className="app-grid" style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 12 }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                 <tr style={{ borderBottom: bd }}>
                   {([['REF','transfer_ref'],['ITEM','item_code'],['DESCRIPTION'],['QTY'],['WBS','wbs_code'],['FROM → TO','from_warehouse'],['REQUESTED BY','requested_by'],['EST. PICKUP','est_pickup_date'],['STATUS','status'],['ACTION']] as [string,string?][]).map(([h,key], i) => (
@@ -181,15 +181,15 @@ const MCTransferInner = ({ dark, projectId, projectName, onBack }: {
                     <tr key={tr.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
                       <td style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600 }}>{tr.transfer_ref}</td>
                       <td style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col }}>{tr.item_code || '—'}</td>
-                      <td style={{ padding: '9px 12px', color: col, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tr.description}</td>
+                      <td data-align="left" style={{ padding: '9px 12px', color: col, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tr.description}</td>
                       <td style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col }}>{tr.qty} {tr.uom}</td>
-                      <td style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{tr.wbs_code || '—'}</td>
-                      <td style={{ padding: '9px 12px', fontSize: 11 }}>
+                      <td data-align="left" style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{tr.wbs_code || '—'}</td>
+                      <td data-align="left" style={{ padding: '9px 12px', fontSize: 11 }}>
                         <span style={{ color: col }}>{tr.from_warehouse_name} · {tr.from_location}</span>
                         <span style={{ color: '#E84E0F', margin: '0 6px' }}>→</span>
                         <span style={{ color: col }}>{tr.to_warehouse_name} · {tr.to_location}</span>
                       </td>
-                      <td style={{ padding: '9px 12px', color: col, fontSize: 11 }}>
+                      <td data-align="left" style={{ padding: '9px 12px', color: col, fontSize: 11 }}>
                         {tr.requested_by_name || '—'}
                         {tr.requested_by_company && <div style={{ fontSize: 10, color: sub }}>{tr.requested_by_company}</div>}
                       </td>

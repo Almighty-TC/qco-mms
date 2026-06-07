@@ -271,7 +271,7 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
             </div>
             <div style={{ background: t.cardBg, border: t.bd, borderRadius: 8, overflow: 'hidden' }}>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ ...rtCert.tableStyle, borderCollapse: 'collapse' }}>
+                <table className="app-grid" style={{ ...rtCert.tableStyle, borderCollapse: 'collapse' }}>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: t.theadBg }}>
                     <tr style={{ borderBottom: t.bd }}>
                       {['FILE', 'TYPE', 'ITEM/SCOPE', 'VENDOR/UPLOADER', 'UPLOADED', 'PRIORITY', 'ACTION'].map((h, i) => <th key={h || i} style={{ ...rtCert.thStyle(i), ...thSt }}>{h}{rtCert.handle(i, dark)}</th>)}
@@ -280,10 +280,10 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
                   <tbody>
                     {approvals.map(a => (
                       <tr key={a.cert_id} style={{ borderBottom: t.rowBd }}>
-                        <td style={{ ...tdSt, ...mono, fontSize: 11, color: '#2563eb', fontWeight: 600 }}>{a.file_name}</td>
+                        <td data-align="left" style={{ ...tdSt, ...mono, fontSize: 11, color: '#2563eb', fontWeight: 600 }}>{a.file_name}</td>
                         <td style={tdSt}>{a.cert_type}</td>
-                        <td style={tdSt}>{a.item_scope}{a.applies_to ? <span style={{ color: t.sub }}> · {a.applies_to}</span> : ''}</td>
-                        <td style={tdSt}>{a.vendor_name} <span style={{ color: t.sub }}>/ {a.uploader}</span></td>
+                        <td data-align="left" style={tdSt}>{a.item_scope}{a.applies_to ? <span style={{ color: t.sub }}> · {a.applies_to}</span> : ''}</td>
+                        <td data-align="left" style={tdSt}>{a.vendor_name} <span style={{ color: t.sub }}>/ {a.uploader}</span></td>
                         <td style={{ ...tdSt, ...mono, fontSize: 11, color: t.sub }}>{fmtDate(a.uploaded_date)}</td>
                         <td style={tdSt}>
                           {a.priority === 'high'
@@ -372,7 +372,7 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
             </div>
             <div style={{ background: t.cardBg, border: t.bd, borderRadius: 8, overflow: 'hidden' }}>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <table className="app-grid" style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: t.theadBg }}>
                     <tr style={{ borderBottom: t.bd }}>
                       {([['TAG','tag'],['ITEM','item'],['HOLD REASON','hold_reason'],['LOCATION','location'],['SINCE','since_date'],['AGE','age_days'],['ACTION']] as [string,string?][]).map(([h,key]) => (
@@ -385,9 +385,9 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
                     {holds.map(h => (
                       <tr key={h.hold_id} style={{ borderBottom: t.rowBd }}>
                         <td style={{ ...tdSt, ...mono, fontSize: 11, color: h.tag ? '#2563eb' : t.sub, fontWeight: 600 }}>{h.tag || '—'}</td>
-                        <td style={tdSt}>{h.item}</td>
-                        <td style={{ ...tdSt, color: '#dc2626', fontWeight: 500 }}>{h.hold_reason}</td>
-                        <td style={{ ...tdSt, ...mono, fontSize: 11, color: t.sub }}>{(h as any).location}</td>
+                        <td data-align="left" style={tdSt}>{h.item}</td>
+                        <td data-align="left" style={{ ...tdSt, color: '#dc2626', fontWeight: 500 }}>{h.hold_reason}</td>
+                        <td data-align="left" style={{ ...tdSt, ...mono, fontSize: 11, color: t.sub }}>{(h as any).location}</td>
                         <td style={{ ...tdSt, ...mono, fontSize: 11, color: t.sub }}>{fmtDate((h as any).since_date)}</td>
                         <td style={{ ...tdSt, ...mono, color: '#dc2626', fontWeight: 700 }}>{(h as any).age_days} d</td>
                         <td style={tdSt}>

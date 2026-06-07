@@ -395,7 +395,7 @@ const LineItemsTab = ({ po, dark, onRefresh }: { po: PO; dark: boolean; onRefres
         <ResetColumnsButton onClick={rt.resetWidths} dark={dark} />
       </div>
       <div style={{ overflowX: 'auto' }}>
-        <table style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 13 }}>
+        <table className="app-grid" style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 13 }}>
           <thead style={{ background: dark ? '#0f172a' : '#f4f7fb' }}>
             <tr>
               {['Line#', 'Description', 'Qty', 'UOM', 'Received', 'Remaining', 'Unit Value', 'Total Value', 'WBS', 'CDD', 'ROS', 'Heat No.'].map((h, i) => (
@@ -416,7 +416,7 @@ const LineItemsTab = ({ po, dark, onRefresh }: { po: PO; dark: boolean; onRefres
                     : l.line_number
                   }
                 </td>
-                <td style={{ ...tdStyle, maxWidth: 280 }}>
+                <td data-align="left" style={{ ...tdStyle, maxWidth: 280 }}>
                   {editMode
                     ? <input value={l.description} onChange={e => updateLine(i, 'description', e.target.value)} placeholder="Description" style={{ ...inp(dark), minWidth: 200 }} />
                     : <span title={l.description}>{l.description}</span>
@@ -452,7 +452,7 @@ const LineItemsTab = ({ po, dark, onRefresh }: { po: PO; dark: boolean; onRefres
                 <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 }}>
                   {l.qty != null && l.unit_price != null ? fmtCurrency(l.qty * l.unit_price, po.currency) : '—'}
                 </td>
-                <td style={{ ...tdStyle, fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#64748b' }}>{l.wbs_code ?? '—'}</td>
+                <td data-align="left" style={{ ...tdStyle, fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#64748b' }}>{l.wbs_code ?? '—'}</td>
                 <td style={{ ...tdStyle, fontSize: 12, color: '#64748b', fontFamily: 'JetBrains Mono, monospace' }}>
                   {editMode
                     ? <input type="date" value={l.cdd?.slice(0,10) ?? ''} onChange={e => updateLine(i, 'cdd', e.target.value || null)} style={{ ...inp(dark), width: 130 }} />

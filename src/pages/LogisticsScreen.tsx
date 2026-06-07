@@ -296,7 +296,7 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
         {/* ── TABLE ─────────────────────────────────────────── */}
         <div style={{ background: cardBg, border: bd, borderRadius: 8 }}>
           <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 320px)' }}>
-            <table style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 12 }}>
+            <table className="app-grid" style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 12 }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                 <tr style={{ borderBottom: bd }}>
                   {([['★','40px'],['SCN','110px','scn_ref'],['PO','100px'],['VENDOR','130px','vendor'],['FORWARDER','120px','forwarder'],
@@ -340,9 +340,9 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
                         <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600 }}>{scn.scn_ref}</span>
                       </td>
                       <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{scn.po_ref || '—'}</td>
-                      <td style={{ padding: '8px 10px', color: col, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={scn.vendor_name || ''}>{scn.vendor_name || '—'}</td>
-                      <td style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{scn.forwarder_name || '—'}</td>
-                      <td style={{ padding: '8px 10px', fontSize: 11, color: sub }}>
+                      <td data-align="left" style={{ padding: '8px 10px', color: col, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={scn.vendor_name || ''}>{scn.vendor_name || '—'}</td>
+                      <td data-align="left" style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{scn.forwarder_name || '—'}</td>
+                      <td data-align="left" style={{ padding: '8px 10px', fontSize: 11, color: sub }}>
                         <span style={{ color: col }}>{scn.origin_location || '—'}</span>
                         {scn.destination_name && <><span style={{ margin: '0 4px', color: '#E84E0F' }}>→</span><span>{scn.destination_name}</span></>}
                       </td>

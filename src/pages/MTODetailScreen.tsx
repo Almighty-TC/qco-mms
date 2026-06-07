@@ -452,7 +452,7 @@ const LineItemsTab = ({
       ) : (
         <>
         <div style={{ overflowX: 'auto', border: bd, borderRadius: 8, background: dark ? '#111827' : '#fff' }}>
-          <table style={{ ...rt.tableStyle, borderCollapse: 'collapse' }}>
+          <table className="app-grid" style={{ ...rt.tableStyle, borderCollapse: 'collapse' }}>
             <thead>
               <tr>
                 {([
@@ -488,8 +488,8 @@ const LineItemsTab = ({
                 return (
                   <tr key={l.id}>
                     <td style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, whiteSpace: 'nowrap' }}>{l.line_number}</td>
-                    <td style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{l.wbs_code ?? '—'}</td>
-                    <td style={{ ...tdS, maxWidth: 260 }}>{l.description}</td>
+                    <td data-align="left" style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{l.wbs_code ?? '—'}</td>
+                    <td data-align="left" style={{ ...tdS, maxWidth: 260 }}>{l.description}</td>
                     <td style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', textAlign: 'right' }}>{l.quantity != null ? l.quantity : '—'}</td>
                     <td style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', color: sub }}>{l.uom ?? '—'}</td>
                     <td style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', fontSize: 11, whiteSpace: 'nowrap' }}>{fmtDate(l.ros_date)}</td>

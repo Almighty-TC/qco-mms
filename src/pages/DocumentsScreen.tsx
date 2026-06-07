@@ -150,7 +150,7 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
       <tr key={r.doc_id} onClick={() => !r.is_missing && setPreview(r)}
         style={{ borderBottom: rowBd, cursor: r.is_missing ? 'default' : 'pointer' }}>
         {/* FILE / TYPE */}
-        <td style={{ ...tdSt, maxWidth: 320 }}>
+        <td data-align="left" style={{ ...tdSt, maxWidth: 320 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {r.is_missing && <span title="Missing — action required" style={{ color: '#dc2626' }}>⚠</span>}
             <span style={{ fontWeight: 600 }}>{r.file_label}</span>
@@ -256,7 +256,7 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
         {/* Table */}
         <div style={{ background: cardBg, border: bd, borderRadius: 8, overflow: 'hidden' }}>
           <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 360px)' }}>
-            <table style={{ ...rt.tableStyle, borderCollapse: 'collapse' }}>
+            <table className="app-grid" style={{ ...rt.tableStyle, borderCollapse: 'collapse' }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: theadBg }}>
                 <tr style={{ borderBottom: bd }}>{headerCells.map((h, i) => <th key={h || i} style={{ ...rt.thStyle(i), ...thSt }}>{h}{rt.handle(i, dark)}</th>)}</tr>
               </thead>
