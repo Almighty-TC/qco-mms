@@ -231,7 +231,10 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
             </div>
           ) : (
             <div style={{ background: cardBg, border: bd, borderRadius: 8, overflow: 'hidden' }}>
-              <div style={{ overflowX: 'auto' }}>
+              {/* Inner scroll container with a constrained height — this is what the
+                  sticky <thead> sticks to. Without a bounded scroll area the header
+                  has nothing to stick within and scrolls away with the page. */}
+              <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 340px)' }}>
                 <table className="app-grid" style={{ ...rt.tableStyle, borderCollapse: 'collapse', fontSize: 12 }}>
                   <colgroup>
                     {rt.widths.map((w, i) => <col key={i} style={{ width: w }} />)}
