@@ -113,23 +113,13 @@ code {
 }
 
 /* ─── DATA-GRID CELL ALIGNMENT ───────────────────────────────
-   Standardised across every register: every data cell is LEFT-aligned so the
-   column contents read naturally left-to-right. Only a few short, badge-like
-   columns are centred — status, currency, INCO terms, and the actions column —
-   by tagging those cells with data-align="center". The !important wins over the
-   per-cell inline textAlign the tables set today. (data-align="left" is kept as
-   a harmless explicit opt-in that matches the default.) */
-table.app-grid td { text-align: left !important; }
-table.app-grid td[data-align="left"]   { text-align: left   !important; }
-table.app-grid td[data-align="center"] { text-align: center !important; }
-
-/* ─── LEFT-COLUMN INDENT ──────────────────────────────────────
-   The left-aligned columns are nudged in from the left border so their content
-   "floats" a little into the column rather than hugging the edge — left-aligned,
-   but sitting further across. text-indent is proportional to each column's own
-   width (unlike % padding, which on table cells resolves against the whole table),
-   so every column floats by the same fraction and it follows column resizing.
-   12% (not a literal quarter) is the most we can indent before the tight numeric
-   columns — e.g. Value — start truncating their digits. Centred columns are
-   exempt. */
-table.app-grid td:not([data-align="center"]) { text-indent: 12%; }
+   Standardised across every register: every data cell is LEFT-aligned, and its
+   content is "floated" a little into the column (rather than hugging the left
+   border) via text-indent. text-indent is proportional to each column's own width
+   (unlike % padding, which on table cells resolves against the whole table), so
+   every column floats by the same fraction and it follows column resizing. 12%
+   (not a literal quarter) is the most we can indent before the tight numeric
+   columns — e.g. Value — start truncating their digits. The !important wins over
+   the per-cell inline textAlign the tables set today. (The data-align="…" markers
+   left on some cells are now inert — every column follows the same left rule.) */
+table.app-grid td { text-align: left !important; text-indent: 12%; }

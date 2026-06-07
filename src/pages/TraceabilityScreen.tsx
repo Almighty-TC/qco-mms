@@ -291,7 +291,7 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
                             : <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 6, background: dark ? '#334155' : '#eef2f7', color: t.sub, fontWeight: 600 }}>Normal</span>}
                         </td>
                         <td data-align="center" style={tdSt}>
-                          <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
+                          <div style={{ display: 'flex', gap: 6 }}>
                             <button onClick={() => setReviewCert(a)} style={{ padding: '4px 10px', borderRadius: 5, border: 'none', background: dark ? '#312e5e' : '#ede9fe', color: '#7c3aed', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>👁 Review</button>
                             <button onClick={() => setReviewCert(a)} style={{ padding: '4px 10px', borderRadius: 5, border: 'none', background: 'rgba(34,197,94,0.14)', color: '#16a34a', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>✓ Verify</button>
                             <button onClick={() => setRejectCert(a)} style={{ padding: '4px 10px', borderRadius: 5, border: 'none', background: 'rgba(239,68,68,0.1)', color: '#dc2626', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>Reject</button>
@@ -391,7 +391,7 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
                         <td data-align="center" style={{ ...tdSt, ...mono, fontSize: 11, color: t.sub }}>{fmtDate((h as any).since_date)}</td>
                         <td style={{ ...tdSt, ...mono, color: '#dc2626', fontWeight: 700 }}>{(h as any).age_days} d</td>
                         <td data-align="center" style={tdSt}>
-                          <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
+                          <div style={{ display: 'flex', gap: 6 }}>
                             <button onClick={() => setChaseHold(h)} style={{ padding: '4px 10px', borderRadius: 5, border: t.bd, background: 'none', color: t.col, cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>📎 Chase cert</button>
                             <button onClick={() => { if (h.tag) { setActiveTag(h.tag); setTab('trace') } else { addToast('error', 'No tag linked to this hold') } }}
                               style={{ padding: '4px 10px', borderRadius: 5, border: t.bd, background: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>View</button>

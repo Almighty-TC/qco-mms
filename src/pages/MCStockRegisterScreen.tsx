@@ -289,7 +289,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                           {/* Subcontractors: no Docs/Move/Resolve buttons */}
                           {!isSubcontractor && (
                             <td data-align="center" style={{ padding: '8px 12px' }}>
-                              <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
+                              <div style={{ display: 'flex', gap: 6 }}>
                                 {item.condition_status === 'quarantine' ? (
                                   // Quarantined stock: resolve (release / reject) instead of move.
                                   <button onClick={() => setResolveItem(item)}

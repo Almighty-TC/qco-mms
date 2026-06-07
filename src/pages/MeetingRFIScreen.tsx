@@ -179,7 +179,7 @@ function MeetingRFIInner({ dark, projectId, projectName, userRole, userId, onBac
                 <td data-align="left" style={td}>{r.title}</td>
                 <td style={td}><LinkChip r={r} dark={dark} /></td>
                 <td data-align="left" style={{ ...td, color: r.assigned_to_name ? col : sub }}>{r.assigned_to_name || 'Unassigned'}</td>
-                <td data-align="center" style={td}>{r.due_date ? <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: RAG_COLOR[r.rag] }} />{r.due_date}</span> : <span style={{ color: sub }}>—</span>}</td>
+                <td data-align="center" style={td}>{r.due_date ? <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: RAG_COLOR[r.rag] }} />{r.due_date}</span> : <span style={{ color: sub }}>—</span>}</td>
                 <td data-align="center" style={td}>{pill(r.status.replace('_', ' '), STATUS_COLOR[r.status] || '#94a3b8')}</td>
                 <td data-align="center" style={{ ...td, color: sub }}>{r.raised_date}</td>
               </tr>

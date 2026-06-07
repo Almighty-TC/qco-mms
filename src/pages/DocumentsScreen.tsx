@@ -169,7 +169,7 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
           {r.is_missing ? (
             <button onClick={() => setShowUpload(true)} style={{ padding: '4px 10px', borderRadius: 5, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>↑ Upload</button>
           ) : (
-            <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
+            <div style={{ display: 'flex', gap: 6 }}>
               <button title="Preview" onClick={() => setPreview(r)} style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>👁</button>
               {r.downloadable ? (
                 <button title={`Download ${r.file_name || r.file_label}`} onClick={() => download(r)} style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: '#16a34a', cursor: 'pointer', fontSize: 11 }}>↓ Download</button>

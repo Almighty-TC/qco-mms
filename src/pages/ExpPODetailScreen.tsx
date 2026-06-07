@@ -800,7 +800,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                               </td>
                               <td data-align="center" style={{ padding: '8px 10px', textAlign: 'center' }}>
                                 {canEditITP && (
-                                  <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
+                                  <div style={{ display: 'flex', gap: 4 }}>
                                     <button title="Edit" onClick={() => setItpModal({ mode: 'edit', item })}
                                       style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 14, padding: '2px 4px' }}>✎</button>
                                     <button title="Delete" onClick={() => setItpDelConfirm(item)}
