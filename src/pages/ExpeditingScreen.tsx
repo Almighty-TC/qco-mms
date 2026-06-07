@@ -756,13 +756,13 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, userRole = '', on
                         {/* ROS */}
                         <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{fmt(po.ros_date)}</td>
                         {/* Status — BUG-2 FIX: RAG-based not procurement status */}
-                        <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                        <td data-align="center" style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
                           <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 10, background: ragPill.bg, color: ragPill.color, fontWeight: 600 }}>
                             {ragPill.label}
                           </span>
                         </td>
                         {/* Navigate — opens drawer; PO ref cell navigates to full screen */}
-                        <td style={{ padding: '10px 12px' }}>
+                        <td data-align="center" style={{ padding: '10px 12px' }}>
                           <button
                             onClick={e => { e.stopPropagation(); setDrawerPoId(po.id) }}
                             style={{ fontSize: 11, padding: '4px 10px', borderRadius: 5, border: bd, background: 'transparent', color: col, cursor: 'pointer', whiteSpace: 'nowrap' }}>
@@ -863,7 +863,7 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, userRole = '', on
                                   <span style={{fontSize:10,color:sub,whiteSpace:'nowrap',fontFamily:'JetBrains Mono, monospace'}}>{pct}%</span>
                                 </div>
                               </td>
-                              <td style={{padding:'10px 12px'}}>
+                              <td data-align="center" style={{padding:'10px 12px'}}>
                                 <button
                                   onClick={e=>{e.stopPropagation();setSelectedVdrlPoId(po.id);const pkgs=vdrlPackages||[];const pkg=pkgs.find((p:any)=>p.po_id===po.id)||pkgs[0];if(pkg)setActivePackageId(pkg.id);setVdrlView('package')}}
                                   style={{fontSize:11,padding:'4px 10px',borderRadius:5,border:bd,background:'none',color:'#2563eb',cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'}}>

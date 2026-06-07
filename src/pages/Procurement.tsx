@@ -1269,7 +1269,7 @@ const POTableRow = ({
       </td>
 
       {/* ── CCY (index 4) ─────────────────────────────────────────────────── */}
-      <td style={{ ...tdBase, width: colWidths[4], textAlign: 'center' }}>
+      <td data-align="center" style={{ ...tdBase, width: colWidths[4], textAlign: 'center' }}>
         <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#64748b' }}>{po.currency}</span>
       </td>
 
@@ -1281,7 +1281,7 @@ const POTableRow = ({
       </td>
 
       {/* ── Incoterms (index 6) ───────────────────────────────────────────── */}
-      <td style={{ ...tdBase, width: colWidths[6], textAlign: 'center' }}>
+      <td data-align="center" style={{ ...tdBase, width: colWidths[6], textAlign: 'center' }}>
         <span style={{ fontSize: 11, color: '#64748b', fontFamily: 'JetBrains Mono, monospace' }}>{po.incoterms ?? '—'}</span>
       </td>
 
@@ -1390,12 +1390,12 @@ const POTableRow = ({
       </td>
 
       {/* ── Status (index 12) ─────────────────────────────────────────────── */}
-      <td style={{ ...tdBase, width: colWidths[12] }}>
+      <td data-align="center" style={{ ...tdBase, width: colWidths[12] }}>
         <StatusPill status={po.status} label={po.statusLabel} />
       </td>
 
       {/* ── Actions (index 13) ────────────────────────────────────────────── */}
-      <td onClick={e => e.stopPropagation()} style={{ ...tdBase, width: colWidths[13], textAlign: 'center' }}>
+      <td data-align="center" onClick={e => e.stopPropagation()} style={{ ...tdBase, width: colWidths[13], textAlign: 'center' }}>
         {!po.isLocked && APPROVABLE_STATUSES.has(po.status) ? (
           <button
             onClick={() => onApprove(po)}

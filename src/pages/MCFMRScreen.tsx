@@ -387,10 +387,10 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
                         </span>
                         {overdue && <div style={{ fontSize: 10, color: '#ef4444' }}>overdue</div>}
                       </td>
-                      <td style={{ padding: '9px 12px' }}>
+                      <td data-align="center" style={{ padding: '9px 12px' }}>
                         <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, background: pill.bg, color: pill.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{pill.label}</span>
                       </td>
-                      <td style={{ padding: '9px 12px' }}>
+                      <td data-align="center" style={{ padding: '9px 12px' }}>
                         {fmr.status === 'pending_approval' && view === 'mc' ? (
                           <button onClick={() => setApproveFmr(fmr)}
                             style={{ padding: '4px 12px', borderRadius: 6, border: 'none', background: '#22c55e', color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>

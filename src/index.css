@@ -113,10 +113,12 @@ code {
 }
 
 /* ─── DATA-GRID CELL ALIGNMENT ───────────────────────────────
-   Standardised across every register: data cells are centred so the
-   numbers/statuses line up under their (already-centred) headers. Columns
-   whose content reads as prose — description, WBS path, vendor, address —
-   stay left-aligned by tagging the cell with data-align="left". The
-   !important wins over the per-cell inline textAlign the tables set today. */
-table.app-grid td { text-align: center !important; }
-table.app-grid td[data-align="left"] { text-align: left !important; }
+   Standardised across every register: every data cell is LEFT-aligned so the
+   column contents read naturally left-to-right. Only a few short, badge-like
+   columns are centred — status, currency, INCO terms, and the actions column —
+   by tagging those cells with data-align="center". The !important wins over the
+   per-cell inline textAlign the tables set today. (data-align="left" is kept as
+   a harmless explicit opt-in that matches the default.) */
+table.app-grid td { text-align: left !important; }
+table.app-grid td[data-align="left"]   { text-align: left   !important; }
+table.app-grid td[data-align="center"] { text-align: center !important; }

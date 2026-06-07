@@ -164,12 +164,12 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
         <td style={{ ...tdSt, ...mono, fontSize: 11, color: '#2563eb' }}>{r.source_label}</td>
         <td style={{ ...tdSt, fontSize: 11 }}>{r.uploaded_by || '—'}</td>
         <td style={{ ...tdSt, ...mono, fontSize: 11, color: sub }}>{fmtDate(r.uploaded_at)}</td>
-        <td style={tdSt}><span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 6, background: pill.bg, color: pill.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{r.status}</span></td>
-        <td style={tdSt} onClick={e => e.stopPropagation()}>
+        <td data-align="center" style={tdSt}><span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 6, background: pill.bg, color: pill.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{r.status}</span></td>
+        <td data-align="center" style={tdSt} onClick={e => e.stopPropagation()}>
           {r.is_missing ? (
             <button onClick={() => setShowUpload(true)} style={{ padding: '4px 10px', borderRadius: 5, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>↑ Upload</button>
           ) : (
-            <div style={{ display: 'flex', gap: 6 }}>
+            <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
               <button title="Preview" onClick={() => setPreview(r)} style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>👁</button>
               {r.downloadable ? (
                 <button title={`Download ${r.file_name || r.file_label}`} onClick={() => download(r)} style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: '#16a34a', cursor: 'pointer', fontSize: 11 }}>↓ Download</button>

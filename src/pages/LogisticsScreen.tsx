@@ -353,10 +353,10 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
                       <td style={{ padding: '8px 10px', fontSize: 11, color: etaColour(scn.eta) || col, fontWeight: etaColour(scn.eta) ? 600 : undefined }}>{fmt(scn.eta)}</td>
                       <td style={{ padding: '8px 10px', textAlign: 'center', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{scn.total_packages ?? '—'}</td>
                       <td style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{fmtW(scn.total_weight_kg)}</td>
-                      <td style={{ padding: '8px 10px' }}>
+                      <td data-align="center" style={{ padding: '8px 10px' }}>
                         <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, background: sc.bg, color: sc.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{sc.label}</span>
                       </td>
-                      <td style={{ padding: '8px 10px' }}>
+                      <td data-align="center" style={{ padding: '8px 10px' }}>
                         <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: RAG_COLOR[rag] || '#64748b' }} />
                       </td>
                     </tr>

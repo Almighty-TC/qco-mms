@@ -241,12 +241,12 @@ const MCReceiptingInner = ({ dark, projectId, projectName, onBack }: {
                       </td>
                       <td style={{ padding: '9px 12px', color: sub, fontSize: 11 }}>{fmt(row.eta)}</td>
                       <td data-align="left" style={{ padding: '9px 12px', color: col, fontSize: 11 }}>{row.destination_name || '—'}</td>
-                      <td style={{ padding: '9px 12px' }}>
+                      <td data-align="center" style={{ padding: '9px 12px' }}>
                         <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, background: pill.bg, color: pill.color, fontWeight: 600, whiteSpace: 'nowrap' }}>
                           {pill.label}
                         </span>
                       </td>
-                      <td style={{ padding: '9px 12px' }}>
+                      <td data-align="center" style={{ padding: '9px 12px' }}>
                         {isArrived && (
                           <button onClick={() => setWizardScn(row)}
                             style={{ padding: '5px 12px', borderRadius: 6, border: 'none', background: '#22c55e', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>

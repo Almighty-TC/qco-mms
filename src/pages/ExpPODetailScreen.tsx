@@ -783,7 +783,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                                   </button>
                                 )}
                               </td>
-                              <td style={{ padding: '8px 10px' }}>
+                              <td data-align="center" style={{ padding: '8px 10px' }}>
                                 <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, background: sc.bg, color: sc.color, fontWeight: 600, whiteSpace: 'nowrap' }}>
                                   {item.status.replace(/_/g, ' ')}
                                 </span>
@@ -798,7 +798,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                                   {item.certificate_required ? 'Yes' : 'No'}
                                 </span>
                               </td>
-                              <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                              <td data-align="center" style={{ padding: '8px 10px', textAlign: 'center' }}>
                                 {canEditITP && (
                                   <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
                                     <button title="Edit" onClick={() => setItpModal({ mode: 'edit', item })}
@@ -945,10 +945,10 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                                 <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: d.required_date&&new Date(d.required_date)<new Date()&&!d.submitted_date?'#ef4444':sub, whiteSpace:'nowrap' }}>{fmtS(d.required_date)}</td>
                                 <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, whiteSpace:'nowrap' }}>{fmtS(d.promised_date)}</td>
                                 <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: d.submitted_date?'#22c55e':sub, whiteSpace:'nowrap' }}>{fmtS(d.submitted_date)}</td>
-                                <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                                <td data-align="center" style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
                                   <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 9999, background: pill.bg, color: pill.color, fontWeight: 500 }}>{pill.label}</span>
                                 </td>
-                                <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                                <td data-align="center" style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
                                   {d.abf_required ? <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 9999, background: d.abf_cleared?'rgba(34,197,94,0.1)':'rgba(245,158,11,0.1)', color: d.abf_cleared?'#16a34a':'#d97706' }}>{d.abf_cleared?'AFC':'C1'}</span> : <span style={{ color: sub, fontSize: 10 }}>—</span>}
                                 </td>
                               </tr>

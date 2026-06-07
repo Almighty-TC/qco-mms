@@ -319,8 +319,8 @@ export const FoundEquipmentScreen = ({ dark, projectId, projectName, onBack }: {
       </td>
       <td data-align="left" style={{ padding: '9px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#94a3b8', whiteSpace: 'nowrap' }}>{e.wbs_code ?? '—'}</td>
       <td data-align="left" style={{ padding: '9px 10px', fontSize: 12, color: e.vendor ? '#64748b' : '#94a3b8', whiteSpace: 'nowrap' }}>{e.vendor ?? '—'}</td>
-      <td style={{ padding: '9px 10px' }}><StatusPill status={e.status} /></td>
-      <td style={{ padding: '9px 10px', whiteSpace: 'nowrap' }}>
+      <td data-align="center" style={{ padding: '9px 10px' }}><StatusPill status={e.status} /></td>
+      <td data-align="center" style={{ padding: '9px 10px', whiteSpace: 'nowrap' }}>
         <button onClick={() => setCertsItem(e)}
           style={{ background: 'none', border: 'none', cursor: 'pointer', color: e.cert_count > 0 ? '#2563eb' : '#94a3b8', fontSize: 12, padding: '2px 6px', marginRight: 4, fontFamily: 'inherit' }}
           title={`${e.cert_count} certificate${e.cert_count !== 1 ? 's' : ''}`}>

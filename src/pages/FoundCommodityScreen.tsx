@@ -287,8 +287,8 @@ export const FoundCommodityScreen = ({ dark, projectId, projectName, onBack }: {
       </td>
       <td style={{ padding: '9px 10px', fontSize: 12, color: c.preservation === 'None' ? '#94a3b8' : col, whiteSpace: 'nowrap' }}>{c.preservation}</td>
       <td data-align="left" style={{ padding: '9px 10px', fontSize: 12, color: '#64748b', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.preferred_vendor ?? '—'}</td>
-      <td style={{ padding: '9px 10px' }}><StatusPill status={c.status} /></td>
-      <td style={{ padding: '9px 10px', whiteSpace: 'nowrap' }}>
+      <td data-align="center" style={{ padding: '9px 10px' }}><StatusPill status={c.status} /></td>
+      <td data-align="center" style={{ padding: '9px 10px', whiteSpace: 'nowrap' }}>
         <button onClick={() => setCertsItem(c)}
           style={{ background: 'none', border: 'none', cursor: 'pointer', color: c.cert_count > 0 ? '#2563eb' : '#94a3b8', fontSize: 12, padding: '2px 6px', marginRight: 4, fontFamily: 'inherit' }}
           title={`${c.cert_count} certificate${c.cert_count !== 1 ? 's' : ''}`}>

@@ -881,8 +881,8 @@ const MTOListInner = ({
                       <td style={{ ...tdStyle, fontFamily: 'JetBrains Mono, monospace' }}>{m.line_count}</td>
                       <td style={{ ...tdStyle, fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }}>{fmtDate(m.updated_at)}</td>
                       <td style={tdStyle}>{m.owner ?? '—'}</td>
-                      <td style={tdStyle}><StatusPill s={m.status} /></td>
-                      <td style={{ ...tdStyle, textAlign: 'center' }}>
+                      <td data-align="center" style={tdStyle}><StatusPill s={m.status} /></td>
+                      <td data-align="center" style={{ ...tdStyle, textAlign: 'center' }}>
                         {!superseded && (
                           <button
                             onClick={() => onViewMTO(m.id)}

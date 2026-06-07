@@ -494,9 +494,9 @@ const LineItemsTab = ({
                     <td style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', color: sub }}>{l.uom ?? '—'}</td>
                     <td style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', fontSize: 11, whiteSpace: 'nowrap' }}>{fmtDate(l.ros_date)}</td>
                     <td style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{l.po_ref ?? '—'}</td>
-                    <td style={tdS}><LinePill s={l.status} /></td>
+                    <td data-align="center" style={tdS}><LinePill s={l.status} /></td>
                     {/* Edit */}
-                    <td style={{ ...tdS, textAlign: 'center' }}>
+                    <td data-align="center" style={{ ...tdS, textAlign: 'center' }}>
                       <button onClick={() => setEditTarget(l)} style={{
                         background: 'transparent', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`,
                         color: sub, padding: '3px 10px', borderRadius: 5, cursor: 'pointer', fontSize: 11,
@@ -504,7 +504,7 @@ const LineItemsTab = ({
                       }}>Edit</button>
                     </td>
                     {/* Lock indicator */}
-                    <td style={{ ...tdS, textAlign: 'center' }}>
+                    <td data-align="center" style={{ ...tdS, textAlign: 'center' }}>
                       {locked && <span title="PO Raised — locked" style={{ fontSize: 13 }}>🔒</span>}
                     </td>
                   </tr>

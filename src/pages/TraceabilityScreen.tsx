@@ -235,12 +235,12 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
                             {r.document_name}
                             {!!r.is_required && <span style={{ marginLeft: 7, fontSize: 9, padding: '1px 5px', borderRadius: 5, background: dark ? '#334155' : '#eef2f7', color: t.sub, fontWeight: 700, letterSpacing: '0.03em' }}>REQ</span>}
                           </td>
-                          <td style={tdSt}><span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 6, background: pill.bg, color: pill.color, fontWeight: 600 }}>{pill.label}</span></td>
+                          <td data-align="center" style={tdSt}><span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 6, background: pill.bg, color: pill.color, fontWeight: 600 }}>{pill.label}</span></td>
                           <td style={{ ...tdSt, ...mono, fontSize: 11, color: t.sub }}>{fmtDate(r.due_date)}</td>
                           <td style={{ ...tdSt, ...mono, fontSize: 11, color: received ? (late ? '#d97706' : '#16a34a') : t.sub }}>
                             {received ? <>{fmtDate(r.received_date)}{late && <span> · late</span>}</> : '—'}
                           </td>
-                          <td style={tdSt}>
+                          <td data-align="center" style={tdSt}>
                             {received ? (
                               <button onClick={() => setDetailCertId(r.cert_id)} style={{ padding: '4px 12px', borderRadius: 5, border: t.bd, background: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>View</button>
                             ) : (
@@ -285,13 +285,13 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
                         <td data-align="left" style={tdSt}>{a.item_scope}{a.applies_to ? <span style={{ color: t.sub }}> · {a.applies_to}</span> : ''}</td>
                         <td data-align="left" style={tdSt}>{a.vendor_name} <span style={{ color: t.sub }}>/ {a.uploader}</span></td>
                         <td style={{ ...tdSt, ...mono, fontSize: 11, color: t.sub }}>{fmtDate(a.uploaded_date)}</td>
-                        <td style={tdSt}>
+                        <td data-align="center" style={tdSt}>
                           {a.priority === 'high'
                             ? <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 6, background: 'rgba(239,68,68,0.12)', color: '#dc2626', fontWeight: 700 }}>HIGH</span>
                             : <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 6, background: dark ? '#334155' : '#eef2f7', color: t.sub, fontWeight: 600 }}>Normal</span>}
                         </td>
-                        <td style={tdSt}>
-                          <div style={{ display: 'flex', gap: 6 }}>
+                        <td data-align="center" style={tdSt}>
+                          <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
                             <button onClick={() => setReviewCert(a)} style={{ padding: '4px 10px', borderRadius: 5, border: 'none', background: dark ? '#312e5e' : '#ede9fe', color: '#7c3aed', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>👁 Review</button>
                             <button onClick={() => setReviewCert(a)} style={{ padding: '4px 10px', borderRadius: 5, border: 'none', background: 'rgba(34,197,94,0.14)', color: '#16a34a', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>✓ Verify</button>
                             <button onClick={() => setRejectCert(a)} style={{ padding: '4px 10px', borderRadius: 5, border: 'none', background: 'rgba(239,68,68,0.1)', color: '#dc2626', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>Reject</button>
@@ -390,8 +390,8 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
                         <td data-align="left" style={{ ...tdSt, ...mono, fontSize: 11, color: t.sub }}>{(h as any).location}</td>
                         <td style={{ ...tdSt, ...mono, fontSize: 11, color: t.sub }}>{fmtDate((h as any).since_date)}</td>
                         <td style={{ ...tdSt, ...mono, color: '#dc2626', fontWeight: 700 }}>{(h as any).age_days} d</td>
-                        <td style={tdSt}>
-                          <div style={{ display: 'flex', gap: 6 }}>
+                        <td data-align="center" style={tdSt}>
+                          <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
                             <button onClick={() => setChaseHold(h)} style={{ padding: '4px 10px', borderRadius: 5, border: t.bd, background: 'none', color: t.col, cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>📎 Chase cert</button>
                             <button onClick={() => { if (h.tag) { setActiveTag(h.tag); setTab('trace') } else { addToast('error', 'No tag linked to this hold') } }}
                               style={{ padding: '4px 10px', borderRadius: 5, border: t.bd, background: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>View</button>
