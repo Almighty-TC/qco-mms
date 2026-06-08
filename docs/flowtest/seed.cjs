@@ -385,6 +385,9 @@ async function main() {
       mtoLineMeta.push({ com, wbs: com.wbs })
     }
     const mtoLineIds = await batchInsert(conn, 'mto_lines', ['mto_id', 'revision', 'line_number', 'wbs_code', 'description', 'quantity', 'uom', 'ros_date', 'inspection_class', 'vdrl_required', 'status'], mtoLineRows)
+    // Stamp each register's line_count = its current-revision live line count. The MTO
+    // detail header reads mto_registers.line_count, so without this it shows "0 lines".
+    await conn.query("UPDATE mto_registers r SET r.line_count=(SELECT COUNT(*) FROM mto_lines l WHERE l.mto_id=r.id AND l.revision=r.current_revision AND l.is_deleted=0) WHERE r.project_id=?", [pid])
 
     // ── PURCHASE ORDERS + LINES (chain-first: each PO line derives from an MTO line) ──
     const GC = ['mechanical', 'electrical', 'instrumentation', 'civil', 'piping', 'structural']
