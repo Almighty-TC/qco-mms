@@ -10,6 +10,7 @@ export type AdminCol = {
   minWidth?: number   // minimum px width during drag
   noResize?: boolean  // suppress drag handle
   flex?: boolean      // fills remaining table width; no explicit width on th until dragged
+  align?: 'left' | 'center'  // explicit body-content centring (beyond auto-detected Status/Date/Action cols)
 }
 
 // ─── CONTEXT: ROW ───────────────────────────────────────────────
@@ -121,7 +122,7 @@ export function AdminTable({ tableId, columns, dark, children, empty, headerAlig
       const l = c.label.trim()
       const isActions = /^actions?$/i.test(l) || (l === '' && !!c.noResize)  // the fixed actions column
       const isMatch = /^(status|state)$/i.test(l) || /(date|login|raised|created|updated|expiry|due|contract)/i.test(c.label)
-      return (isActions || isMatch) ? i + 1 : 0
+      return (isActions || isMatch || c.align === 'center') ? i + 1 : 0
     })
     .filter(Boolean)
   const bodyAlignCss = centerCols.length

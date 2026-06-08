@@ -2333,12 +2333,12 @@ const P_COLS: AdminCol[] = [
   { label: 'Code',   width: 100, minWidth: 80  },
   { label: 'Name',   width: 200, minWidth: 120, flex: true },
   { label: 'Client', width: 130, minWidth: 100 },
-  { label: 'Phase',  width: 100, minWidth: 80  },
+  { label: 'Phase',  width: 100, minWidth: 80, align: 'center' },
   { label: 'POs',    width: 60,  minWidth: 50  },
   { label: 'Risk',   width: 60,  minWidth: 50  },
   { label: 'Breach', width: 60,  minWidth: 50  },
-  { label: 'Start',  width: 110, minWidth: 80  },
-  { label: 'End',    width: 110, minWidth: 80  },
+  { label: 'Start',  width: 110, minWidth: 80, align: 'center' },
+  { label: 'End',    width: 110, minWidth: 80, align: 'center' },
   { label: '',       width: 90,  minWidth: 90,  noResize: true },
 ]
 
@@ -3417,7 +3417,7 @@ interface Currency { id: number; code: string; name: string; symbol: string; is_
 const CURR_COLS: AdminCol[] = [
   { label: 'Code',   width: 90,  minWidth: 70 },
   { label: 'Name',   width: 220, minWidth: 150 },
-  { label: 'Symbol', width: 70,  minWidth: 60 },
+  { label: 'Symbol', width: 70,  minWidth: 60, align: 'center' },
   { label: 'Status', width: 110, minWidth: 90 },
   { label: 'Actions',width: 180, minWidth: 150, noResize: true },
 ]
@@ -3676,11 +3676,11 @@ function PackageTypesTab({ dark }: { dark: boolean }) {
             </AdminCell>
             <AdminCell col={PT_COLS[3]}>
               <AdminActions>
-                <button onClick={() => openEdit(p)} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 5, border: bd, background: 'none', color: '#64748b', cursor: 'pointer', fontFamily: 'inherit' }}>Edit</button>
-                <button onClick={() => toggleActive(p)} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 5, border: bd, background: 'none', color: p.is_active ? '#b45309' : '#15803d', cursor: 'pointer', fontFamily: 'inherit' }}>
-                  {p.is_active ? 'Deactivate' : 'Activate'}
-                </button>
-                <button onClick={() => { setDelTarget(p); setDelErr('') }} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.3)', background: 'none', color: '#ef4444', cursor: 'pointer', fontFamily: 'inherit' }}>Delete</button>
+                <ActionMenu dark={dark} actions={[
+                  { label: 'Edit', icon: '✏', onClick: () => openEdit(p) },
+                  { label: p.is_active ? 'Deactivate' : 'Activate', icon: p.is_active ? '⊙' : '↺', variant: p.is_active ? 'warning' : undefined, onClick: () => toggleActive(p) },
+                  { label: 'Delete', icon: '🗑', variant: 'danger', onClick: () => { setDelTarget(p); setDelErr('') } },
+                ] satisfies ActionItem[]} />
               </AdminActions>
             </AdminCell>
           </AdminRow>
