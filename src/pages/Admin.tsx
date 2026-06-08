@@ -681,7 +681,7 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
       {error && <Err msg={error} />}
 
       {/* ─── TABLE ──────────────────────────────────────── */}
-      <AdminTable tableId="admin_users" columns={U_COLS} dark={dark} empty="No users found.">
+      <AdminTable tableId="admin_users" columns={U_COLS} dark={dark} headerAlign="center" empty="No users found.">
         {filteredRows.map(u => (
           <AdminRow key={u.id} dark={dark}>
             {/* ─── NAME — left stripe encodes user type ───────

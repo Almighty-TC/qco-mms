@@ -72,9 +72,10 @@ type AdminTableProps = {
   dark: boolean
   children: React.ReactNode
   empty?: string
+  headerAlign?: 'left' | 'center'  // opt-in centred headers (default left)
 }
 
-export function AdminTable({ tableId, columns, dark, children, empty }: AdminTableProps) {
+export function AdminTable({ tableId, columns, dark, children, empty, headerAlign = 'left' }: AdminTableProps) {
   const defaultWidths = columns.map(c => c.width)
   const minWidths     = columns.map(c => c.minWidth ?? 40)
   const { widths, onMouseDown, resetWidths } = useColumnResize(tableId, defaultWidths, minWidths)
@@ -180,7 +181,7 @@ export function AdminTable({ tableId, columns, dark, children, empty }: AdminTab
                   letterSpacing: '0.06em',
                   textTransform: 'uppercase',
                   fontFamily: 'IBM Plex Sans, sans-serif',
-                  textAlign: 'left',
+                  textAlign: headerAlign,
                   position: 'relative',
                   overflow: 'hidden',
                   whiteSpace: 'nowrap',
