@@ -346,17 +346,17 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
                         <span style={{ color: col }}>{scn.origin_location || '—'}</span>
                         {scn.destination_name && <><span style={{ margin: '0 4px', color: '#E84E0F' }}>→</span><span>{scn.destination_name}</span></>}
                       </td>
-                      <td style={{ padding: '8px 10px', fontSize: 12 }}>
+                      <td data-col="lmid22" style={{ padding: '8px 10px', fontSize: 12 }}>
                         {scn.mode ? <span title={scn.mode}>{MODE_ICON[scn.mode] || '?'} <span style={{ color: sub, fontSize: 10, textTransform: 'capitalize' }}>{scn.mode}</span></span> : '—'}
                       </td>
-                      <td data-align="center" style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{fmt(scn.etd)}</td>
-                      <td data-align="center" style={{ padding: '8px 10px', fontSize: 11, color: etaColour(scn.eta) || col, fontWeight: etaColour(scn.eta) ? 600 : undefined }}>{fmt(scn.eta)}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'center', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{scn.total_packages ?? '—'}</td>
-                      <td style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{fmtW(scn.total_weight_kg)}</td>
+                      <td data-col="lmid22" style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{fmt(scn.etd)}</td>
+                      <td data-col="lmid22" style={{ padding: '8px 10px', fontSize: 11, color: etaColour(scn.eta) || col, fontWeight: etaColour(scn.eta) ? 600 : undefined }}>{fmt(scn.eta)}</td>
+                      <td data-col="lmid22" style={{ padding: '8px 10px', textAlign: 'center', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{scn.total_packages ?? '—'}</td>
+                      <td data-col="lmid22" style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{fmtW(scn.total_weight_kg)}</td>
                       <td data-align="center" data-col="status" style={{ padding: '8px 10px' }}>
                         <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, background: sc.bg, color: sc.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{sc.label}</span>
                       </td>
-                      <td data-align="center" style={{ padding: '8px 10px' }}>
+                      <td data-col="ctr" style={{ padding: '8px 10px' }}>
                         <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: RAG_COLOR[rag] || '#64748b' }} />
                       </td>
                     </tr>
