@@ -1910,7 +1910,7 @@ const S_COLS: AdminCol[] = [
   { label: 'Contact',   width: 150, minWidth: 100 },
   { label: 'Email',     width: 190, minWidth: 130 },
   { label: 'Phone',     width: 130, minWidth: 90  },
-  { label: 'Addresses', width: 130, minWidth: 80  },
+  { label: 'Addresses', width: 230, minWidth: 120 },
   { label: 'Status',    width: 90,  minWidth: 70  },
   { label: '',          width: 90,  minWidth: 90,  noResize: true },
 ]
@@ -1936,6 +1936,18 @@ function SuppliersTab({ dark }: { dark: boolean }) {
   const [deactivateTarget, setDeactivateTarget] = useState<{ id: number; name: string } | null>(null)
   const [deactivateSaving, setDeactivateSaving] = useState(false)
   const [deactivateErr,    setDeactivateErr]    = useState('')
+  // ─── ADDRESS LIST POPUP ─────────────────────────────────────
+  // Shown when a supplier with >1 address is clicked — fetches the full list.
+  const [addrModal, setAddrModal] = useState<{ name: string; loading: boolean; addresses: SupplierAddress[] } | null>(null)
+  const openAddrModal = async (s: Supplier) => {
+    setAddrModal({ name: s.name, loading: true, addresses: [] })
+    try {
+      const { data } = await axios.get(`${API}/suppliers/${s.id}`)
+      setAddrModal({ name: s.name, loading: false, addresses: data.addresses ?? [] })
+    } catch {
+      setAddrModal({ name: s.name, loading: false, addresses: [] })
+    }
+  }
 
   const load = useCallback(async () => {
     setError('')
@@ -2111,12 +2123,19 @@ function SuppliersTab({ dark }: { dark: boolean }) {
             <AdminCell muted mono>{s.phone || '—'}</AdminCell>
             {/* ─── ADDRESSES BADGE ────────────────────────── */}
             <AdminCell>
-              {(s.addressCount ?? 0) > 0 ? (
-                <span title={s.primaryAddressText || undefined} style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 9999, background: 'rgba(37,99,235,0.08)', color: '#2563eb', cursor: s.primaryAddressText ? 'help' : 'default', whiteSpace: 'nowrap' }}>
-                  {s.addressCount} address{(s.addressCount ?? 0) !== 1 ? 'es' : ''}
+              {(s.addressCount ?? 0) === 0 ? (
+                <span style={{ fontSize: 12, color: '#94a3b8' }}>—</span>
+              ) : s.addressCount === 1 ? (
+                // Single address — show it inline (truncates with full text on hover).
+                <span title={s.primaryAddressText || undefined} style={{ fontSize: 12, color: dark ? '#cbd5e1' : '#475569' }}>
+                  {s.primaryAddressText || '1 address'}
                 </span>
               ) : (
-                <span style={{ fontSize: 12, color: '#94a3b8' }}>—</span>
+                // Multiple — clickable count chip that pops up the full list.
+                <span onClick={() => openAddrModal(s)} title="View all addresses"
+                  style={{ fontSize: 11, fontWeight: 600, padding: '2px 10px', borderRadius: 9999, background: 'rgba(37,99,235,0.1)', color: '#2563eb', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                  {s.addressCount} addresses
+                </span>
               )}
             </AdminCell>
             <AdminCell>
@@ -2133,6 +2152,40 @@ function SuppliersTab({ dark }: { dark: boolean }) {
           </AdminRow>
         ))}
       </AdminTable>
+
+      {/* ─── ADDRESS LIST POPUP ─────────────────────────────── */}
+      {addrModal && createPortal(
+        <div onClick={() => setAddrModal(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 520, maxWidth: '92vw', maxHeight: '80vh', overflowY: 'auto', background: dark ? '#1e293b' : '#fff', borderRadius: 12, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, boxShadow: '0 20px 60px rgba(0,0,0,0.4)', padding: 22 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: dark ? '#f1f5f9' : '#0f172a' }}>{addrModal.name} — Addresses</div>
+              <button onClick={() => setAddrModal(null)} style={{ background: 'none', border: 'none', fontSize: 20, color: '#94a3b8', cursor: 'pointer' }}>×</button>
+            </div>
+            {addrModal.loading ? (
+              <div style={{ fontSize: 13, color: '#94a3b8', padding: '24px 0', textAlign: 'center' }}>Loading…</div>
+            ) : addrModal.addresses.length === 0 ? (
+              <div style={{ fontSize: 13, color: '#94a3b8', padding: '24px 0', textAlign: 'center' }}>No addresses on file.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {addrModal.addresses.map((a, i) => (
+                  <div key={a.id ?? i} style={{ border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: 8, padding: '10px 12px', background: dark ? '#0f172a' : '#f8fafc' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: dark ? '#f1f5f9' : '#0f172a' }}>{a.label || 'Address'}</span>
+                      {a.is_primary && <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: 'rgba(37,99,235,0.12)', color: '#2563eb' }}>PRIMARY</span>}
+                      {a.is_pickup && <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: 'rgba(34,197,94,0.12)', color: '#16a34a' }}>PICKUP</span>}
+                    </div>
+                    <div style={{ fontSize: 12.5, color: dark ? '#cbd5e1' : '#475569', lineHeight: 1.5 }}>
+                      {[a.address_line1, a.address_line2, [a.city, a.state, a.postcode].filter(Boolean).join(' '), a.country].filter(Boolean).join(', ') || '—'}
+                    </div>
+                    {a.notes && <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 3, fontStyle: 'italic' }}>{a.notes}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>,
+        document.body
+      )}
 
       {/* ─── DEACTIVATE / DELETE MODALS ─────────────────────── */}
       {deactivateTarget && (
