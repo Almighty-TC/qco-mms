@@ -168,7 +168,7 @@ router.get('/:projectId/:id', requirePermission('rfi_meeting', 'can_view'), asyn
 })
 
 // ─── CREATE (auto-gen ref RFI-0001 / MTG-0001 per project+type) ──
-router.post('/:projectId', async (req, res) => {
+router.post('/:projectId', requirePermission('rfi_meeting', 'can_create'), async (req, res) => {
   try {
     const pid = Number(req.params.projectId); const uid = req.user.id
     const { record_type, title, description, priority, due_date, assigned_to } = req.body

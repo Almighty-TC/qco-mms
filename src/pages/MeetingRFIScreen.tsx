@@ -135,6 +135,7 @@ function MeetingRFIInner({ dark, projectId, projectName, userRole, userId, onBac
     fontWeight: 700, color: sub, letterSpacing: '0.08em', textTransform: 'uppercase' as const, whiteSpace: 'nowrap' as const, cursor: 'pointer' as const }
   const td = { padding: '9px 10px', borderBottom: bd, fontSize: 13, color: col, verticalAlign: 'middle' as const }
   const inp = { height: 32, padding: '0 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 12, fontFamily: 'inherit', outline: 'none' }
+  const canCreate = CAN_CREATE_ROLES.has(userRole)
 
   return (
     <div style={{ paddingTop: 20, fontFamily: 'IBM Plex Sans, sans-serif' }}>
@@ -160,8 +161,10 @@ function MeetingRFIInner({ dark, projectId, projectName, userRole, userId, onBac
             ))}
           </div>
           <HelpButton screenName="Meetings & RFIs" sections={RFI_MEETING_HELP} dark={dark} />
-          <button onClick={() => openCreate('rfi')} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>+ New RFI</button>
-          <button onClick={() => openCreate('meeting')} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#7c3aed', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>+ New Meeting</button>
+          {canCreate && <>
+            <button onClick={() => openCreate('rfi')} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>+ New RFI</button>
+            <button onClick={() => openCreate('meeting')} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#7c3aed', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>+ New Meeting</button>
+          </>}
         </div>
       </div>
 
@@ -291,6 +294,10 @@ const CLOSING = new Set(['closed'])
 // approve-capable roles (mirror the C1 matrix); external = respond-only, row-restricted.
 const CLOSE_ROLES = new Set(['admin', 'project_manager', 'project_director', 'engineering_lead', 'project_controls_manager', 'procurement_manager', 'expediting_manager', 'logistics_manager'])
 const EXTERNAL_ROLES = new Set(['vendor', 'subcontractor', 'site_contractor', 'freight_forwarder'])
+// Roles allowed to raise new RFIs / meetings — mirrors role_permissions.can_create
+// for the rfi_meeting module (backend enforces it via requirePermission). Read-only
+// roles (viewer, auditor, ceo, director) and external roles are excluded.
+const CAN_CREATE_ROLES = new Set(['admin', 'project_manager', 'project_director', 'project_controls_manager', 'project_control', 'engineering_lead', 'materials_engineer', 'procurement_manager', 'procurement_officer', 'expediting_manager', 'expeditor', 'logistics_manager', 'warehouse'])
 const ACTION_LABEL: Record<string, string> = { open: 'Raise', assigned: 'Assign…', answered: 'Respond…', closed: 'Close', cancelled: 'Cancel', held: 'Mark held', actions_open: 'Open actions' }
 
 // ─── RECORD DRAWER ────────────────────────────────────────────
