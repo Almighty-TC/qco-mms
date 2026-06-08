@@ -346,7 +346,7 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
                       </td>
                       <td data-col="ctr" style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{scn.po_ref || '—'}</td>
                       <td data-align="left" style={{ padding: '8px 10px', color: col, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={scn.vendor_name || ''}>{scn.vendor_name || '—'}</td>
-                      <td data-align="left" style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{scn.forwarder_name || '—'}</td>
+                      <td data-col="lmid27" style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{scn.forwarder_name || '—'}</td>
                       <td data-align="left" style={{ padding: '8px 10px', fontSize: 11, color: sub }}>
                         <span style={{ color: col }}>{scn.origin_location || '—'}</span>
                         {scn.destination_name && <><span style={{ margin: '0 4px', color: '#E84E0F' }}>→</span><span>{scn.destination_name}</span></>}
@@ -354,9 +354,9 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
                       <td data-col="lmid22" style={{ padding: '8px 10px', fontSize: 12 }}>
                         {scn.mode ? <span title={scn.mode}>{MODE_ICON[scn.mode] || '?'} <span style={{ color: sub, fontSize: 10, textTransform: 'capitalize' }}>{scn.mode}</span></span> : '—'}
                       </td>
-                      <td data-col="lmid22" style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{fmt(scn.etd)}</td>
-                      <td data-col="lmid22" style={{ padding: '8px 10px', fontSize: 11, color: etaColour(scn.eta) || col, fontWeight: etaColour(scn.eta) ? 600 : undefined }}>{fmt(scn.eta)}</td>
-                      <td data-col="lmid22" style={{ padding: '8px 10px', textAlign: 'center', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{scn.total_packages ?? '—'}</td>
+                      <td data-col="ctr" style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{fmt(scn.etd)}</td>
+                      <td data-col="ctr" style={{ padding: '8px 10px', fontSize: 11, color: etaColour(scn.eta) || col, fontWeight: etaColour(scn.eta) ? 600 : undefined }}>{fmt(scn.eta)}</td>
+                      <td data-col="ctr" style={{ padding: '8px 10px', textAlign: 'center', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{scn.total_packages ?? '—'}</td>
                       <td data-col="lmid22" style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{fmtW(scn.total_weight_kg)}</td>
                       <td data-align="center" data-col="status" style={{ padding: '8px 10px' }}>
                         <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, background: sc.bg, color: sc.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{sc.label}</span>

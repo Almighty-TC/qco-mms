@@ -145,4 +145,5 @@ table.app-grid td[data-col="ctr"] { text-align: center !important; text-indent: 
 table.app-grid td[data-col="lmid"]   { text-align: left !important; text-indent: 38%; }  /* Owner */
 table.app-grid td[data-col="lmid40"] { text-align: left !important; text-indent: 40%; }  /* Lines */
 table.app-grid td[data-col="lmid33"] { text-align: left !important; text-indent: 33%; }  /* Last Updated */
-table.app-grid td[data-col="lmid22"] { text-align: left !important; text-indent: 22%; }  /* Logistics: Mode/ETD/ETA/Pkgs/Weight (12% + 10%) */
+table.app-grid td[data-col="lmid22"] { text-align: left !important; text-indent: 22%; }  /* Logistics: Mode/Weight (12% + 10%) */
+table.app-grid td[data-col="lmid27"] { text-align: left !important; text-indent: 27%; }  /* Logistics: Forwarder (12% + 15%) */
