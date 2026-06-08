@@ -139,3 +139,7 @@ table.app-grid td[data-col="status"] > span {
    Used for a few specific columns (e.g. the MTO register's Latest Rev / Last
    Updated / Owner) that read better centred without changing the global rule. */
 table.app-grid td[data-col="ctr"] { text-align: center !important; text-indent: 0 !important; }
+
+/* Left-aligned but floated further in (content starts near the middle) — opt-in
+   via data-col="lmid". Used for the MTO register's Lines count. */
+table.app-grid td[data-col="lmid"] { text-align: left !important; text-indent: 42%; }
