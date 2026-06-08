@@ -82,6 +82,11 @@ const STATUS_BAR_COLOR: Record<string, string> = {
 }
 const RAG_COLOR: Record<string, string> = { red: '#ef4444', amber: '#f59e0b', green: '#22c55e' }
 const MODE_ICON: Record<string, string> = { sea: '🚢', air: '✈', road: '🚛', rail: '🚂', courier: '📦' }
+// Full-text expansions shown on hover over the abbreviated column headers.
+const HEAD_TITLE: Record<string, string> = {
+  SCN: 'Shipment Control Note', PO: 'Purchase Order', ETD: 'Estimated Time of Departure',
+  ETA: 'Estimated Time of Arrival', PKGS: 'Packages', RAG: 'Red / Amber / Green status',
+}
 
 const NEXT_VALID: Record<string, string[]> = {
   pending_pickup: ['in_transit'],
@@ -302,7 +307,7 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
                   {([['★','40px'],['SCN','110px','scn_ref'],['PO','100px'],['VENDOR','130px','vendor'],['FORWARDER','120px','forwarder'],
                     ['ROUTE','160px','origin'],['MODE','90px','mode'],['ETD','100px','etd'],['ETA','100px','eta'],
                     ['PKGS','60px'],['WEIGHT','90px'],['STATUS','130px','status'],['RAG','50px']] as [string,string,string?][]).map(([h,w,key], i) => (
-                    <th key={h} onClick={key ? () => toggleSort(key) : undefined}
+                    <th key={h} onClick={key ? () => toggleSort(key) : undefined} title={HEAD_TITLE[h] || undefined}
                       style={{ ...rt.thStyle(i), padding: '8px 10px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap', cursor: key ? 'pointer' : 'default', userSelect: 'none' }}>
                       {h}{key ? sortArrow(key) : ''}
                       {rt.handle(i, dark)}
@@ -333,13 +338,13 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
                       onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = dark ? '#1e293b' : '#f8fafc'}
                       onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}>
                       {/* ★ */}
-                      <td style={{ padding: '8px 10px' }} onClick={e => toggleCritical(scn, e)}>
+                      <td data-col="ctr" style={{ padding: '8px 10px' }} onClick={e => toggleCritical(scn, e)}>
                         <span style={{ cursor: 'pointer', color: scn.is_critical_path ? '#E84E0F' : '#cbd5e1', fontSize: 14 }}>★</span>
                       </td>
-                      <td style={{ padding: '8px 10px' }}>
+                      <td data-col="ctr" style={{ padding: '8px 10px' }}>
                         <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600 }}>{scn.scn_ref}</span>
                       </td>
-                      <td style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{scn.po_ref || '—'}</td>
+                      <td data-col="ctr" style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{scn.po_ref || '—'}</td>
                       <td data-align="left" style={{ padding: '8px 10px', color: col, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={scn.vendor_name || ''}>{scn.vendor_name || '—'}</td>
                       <td data-align="left" style={{ padding: '8px 10px', color: sub, fontSize: 11 }}>{scn.forwarder_name || '—'}</td>
                       <td data-align="left" style={{ padding: '8px 10px', fontSize: 11, color: sub }}>
@@ -591,7 +596,7 @@ const OverviewTab = ({ dark, scn, onRefresh, addToast }: {
 
           {/* ETD row with edit */}
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 13, alignItems: 'center' }}>
-            <span style={{ color: sub }}>ETD</span>
+            <span style={{ color: sub }} title="Estimated Time of Departure">ETD</span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ color: col }}>{fmt(scn.etd)}</span>
               <button onClick={() => openDateEdit('etd')}
@@ -608,7 +613,7 @@ const OverviewTab = ({ dark, scn, onRefresh, addToast }: {
 
           {/* ETA row with edit */}
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 13, alignItems: 'center' }}>
-            <span style={{ color: sub }}>ETA</span>
+            <span style={{ color: sub }} title="Estimated Time of Arrival">ETA</span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ color: etaColour(scn.eta) || col, fontWeight: etaColour(scn.eta) ? 600 : undefined }}>{fmt(scn.eta)}</span>
               <button onClick={() => openDateEdit('eta')}
