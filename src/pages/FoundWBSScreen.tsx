@@ -185,12 +185,10 @@ const AddNodeModal = ({ projectId, nodes, dark, onClose, onCreated, onQueued, pr
   const [description, setDesc]        = useState(prefill?.description ?? '')
   const [rag, setRag]                 = useState(prefill?.rag ?? '')
   const [rosDate, setRosDate]         = useState(prefill?.ros_date?.slice(0,10) ?? '')
-  const [plannedStart, setPlStart]    = useState(prefill?.planned_start?.slice(0,10) ?? '')
-  const [plannedEnd, setPlEnd]        = useState(prefill?.planned_end?.slice(0,10) ?? '')
-  const [forecastStart, setFcStart]   = useState(prefill?.forecast_start?.slice(0,10) ?? '')
-  const [forecastEnd, setFcEnd]       = useState(prefill?.forecast_end?.slice(0,10) ?? '')
-  const [actualStart, setAcStart]     = useState(prefill?.actual_start?.slice(0,10) ?? '')
-  const [actualEnd, setAcEnd]         = useState(prefill?.actual_end?.slice(0,10) ?? '')
+  // Planned/forecast/actual dates are NOT hand-entered — a WBS node's schedule is a
+  // ROLL-UP of the POs/milestones beneath its branch (EPC-correct). They're derived and
+  // stored by the seed (and stay fresh on edit because the PATCH preserves any field the
+  // body omits), so the create/edit modal no longer carries them.
   const [notes, setNotes]             = useState(prefill?.notes ?? '')
   const [saving, setSaving]           = useState(false)
   const [err, setErr]                 = useState('')
@@ -210,9 +208,6 @@ const AddNodeModal = ({ projectId, nodes, dark, onClose, onCreated, onQueued, pr
         code: fullCode, description: description.trim(),
         parent_id: parentId ? Number(parentId) : null,
         rag: rag || null, ros_date: rosDate || null,
-        planned_start: plannedStart || null, planned_end: plannedEnd || null,
-        forecast_start: forecastStart || null, forecast_end: forecastEnd || null,
-        actual_start: actualStart || null, actual_end: actualEnd || null,
         notes: notes || null,
       })
       onCreated(data)
@@ -226,9 +221,6 @@ const AddNodeModal = ({ projectId, nodes, dark, onClose, onCreated, onQueued, pr
             code: fullCode, description: description.trim(),
             parent_id: parentId ? Number(parentId) : null,
             rag: rag || null, ros_date: rosDate || null,
-            planned_start: plannedStart || null, planned_end: plannedEnd || null,
-            forecast_start: forecastStart || null, forecast_end: forecastEnd || null,
-            actual_start: actualStart || null, actual_end: actualEnd || null,
             notes: notes || null,
           })
           onQueued(`✓ ${approvalToast(r)}`)
@@ -249,16 +241,6 @@ const AddNodeModal = ({ projectId, nodes, dark, onClose, onCreated, onQueued, pr
   const label = (txt: string) => (
     <div style={{ fontSize: 11, fontWeight: 600, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase' as const, marginBottom: 4, marginTop: 12 }}>{txt}</div>
   )
-  const dateGroup = (lbl: string, v1: string, s1: (v:string)=>void, v2: string, s2: (v:string)=>void) => (
-    <div>
-      {label(lbl)}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-        <input type="date" value={v1} onChange={e => s1(e.target.value)} style={inp} placeholder="Start" />
-        <input type="date" value={v2} onChange={e => s2(e.target.value)} style={inp} placeholder="End" />
-      </div>
-    </div>
-  )
-
   return createPortal(
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
       <div onClick={e => e.stopPropagation()} style={{ background: dark ? '#1e293b' : '#fff', borderRadius: 10, padding: 28, width: 580, maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 16px 48px rgba(0,0,0,0.4)', fontFamily: 'IBM Plex Sans, sans-serif', border: `1px solid ${dark ? '#334155' : '#dde3ed'}` }}>
@@ -308,9 +290,7 @@ const AddNodeModal = ({ projectId, nodes, dark, onClose, onCreated, onQueued, pr
           </div>
         </div>
 
-        {dateGroup('Planned Dates', plannedStart, setPlStart, plannedEnd, setPlEnd)}
-        {dateGroup('Forecast Dates', forecastStart, setFcStart, forecastEnd, setFcEnd)}
-        {dateGroup('Actual Dates', actualStart, setAcStart, actualEnd, setAcEnd)}
+        {/* Planned / Forecast / Actual dates are derived by WBS roll-up, not hand-entered. */}
 
         {label('Notes / scope description')}
         <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3}
