@@ -73,6 +73,12 @@ function MeetingRFIInner({ dark, projectId, projectName, userRole, userId, onBac
   const [search, setSearch]   = useState('')
   const [selected, setSelected] = useState<RfiRow | null>(null)
   const [assignees, setAssignees] = useState<{ id: number; name: string }[]>([])
+  // ─── CREATE (new RFI / Meeting) ─────────────────────────────
+  const [users, setUsers]         = useState<{ id: number; name: string }[]>([])
+  const [createType, setCreateType] = useState<'rfi' | 'meeting' | null>(null)
+  const [cForm, setCForm]         = useState({ title: '', description: '', priority: 'normal', due_date: '', assigned_to: '' })
+  const [cSaving, setCSaving]     = useState(false)
+  const [cErr, setCErr]           = useState('')
 
   const fetcher = useCallback(async ({ page, limit, sortCol, sortDir }: { page: number; limit: number; sortCol?: string; sortDir: 'asc' | 'desc' }) => {
     const params: Record<string, string> = { page: String(page), limit: String(limit), sort_dir: sortDir }
@@ -99,6 +105,28 @@ function MeetingRFIInner({ dark, projectId, projectName, userRole, userId, onBac
         setAssignees([...m].map(([id, name]) => ({ id, name })))
       }).catch(() => {})
   }, [projectId])
+
+  // Full user list for the create form's Assignee dropdown.
+  useEffect(() => { axios.get(`${API}/rfi-meeting/${projectId}/users`).then(({ data }) => setUsers(data)).catch(() => {}) }, [projectId])
+
+  const openCreate = (rt: 'rfi' | 'meeting') => {
+    setCForm({ title: '', description: '', priority: 'normal', due_date: '', assigned_to: '' }); setCErr(''); setCreateType(rt)
+  }
+  const submitCreate = async () => {
+    if (!cForm.title.trim()) { setCErr('Title is required'); return }
+    setCSaving(true); setCErr('')
+    try {
+      await axios.post(`${API}/rfi-meeting/${projectId}`, {
+        record_type: createType, title: cForm.title.trim(), description: cForm.description.trim() || null,
+        priority: cForm.priority, due_date: cForm.due_date || null, assigned_to: cForm.assigned_to || null,
+      })
+      addToast('success', `${createType === 'rfi' ? 'RFI' : 'Meeting'} created`)
+      setCreateType(null); reload()
+    } catch (e) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setCErr(err.response?.data?.error || 'Failed to create record')
+    } finally { setCSaving(false) }
+  }
 
   const STATUSES = ['draft', 'open', 'assigned', 'answered', 'scheduled', 'held', 'actions_open', 'closed', 'cancelled']
   const sortArrow = (c: string) => sortCol === c ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''
@@ -132,6 +160,8 @@ function MeetingRFIInner({ dark, projectId, projectName, userRole, userId, onBac
             ))}
           </div>
           <HelpButton screenName="Meetings & RFIs" sections={RFI_MEETING_HELP} dark={dark} />
+          <button onClick={() => openCreate('rfi')} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>+ New RFI</button>
+          <button onClick={() => openCreate('meeting')} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#7c3aed', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>+ New Meeting</button>
         </div>
       </div>
 
@@ -203,6 +233,50 @@ function MeetingRFIInner({ dark, projectId, projectName, userRole, userId, onBac
       {selected && (
         <RecordDrawer recordId={selected.id} projectId={projectId} dark={dark} userRole={userRole} userId={userId}
           onClose={() => setSelected(null)} onChanged={reload} addToast={addToast} />
+      )}
+
+      {/* ─── CREATE NEW RFI / MEETING ───────────────────────── */}
+      {createType && createPortal(
+        <div onClick={() => !cSaving && setCreateType(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '92vw', maxHeight: '88vh', overflowY: 'auto', background: cardBg, borderRadius: 12, border: bd, boxShadow: '0 20px 60px rgba(0,0,0,0.4)', padding: 24 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color: col }}>New {createType === 'rfi' ? 'RFI' : 'Meeting'}</div>
+              <button onClick={() => setCreateType(null)} style={{ background: 'none', border: 'none', fontSize: 20, color: sub, cursor: 'pointer' }}>×</button>
+            </div>
+            {cErr && <div style={{ fontSize: 12, color: '#ef4444', background: 'rgba(239,68,68,0.1)', borderRadius: 6, padding: '8px 10px', marginBottom: 12 }}>{cErr}</div>}
+            <label style={{ fontSize: 11, color: sub, fontWeight: 600, display: 'block', marginBottom: 4 }}>Title *</label>
+            <input autoFocus value={cForm.title} onChange={e => setCForm(p => ({ ...p, title: e.target.value }))}
+              placeholder={createType === 'rfi' ? 'e.g. Clarify weld procedure for SAG mill liners' : 'e.g. Weekly procurement coordination'}
+              style={{ ...inp, width: '100%', boxSizing: 'border-box', height: 36, marginBottom: 12 }} />
+            <label style={{ fontSize: 11, color: sub, fontWeight: 600, display: 'block', marginBottom: 4 }}>Description</label>
+            <textarea value={cForm.description} onChange={e => setCForm(p => ({ ...p, description: e.target.value }))} rows={3}
+              style={{ ...inp, width: '100%', boxSizing: 'border-box', height: 'auto', padding: '8px 10px', resize: 'vertical', marginBottom: 12 }} />
+            <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ fontSize: 11, color: sub, fontWeight: 600, display: 'block', marginBottom: 4 }}>Priority</label>
+                <select value={cForm.priority} onChange={e => setCForm(p => ({ ...p, priority: e.target.value }))} style={{ ...inp, width: '100%', height: 36 }}>
+                  {['low', 'normal', 'high', 'critical'].map(o => <option key={o} value={o}>{o[0].toUpperCase() + o.slice(1)}</option>)}
+                </select>
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ fontSize: 11, color: sub, fontWeight: 600, display: 'block', marginBottom: 4 }}>Due date</label>
+                <input type="date" value={cForm.due_date} onChange={e => setCForm(p => ({ ...p, due_date: e.target.value }))} style={{ ...inp, width: '100%', height: 36 }} />
+              </div>
+            </div>
+            <label style={{ fontSize: 11, color: sub, fontWeight: 600, display: 'block', marginBottom: 4 }}>Assignee</label>
+            <select value={cForm.assigned_to} onChange={e => setCForm(p => ({ ...p, assigned_to: e.target.value }))} style={{ ...inp, width: '100%', height: 36, marginBottom: 20 }}>
+              <option value="">Unassigned</option>
+              {users.map(u => <option key={u.id} value={String(u.id)}>{u.name}</option>)}
+            </select>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button onClick={() => setCreateType(null)} disabled={cSaving} style={{ padding: '8px 16px', borderRadius: 6, border: bd, background: 'none', color: sub, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+              <button onClick={submitCreate} disabled={cSaving} style={{ padding: '8px 18px', borderRadius: 6, border: 'none', background: createType === 'rfi' ? '#2563eb' : '#7c3aed', color: '#fff', fontSize: 12, fontWeight: 600, cursor: cSaving ? 'wait' : 'pointer', fontFamily: 'inherit', opacity: cSaving ? 0.7 : 1 }}>
+                {cSaving ? 'Creating…' : `Create ${createType === 'rfi' ? 'RFI' : 'Meeting'}`}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   )
