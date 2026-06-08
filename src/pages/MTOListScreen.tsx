@@ -879,8 +879,8 @@ const MTOListInner = ({
                         Rev {m.current_revision}
                       </td>
                       <td data-col="lmid" style={{ ...tdStyle, fontFamily: 'JetBrains Mono, monospace' }}>{m.line_count}</td>
-                      <td data-col="ctr" style={{ ...tdStyle, fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }}>{fmtDate(m.updated_at)}</td>
-                      <td data-col="ctr" style={tdStyle}>{m.owner ?? '—'}</td>
+                      <td data-col="lmid" style={{ ...tdStyle, fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }}>{fmtDate(m.updated_at)}</td>
+                      <td data-col="lmid" style={tdStyle}>{m.owner ?? '—'}</td>
                       <td data-align="center" data-col="status" style={tdStyle}><StatusPill s={m.status} /></td>
                       <td data-align="center" style={{ ...tdStyle, textAlign: 'center' }}>
                         {!superseded && (
