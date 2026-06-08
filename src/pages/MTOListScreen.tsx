@@ -878,7 +878,7 @@ const MTOListInner = ({
                       <td data-col="ctr" style={{ ...tdStyle, fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, fontSize: 14 }}>
                         Rev {m.current_revision}
                       </td>
-                      <td data-col="lmid" style={{ ...tdStyle, fontFamily: 'JetBrains Mono, monospace' }}>{m.line_count}</td>
+                      <td data-col="lmid40" style={{ ...tdStyle, fontFamily: 'JetBrains Mono, monospace' }}>{m.line_count}</td>
                       <td data-col="lmid33" style={{ ...tdStyle, fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }}>{fmtDate(m.updated_at)}</td>
                       <td data-col="lmid" style={tdStyle}>{m.owner ?? '—'}</td>
                       <td data-align="center" data-col="status" style={tdStyle}><StatusPill s={m.status} /></td>
