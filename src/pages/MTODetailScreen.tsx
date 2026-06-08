@@ -494,7 +494,7 @@ const LineItemsTab = ({
                     <td style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', color: sub }}>{l.uom ?? '—'}</td>
                     <td data-align="center" style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', fontSize: 11, whiteSpace: 'nowrap' }}>{fmtDate(l.ros_date)}</td>
                     <td style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{l.po_ref ?? '—'}</td>
-                    <td data-align="center" style={tdS}><LinePill s={l.status} /></td>
+                    <td data-align="center" data-col="status" style={tdS}><LinePill s={l.status} /></td>
                     {/* Edit */}
                     <td data-align="center" style={{ ...tdS, textAlign: 'center' }}>
                       <button onClick={() => setEditTarget(l)} style={{

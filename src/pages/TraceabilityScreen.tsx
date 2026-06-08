@@ -235,7 +235,7 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
                             {r.document_name}
                             {!!r.is_required && <span style={{ marginLeft: 7, fontSize: 9, padding: '1px 5px', borderRadius: 5, background: dark ? '#334155' : '#eef2f7', color: t.sub, fontWeight: 700, letterSpacing: '0.03em' }}>REQ</span>}
                           </td>
-                          <td data-align="center" style={tdSt}><span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 6, background: pill.bg, color: pill.color, fontWeight: 600 }}>{pill.label}</span></td>
+                          <td data-align="center" data-col="status" style={tdSt}><span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 6, background: pill.bg, color: pill.color, fontWeight: 600 }}>{pill.label}</span></td>
                           <td data-align="center" style={{ ...tdSt, ...mono, fontSize: 11, color: t.sub }}>{fmtDate(r.due_date)}</td>
                           <td data-align="center" style={{ ...tdSt, ...mono, fontSize: 11, color: received ? (late ? '#d97706' : '#16a34a') : t.sub }}>
                             {received ? <>{fmtDate(r.received_date)}{late && <span> · late</span>}</> : '—'}

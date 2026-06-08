@@ -756,7 +756,7 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, userRole = '', on
                         {/* ROS */}
                         <td data-align="center" style={{ padding: '10px 12px', whiteSpace: 'nowrap', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{fmt(po.ros_date)}</td>
                         {/* Status — BUG-2 FIX: RAG-based not procurement status */}
-                        <td data-align="center" style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                        <td data-align="center" data-col="status" style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
                           <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 10, background: ragPill.bg, color: ragPill.color, fontWeight: 600 }}>
                             {ragPill.label}
                           </span>

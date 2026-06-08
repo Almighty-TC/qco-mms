@@ -277,7 +277,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                           <td data-align="left" style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, ...ellipsisCell }}>{item.wbs_code || '—'}</td>
                           <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col, fontWeight: 600, ...ellipsisCell }}>{Number(item.qty).toLocaleString()}</td>
                           <td style={{ padding: '8px 12px', color: sub, ...ellipsisCell }}>{item.uom}</td>
-                          <td data-align="center" style={{ padding: '8px 12px' }}>
+                          <td data-align="center" data-col="status" style={{ padding: '8px 12px' }}>
                             <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: cond.bg, color: cond.color, fontWeight: 600 }}>{cond.label}</span>
                           </td>
                           <td data-align="left" style={{ padding: '8px 12px', color: sub, fontSize: 11, ...ellipsisCell }}>{item.vendor_name || '—'}</td>

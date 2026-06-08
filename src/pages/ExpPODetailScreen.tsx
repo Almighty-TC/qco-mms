@@ -783,7 +783,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                                   </button>
                                 )}
                               </td>
-                              <td data-align="center" style={{ padding: '8px 10px' }}>
+                              <td data-align="center" data-col="status" style={{ padding: '8px 10px' }}>
                                 <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, background: sc.bg, color: sc.color, fontWeight: 600, whiteSpace: 'nowrap' }}>
                                   {item.status.replace(/_/g, ' ')}
                                 </span>
@@ -945,7 +945,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                                 <td data-align="center" style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: d.required_date&&new Date(d.required_date)<new Date()&&!d.submitted_date?'#ef4444':sub, whiteSpace:'nowrap' }}>{fmtS(d.required_date)}</td>
                                 <td data-align="center" style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, whiteSpace:'nowrap' }}>{fmtS(d.promised_date)}</td>
                                 <td data-align="center" style={{ padding: '8px 10px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: d.submitted_date?'#22c55e':sub, whiteSpace:'nowrap' }}>{fmtS(d.submitted_date)}</td>
-                                <td data-align="center" style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                                <td data-align="center" data-col="status" style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
                                   <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 9999, background: pill.bg, color: pill.color, fontWeight: 500 }}>{pill.label}</span>
                                 </td>
                                 <td data-align="center" style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>

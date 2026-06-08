@@ -123,3 +123,14 @@ code {
    the per-cell inline textAlign the tables set today. (The data-align="…" markers
    left on some cells are now inert — every column follows the same left rule.) */
 table.app-grid td { text-align: left !important; text-indent: 12%; }
+
+/* ─── STATUS COLUMN ──────────────────────────────────────────
+   The one exception to the left rule: the Status column is centred, and its pill
+   is rendered as a longer rounded badge (min-width + roomier horizontal padding)
+   so the statuses line up as even, readable chips down the column. Tagged with
+   data-col="status" on the cell; the pill is its direct <span> child. */
+table.app-grid td[data-col="status"] { text-align: center !important; text-indent: 0 !important; }
+table.app-grid td[data-col="status"] > span {
+  display: inline-block; min-width: 96px; box-sizing: border-box;
+  padding-left: 14px !important; padding-right: 14px !important; text-align: center;
+}

@@ -164,7 +164,7 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
         <td style={{ ...tdSt, ...mono, fontSize: 11, color: '#2563eb' }}>{r.source_label}</td>
         <td style={{ ...tdSt, fontSize: 11 }}>{r.uploaded_by || '—'}</td>
         <td data-align="center" style={{ ...tdSt, ...mono, fontSize: 11, color: sub }}>{fmtDate(r.uploaded_at)}</td>
-        <td data-align="center" style={tdSt}><span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 6, background: pill.bg, color: pill.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{r.status}</span></td>
+        <td data-align="center" data-col="status" style={tdSt}><span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 6, background: pill.bg, color: pill.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{r.status}</span></td>
         <td data-align="center" style={tdSt} onClick={e => e.stopPropagation()}>
           {r.is_missing ? (
             <button onClick={() => setShowUpload(true)} style={{ padding: '4px 10px', borderRadius: 5, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>↑ Upload</button>

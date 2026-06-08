@@ -1390,7 +1390,7 @@ const POTableRow = ({
       </td>
 
       {/* ── Status (index 12) ─────────────────────────────────────────────── */}
-      <td data-align="center" style={{ ...tdBase, width: colWidths[12] }}>
+      <td data-align="center" data-col="status" style={{ ...tdBase, width: colWidths[12] }}>
         <StatusPill status={po.status} label={po.statusLabel} />
       </td>
 

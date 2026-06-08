@@ -194,7 +194,7 @@ const MCTransferInner = ({ dark, projectId, projectName, onBack }: {
                         {tr.requested_by_company && <div style={{ fontSize: 10, color: sub }}>{tr.requested_by_company}</div>}
                       </td>
                       <td data-align="center" style={{ padding: '9px 12px', fontSize: 11, color: sub }}>{fmt(tr.est_pickup_date)}</td>
-                      <td data-align="center" style={{ padding: '9px 12px' }}>
+                      <td data-align="center" data-col="status" style={{ padding: '9px 12px' }}>
                         <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, background: pill.bg, color: pill.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{pill.label}</span>
                       </td>
                       <td data-align="center" style={{ padding: '9px 12px' }}>

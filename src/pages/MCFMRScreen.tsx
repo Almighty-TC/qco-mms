@@ -387,7 +387,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
                         </span>
                         {overdue && <div style={{ fontSize: 10, color: '#ef4444' }}>overdue</div>}
                       </td>
-                      <td data-align="center" style={{ padding: '9px 12px' }}>
+                      <td data-align="center" data-col="status" style={{ padding: '9px 12px' }}>
                         <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, background: pill.bg, color: pill.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{pill.label}</span>
                       </td>
                       <td data-align="center" style={{ padding: '9px 12px' }}>
