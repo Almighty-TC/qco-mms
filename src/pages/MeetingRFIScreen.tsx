@@ -10,6 +10,7 @@ import { HelpButton } from '../components/HelpDrawer'
 import { BackButton } from '../components/BackButton'
 import { Pager } from '../components/Pager'
 import { useResizableTable, ResetColumnsButton } from '../components/colResize'
+import { useExpand, ExpandBtn } from '../components/ExpandToggle'
 import { usePagedList } from '../hooks/usePagedList'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { ToastContainer } from '../components/Toast'
@@ -216,6 +217,7 @@ function RecordDrawer({ recordId, projectId, dark, userRole, userId, onClose, on
   recordId: number; projectId: number; dark: boolean; userRole: string; userId: number
   onClose: () => void; onChanged: () => void; addToast: (t: 'success' | 'error' | 'warning', m: string) => void
 }) {
+  const [expanded, toggleExpand] = useExpand()
   const col = dark ? '#f1f5f9' : '#0f172a'; const sub = '#94a3b8'
   const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`; const cardBg = dark ? '#1e293b' : '#fff'
   const inp = { height: 32, padding: '0 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none', width: '100%', boxSizing: 'border-box' as const }
@@ -280,14 +282,17 @@ function RecordDrawer({ recordId, projectId, dark, userRole, userId, onClose, on
 
   return createPortal(
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9000, display: 'flex', justifyContent: 'flex-end' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '92vw', height: '100%', background: cardBg, borderLeft: bd, padding: 24, overflowY: 'auto', boxShadow: '-12px 0 40px rgba(0,0,0,0.35)' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: expanded ? '95vw' : 480, maxWidth: '95vw', transition: 'width 0.18s ease', height: '100%', background: cardBg, borderLeft: bd, padding: 24, overflowY: 'auto', boxShadow: '-12px 0 40px rgba(0,0,0,0.35)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 16, fontWeight: 700, color: col }}>{rec.ref}</span>
             <TypePill t={rec.record_type} />
             {pill(rec.status.replace('_', ' '), STATUS_COLOR[rec.status] || '#94a3b8')}
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, color: sub, cursor: 'pointer' }}>×</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <ExpandBtn expanded={expanded} onToggle={toggleExpand} color={sub} />
+            <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, color: sub, cursor: 'pointer' }}>×</button>
+          </div>
         </div>
         <div style={{ fontSize: 15, fontWeight: 600, color: col, marginBottom: 4 }}>{rec.title}</div>
 
