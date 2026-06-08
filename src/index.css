@@ -134,3 +134,8 @@ table.app-grid td[data-col="status"] > span {
   display: inline-block; min-width: 96px; box-sizing: border-box;
   padding-left: 14px !important; padding-right: 14px !important; text-align: center;
 }
+
+/* Plain centred cell (no pill styling) — opt-in per cell via data-col="ctr".
+   Used for a few specific columns (e.g. the MTO register's Latest Rev / Last
+   Updated / Owner) that read better centred without changing the global rule. */
+table.app-grid td[data-col="ctr"] { text-align: center !important; text-indent: 0 !important; }

@@ -875,12 +875,12 @@ const MTOListInner = ({
                         <div style={{ fontWeight: 600 }}>{m.name}</div>
                         <div style={{ fontSize: 11, color: sub, fontFamily: 'JetBrains Mono, monospace', marginTop: 2 }}>{m.reference}</div>
                       </td>
-                      <td style={{ ...tdStyle, fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, fontSize: 14 }}>
+                      <td data-col="ctr" style={{ ...tdStyle, fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, fontSize: 14 }}>
                         Rev {m.current_revision}
                       </td>
                       <td style={{ ...tdStyle, fontFamily: 'JetBrains Mono, monospace' }}>{m.line_count}</td>
-                      <td data-align="center" style={{ ...tdStyle, fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }}>{fmtDate(m.updated_at)}</td>
-                      <td style={tdStyle}>{m.owner ?? '—'}</td>
+                      <td data-col="ctr" style={{ ...tdStyle, fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }}>{fmtDate(m.updated_at)}</td>
+                      <td data-col="ctr" style={tdStyle}>{m.owner ?? '—'}</td>
                       <td data-align="center" data-col="status" style={tdStyle}><StatusPill s={m.status} /></td>
                       <td data-align="center" style={{ ...tdStyle, textAlign: 'center' }}>
                         {!superseded && (
