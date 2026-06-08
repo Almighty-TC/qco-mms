@@ -75,7 +75,7 @@ type AdminTableProps = {
   headerAlign?: 'left' | 'center'  // opt-in centred headers (default left)
 }
 
-export function AdminTable({ tableId, columns, dark, children, empty, headerAlign = 'left' }: AdminTableProps) {
+export function AdminTable({ tableId, columns, dark, children, empty, headerAlign = 'center' }: AdminTableProps) {
   const defaultWidths = columns.map(c => c.width)
   const minWidths     = columns.map(c => c.minWidth ?? 40)
   const { widths, onMouseDown, resetWidths } = useColumnResize(tableId, defaultWidths, minWidths)

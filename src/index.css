@@ -124,6 +124,16 @@ code {
    left on some cells are now inert — every column follows the same left rule.) */
 table.app-grid td { text-align: left !important; text-indent: 12%; }
 
+/* ─── GLOBAL: centred column headers ─────────────────────────
+   Every register/grid header is centred app-wide (body cells keep their own
+   per-column alignment rules above). */
+table.app-grid th { text-align: center !important; }
+
+/* ─── GLOBAL: centred Status / State / Actions / Dates contents ───
+   These column types are tagged data-align="center" on their cells; centre their
+   contents app-wide (overriding the global left rule for just those columns). */
+table.app-grid td[data-align="center"] { text-align: center !important; text-indent: 0 !important; }
+
 /* ─── STATUS COLUMN ──────────────────────────────────────────
    The one exception to the left rule: the Status column is centred, and its pill
    is rendered as a longer rounded badge (min-width + roomier horizontal padding)
