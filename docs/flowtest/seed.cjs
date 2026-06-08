@@ -199,7 +199,7 @@ async function main() {
     }
 
     // ── PROJECT ──
-    const [pr] = await conn.query("INSERT INTO projects (code,name) VALUES ('ZZ_FLOWTEST','ZZ Flow Test (disposable)')")
+    const [pr] = await conn.query("INSERT INTO projects (code,name) VALUES ('ZZ_FLOWTEST','ZZ Iron Ridge Minerals Processing Plant (demo)')")
     const pid = pr.insertId
     console.log('[seed] project id =', pid)
 
@@ -237,21 +237,37 @@ async function main() {
     // Codes are discipline abbreviations (CIV, MEC, …) with zero-padded sub-levels
     // (CIV.01, CIV.01.01) — alphabetic root, dot-separated so the parent_id derivation
     // (SUBSTRING_INDEX on '.') still resolves CIV.01.01 → CIV.01 → CIV → root.
-    const DISC = ['Civil', 'Structural', 'Mechanical', 'Piping', 'Electrical', 'Instrumentation', 'HVAC', 'Fire']
-    const ABBR = { Civil: 'CIV', Structural: 'STR', Mechanical: 'MEC', Piping: 'PIP', Electrical: 'ELE', Instrumentation: 'INS', HVAC: 'HVA', Fire: 'FIR' }
+    // Minerals-processing plant breakdown: real process areas → sub-areas → packages.
+    const AREAS = [
+      { ab: 'ROM', name: 'ROM & Primary Crushing', disc: 'Mechanical', subs: ['ROM Bin & Apron Feeder', 'Primary Gyratory Crusher', 'Primary Crushed Stockpile'] },
+      { ab: 'SCR', name: 'Secondary & Tertiary Crushing', disc: 'Mechanical', subs: ['Secondary Cone Crushers', 'Tertiary Cone Crushers', 'Screening & Surge Bins'] },
+      { ab: 'GRD', name: 'Grinding', disc: 'Mechanical', subs: ['SAG Milling', 'Ball Milling', 'Mill Discharge & Trommel', 'Mill Lube & Cooling'] },
+      { ab: 'CLA', name: 'Classification', disc: 'Process', subs: ['Cyclone Clusters', 'Cyclone Feed Pumping'] },
+      { ab: 'FLO', name: 'Flotation', disc: 'Process', subs: ['Rougher Flotation', 'Cleaner Flotation', 'Regrind Circuit', 'Concentrate Handling'] },
+      { ab: 'THK', name: 'Thickening & Filtration', disc: 'Process', subs: ['Concentrate Thickener', 'Tailings Thickener', 'Concentrate Filtration'] },
+      { ab: 'REA', name: 'Reagents', disc: 'Process', subs: ['Lime Slaking & Dosing', 'Collector & Frother Dosing', 'Flocculant Make-up'] },
+      { ab: 'TSF', name: 'Tailings Storage', disc: 'Piping', subs: ['Tailings Pumping', 'Return Water', 'TSF Pipeline'] },
+      { ab: 'MH',  name: 'Materials Handling', disc: 'Mechanical', subs: ['Overland Conveyor', 'Stacker & Reclaimer', 'Transfer Towers'] },
+      { ab: 'WAT', name: 'Water Services', disc: 'Piping', subs: ['Raw & Process Water', 'Gland & Service Water', 'Fire Water'] },
+      { ab: 'ELE', name: 'Power & Electrical', disc: 'Electrical', subs: ['Main Substation', 'MCC Rooms', 'HV Reticulation', 'Field Cabling'] },
+      { ab: 'PCS', name: 'Process Control', disc: 'Instrumentation', subs: ['Control System (DCS)', 'Field Instrumentation', 'Network & Comms'] },
+      { ab: 'INF', name: 'Infrastructure', disc: 'Civil', subs: ['Site Roads & Earthworks', 'Buildings & Workshops', 'Compressed Air'] },
+    ]
+    const PKG = ['Mechanical Install', 'Pipework & Spools', 'Structural Steel', 'Platework & Chutes', 'Electrical & Instrumentation', 'Lube & Hydraulics']
     const RAGS = ['green', 'amber', 'red', 'blue']
     const wbsRows = [], wbsMeta = [] // {code, disc}
     for (let a = 1; a <= S.wbsL1; a++) {
-      const disc = DISC[(a - 1) % DISC.length]; const ab = ABBR[disc]
-      wbsRows.push([pid, null, ab, `${disc} Works`, disc, rnd(RAGS), iso(addDays(TODAY, -300)), `WBS lead ${a}`]); wbsMeta.push({ code: ab, disc })
-      for (let b = 1; b <= ri(3, 6); b++) {
-        const c2 = `${ab}.${pad(b, 2)}`
-        wbsRows.push([pid, null, c2, `${disc} Area ${b}`, disc, rnd(RAGS), iso(addDays(TODAY, -250)), null]); wbsMeta.push({ code: c2, disc })
-        for (let c = 1; c <= ri(2, 5); c++) {
-          const c3 = `${ab}.${pad(b, 2)}.${pad(c, 2)}`
-          wbsRows.push([pid, null, c3, `${disc} Subsystem ${c}`, disc, rnd(RAGS), null, null]); wbsMeta.push({ code: c3, disc })
+      const area = AREAS[(a - 1) % AREAS.length]; const ab = area.ab
+      wbsRows.push([pid, null, ab, area.name, area.disc, rnd(RAGS), null, `Area Lead — ${area.name}`]); wbsMeta.push({ code: ab, disc: area.disc })
+      const subs = area.subs.slice(0, Math.min(area.subs.length, ri(3, 6)))
+      subs.forEach((subName, bi) => {
+        const c2 = `${ab}.${pad(bi + 1, 2)}`
+        wbsRows.push([pid, null, c2, subName, area.disc, rnd(RAGS), null, null]); wbsMeta.push({ code: c2, disc: area.disc })
+        for (let c = 1; c <= ri(2, 4); c++) {
+          const c3 = `${ab}.${pad(bi + 1, 2)}.${pad(c, 2)}`
+          wbsRows.push([pid, null, c3, `${subName} — ${rnd(PKG)}`, area.disc, rnd(RAGS), null, null]); wbsMeta.push({ code: c3, disc: area.disc })
         }
-      }
+      })
     }
     const wbsIds = await batchInsert(conn, 'wbs_nodes', ['project_id', 'parent_id', 'code', 'description', 'discipline', 'rag', 'ros_date', 'owner_id'], wbsRows.map(r => [r[0], r[1], r[2], r[3], r[4], r[5], r[6], null]))
     const wbsIdByCode = {}; wbsMeta.forEach((m, i) => { wbsIdByCode[m.code] = wbsIds[i] })
@@ -267,37 +283,98 @@ async function main() {
     if (accessRows.length) await batchInsert(conn, 'user_wbs_access', ['user_id', 'project_id', 'wbs_code', 'scope_type', 'created_by'], accessRows)
 
     // ── SUPPLIERS (ZZF-coded, with contacts) ──
+    const VENDORS = [
+      'Pilbara Steel & Fabrication Pty Ltd', 'Westforge Heavy Engineering', 'Karratha Industrial Services',
+      'AusValve Manufacturing Pty Ltd', 'SlurryFlow Pumps Australia', 'MillTech Grinding Solutions',
+      'FloCell Process Equipment', 'ThickPro Separation Systems', 'NorWest Electrical Supplies',
+      'Precision Process Instruments', 'Reagent Systems Australia', 'ConveyCo Materials Handling',
+      'Southern Cross Switchgear', 'Cyclone Dynamics Pty Ltd', 'Apex Rubber Linings',
+      'Ironbark Structural Steel', 'Desert Power Transformers', 'Summit Filtration Systems',
+      'Tropic Pipe & Fittings', 'Vanguard Instrumentation', 'Redgum Engineering', 'Blue Range Valves',
+      'Coastal Crane & Rigging', 'Hedland Logistics & Transport', 'OceanLink Freight Forwarders',
+      'Goldfields Mechanical', 'Seabreeze Electrical', 'Outback Conveyors', 'Monsoon Pumps & Seals', 'Granite Process Equipment',
+    ]
+    const CONTACTS = ['James Whitfield', 'Sarah Nguyen', 'David Okonkwo', 'Priya Sharma', 'Tom Castellano', 'Mei Lin', 'Brett Hammond', 'Aisha Rahman', 'Carlos Mendez', 'Hannah Pearce']
     const supRows = []
-    for (let i = 1; i <= S.supplier; i++) supRows.push([`ZZ Supplier ${i} Pty Ltd`, `ZZF-${pad(i, 3)}`, `5${pad(ri(10000000, 99999999), 8)}`, 'Australia', `Contact ${i}`, `sales${i}@zzsupplier.example`, `08${pad(ri(10000000, 99999999), 8)}`, rnd(['approved', 'approved', 'conditional']), 'active'])
+    for (let i = 1; i <= S.supplier; i++) {
+      const base = VENDORS[(i - 1) % VENDORS.length]
+      const name = i <= VENDORS.length ? base : `${base} (${Math.ceil(i / VENDORS.length)})`
+      const ct = CONTACTS[(i - 1) % CONTACTS.length]; const ln = ct.toLowerCase().split(' ')
+      supRows.push([name, `ZZF-${pad(i, 3)}`, `5${pad(ri(10000000, 99999999), 8)}`, 'Australia', ct, `${ln[1]}.${ln[0]}@${base.split(' ')[0].toLowerCase()}.example`, `08${pad(ri(10000000, 99999999), 8)}`, rnd(['approved', 'approved', 'conditional']), 'active'])
+    }
     const supIds = await batchInsert(conn, 'suppliers', ['name', 'code', 'abn', 'country', 'contact_name', 'email', 'phone', 'avl_status', 'status'], supRows)
+    const supName = (n) => supRows[n - 1][0]  // 1-based supplier index → its real name (coherent vendor_name everywhere)
     // Supplier shipping (pickup) addresses → the SCN wizard sources pickup location from here.
     const SUP_ORIGINS = [['Shanghai', 'Shanghai', '200000', 'China'], ['Houston', 'TX', '77002', 'USA'], ['Hamburg', 'HH', '20457', 'Germany'], ['Singapore', 'Singapore', '049315', 'Singapore'], ['Busan', 'Busan', '48058', 'South Korea'], ['Perth', 'WA', '6000', 'Australia'], ['Mumbai', 'MH', '400001', 'India'], ['Rotterdam', 'ZH', '3011', 'Netherlands']]
-    const addrRows = supIds.map((sid, i) => { const o = SUP_ORIGINS[i % SUP_ORIGINS.length]; return [sid, 'shipping', `ZZ Supplier ${i + 1} Pty Ltd Works`, o[0], o[1], o[2], o[3], 1] })
+    const addrRows = supIds.map((sid, i) => { const o = SUP_ORIGINS[i % SUP_ORIGINS.length]; return [sid, 'shipping', `${supName(i + 1)} — Works`, o[0], o[1], o[2], o[3], 1] })
     await batchInsert(conn, 'supplier_addresses', ['supplier_id', 'type', 'address_line1', 'city', 'state', 'postcode', 'country', 'is_primary'], addrRows)
 
     // ── COMMODITIES (linked to WBS) + EQUIPMENT ──
-    const COMCAT = ['Pipe', 'Valve', 'Fitting', 'Flange', 'Gasket', 'Bolt Set', 'Cable', 'Instrument', 'Steel Section']
+    // Discipline-realistic bulk commodities (slurry piping, valves, mill liners, electrical, instruments…)
+    const COMS = [
+      { cat: 'HDPE Slurry Pipe', uom: 'M', spec: 'PN16 SDR11', sizes: ['DN200', 'DN300', 'DN450', 'DN600'], trace: 'lot', pres: 'Outdoor laydown' },
+      { cat: 'Rubber-Lined Steel Pipe', uom: 'M', spec: '12mm NR lining, CS backing', sizes: ['DN200', 'DN300', 'DN450'], trace: 'heat', pres: 'Outdoor laydown' },
+      { cat: 'Carbon Steel Pipe', uom: 'M', spec: 'ASTM A106 Gr.B Sch40', sizes: ['DN50', 'DN100', 'DN200', 'DN300'], trace: 'heat', pres: 'Greased & wrapped' },
+      { cat: 'Knife Gate Valve', uom: 'EA', spec: 'WCB body, EPDM seat, pneumatic', sizes: ['DN150', 'DN200', 'DN300'], trace: 'serial', pres: 'Indoor dry store' },
+      { cat: 'Pinch Valve', uom: 'EA', spec: 'NR sleeve, air-actuated', sizes: ['DN100', 'DN150', 'DN200'], trace: 'serial', pres: 'Indoor dry store' },
+      { cat: 'Ball Valve', uom: 'EA', spec: '316SS full bore, lever', sizes: ['DN25', 'DN50', 'DN100'], trace: 'serial', pres: 'Indoor dry store' },
+      { cat: 'Pipe Elbow', uom: 'EA', spec: '90° LR, matched lining', sizes: ['DN200', 'DN300', 'DN450'], trace: 'heat', pres: 'Outdoor laydown' },
+      { cat: 'Weld-Neck Flange', uom: 'EA', spec: 'ASME B16.5 Cl150 RF', sizes: ['DN100', 'DN200', 'DN300'], trace: 'heat', pres: 'Greased & wrapped' },
+      { cat: 'Spiral Wound Gasket', uom: 'EA', spec: '316SS/Graphite Cl150', sizes: ['DN100', 'DN200', 'DN300'], trace: 'lot', pres: 'Indoor dry store' },
+      { cat: 'Structural Steel Section', uom: 'tonne', spec: 'Grade 300 UB/UC', sizes: ['200UB', '310UC', '460UB'], trace: 'heat', pres: 'Outdoor laydown' },
+      { cat: 'Steel Grating', uom: 'm2', spec: 'Galv 32x5 panel', sizes: ['Standard panel'], trace: 'lot', pres: 'Outdoor laydown' },
+      { cat: 'Handrail', uom: 'M', spec: 'Galv 2-rail + kickplate', sizes: ['Standard'], trace: 'lot', pres: 'Outdoor laydown' },
+      { cat: 'Mill Liner Set', uom: 'SET', spec: 'Rubber/steel composite', sizes: ['SAG Mill', 'Ball Mill'], trace: 'serial', pres: 'Indoor dry store' },
+      { cat: 'Cyclone Cluster', uom: 'EA', spec: '500CVX, 6-off manifold', sizes: ['DN500'], trace: 'serial', pres: 'Indoor dry store' },
+      { cat: 'Conveyor Idler', uom: 'EA', spec: 'Troughing 152mm roll', sizes: ['1200BW'], trace: 'lot', pres: 'Indoor dry store' },
+      { cat: 'Conveyor Belting', uom: 'M', spec: 'ST1000 4+2 cover', sizes: ['1200mm'], trace: 'lot', pres: 'Climate controlled' },
+      { cat: 'Power Cable', uom: 'M', spec: 'XLPE 3C+E 11kV', sizes: ['185mm2', '300mm2'], trace: 'lot', pres: 'Indoor dry store' },
+      { cat: 'Cable Ladder', uom: 'M', spec: 'Galv 600mm', sizes: ['600mm'], trace: 'lot', pres: 'Outdoor laydown' },
+      { cat: 'Motor Control Centre', uom: 'EA', spec: 'Form 4b, 415V', sizes: ['Standard'], trace: 'serial', pres: 'Climate controlled' },
+      { cat: 'HV Switchgear', uom: 'EA', spec: '11kV vacuum CB', sizes: ['Standard'], trace: 'serial', pres: 'Climate controlled' },
+      { cat: 'Mag Flow Meter', uom: 'EA', spec: 'Slurry-rated, in-line', sizes: ['DN200', 'DN300'], trace: 'serial', pres: 'Climate controlled' },
+      { cat: 'Density Gauge', uom: 'EA', spec: 'Nuclear clamp-on', sizes: ['DN200'], trace: 'serial', pres: 'Climate controlled' },
+      { cat: 'Reagent Dosing Skid', uom: 'EA', spec: 'Dual-head, PLC controlled', sizes: ['Standard'], trace: 'serial', pres: 'Indoor dry store' },
+    ]
     const comRows = []
     for (let i = 1; i <= S.commodity; i++) {
-      const wc = rnd(leafCodes); const cat = rnd(COMCAT)
-      comRows.push([pid, `ZZC-${pad(i, 5)}`, `${cat} ${i}`, rnd(['EA', 'M', 'KG', 'SET', 'LM']), wc, wbsIdByCode[wc], ri(10, 5000), rnd(['lot', 'heat', 'serial']), `ZZ Supplier ${ri(1, S.supplier)} Pty Ltd`, `${cat} per spec ${ri(100, 999)}`, 'active', ADMIN])
+      const wc = rnd(leafCodes); const cm = rnd(COMS); const size = rnd(cm.sizes)
+      comRows.push([pid, `ZZC-${pad(i, 5)}`, `${size} ${cm.cat}`, cm.uom, wc, wbsIdByCode[wc], ri(10, 5000), cm.trace, cm.pres, supName(ri(1, S.supplier)), cm.spec, 'active', ADMIN])
     }
-    const comIds = await batchInsert(conn, 'commodity_library', ['project_id', 'code', 'name', 'uom', 'wbs_code', 'wbs_node_id', 'estimated_qty', 'trace_level', 'preferred_vendor', 'notes', 'status', 'created_by'], comRows)
+    const comIds = await batchInsert(conn, 'commodity_library', ['project_id', 'code', 'name', 'uom', 'wbs_code', 'wbs_node_id', 'estimated_qty', 'trace_level', 'preservation', 'preferred_vendor', 'notes', 'status', 'created_by'], comRows)
     const comMeta = comRows.map((r, i) => ({ id: comIds[i], code: r[1], name: r[2], uom: r[3], wbs: r[4] }))
 
-    const EQT = ['Pump', 'Vessel', 'Exchanger', 'Motor', 'Compressor', 'Transformer']
+    // Tagged process equipment with area-coded tags (e.g. 34-ML-001 = Grinding/SAG mill).
+    const EQUIP = [
+      { type: 'SAG Mill', code: 'ML', area: '34', crit: 'high', wt: [200000, 450000], size: '11.6 x 6.7 x 9.0 m' },
+      { type: 'Ball Mill', code: 'ML', area: '34', crit: 'high', wt: [180000, 380000], size: '7.3 x 11.0 x 7.5 m' },
+      { type: 'Primary Gyratory Crusher', code: 'CR', area: '31', crit: 'high', wt: [150000, 320000], size: '8.0 x 6.0 x 9.5 m' },
+      { type: 'Secondary Cone Crusher', code: 'CR', area: '32', crit: 'high', wt: [40000, 90000], size: '4.5 x 3.0 x 4.0 m' },
+      { type: 'Vibrating Screen', code: 'SC', area: '32', crit: 'medium', wt: [8000, 22000], size: '6.0 x 3.0 x 2.5 m' },
+      { type: 'Flotation Cell', code: 'FC', area: '36', crit: 'high', wt: [12000, 35000], size: '5.5 x 5.5 x 6.0 m' },
+      { type: 'Concentrate Thickener', code: 'TH', area: '37', crit: 'medium', wt: [30000, 80000], size: '24 m dia x 6 m' },
+      { type: 'Slurry Pump', code: 'PP', area: '35', crit: 'high', wt: [1500, 9000], size: '2.5 x 1.6 x 1.8 m' },
+      { type: 'Cyclone Cluster', code: 'CY', area: '35', crit: 'medium', wt: [3000, 9000], size: '3.0 x 3.0 x 4.5 m' },
+      { type: 'Overland Conveyor Drive', code: 'CV', area: '41', crit: 'high', wt: [15000, 60000], size: '8.0 x 4.0 x 5.0 m' },
+      { type: 'Apron Feeder', code: 'FE', area: '31', crit: 'medium', wt: [25000, 70000], size: '12.0 x 2.4 x 2.0 m' },
+      { type: 'Power Transformer', code: 'TX', area: '61', crit: 'high', wt: [20000, 65000], size: '4.5 x 3.0 x 4.2 m' },
+      { type: 'Reagent Dosing Pump', code: 'PP', area: '38', crit: 'low', wt: [200, 1200], size: '1.2 x 0.8 x 1.0 m' },
+      { type: 'Pressure Filter', code: 'FL', area: '37', crit: 'medium', wt: [20000, 55000], size: '8.0 x 4.0 x 6.0 m' },
+    ]
+    // PO package descriptors (also used for PO names) — mining vocabulary.
+    const PKGNAME = ['Slurry Pipework', 'Mill Liner', 'Flotation Cell', 'Valve & Actuator', 'Structural Steel', 'Conveyor System', 'Electrical & MCC', 'Field Instrumentation', 'Slurry Pump', 'Reagent System', 'Cyclone Cluster', 'Thickener', 'Crusher Spares', 'Cable & Tray']
     const eqRows = []
     for (let i = 1; i <= S.equipment; i++) {
-      const wc = rnd(leafCodes)
-      eqRows.push([pid, `ZZE-${pad(i, 4)}`, rnd(EQT), wc, wbsIdByCode[wc], `${rnd(EQT)} unit ${i}`, `Area ${ri(1, 40)}`, rnd(['high', 'medium', 'low']), `Datasheet DS-${ri(1000, 9999)}`, rnd(['A', 'B', 'C']), `ZZ Supplier ${ri(1, S.supplier)} Pty Ltd`, ri(50, 40000), 'active', ADMIN])
+      const wc = rnd(leafCodes); const e = rnd(EQUIP); const tag = `${e.area}-${e.code}-${pad(i, 3)}`
+      eqRows.push([pid, tag, e.type, wc, wbsIdByCode[wc], `${e.type} (${tag})`, `Area ${e.area}`, e.crit, `Datasheet DS-${e.code}-${ri(1000, 9999)}`, rnd(['A', 'B', 'C']), supName(ri(1, S.supplier)), ri(e.wt[0], e.wt[1]), e.size, `Vendor data pack & GA drawings; ${e.crit === 'high' ? 'long-lead critical item' : 'standard delivery'}`, 'active', ADMIN])
     }
-    await batchInsert(conn, 'equipment_list', ['project_id', 'tag', 'equipment_type', 'wbs_code', 'wbs_node_id', 'description', 'area_location', 'criticality', 'spec', 'trace_class', 'vendor', 'weight_kg', 'status', 'created_by'], eqRows)
+    await batchInsert(conn, 'equipment_list', ['project_id', 'tag', 'equipment_type', 'wbs_code', 'wbs_node_id', 'description', 'area_location', 'criticality', 'spec', 'trace_class', 'vendor', 'weight_kg', 'size_lwh', 'notes', 'status', 'created_by'], eqRows)
 
     // ── MTO registers + revisions + lines (demand; po_ref filled after POs) ──
     const mtoIds = []
     for (let m = 1; m <= S.mtoReg; m++) {
       const [r] = await conn.query('INSERT INTO mto_registers (project_id,name,reference,current_revision,owner,description,status,created_by) VALUES (?,?,?,?,?,?,?,?)',
-        [pid, `ZZ MTO ${DISC[(m - 1) % DISC.length]}`, `ZZ-MTO-${pad(m, 3)}`, 'A', `Eng Lead ${m}`, `Material take-off for ${DISC[(m - 1) % DISC.length]} discipline`, 'active', ADMIN])
+        [pid, `${AREAS[(m - 1) % AREAS.length].name} MTO`, `ZZ-MTO-${pad(m, 3)}`, 'A', `Eng Lead ${m}`, `Material take-off — ${AREAS[(m - 1) % AREAS.length].name} area`, 'active', ADMIN])
       mtoIds.push(r.insertId)
     }
     await batchInsert(conn, 'mto_revisions', ['mto_id', 'revision', 'uploaded_by', 'notes'], mtoIds.flatMap((mid, idx) => (idx < 2 ? ['A', 'B', 'C'] : ['A']).map(rev => [mid, rev, ADMIN, `Revision ${rev}`])))
@@ -350,10 +427,10 @@ async function main() {
       const [r] = await conn.query(
         `INSERT INTO purchase_orders (project_id,po_number,po_name,wbs_code,group_category,ros_date,is_locked,vendor_name,vendor_code,supplier_id,description,value,currency,status,rag,incoterms,warehouse_id,contract_delivery_date,estimated_delivery_date,milestone_po_date,milestone_eta_date,milestone_ros_date,created_by,expeditor_id)
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [pid, poNum, `${rnd(EQT)} package ${i}`, rnd(leafCodes), rnd(GC), iso(poRos), i % 4 === 0 ? 1 : 0, `ZZ Supplier ${sup + 1} Pty Ltd`, `ZZF-${pad(sup + 1, 3)}`, supIds[sup], `Supply & delivery package ${i}`, ri(20000, 1500000), 'AUD', poStatus, rnd(['green', 'amber', 'red']), rnd(INCO), rnd(whIds), iso(cddHdr), iso(tl.receipt), iso(tl.ms.poIssued), iso(tl.eta), iso(poRos), ADMIN, someExp])
+        [pid, poNum, `${rnd(PKGNAME)} Package ${pad(i, 3)}`, rnd(leafCodes), rnd(GC), iso(poRos), i % 4 === 0 ? 1 : 0, supName(sup + 1), `ZZF-${pad(sup + 1, 3)}`, supIds[sup], `Supply & delivery package ${i}`, ri(20000, 1500000), 'AUD', poStatus, rnd(['green', 'amber', 'red']), rnd(INCO), rnd(whIds), iso(cddHdr), iso(tl.receipt), iso(tl.ms.poIssued), iso(tl.eta), iso(poRos), ADMIN, someExp])
       const poId = r.insertId
       if (amended) dclRows.push(['purchase_order', poId, 'ros_date', iso(mtoDemand), iso(poRos), 'Procurement amendment — revised delivery date agreed with vendor at PO placement', PROC_USER])
-      poMeta.push({ id: poId, poNum, tl, mtoDemand, poRos, amended, maxRank, sup, vendor: `ZZ Supplier ${sup + 1} Pty Ltd`, status: poStatus })
+      poMeta.push({ id: poId, poNum, tl, mtoDemand, poRos, amended, maxRank, sup, vendor: supName(sup + 1), status: poStatus })
       for (const sp of specs) {
         const { l, mIdx, com, st, rank, heatReq } = sp
         // every line inherits the PO's ROS (amended or not); cdd ≤ ROS.
@@ -363,9 +440,9 @@ async function main() {
         mtoPoRef.set(mtoLineIds[mIdx], poNum)
         poLineRows.push([poId, wbsIdByCode[com.wbs], `L${pad(l, 3)}`, `${com.name} — ${com.code}`, `TAG-${i}-${l}`, ri(1, 200), com.uom,
           rank >= 5 ? ri(1, 200) : 0, +(ri(50, 9000) + Math.random()).toFixed(2), iso(cdd), iso(rosDate), heatReq, com.wbs,
-          `ZZ Supplier ${sup + 1} Pty Ltd`, rnd(['Class I', 'Class II', 'Class III']), heatReq ? 'Mill cert 3.1' : null, chance(0.4) ? 1 : 0, st,
+          supName(sup + 1), rnd(['Class I', 'Class II', 'Class III']), heatReq ? 'Mill cert 3.1' : null, chance(0.4) ? 1 : 0, st,
           (rank < 2 ? 'grey' : lineOverdue ? 'red' : rnd(['green', 'amber'])), com.id])
-        poLineMeta.push({ poId, poNum, com, status: st, rank, heatReq, rosDate, vendor: `ZZ Supplier ${sup + 1} Pty Ltd`, wh: rnd(whIds), tl })
+        poLineMeta.push({ poId, poNum, com, status: st, rank, heatReq, rosDate, vendor: supName(sup + 1), wh: rnd(whIds), tl })
       }
     }
     const poLineIds = await batchInsert(conn, 'po_lines', ['po_id', 'wbs_id', 'line_number', 'description', 'tag_number', 'qty', 'uom', 'qty_received', 'unit_price', 'cdd', 'ros_date', 'heat_number_required', 'wbs_code_snapshot', 'supplier_name_snapshot', 'insp_type', 'cert_required', 'vdrl_required', 'status', 'rag', 'commodity_id'], poLineRows)
@@ -406,6 +483,44 @@ async function main() {
     if (dclRows.length) await batchInsert(conn, 'date_change_log', ['entity_type', 'entity_id', 'field_name', 'old_value', 'new_value', 'change_reason', 'created_by'], dclRows)
     await batchInsert(conn, 'po_approvals', ['po_id', 'approver_id', 'approval_level', 'status', 'comments', 'actioned_at'], apprRows)
 
+    // ── WBS GANTT ROLL-UP DATES ────────────────────────────────────────────────
+    // A WBS node's schedule is a ROLL-UP of the work beneath it (EPC-correct), NOT
+    // hand-keyed (the manual date fields were removed from the node modal). Derive
+    // each node's bar from its PO-line timelines: planned span = earliest PO-raised →
+    // latest line ROS; forecast end = latest expected receipt (shows drift vs planned);
+    // actual = started / received work. A node spans ALL descendants (codes under its
+    // prefix), so parent areas summarise their children on the Gantt.
+    const minD = (a, b) => (!a ? b : !b ? a : (a < b ? a : b))
+    const maxD = (a, b) => (!a ? b : !b ? a : (a > b ? a : b))
+    const leafAgg = {}  // leaf WBS code → aggregated dates from its PO lines
+    for (const ml of poLineMeta) {
+      const a = (leafAgg[ml.com.wbs] ||= {})
+      a.ps = minD(a.ps, ml.tl.raised); a.pe = maxD(a.pe, ml.rosDate)
+      a.fs = minD(a.fs, ml.tl.raised); a.fe = maxD(a.fe, ml.tl.receipt)
+      if (ml.rank >= 2) a.as_ = minD(a.as_, ml.tl.raised)     // work started
+      if (ml.rank >= 5) a.ae  = maxD(a.ae,  ml.tl.receipt)    // work received/complete
+    }
+    let rollupCount = 0
+    for (const meta of wbsMeta) {
+      const code = meta.code; const g = {}
+      for (const lc in leafAgg) {
+        if (lc === code || lc.startsWith(code + '.')) {
+          const a = leafAgg[lc]
+          g.ps = minD(g.ps, a.ps); g.pe = maxD(g.pe, a.pe)
+          g.fs = minD(g.fs, a.fs); g.fe = maxD(g.fe, a.fe)
+          g.as_ = minD(g.as_, a.as_); g.ae = maxD(g.ae, a.ae)
+        }
+      }
+      if (!(g.ps && g.pe)) continue
+      await conn.query(
+        `UPDATE wbs_nodes SET planned_start=?, planned_end=?, forecast_start=?, forecast_end=?,
+           actual_start=?, actual_end=?, ros_date=? WHERE project_id=? AND code=?`,
+        [iso(g.ps), iso(g.pe), g.fs ? iso(g.fs) : null, g.fe ? iso(g.fe) : null,
+         g.as_ ? iso(g.as_) : null, g.ae ? iso(g.ae) : null, iso(g.pe), pid, code])
+      rollupCount++
+    }
+    console.log(`[seed] WBS Gantt roll-up applied to ${rollupCount}/${wbsMeta.length} nodes`)
+
     // ── VDRL packages + documents (for POs carrying vdrl-required lines) ──
     const DT = ['Drawing', 'Datasheet', 'Procedure', 'Certificate', 'Manual', 'Report']
     let vdrlDocs = 0
@@ -417,7 +532,7 @@ async function main() {
       const docRows = []
       for (let d = 1; d <= ri(2, 5); d++) {
         const req = addDays(po.tl.ms.draw, ri(0, 90)); const overdue = req < TODAY && chance(0.4)  // docs due in the drawings/early-fab window
-        docRows.push([vp.insertId, `DOC-${po.poNum.slice(-4)}-${pad(d, 2)}`, `${rnd(DT)} ${d}`, rnd(DT), rnd(DISC), 'A', rnd(['IFA', 'IFR', 'IFC']), overdue ? 'Overdue' : rnd(['Not submitted', 'Under review', 'Approved']), iso(req), iso(addDays(req, ri(-5, 10))), overdue ? null : iso(addDays(req, -ri(0, 5))), chance(0.5) ? 1 : 0, ADMIN])
+        docRows.push([vp.insertId, `DOC-${po.poNum.slice(-4)}-${pad(d, 2)}`, `${rnd(DT)} ${d}`, rnd(DT), rnd(['Mechanical', 'Process', 'Piping', 'Electrical', 'Instrumentation', 'Civil']), 'A', rnd(['IFA', 'IFR', 'IFC']), overdue ? 'Overdue' : rnd(['Not submitted', 'Under review', 'Approved']), iso(req), iso(addDays(req, ri(-5, 10))), overdue ? null : iso(addDays(req, -ri(0, 5))), chance(0.5) ? 1 : 0, ADMIN])
         vdrlDocs++
       }
       await batchInsert(conn, 'vdrl_documents', ['package_id', 'doc_number', 'title', 'doc_type', 'discipline', 'revision', 'purpose', 'status', 'required_date', 'promised_date', 'submitted_date', 'cert_required', 'created_by'], docRows)
@@ -515,7 +630,7 @@ async function main() {
     const holdRows = []
     for (let i = 0; i < S.hold; i++) {
       const active = chance(0.6); const since = addDays(TODAY, -ri(5, 90))
-      holdRows.push([pid, `TAG-${ri(1, S.po)}-${ri(1, 9)}`, rnd(['Valve', 'Flange', 'Spool']), rnd(['Missing MTC', 'Heat mismatch', 'NDE outstanding', 'Awaiting QA review']), rnd(['ZZF-WH1', 'ZZF-WH2']), iso(since), Math.round((TODAY - since) / 86400000), ri(0, 4), certIds.length ? rnd(certIds) : null, `ZZ Supplier ${ri(1, S.supplier)} Pty Ltd`, active ? 'active' : 'released', active ? null : ADMIN])
+      holdRows.push([pid, `TAG-${ri(1, S.po)}-${ri(1, 9)}`, rnd(['Valve', 'Flange', 'Spool']), rnd(['Missing MTC', 'Heat mismatch', 'NDE outstanding', 'Awaiting QA review']), rnd(['ZZF-WH1', 'ZZF-WH2']), iso(since), Math.round((TODAY - since) / 86400000), ri(0, 4), certIds.length ? rnd(certIds) : null, supName(ri(1, S.supplier)), active ? 'active' : 'released', active ? null : ADMIN])
     }
     await batchInsert(conn, 'traceability_holds', ['project_id', 'tag', 'item', 'hold_reason', 'location', 'since_date', 'age_days', 'chase_count', 'related_cert_id', 'vendor_name', 'status', 'released_by'], holdRows)
 
