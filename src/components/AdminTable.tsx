@@ -112,6 +112,22 @@ export function AdminTable({ tableId, columns, dark, children, empty, headerAlig
   // this wide even when the flex column has no remaining space.
   const minTableWidth = columns.reduce((acc, col, i) => acc + (col.flex ? 0 : widths[i]), 0)
 
+  // ─── BODY ALIGNMENT ──────────────────────────────────────────
+  // Centre the contents of Status / State / Actions / date columns (matched by
+  // header label) to match the registers app-wide. Emitted as a scoped nth-child
+  // rule keyed on data-atid so it only ever affects this table's own rows.
+  const centerCols = columns
+    .map((c, i) => {
+      const l = c.label.trim()
+      const isActions = /^actions?$/i.test(l) || (l === '' && !!c.noResize)  // the fixed actions column
+      const isMatch = /^(status|state)$/i.test(l) || /(date|login|raised|created|updated|expiry|due|contract)/i.test(c.label)
+      return (isActions || isMatch) ? i + 1 : 0
+    })
+    .filter(Boolean)
+  const bodyAlignCss = centerCols.length
+    ? centerCols.map(n => `table[data-atid="${tableId}"] > tbody > tr > td:nth-child(${n})`).join(',') + '{text-align:center !important}'
+    : ''
+
   // ─── GRADIENT COLOURS ────────────────────────────────────────
   // Match the table wrapper background so the fade blends cleanly.
   const fadeL = dark ? 'rgba(30,41,59,0.92)' : 'rgba(255,255,255,0.92)'
@@ -145,7 +161,8 @@ export function AdminTable({ tableId, columns, dark, children, empty, headerAlig
           pointerEvents: 'none', zIndex: 4, borderRadius: '0 10px 10px 0',
         }} />
       )}
-      <table style={{
+      {bodyAlignCss && <style>{bodyAlignCss}</style>}
+      <table data-atid={tableId} style={{
         width: '100%',
         minWidth: minTableWidth,
         borderCollapse: 'separate',
