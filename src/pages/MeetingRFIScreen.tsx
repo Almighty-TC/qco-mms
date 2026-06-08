@@ -37,12 +37,19 @@ const pill = (text: string, color: string) => (
   <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600,
     color, background: `${color}1f`, whiteSpace: 'nowrap' }}>{text}</span>
 )
-const TypePill = ({ t }: { t: 'rfi' | 'meeting' }) =>
-  pill(t === 'rfi' ? 'RFI' : 'Meeting', t === 'rfi' ? '#2563eb' : '#7c3aed')
+const TypePill = ({ t }: { t: 'rfi' | 'meeting' }) => {
+  const color = t === 'rfi' ? '#2563eb' : '#7c3aed'
+  return (
+    <span style={{ display: 'inline-block', minWidth: 84, textAlign: 'center', padding: '3px 16px', borderRadius: 999,
+      fontSize: 11, fontWeight: 600, color, background: `${color}1f`, whiteSpace: 'nowrap' }}>
+      {t === 'rfi' ? 'RFI' : 'Meeting'}
+    </span>
+  )
+}
 const LinkChip = ({ r, dark }: { r: RfiRow; dark: boolean }) => {
   if (r.link_type === 'project' || !r.link_label) return <span style={{ color: '#94a3b8', fontSize: 12 }}>—</span>
   return (
-    <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600,
+    <span style={{ display: 'inline-block', minWidth: 130, textAlign: 'center', padding: '4px 14px', borderRadius: 6, fontSize: 11, fontWeight: 600,
       color: dark ? '#cbd5e1' : '#475569', background: dark ? '#334155' : '#eef2f7', whiteSpace: 'nowrap' }}>
       {r.link_type.toUpperCase()} {r.link_label}
     </span>
@@ -180,7 +187,7 @@ function MeetingRFIInner({ dark, projectId, projectName, userRole, userId, onBac
                 <td data-align="left" style={td}>{r.title}</td>
                 <td style={td}><LinkChip r={r} dark={dark} /></td>
                 <td data-align="left" style={{ ...td, color: r.assigned_to_name ? col : sub }}>{r.assigned_to_name || 'Unassigned'}</td>
-                <td data-align="center" style={td}>{r.due_date ? <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: RAG_COLOR[r.rag] }} />{r.due_date}</span> : <span style={{ color: sub }}>—</span>}</td>
+                <td data-align="center" style={td}>{r.due_date ? <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: RAG_COLOR[r.rag] }} />{r.due_date}</span> : <span style={{ color: sub, display: 'block', textAlign: 'center' }}>—</span>}</td>
                 <td data-align="center" data-col="status" style={td}>{pill(r.status.replace('_', ' '), STATUS_COLOR[r.status] || '#94a3b8')}</td>
                 <td data-align="center" style={{ ...td, color: sub }}>{r.raised_date}</td>
               </tr>
