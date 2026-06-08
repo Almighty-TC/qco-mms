@@ -183,7 +183,7 @@ function MeetingRFIInner({ dark, projectId, projectName, userRole, userId, onBac
                   onMouseEnter={e => (e.currentTarget.style.background = dark ? '#0f172a' : '#f8fafc')}
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                 <td style={{ ...td, fontWeight: 600 }}>{r.ref}</td>
-                <td style={td}><TypePill t={r.record_type} /></td>
+                <td data-align="center" style={td}><TypePill t={r.record_type} /></td>
                 <td data-align="left" style={td}>{r.title}</td>
                 <td style={td}><LinkChip r={r} dark={dark} /></td>
                 <td data-align="left" style={{ ...td, color: r.assigned_to_name ? col : sub }}>{r.assigned_to_name || 'Unassigned'}</td>
