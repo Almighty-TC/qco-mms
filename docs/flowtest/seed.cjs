@@ -466,17 +466,27 @@ async function main() {
       // milestone planned dates come straight off the PO timeline (already monotonic):
       // PO Issued ≤ Drawings ≤ Manufacture ≤ FAT ≤ Ship ≤ On Site.
       const msDates = [po.tl.ms.poIssued, po.tl.ms.draw, po.tl.ms.mfg, po.tl.ms.fat, po.tl.ms.ship, po.tl.ms.onsite]
+      // Running floors keep forecast AND actual monotonic across the chain: when a
+      // milestone slips, every later one cascades so it can never precede it (a slipped
+      // FAT must push Ship / On-Site, not be overtaken by them).
+      let prevForecast = null, prevActual = null
       STEPS.forEach((label, s) => {
         const planned = msDates[s]
         // forecast == planned UNLESS expediting revised it — so a forecast ≠ planned is
         // ALWAYS backed by a date_change_log row (expediting stage). Only POs that reached
-        // expediting (rank ≥ 3) on already-passed milestones can slip.
-        const slip = po.maxRank >= 3 && planned < TODAY && chance(0.18)
-        const forecast = slip ? addDays(planned, ri(5, 30)) : planned
-        const done = planned < TODAY && chance(0.85)
-        const breached = planned < TODAY && !done                  // passed but not done → overdue (Attention)
-        const actual = done ? clampPast(addDays(forecast, ri(0, 8))) : null  // actual ≥ forecast, ≤ today
-        if (slip) msSlip.push({ idx: msRows.length, planned, forecast })
+        // expediting (rank ≥ 3) on already-passed milestones get an OWN slip…
+        const ownSlip = po.maxRank >= 3 && planned < TODAY && chance(0.18)
+        let forecast = ownSlip ? addDays(planned, ri(5, 30)) : planned
+        // …then cascade: a milestone's forecast can never precede the previous one's.
+        if (prevForecast && forecast < prevForecast) forecast = addDays(prevForecast, ri(1, 6))
+        const slipped = +forecast !== +planned                     // moved by own slip OR cascade → log it
+        // Completion is judged against the (cascaded) forecast; actuals stay monotonic.
+        const done = forecast < TODAY && chance(0.85)
+        const breached = forecast < TODAY && !done                 // forecast passed but not done → overdue (Attention)
+        let actual = done ? clampPast(addDays(forecast, ri(0, 8))) : null  // actual ≥ forecast, ≤ today
+        if (actual && prevActual && actual < prevActual) actual = clampPast(addDays(prevActual, ri(0, 4)))
+        if (slipped) msSlip.push({ idx: msRows.length, planned, forecast })
+        prevForecast = forecast; if (actual) prevActual = actual
         msRows.push([po.id, s + 1, label, `${label} milestone`, iso(planned), iso(planned), iso(forecast), actual ? iso(actual) : null, done ? 'complete' : breached ? 'overdue' : 'not_started', 1, done ? ADMIN : null, ADMIN])
       })
       apprRows.push([po.id, ADMIN, 1, po.status === 'rfq' ? 'pending' : 'approved', po.status === 'rfq' ? null : 'Approved within delegation', po.status === 'rfq' ? null : new Date()])
