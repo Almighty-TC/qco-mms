@@ -3502,23 +3502,22 @@ function CurrenciesTab({ dark }: { dark: boolean }) {
       <AdminTable tableId="admin_currencies" columns={CURR_COLS} dark={dark} empty="No currencies found.">
         {rows.map(c => (
           <AdminRow key={c.id} dark={dark}>
-            <AdminCell col={CURR_COLS[0]}><span style={{ fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: col }}>{c.code}</span></AdminCell>
-            <AdminCell col={CURR_COLS[1]}><span style={{ color: col }}>{c.name}</span></AdminCell>
-            <AdminCell col={CURR_COLS[2]}><span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#64748b' }}>{c.symbol}</span></AdminCell>
-            <AdminCell col={CURR_COLS[3]}>
+            <AdminCell><span style={{ fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: col }}>{c.code}</span></AdminCell>
+            <AdminCell><span style={{ color: col }}>{c.name}</span></AdminCell>
+            <AdminCell><span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#64748b' }}>{c.symbol}</span></AdminCell>
+            <AdminCell>
               <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 9999, background: c.is_active ? 'rgba(34,197,94,0.12)' : 'rgba(148,163,184,0.15)', color: c.is_active ? '#15803d' : '#64748b' }}>
                 {c.is_active ? 'Active' : 'Inactive'}
               </span>
             </AdminCell>
-            <AdminCell col={CURR_COLS[4]}>
-              <AdminActions>
-                <button onClick={() => openEdit(c)} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 5, border: bd, background: 'none', color: '#64748b', cursor: 'pointer', fontFamily: 'inherit' }}>Edit</button>
-                <button onClick={() => toggleActive(c)} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 5, border: bd, background: 'none', color: c.is_active ? '#b45309' : '#15803d', cursor: 'pointer', fontFamily: 'inherit' }}>
-                  {c.is_active ? 'Deactivate' : 'Activate'}
-                </button>
-                <button onClick={() => { setDelTarget(c); setDelErr('') }} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.3)', background: 'none', color: '#ef4444', cursor: 'pointer', fontFamily: 'inherit' }}>Delete</button>
-              </AdminActions>
-            </AdminCell>
+            {/* Actions cell — AdminActions renders its own <td>; do not wrap in AdminCell (avoids nested <td>) */}
+            <AdminActions>
+              <button onClick={() => openEdit(c)} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 5, border: bd, background: 'none', color: '#64748b', cursor: 'pointer', fontFamily: 'inherit' }}>Edit</button>
+              <button onClick={() => toggleActive(c)} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 5, border: bd, background: 'none', color: c.is_active ? '#b45309' : '#15803d', cursor: 'pointer', fontFamily: 'inherit' }}>
+                {c.is_active ? 'Deactivate' : 'Activate'}
+              </button>
+              <button onClick={() => { setDelTarget(c); setDelErr('') }} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.3)', background: 'none', color: '#ef4444', cursor: 'pointer', fontFamily: 'inherit' }}>Delete</button>
+            </AdminActions>
           </AdminRow>
         ))}
       </AdminTable>
@@ -3667,22 +3666,21 @@ function PackageTypesTab({ dark }: { dark: boolean }) {
       <AdminTable tableId="admin_package_types" columns={PT_COLS} dark={dark} empty="No package types found.">
         {rows.map(p => (
           <AdminRow key={p.id} dark={dark}>
-            <AdminCell col={PT_COLS[0]}><span style={{ fontWeight: 500, color: col }}>{p.name}</span></AdminCell>
-            <AdminCell col={PT_COLS[1]}><span style={{ fontSize: 12, color: '#64748b' }}>{p.description ?? '—'}</span></AdminCell>
-            <AdminCell col={PT_COLS[2]}>
+            <AdminCell><span style={{ fontWeight: 500, color: col }}>{p.name}</span></AdminCell>
+            <AdminCell><span style={{ fontSize: 12, color: '#64748b' }}>{p.description ?? '—'}</span></AdminCell>
+            <AdminCell>
               <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 9999, background: p.is_active ? 'rgba(34,197,94,0.12)' : 'rgba(148,163,184,0.15)', color: p.is_active ? '#15803d' : '#64748b' }}>
                 {p.is_active ? 'Active' : 'Inactive'}
               </span>
             </AdminCell>
-            <AdminCell col={PT_COLS[3]}>
-              <AdminActions>
-                <ActionMenu dark={dark} actions={[
-                  { label: 'Edit', icon: '✏', onClick: () => openEdit(p) },
-                  { label: p.is_active ? 'Deactivate' : 'Activate', icon: p.is_active ? '⊙' : '↺', variant: p.is_active ? 'warning' : undefined, onClick: () => toggleActive(p) },
-                  { label: 'Delete', icon: '🗑', variant: 'danger', onClick: () => { setDelTarget(p); setDelErr('') } },
-                ] satisfies ActionItem[]} />
-              </AdminActions>
-            </AdminCell>
+            {/* Actions cell — AdminActions renders its own <td>; do not wrap in AdminCell (avoids nested <td>) */}
+            <AdminActions>
+              <ActionMenu dark={dark} actions={[
+                { label: 'Edit', icon: '✏', onClick: () => openEdit(p) },
+                { label: p.is_active ? 'Deactivate' : 'Activate', icon: p.is_active ? '⊙' : '↺', variant: p.is_active ? 'warning' : undefined, onClick: () => toggleActive(p) },
+                { label: 'Delete', icon: '🗑', variant: 'danger', onClick: () => { setDelTarget(p); setDelErr('') } },
+              ] satisfies ActionItem[]} />
+            </AdminActions>
           </AdminRow>
         ))}
       </AdminTable>
