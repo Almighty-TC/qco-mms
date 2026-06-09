@@ -283,7 +283,7 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
                     {approvals.map(a => (
                       <tr key={a.cert_id} style={{ borderBottom: t.rowBd }}>
                         <td data-align="left" style={{ ...tdSt, ...mono, fontSize: 11, color: '#2563eb', fontWeight: 600 }}>{a.file_name}</td>
-                        <td style={tdSt} title={acronymTitle(a.cert_type)}>{a.cert_type}</td>
+                        <td data-align="center" style={tdSt} title={acronymTitle(a.cert_type)}>{a.cert_type}</td>
                         <td data-align="left" style={tdSt}>{a.item_scope}{a.applies_to ? <span style={{ color: t.sub }}> · {a.applies_to}</span> : ''}</td>
                         <td data-align="left" style={tdSt}>{a.vendor_name} <span style={{ color: t.sub }}>/ {a.uploader}</span></td>
                         <td data-align="center" style={{ ...tdSt, ...mono, fontSize: 11, color: t.sub }}>{fmtDate(a.uploaded_date)}</td>
