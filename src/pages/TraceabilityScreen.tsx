@@ -12,6 +12,8 @@ import { TRACEABILITY_HELP } from '../helpContent'
 import { Pager } from '../components/Pager'
 import { usePagedList } from '../hooks/usePagedList'
 import { ToastProvider, useToast } from '../hooks/useToast'
+import { ActionMenu, type ActionItem } from '../components/ActionMenu'
+import { acronymTitle } from '../lib/acronyms'
 import { API, tokens, fmtDate } from '../components/traceability/traceUtil'
 import { UploadCertModal, type VdrlRow } from '../components/traceability/UploadCertModal'
 import { CertDetailModal } from '../components/traceability/CertDetailModal'
@@ -281,7 +283,7 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
                     {approvals.map(a => (
                       <tr key={a.cert_id} style={{ borderBottom: t.rowBd }}>
                         <td data-align="left" style={{ ...tdSt, ...mono, fontSize: 11, color: '#2563eb', fontWeight: 600 }}>{a.file_name}</td>
-                        <td style={tdSt}>{a.cert_type}</td>
+                        <td style={tdSt} title={acronymTitle(a.cert_type)}>{a.cert_type}</td>
                         <td data-align="left" style={tdSt}>{a.item_scope}{a.applies_to ? <span style={{ color: t.sub }}> · {a.applies_to}</span> : ''}</td>
                         <td data-align="left" style={tdSt}>{a.vendor_name} <span style={{ color: t.sub }}>/ {a.uploader}</span></td>
                         <td data-align="center" style={{ ...tdSt, ...mono, fontSize: 11, color: t.sub }}>{fmtDate(a.uploaded_date)}</td>
@@ -291,11 +293,11 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
                             : <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 6, background: dark ? '#334155' : '#eef2f7', color: t.sub, fontWeight: 600 }}>Normal</span>}
                         </td>
                         <td data-align="center" style={tdSt}>
-                          <div style={{ display: 'flex', gap: 6 }}>
-                            <button onClick={() => setReviewCert(a)} style={{ padding: '4px 10px', borderRadius: 5, border: 'none', background: dark ? '#312e5e' : '#ede9fe', color: '#7c3aed', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>👁 Review</button>
-                            <button onClick={() => setReviewCert(a)} style={{ padding: '4px 10px', borderRadius: 5, border: 'none', background: 'rgba(34,197,94,0.14)', color: '#16a34a', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>✓ Verify</button>
-                            <button onClick={() => setRejectCert(a)} style={{ padding: '4px 10px', borderRadius: 5, border: 'none', background: 'rgba(239,68,68,0.1)', color: '#dc2626', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>Reject</button>
-                          </div>
+                          <ActionMenu dark={dark} actions={[
+                            { label: 'Review', icon: '👁', onClick: () => setReviewCert(a) },
+                            { label: 'Verify', icon: '✓', onClick: () => setReviewCert(a) },
+                            { label: 'Reject', icon: '✕', variant: 'danger', onClick: () => setRejectCert(a) },
+                          ] satisfies ActionItem[]} />
                         </td>
                       </tr>
                     ))}

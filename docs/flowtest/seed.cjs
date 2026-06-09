@@ -637,9 +637,9 @@ async function main() {
       // mill cert issued around manufacture of that heat's PO; received after issue, ≤ today.
       const issue = clampPast(addDays(m.tl.ms.mfg, ri(0, 30))); const stat = rnd(['verified', 'received', 'pending', 'overdue', 'rejected'])
       const received = (stat === 'pending' || stat === 'overdue') ? null : iso(clampPast(addDays(issue, ri(1, 20))))
-      certRows.push([pid, 'approval', m.poId, m.poNum, m.vendor, `TAG-${m.poNum.slice(-4)}`, `MTC ${m.heat}`, 'MTC', m.heat, m.heat, iso(issue), iso(addDays(issue, 30)), received, 1, stat, stat === 'overdue' || stat === 'rejected' ? 'high' : 'normal', ADMIN])
+      certRows.push([pid, 'approval', m.poId, m.poNum, m.vendor, `TAG-${m.poNum.slice(-4)}`, `MTC ${m.heat}`, 'MTC', `MTC-${m.heat}.pdf`, m.heat, m.heat, iso(issue), iso(addDays(issue, 30)), received, 1, stat, stat === 'overdue' || stat === 'rejected' ? 'high' : 'normal', ADMIN])
     }
-    const certIds = certRows.length ? await batchInsert(conn, 'traceability_certs', ['project_id', 'category', 'po_id', 'po_ref', 'vendor_name', 'tag', 'document_name', 'cert_type', 'heat_ref', 'applies_to', 'issue_date', 'due_date', 'received_date', 'is_required', 'status', 'priority', 'uploaded_by'], certRows) : []
+    const certIds = certRows.length ? await batchInsert(conn, 'traceability_certs', ['project_id', 'category', 'po_id', 'po_ref', 'vendor_name', 'tag', 'document_name', 'cert_type', 'file_name', 'heat_ref', 'applies_to', 'issue_date', 'due_date', 'received_date', 'is_required', 'status', 'priority', 'uploaded_by'], certRows) : []
     const holdRows = []
     for (let i = 0; i < S.hold; i++) {
       const active = chance(0.6); const since = addDays(TODAY, -ri(5, 90))
