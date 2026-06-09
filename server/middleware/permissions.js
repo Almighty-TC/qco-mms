@@ -107,24 +107,30 @@ function denyReadOnly(req, res, next) {
   next()
 }
 
-// ─── ENFORCE (C-b2 per-route authorization) ──────────────────
+// ─── ENFORCE (C-b2 writes + C-e reads: per-route authorization) ──────────────
 // One middleware per router (applied after denyReadOnly). Maps the HTTP verb to
 // a matrix action and delegates to requirePermission(module, action).
-//   verb→action: POST→can_create, PUT/PATCH→can_edit, DELETE→can_delete
+//   verb→action: GET→can_view, POST→can_create, PUT/PATCH→can_edit, DELETE→can_delete
 //   path /approve|reject|verify|issue|critical-path/ → can_approve
-//   GET → passes (C-b2 gates writes only; reads unchanged)
 // `moduleFor` is a module string OR a function(req)→module. If it returns a
 // falsy module, the route is left to the deny-floor alone (reported as residual).
 // NB: critical-path is a toggle (edit), NOT an approval — maps to can_edit (C-d fix).
+//
+// C-e (read gating): GET now requires can_view on the mapped module — previously
+// GET passed unconditionally ("reads unchanged"), which let any authenticated role
+// read every module regardless of the matrix (the PASS 1 read-leak finding). This
+// enforces the matrix STRICTLY: a role with no can_view=1 row for the module gets
+// 403. Roles that legitimately need read access but lack a matrix row must be
+// granted can_view=1 (matrix backfill is the deliberate follow-up, not this change).
 const APPROVE_RE = /\/(approve|reject|verify|issue)(\/|$)/
 function enforce(moduleFor) {
   return (req, res, next) => {
-    if (req.method === 'GET') return next()
     const p = (req.originalUrl || req.url || '').split('?')[0] // full path; router-relative req.path is unreliable
     const module = typeof moduleFor === 'function' ? moduleFor(p, req) : moduleFor
     if (!module) return next() // deny-floor-only residual route
-    const action = APPROVE_RE.test(p)
-      ? 'can_approve'
+    const action = req.method === 'GET'
+      ? 'can_view'
+      : APPROVE_RE.test(p) ? 'can_approve'
       : req.method === 'POST' ? 'can_create'
       : req.method === 'DELETE' ? 'can_delete'
       : 'can_edit'
