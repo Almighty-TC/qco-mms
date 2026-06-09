@@ -29,6 +29,7 @@ import { ConfirmerQueueScreen } from './pages/ConfirmerQueueScreen'
 import { AuditViewerScreen } from './pages/AuditViewerScreen'
 import { ForcePasswordChange } from './components/ForcePasswordChange'
 import { ChangePasswordModal } from './components/ChangePasswordModal'
+import { AcronymHeaderTitles } from './components/AcronymHeaderTitles'
 import './App.css'
 
 // ─── PAGE ROUTING ───────────────────────────────────────────
@@ -941,6 +942,7 @@ function App() {
     // on children of a zoom-scaled element is misaligned in some
     // browsers — keeping fixed elements outside guarantees correct positioning.
     <>
+    <AcronymHeaderTitles />
     {/* zoom scales the entire UI uniformly. Compensating height/width
         (= 100vh/vw ÷ scale) ensures the content fills the viewport
         exactly — without it, small mode leaves blank space and
