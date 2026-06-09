@@ -352,6 +352,71 @@ router.post('/cert/:certId/reject', async (req, res) => {
   }
 })
 
+// ─── GET /cert/:certId/file — open / download a certificate's file ────────────
+// Streams the uploaded file when one exists on disk; otherwise returns a generated
+// placeholder PDF (seeded/demo certs carry a file_name but no real file). Gated by
+// traceability.can_view so document access follows the matrix.
+router.get('/cert/:certId/file', require('../middleware/permissions').requirePermission('traceability', 'can_view'), async (req, res) => {
+  try {
+    const certId = Number(req.params.certId)
+    const [[cert]] = await db.query('SELECT * FROM traceability_certs WHERE id=?', [certId])
+    if (!cert) return res.status(404).json({ error: 'Certificate not found' })
+    const fname = (cert.file_name || `cert-${certId}.pdf`).replace(/["\r\n]/g, '')
+    // Real uploaded file on disk → stream it
+    if (cert.file_path) {
+      const abs = path.join(__dirname, '..', cert.file_path)
+      if (fs.existsSync(abs)) {
+        res.setHeader('Content-Type', cert.mime_type || 'application/octet-stream')
+        res.setHeader('Content-Disposition', `inline; filename="${fname}"`)
+        return fs.createReadStream(abs).pipe(res)
+      }
+    }
+    // No real file → generate a placeholder PDF on the fly
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="${fname.replace(/\.[^.]*$/, '')}.pdf"`)
+    res.send(stubCertPdf(cert))
+  } catch (e) {
+    res.status(500).json({ error: 'Could not open certificate file: ' + e.message })
+  }
+})
+
+// Minimal dependency-free one-page PDF for demo certs that have no real file.
+function stubCertPdf(cert) {
+  const lines = [
+    'MILL TEST CERTIFICATE  —  DEMO PLACEHOLDER',
+    '',
+    'Document  : ' + (cert.document_name || cert.file_name || ''),
+    'Type      : ' + (cert.cert_type || 'MTC'),
+    'Heat/Batch: ' + (cert.heat_ref || ''),
+    'Vendor    : ' + (cert.vendor_name || ''),
+    'PO Ref    : ' + (cert.po_ref || ''),
+    'Tag       : ' + (cert.tag || ''),
+    'Status    : ' + (cert.status || ''),
+    '',
+    'Generated placeholder for seeded/demo data — not a real mill',
+    'certificate. Upload a real file to replace it.',
+  ]
+  const esc = s => String(s).replace(/([()\\])/g, '\\$1')
+  let content = 'BT /F1 12 Tf 56 740 Td 16 TL\n'
+  for (const ln of lines) content += '(' + esc(ln) + ') Tj T*\n'
+  content += 'ET'
+  const objs = [
+    '<</Type/Catalog/Pages 2 0 R>>',
+    '<</Type/Pages/Kids[3 0 R]/Count 1>>',
+    '<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>',
+    '<</Length ' + Buffer.byteLength(content) + '>>\nstream\n' + content + '\nendstream',
+    '<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>',
+  ]
+  let pdf = '%PDF-1.4\n'
+  const offsets = []
+  objs.forEach((o, i) => { offsets.push(Buffer.byteLength(pdf, 'latin1')); pdf += (i + 1) + ' 0 obj\n' + o + '\nendobj\n' })
+  const xref = Buffer.byteLength(pdf, 'latin1')
+  pdf += 'xref\n0 ' + (objs.length + 1) + '\n0000000000 65535 f \n'
+  for (const off of offsets) pdf += String(off).padStart(10, '0') + ' 00000 n \n'
+  pdf += 'trailer\n<</Size ' + (objs.length + 1) + '/Root 1 0 R>>\nstartxref\n' + xref + '\n%%EOF'
+  return Buffer.from(pdf, 'latin1')
+}
+
 // ═══════════════════════════════════════════════════════════════
 // TRACE CHAIN — lifecycle per tag
 // ═══════════════════════════════════════════════════════════════

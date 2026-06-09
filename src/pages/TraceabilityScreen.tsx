@@ -141,6 +141,19 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
   const rtVdrl = useResizableTable('trace_vdrl', [110, 130, 110, 200, 110, 110, 110, 80], [80, 90, 80, 120, 80, 80, 80, 60])
   const rtCert = useResizableTable('trace_cert', [200, 90, 180, 180, 120, 100, 90], [120, 60, 120, 120, 90, 80, 70])
   const tdSt: React.CSSProperties = { padding: '9px 12px', fontSize: 12, color: t.col }
+
+  // Open a certificate's file — fetched as a blob (so the auth token is sent) and
+  // opened inline. Real uploads stream; seeded certs get a generated placeholder PDF.
+  const openCertFile = async (certId: number) => {
+    try {
+      const res = await axios.get(`${API}/traceability/cert/${certId}/file`, { responseType: 'blob' })
+      const url = URL.createObjectURL(res.data as Blob)
+      window.open(url, '_blank')
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+    } catch (e: any) {
+      addToast('error', e?.response?.status === 403 ? 'You do not have permission to open this certificate' : 'Could not open the certificate file')
+    }
+  }
   const mono: React.CSSProperties = { fontFamily: 'JetBrains Mono, monospace' }
 
   const tabBtn = (key: Tab, label: string, count?: number, countColor?: string) => {
@@ -282,7 +295,11 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
                   <tbody>
                     {approvals.map(a => (
                       <tr key={a.cert_id} style={{ borderBottom: t.rowBd }}>
-                        <td data-align="left" style={{ ...tdSt, ...mono, fontSize: 11, color: '#2563eb', fontWeight: 600 }}>{a.file_name}</td>
+                        <td data-align="left" style={{ ...tdSt, ...mono, fontSize: 11 }}>
+                          {a.file_name
+                            ? <button onClick={() => openCertFile(a.cert_id)} title="Open certificate" style={{ background: 'none', border: 'none', padding: 0, color: '#2563eb', fontWeight: 600, fontFamily: 'inherit', fontSize: 11, cursor: 'pointer', textDecoration: 'underline' }}>{a.file_name}</button>
+                            : <span style={{ color: t.sub }}>—</span>}
+                        </td>
                         <td data-align="center" style={tdSt} title={acronymTitle(a.cert_type)}>{a.cert_type}</td>
                         <td data-align="left" style={tdSt}>{a.item_scope}{a.applies_to ? <span style={{ color: t.sub }}> · {a.applies_to}</span> : ''}</td>
                         <td data-align="left" style={tdSt}>{a.vendor_name} <span style={{ color: t.sub }}>/ {a.uploader}</span></td>
