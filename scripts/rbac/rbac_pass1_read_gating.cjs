@@ -1,7 +1,7 @@
 const m = require('../../server/node_modules/mysql2/promise')
 const jwt = require('../../server/node_modules/jsonwebtoken')
 require('../../server/node_modules/dotenv').config({ path: '../../server/.env' })
-const SECRET = 'qmat_jwt_secret_2024', API = 'http://localhost:3001/api', PID = 25
+const SECRET = process.env.JWT_SECRET || 'qmat_jwt_secret_2024', API = 'http://localhost:3001/api', PID = Number(process.argv[2]) || 27
 // (module, a can_view=0 role for it, the module's primary LIST/GET read endpoint)
 const reads = [
   ['procurement','freight_forwarder',`/procurement/${PID}/pos`],
