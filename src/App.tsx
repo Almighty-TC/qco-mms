@@ -290,6 +290,34 @@ const AUDIT_VIEW_ROLES = new Set(['admin', 'auditor', 'ceo', 'director', 'expedi
 // just hides the nav for external roles. Mirrors rbac_reports_matrix_seed.cjs.
 const REPORTS_VIEW_ROLES = new Set(['admin', 'auditor', 'ceo', 'director', 'engineering_lead', 'expediting_manager', 'expeditor', 'logistics_manager', 'materials_engineer', 'procurement_manager', 'procurement_officer', 'project_control', 'project_controls_manager', 'project_director', 'project_manager', 'viewer', 'warehouse'])
 
+// ─── BREADCRUMB MAP (page → module segment + optional leaf) ───
+// Drives the clickable topbar trail `Dashboard › {Project} › {Module} › {leaf}`.
+// `module` links to that module's register page; a `leaf` (present on detail pages)
+// adds a 4th segment = the entity ref (set by the screen) or this fallback name.
+// Project-scoped pages also get the project segment (added by the builder). Global
+// pages (dashboard/admin/audit) are handled directly in the builder.
+const CRUMB: Record<string, { module: { label: string; page: Page }; leaf?: string }> = {
+  procurement:            { module: { label: 'Procurement', page: 'procurement' } },
+  'po-detail':            { module: { label: 'Procurement', page: 'procurement' }, leaf: 'PO Detail' },
+  expediting:             { module: { label: 'Expediting', page: 'expediting' } },
+  'expediting-po-detail': { module: { label: 'Expediting', page: 'expediting' }, leaf: 'PO Detail' },
+  'mto-list':             { module: { label: 'MTO Register', page: 'mto-list' } },
+  'mto-detail':           { module: { label: 'MTO Register', page: 'mto-list' }, leaf: 'MTO Detail' },
+  'foundational-wbs':         { module: { label: 'Foundational · WBS', page: 'foundational-wbs' } },
+  'foundational-commodities': { module: { label: 'Foundational · Commodity Library', page: 'foundational-commodities' } },
+  'foundational-equipment':   { module: { label: 'Foundational · Equipment List', page: 'foundational-equipment' } },
+  logistics:              { module: { label: 'Logistics', page: 'logistics' } },
+  'mc-receipting':        { module: { label: 'Materials Control · Receipting', page: 'mc-receipting' } },
+  'mc-stock':             { module: { label: 'Materials Control · Stock Register', page: 'mc-stock' } },
+  'mc-fmr':               { module: { label: 'Materials Control · FMR Register', page: 'mc-fmr' } },
+  'mc-transfers':         { module: { label: 'Materials Control · Transfers', page: 'mc-transfers' } },
+  traceability:           { module: { label: 'Traceability', page: 'traceability' } },
+  documents:              { module: { label: 'Document Inbox', page: 'documents' } },
+  reports:                { module: { label: 'Reports', page: 'reports' } },
+  'rfi-meeting':          { module: { label: 'Meetings & RFIs', page: 'rfi-meeting' } },
+  'pending-changes':      { module: { label: 'Pending Changes', page: 'pending-changes' } },
+}
+
 // Dark-gradient sidebar with logo, nav items, and user chip.
 // activePage and onNavigate enable state-based page routing without
 // a router library. Only items with a page key are clickable.
@@ -813,6 +841,11 @@ function App() {
   const [selectedPOId,    setSelectedPOId]    = useState<number | null>(null)
   const [selectedMTOId,   setSelectedMTOId]   = useState<number | null>(null)
   const [selectedExpPOId, setSelectedExpPOId] = useState<number | null>(null)
+  // Breadcrumb leaf — the current detail entity's ref (e.g. a PO/MTO ref). Detail
+  // screens set it via the onLeaf prop after their fetch; it resets on every page
+  // change so a stale ref never shows. Registers leave it null (no 4th segment).
+  const [crumbLeaf, setCrumbLeaf] = useState<string | null>(null)
+  useEffect(() => { setCrumbLeaf(null) }, [page])
   const [showChangePw,  setShowChangePw]  = useState(false)
   const [showProfile,   setShowProfile]   = useState(false)
 
@@ -990,33 +1023,43 @@ function App() {
           </button>
 
           {/* ─── BREADCRUMB ─────────────────────────────────────
-              Shows the current module name. For Procurement, also
-              shows the selected project name and a ← back link. */}
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-            {page === 'procurement' && selectedProjectId && (
-              <button
-                onClick={() => { setSelectedProjectId(null); setSelectedProjectName('') }}
-                title="Back to project selection"
-                style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 12, cursor: 'pointer', padding: '0 4px 0 0', fontFamily: 'inherit' }}
-              >←</button>
-            )}
-            <span style={{ fontSize: 12, color: '#94a3b8' }}>
-              {page === 'admin' ? 'Admin'
-              : page === 'audit' ? 'Audit Trail'
-              : page === 'po-detail' ? `PO Detail · ${selectedProjectName}`
-              : page === 'procurement' ? (selectedProjectName ? `Procurement · ${selectedProjectName}` : 'Procurement')
-              : page === 'foundational-wbs' ? `Foundational · WBS · ${selectedProjectName}`
-              : page === 'foundational-commodities' ? `Foundational · Commodity Library · ${selectedProjectName}`
-              : page === 'foundational-equipment' ? `Foundational · Equipment List · ${selectedProjectName}`
-              : page === 'expediting' ? `Expediting · ${selectedProjectName}`
-              : page === 'expediting-po-detail' ? `Expediting PO Detail · ${selectedProjectName}`
-              : page === 'mto-list'   ? `MTO Register · ${selectedProjectName}`
-              : page === 'mto-detail' ? `MTO Detail · ${selectedProjectName}`
-              : page === 'traceability' ? `Traceability · ${selectedProjectName}`
-              : page === 'documents' ? `Document Inbox · ${selectedProjectName}`
-              : page === 'reports' ? `Reports · ${selectedProjectName}`
-              : 'Dashboard'}
-            </span>
+              Clickable trail (wireframe spec): Dashboard › {Project} › {Module}
+              › {entity ref}. Every segment but the last is a jump link; the leaf
+              (detail entity ref, or a fallback name) is plain. The per-screen
+              ← Back button stays — the bible specifies back AND trail. */}
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
+            {(() => {
+              const goRoot = () => { setSelectedProjectId(null); setSelectedProjectName(''); setPage('dashboard') }
+              const goProjectHome = () => setPage('dashboard')
+              const items: { label: string; onClick?: () => void }[] = []
+              if (page === 'dashboard' && !selectedProjectId) {
+                items.push({ label: 'Dashboard' })                                  // root, plain
+              } else {
+                items.push({ label: 'Dashboard', onClick: goRoot })
+                if (page === 'dashboard') items.push({ label: selectedProjectName || 'Project' })
+                else if (page === 'admin') items.push({ label: 'Admin' })
+                else if (page === 'audit') items.push({ label: 'Audit Trail' })
+                else {
+                  if (selectedProjectId) items.push({ label: selectedProjectName || 'Project', onClick: goProjectHome })
+                  const c = CRUMB[page]
+                  if (c?.leaf) {
+                    items.push({ label: c.module.label, onClick: () => setPage(c.module.page) })
+                    items.push({ label: crumbLeaf || c.leaf })                       // ref, else fallback — never blank
+                  } else if (c) {
+                    items.push({ label: c.module.label })                            // register = current page, plain
+                  }
+                }
+              }
+              return items.flatMap((it, i) => {
+                const node = it.onClick
+                  ? <button key={`c${i}`} onClick={it.onClick}
+                      style={{ background: 'none', border: 'none', padding: 0, fontSize: 12, color: '#2563eb', cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}
+                      onMouseEnter={e => { e.currentTarget.style.textDecoration = 'underline' }}
+                      onMouseLeave={e => { e.currentTarget.style.textDecoration = 'none' }}>{it.label}</button>
+                  : <span key={`c${i}`} style={{ fontSize: 12, color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.label}</span>
+                return i === 0 ? [node] : [<span key={`s${i}`} style={{ color: dark ? '#475569' : '#c4cedf', fontSize: 12 }}>›</span>, node]
+              })
+            })()}
           </div>
 
           {/* Right-side controls */}
@@ -1211,6 +1254,7 @@ function App() {
               projectName={selectedProjectName}
               poId={selectedPOId}
               onBack={() => setPage('procurement')}
+              onLeaf={setCrumbLeaf}
             />
           )}
 
@@ -1283,7 +1327,7 @@ function App() {
           {page === 'expediting-po-detail' && selectedProjectId && selectedExpPOId && (
             <ExpPODetailScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
               poId={selectedExpPOId} userRole={user?.role ?? ''}
-              onBack={() => setPage('expediting')} />
+              onBack={() => setPage('expediting')} onLeaf={setCrumbLeaf} />
           )}
 
           {/* ─── LOGISTICS ───────────────────────────────────────
@@ -1377,6 +1421,7 @@ function App() {
               projectName={selectedProjectName}
               mtoId={selectedMTOId}
               onBack={() => setPage('mto-list')}
+              onLeaf={setCrumbLeaf}
             />
           )}
         </div>

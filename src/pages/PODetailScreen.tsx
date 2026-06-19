@@ -1029,11 +1029,14 @@ interface PODetailInnerProps {
   projectName: string
   poId: number
   onBack: () => void
+  onLeaf?: (ref: string | null) => void
 }
 
-const PODetailInner = ({ dark, poId, projectName, onBack }: PODetailInnerProps) => {
+const PODetailInner = ({ dark, poId, projectName, onBack, onLeaf }: PODetailInnerProps) => {
   const { addToast } = useToast()
   const [po, setPO]             = useState<PO | null>(null)
+  // Report the PO ref up to the topbar breadcrumb (leaf segment); clear on unmount.
+  useEffect(() => { onLeaf?.(po?.po_number ?? null); return () => onLeaf?.(null) }, [po?.po_number, onLeaf])
   const [loading, setLoading]   = useState(true)
   const [activeTab, setTab]     = useState<Tab>('lines')
   const [showApprove, setApprove] = useState(false)
@@ -1181,10 +1184,11 @@ export interface PODetailScreenProps {
   projectName: string
   poId: number
   onBack: () => void
+  onLeaf?: (ref: string | null) => void   // report the PO ref for the topbar breadcrumb leaf
 }
 
-export const PODetailScreen = ({ dark, projectId, projectName, poId, onBack }: PODetailScreenProps) => (
+export const PODetailScreen = ({ dark, projectId, projectName, poId, onBack, onLeaf }: PODetailScreenProps) => (
   <ToastProvider>
-    <PODetailInner dark={dark} projectId={projectId} projectName={projectName} poId={poId} onBack={onBack} />
+    <PODetailInner dark={dark} projectId={projectId} projectName={projectName} poId={poId} onBack={onBack} onLeaf={onLeaf} />
   </ToastProvider>
 )

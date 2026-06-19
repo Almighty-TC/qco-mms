@@ -775,12 +775,15 @@ const RevDiffTab = ({
 
 // ─── INNER COMPONENT ─────────────────────────────────────────────────────────
 const MTODetailInner = ({
-  dark, projectId, projectName, mtoId, onBack,
+  dark, projectId, projectName, mtoId, onBack, onLeaf,
 }: {
   dark: boolean; projectId: number; projectName: string; mtoId: number; onBack: () => void
+  onLeaf?: (ref: string | null) => void
 }) => {
   const { addToast } = useToast()
   const [mto,        setMto]        = useState<MTORegister | null>(null)
+  // Report the MTO ref up to the topbar breadcrumb (leaf segment); clear on unmount.
+  useEffect(() => { onLeaf?.(mto?.reference ?? null); return () => onLeaf?.(null) }, [mto?.reference, onLeaf])
   const [revisions,  setRevisions]  = useState<string[]>([])
   const [activeTab,  setActiveTab]  = useState<'lines' | 'history' | 'diff' | 'variations'>('lines')
   const [showUpload, setShowUpload] = useState(false)
@@ -931,6 +934,7 @@ export const MTODetailScreen = (props: {
   projectName: string
   mtoId: number
   onBack: () => void
+  onLeaf?: (ref: string | null) => void
 }) => (
   <ToastProvider>
     <MTODetailInner {...props} />

@@ -81,6 +81,7 @@ interface PODetail {
 interface Props {
   dark: boolean; projectId: number; projectName: string
   poId: number; onBack: () => void; userRole?: string
+  onLeaf?: (ref: string | null) => void   // report the PO ref for the topbar breadcrumb leaf
 }
 
 type ActiveTab = 'lines' | 'milestones' | 'itp' | 'vdrl' | 'notes' | 'audit'
@@ -113,10 +114,12 @@ const fmtMoney = (v?: number | null, cur = 'AUD') =>
 
 // ─── INNER COMPONENT ──────────────────────────────────────────
 // Must be wrapped in ToastProvider; use the exported ExpPODetailScreen below.
-const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, userRole = '' }: Props) => {
+const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, userRole = '', onLeaf }: Props) => {
   const { addToast } = useToast()
   const [po, setPO]           = useState<PODetail | null>(null)
   const [loading, setLoading] = useState(true)
+  // Report the PO ref up to the topbar breadcrumb (leaf segment); clear on unmount.
+  useEffect(() => { onLeaf?.(po?.po_number ?? null); return () => onLeaf?.(null) }, [po?.po_number, onLeaf])
   const [activeTab, setTab]   = useState<ActiveTab>('lines')
 
   // Milestone editing state
