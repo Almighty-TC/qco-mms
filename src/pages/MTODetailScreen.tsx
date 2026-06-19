@@ -19,6 +19,7 @@ const MTO_REV_MIN  = [90, 120, 90, 120, 60]
 import { HelpButton } from '../components/HelpDrawer'
 import { MTO_DETAIL_HELP } from '../helpContent'
 import { BackButton } from '../components/BackButton'
+import { revisionFormatError } from './MTOListScreen'
 import { MilestoneLegend } from '../components/MilestoneLegend'
 import { Pager } from '../components/Pager'
 import { usePagedList } from '../hooks/usePagedList'
@@ -324,8 +325,10 @@ const UploadRevModal = ({
           <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4, fontFamily: 'IBM Plex Sans, sans-serif' }}>New revision *</label>
           <input value={newRev} onChange={e => setNewRev(e.target.value.slice(0, 10))}
             placeholder="e.g. B, 2, 2A, R1" maxLength={10}
-            style={{ ...inp, width: 160, fontFamily: 'JetBrains Mono, monospace' }} />
-          <span style={{ fontSize: 11, color: sub, marginLeft: 10 }}>Current: Rev {mto.current_revision}. Letters, numbers or a mix.</span>
+            style={{ ...inp, width: 160, fontFamily: 'JetBrains Mono, monospace', borderColor: revisionFormatError(newRev) ? '#ef4444' : undefined }} />
+          <span style={{ fontSize: 11, color: revisionFormatError(newRev) ? '#ef4444' : sub, marginLeft: 10 }}>
+            {revisionFormatError(newRev) || `Current: Rev ${mto.current_revision}. Must be later than the current revision.`}
+          </span>
         </div>
 
         <div style={{ marginBottom: 14 }}>
@@ -353,7 +356,7 @@ const UploadRevModal = ({
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
           <button onClick={onClose} style={{ background: 'transparent', border: bd, color: sub, padding: '7px 16px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontFamily: 'IBM Plex Sans, sans-serif' }}>Cancel</button>
-          <button onClick={doUpload} disabled={!file || uploading} style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '7px 18px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'IBM Plex Sans, sans-serif', opacity: (!file || uploading) ? 0.5 : 1 }}>
+          <button onClick={doUpload} disabled={!file || uploading || !!revisionFormatError(newRev)} style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '7px 18px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'IBM Plex Sans, sans-serif', opacity: (!file || uploading || !!revisionFormatError(newRev)) ? 0.5 : 1 }}>
             {uploading ? 'Uploading…' : `↑ Upload Rev ${newRev.trim() || '?'}`}
           </button>
         </div>

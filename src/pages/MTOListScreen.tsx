@@ -54,6 +54,17 @@ function fmtDate(s: string) {
   return new Date(s).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
+// Client-side revision FORMAT check (mirrors server/lib/revision.js). Ordering is
+// enforced server-side on upload; this is instant feedback for the format rule.
+export function revisionFormatError(rev: string): string | null {
+  const s = (rev ?? '').trim()
+  if (!/^[A-Za-z0-9-]{1,10}$/.test(s))
+    return 'Use 1–10 characters: letters, numbers and dashes only (e.g. A, A-7, A-7-B).'
+  if (s.split('-').some(seg => seg === ''))
+    return 'No leading, trailing or double dashes.'
+  return null
+}
+
 let _key = 0
 const newRow = (): NewLineRow => ({
   key: String(++_key),
@@ -209,8 +220,10 @@ const NewMTOModal = ({
             <div>
               <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4 }}>Revision</label>
               <input value={revision} onChange={e => setRevision(e.target.value.slice(0, 10))}
-                placeholder="e.g. A, 1, 2A, R0" style={inp} maxLength={10} />
-              <div style={{ fontSize: 10, color: sub, marginTop: 3 }}>Letters, numbers or a mix.</div>
+                placeholder="e.g. A, 1, 2A, R0" style={{ ...inp, borderColor: revisionFormatError(revision) ? '#ef4444' : (inp.borderColor as string) }} maxLength={10} />
+              <div style={{ fontSize: 10, color: revisionFormatError(revision) ? '#ef4444' : sub, marginTop: 3 }}>
+                {revisionFormatError(revision) || 'Letters, numbers or a mix.'}
+              </div>
             </div>
             <div>
               <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4 }}>Owner</label>
@@ -228,8 +241,8 @@ const NewMTOModal = ({
             <button onClick={onClose} style={{ background: 'transparent', border: bd, color: sub, padding: '7px 16px', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>Cancel</button>
             <button
               onClick={() => { if (lines.length === 1 && !lines[0].line_number) setLines([{ ...newRow(), line_number: 'L-001' }]); setStep(2) }}
-              disabled={!name.trim() || !ref.trim()}
-              style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '7px 18px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, opacity: (!name.trim() || !ref.trim()) ? 0.5 : 1 }}>
+              disabled={!name.trim() || !ref.trim() || !!revisionFormatError(revision)}
+              style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '7px 18px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, opacity: (!name.trim() || !ref.trim() || !!revisionFormatError(revision)) ? 0.5 : 1 }}>
               Next → Add lines
             </button>
           </div>

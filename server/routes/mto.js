@@ -15,6 +15,7 @@ const fs      = require('fs')
 const path    = require('path')
 const { fileColumnsReady } = require('../lib/schemaColumns')
 const { fileNotEmpty } = require('../utils/validate')
+const { validateRevisionFormat, compareRevisions, RevisionError } = require('../lib/revision')
 
 // ─── AUTH MIDDLEWARE ──────────────────────────────────────────────────────────
 router.use(authenticateToken)
@@ -160,6 +161,9 @@ router.post('/:projectId', async (req, res) => {
   const { current_revision, owner, description } = req.body
   // ─── Basic input checks before accepting ──────────────────────
   if (!name || !reference) return res.status(400).json({ error: 'Name and reference are required.' })
+  // Initial revision is free-text — enforce the format (no prior rev to order against).
+  const revFmtErr = validateRevisionFormat(current_revision || 'A')
+  if (revFmtErr) return res.status(422).json({ error: revFmtErr })
   try {
     // Reject a duplicate MTO reference within the project (logical conflict).
     const [[dup]] = await db.query(
@@ -776,20 +780,39 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
     // highest existing revision (current_revision can be stale).
     const [allRevs] = await db.query('SELECT revision FROM mto_revisions WHERE mto_id = ?', [mtoId])
     // A freshly-created MTO seeds its initial revision with no lines; the very
-    // first upload populates THAT revision (same label) rather than adding a new
-    // one. So only block a same-label upload if that revision already has lines.
-    const [[{ c: revLineCount }]] = await db.query(
-      'SELECT COUNT(*) c FROM mto_lines WHERE mto_id=? AND revision=? AND is_deleted=0', [mtoId, newRev])
-    const isInitialPopulation = revLineCount === 0
-    if (!isInitialPopulation && allRevs.some(r => compareRev(r.revision, newRev) === 0)) {
+    // first upload populates THAT revision rather than adding a new one. "Initial
+    // population" therefore means the MTO has NO lines anywhere yet — once it holds
+    // any lines, every upload is a genuine new revision and must pass the duplicate,
+    // ordering AND scheme checks below (a per-LABEL 0-line test let a brand-new label
+    // — including a backwards or scheme-mismatched one — skip all of them).
+    const [[{ c: totalLines }]] = await db.query(
+      'SELECT COUNT(*) c FROM mto_lines WHERE mto_id=? AND is_deleted=0', [mtoId])
+    const isInitialPopulation = totalLines === 0
+    // Format-gate the incoming revision first (clear 422 before any ordering work).
+    const upRevFmtErr = validateRevisionFormat(newRev)
+    if (upRevFmtErr) return res.status(422).json({ error: upRevFmtErr })
+    // Duplicate: case-insensitive label match (avoids relying on the comparator for ==).
+    const newU = String(newRev).trim().toUpperCase()
+    if (!isInitialPopulation && allRevs.some(r => String(r.revision).trim().toUpperCase() === newU)) {
       return res.status(409).json({
         error: `Revision ${newRev} already exists for this MTO. Upload a new revision number.`
       })
     }
+    // Find the latest existing rev with the tolerant legacy compare (legacy data may
+    // hold mixed schemes; this discovery must never throw). The NEW rev is then judged
+    // against it by the strict rule (compareRevisions surfaces scheme/format as 422).
     const latest = allRevs.reduce((a, r) => (a === '' || compareRev(r.revision, a) > 0) ? r.revision : a, '')
-    if (!isInitialPopulation && latest && compareRev(newRev, latest) <= 0) {
-      return res.status(409).json({
-        error: `Revision ${newRev} is older than the latest revision ${latest} already in the system. Uploads must be a later revision.`
+    if (!isInitialPopulation && latest) {
+      let cmp
+      try { cmp = compareRevisions(newRev, latest) }
+      catch (e) {
+        if (e instanceof RevisionError && e.code === 'SCHEME')
+          return res.status(422).json({ error: `New revision "${newRev}" doesn't match this MTO's revision scheme (latest is ${latest}).` })
+        if (e instanceof RevisionError) return res.status(422).json({ error: e.message })
+        throw e
+      }
+      if (cmp <= 0) return res.status(409).json({
+        error: `Revision must be later than the current revision ${latest}.`
       })
     }
 
