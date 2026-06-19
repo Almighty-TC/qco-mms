@@ -13,6 +13,7 @@ import { Pager } from '../components/Pager'
 import { usePagedList } from '../hooks/usePagedList'
 import { HelpButton } from '../components/HelpDrawer'
 import type { HelpSection } from '../components/HelpDrawer'
+import { SimpleConfirmModal } from '../components/SimpleConfirmModal'
 
 const API = 'http://localhost:3001/api'
 
@@ -159,11 +160,24 @@ export const AuditViewerScreen = ({ dark, userRole, onBack }: {
   // ── C4: QA sign-off (append-only; backend enforces the gate) ──
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [batchBusy, setBatchBusy] = useState(false)
+  // Pending batch status awaiting duplicate-review confirmation (null = no prompt).
+  const [dupBatch, setDupBatch] = useState<'reviewed' | 'flagged' | null>(null)
   const toggleSel = (id: number) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
   const clearSel = () => setSelected(new Set())
 
-  const batchReview = async (review_status: 'reviewed' | 'flagged') => {
+  // How many of the selected entries already carry ≥1 review (drives the warning).
+  const reviewedSelCount = () => [...selected].filter(id => (rows.find(r => r.id === id)?.review_count ?? 0) > 0).length
+
+  // Gate: warn ONLY when re-reviewing already-reviewed entries; first-time → straight through.
+  const batchReview = (review_status: 'reviewed' | 'flagged') => {
     if (selected.size === 0) return
+    if (reviewedSelCount() > 0) { setDupBatch(review_status); return }
+    doBatchReview(review_status)
+  }
+
+  // The actual append-only write (unchanged) — runs first-time, or after confirmation.
+  const doBatchReview = async (review_status: 'reviewed' | 'flagged') => {
+    setDupBatch(null)
     const note = window.prompt(`Optional note for marking ${selected.size} entr${selected.size === 1 ? 'y' : 'ies'} ${review_status}:`) ?? undefined
     setBatchBusy(true)
     try {
@@ -320,6 +334,16 @@ export const AuditViewerScreen = ({ dark, userRole, onBack }: {
         </div>
       )}
 
+      {/* Duplicate-review warning (batch): only when re-reviewing already-reviewed entries.
+          Append-only is unchanged — this is a pre-submit guard against accidental re-review. */}
+      {dupBatch && (() => { const n = reviewedSelCount(); return (
+        <SimpleConfirmModal dark={dark}
+          title="Some entries already reviewed"
+          message={`${n} of ${selected.size} selected ${n === 1 ? 'entry has' : 'entries have'} already been reviewed. Reviews are kept as history — add another review to ${selected.size === 1 ? 'it' : 'them'}?`}
+          confirmLabel="Add review" confirmStyle="warning"
+          onConfirm={() => doBatchReview(dupBatch)} onCancel={() => setDupBatch(null)} saving={batchBusy} />
+      ) })()}
+
       {/* Table */}
       <AdminTable tableId="audit_viewer" columns={COLS} dark={dark}
         empty={loading ? 'Loading…' : 'No audit records match the filters.'}>
@@ -384,6 +408,7 @@ const ExpandedDetail = ({ row, dark, canReview, onReviewed }: { row: AuditRow; d
   const [status, setStatus] = useState<'reviewed' | 'flagged'>('reviewed')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
+  const [showDupWarn, setShowDupWarn] = useState(false)
 
   const loadHistory = useCallback(async () => {
     setHistLoading(true)
@@ -393,7 +418,15 @@ const ExpandedDetail = ({ row, dark, canReview, onReviewed }: { row: AuditRow; d
   }, [row.id])
   useEffect(() => { loadHistory() }, [loadHistory])
 
-  const submit = async () => {
+  // Gate: warn before a SECOND+ review (history is loaded newest-first); first → straight through.
+  const submit = () => {
+    if (history.length > 0) { setShowDupWarn(true); return }
+    doSubmit()
+  }
+
+  // The actual append-only write (unchanged) — runs first-time, or after confirmation.
+  const doSubmit = async () => {
+    setShowDupWarn(false)
     setBusy(true)
     try {
       await axios.post(`${API}/audit/${row.id}/review`, { review_status: status, review_note: note.trim() || null })
@@ -446,6 +479,16 @@ const ExpandedDetail = ({ row, dark, canReview, onReviewed }: { row: AuditRow; d
             <input value={note} onChange={e => setNote(e.target.value)} placeholder="Optional note…"
               style={{ width: '100%', height: 30, padding: '0 8px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 12, fontFamily: 'inherit', boxSizing: 'border-box' }} />
           </div>
+        )}
+
+        {/* Duplicate-review warning: only for a 2nd+ sign-off on this entry. Append-only
+            is unchanged — confirming just appends another review row to the history. */}
+        {showDupWarn && (
+          <SimpleConfirmModal dark={dark}
+            title="Already reviewed"
+            message={`This entry was already reviewed${history[0] ? ` by ${history[0].reviewed_by_name ?? 'a reviewer'} on ${fmtDateTime(history[0].reviewed_at)}` : ''}${history.length > 1 ? ` (reviewed ${history.length} times)` : ''}. Reviews are kept as history — add another?`}
+            confirmLabel="Add review" confirmStyle="warning"
+            onConfirm={doSubmit} onCancel={() => setShowDupWarn(false)} saving={busy} />
         )}
       </div>
     </div>
