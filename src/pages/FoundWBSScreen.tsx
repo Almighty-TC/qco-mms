@@ -1508,7 +1508,7 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
   // ── Search & filter state ────────────────────────────────────
   const [searchQ, setSearchQ]         = useState('')
   const [ragFilter, setRagFilter]     = useState<string>('all')
-  const [depthFilter, setDepthFilter] = useState<string>('all')
+  const [depthLevel, setDepthLevel]   = useState<string>('all')   // expansion-depth preset (NOT a filter)
   // ── Bulk selection state ─────────────────────────────────────
   const [selectedNodes, setSelectedNodes] = useState<Set<number>>(new Set())
   const [bulkRag, setBulkRag]         = useState('')
@@ -1547,6 +1547,19 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
 
   const expandAll = () => { const all = new Set(nodes.map(n => n.id)); setExpanded(all) }
   const collapseAll = () => { setExpanded(new Set()) }
+
+  // ── Depth preset: a "Level N" pick sets the EXPANSION depth, it is NOT a filter.
+  // Expands every node SHALLOWER than the chosen level (codeDepth = code.split('.').
+  // length, the same depth source the old filter used) so depth-N nodes render
+  // collapsed-but-expandable — chevrons still drill deeper. Overwrites manual expand
+  // state, like expand/collapse-all. Search/RAG (collectVisible) still supersede this
+  // when active. Maps: all→expandAll; level1→∅; level1-2→depth<2; level1-3→depth<3.
+  const applyDepthPreset = (value: string) => {
+    setDepthLevel(value)
+    if (value === 'all') { expandAll(); return }
+    const showThrough = value === 'level1' ? 1 : value === 'level1-2' ? 2 : 3   // deepest level to reveal
+    setExpanded(new Set(nodes.filter(n => n.code.split('.').length < showThrough).map(n => n.id)))
+  }
 
   // ── Resizable column widths (Code, WBS Node, ROS, Notes, PO Qty) ──
   const { widths: colW, onMouseDown: onColResize, resetWidths } = useColumnResize('wbs_tree', WBS_COL_DEFAULTS, WBS_COL_MINS)
@@ -1630,16 +1643,11 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
   }
 
   // ── Filter logic ─────────────────────────────────────────────
-  const hasActiveFilter = searchQ.trim() || ragFilter !== 'all' || depthFilter !== 'all'
+  // Depth is no longer a filter — it drives expansion (applyDepthPreset). Only
+  // search + RAG hide nodes; collectVisible(visibleIds) is used solely for those.
+  const hasActiveFilter = searchQ.trim() || ragFilter !== 'all'
 
   const nodeFilterFn = (n: WBSNode): boolean => {
-    const depth = n.code.split('.').length
-    if (depthFilter !== 'all') {
-      const maxDepth = parseInt(depthFilter.replace('level1-', '').replace('level1', '1'))
-      if (depthFilter === 'level1' && depth !== 1) return false
-      if (depthFilter === 'level1-2' && depth > 2) return false
-      if (depthFilter === 'level1-3' && depth > 3) return false
-    }
     if (ragFilter !== 'all') {
       const r = ragFilter === 'none' ? null : ragFilter
       if (n.rag !== r) return false
@@ -1755,7 +1763,8 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
         {/* Depth filter — Tree only (the Gantt has its own depth control; this
             dropdown never affected the Gantt, so it's hidden in Gantt view). */}
         {wbsView === 'tree' && (
-          <select value={depthFilter} onChange={e => setDepthFilter(e.target.value)}
+          <select value={depthLevel} onChange={e => applyDepthPreset(e.target.value)}
+            title="Expand the tree through this depth (deeper nodes stay collapsed but expandable)"
             style={{ height: 32, padding: '0 8px', borderRadius: 6, border: bd, background: dark ? '#1e293b' : '#fff', color: col, fontSize: 12, fontFamily: 'inherit', outline: 'none' }}>
             <option value="all">All levels</option>
             <option value="level1">Level 1 only</option>
@@ -1764,7 +1773,7 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
           </select>
         )}
         {hasActiveFilter && (
-          <button onClick={() => { setSearchQ(''); setRagFilter('all'); setDepthFilter('all') }}
+          <button onClick={() => { setSearchQ(''); setRagFilter('all') }}
             style={{ padding: '4px 10px', borderRadius: 6, border: `1px solid rgba(239,68,68,0.3)`, background: 'rgba(239,68,68,0.08)', color: '#ef4444', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
             ✕ Clear filters
           </button>
