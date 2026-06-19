@@ -58,7 +58,7 @@ const A = { c:'can_create', e:'can_edit', a:'can_approve', d:'can_delete', v:'ca
 // here as the binding constraint, COMPOSED with the underlying enforce() gate.
 // Source of truth: server/routes/procurement.js (allowlists) + expediting.js (canSeeAllPOs).
 const RULE = {
-  EXPEDITOR_ASSIGN: new Set(['admin','expediting_manager']),                                   // procurement.js EXPEDITOR_ASSIGN_ROLES
+  EXPEDITOR_ASSIGN: new Set(['admin','expediting_manager','expeditor','procurement_manager']),  // procurement.js EXPEDITOR_ASSIGN_ROLES (widened; now the SOLE gate — enforce() defers for these 3 write routes)
   OWNER_ASSIGN:     new Set(['admin','procurement_manager']),                                  // procurement.js OWNER_ASSIGN_ROLES
   DOC_UPLOAD:       new Set(['admin','procurement_manager','procurement_officer']),            // procurement.js DOC_UPLOAD_ROLES
   ASSIGNED_ONLY:    new Set(['admin','project_manager','project_director','procurement_manager','expediting_manager']), // expediting.js canSeeAllPOs (managers bypass per-PO assign check; others 403 on the dummy PO)
@@ -92,6 +92,10 @@ const RULE = {
     if (mod === 'admin') return 'DENY'   // /admin/* is requireAdmin → only admin (matrix admin.can_view unused by API)
     const write = act !== 'v'
     if (write && (role==='viewer'||role==='auditor') && !NOFLOOR.has(mod)) return 'DENY'
+    // EXPEDITOR_ASSIGN writes are RESIDUAL — enforce() defers, so they are gated by the
+    // deny-floor (above) + the inline allowlist ONLY (no matrix cell, no wbs-scope). Decide
+    // here before the matrix-cell check below, which no longer applies to these routes.
+    if (rule === 'EXPEDITOR_ASSIGN') return RULE.EXPEDITOR_ASSIGN.has(role) ? 'ALLOW' : 'DENY'
     const row = mtx[role][mod]
     if (!row || !row[act]) return 'DENY'                            // underlying enforce() matrix gate
     if (hasProj && row.wbs && !usr[role].wbsAccess) return 'DENY'   // wbs-scope check fires inside enforce

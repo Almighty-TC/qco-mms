@@ -7,7 +7,17 @@
 const express = require('express')
 const router  = express.Router()
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes (auth applied at mount)
-router.use(require('../middleware/permissions').enforce(p => /\/pos\/\d+\/expeditor$/.test(p) ? 'expediting' : 'procurement')) // C-b2: expeditor-assign→expediting (module-move), else procurement
+router.use(require('../middleware/permissions').enforce((p, req) => {
+  // Expeditor-assign WRITES (POST/DELETE …/expeditors, PUT …/expeditor) are gated
+  // SOLELY by the inline EXPEDITOR_ASSIGN_ROLES allowlist + the deny-read-only floor.
+  // Return a falsy module → enforce() defers (residual path), so the allowlist is the
+  // single consistent gate. (The old per-module mapping diverged — POST/DELETE needed
+  // procurement.create/delete, PUT needed expediting.edit — which blocked allowlisted
+  // roles like expediting_manager from co-assigning.) GET …/expeditors (listing) stays
+  // matrix-gated on procurement.can_view; every other procurement route → procurement.
+  if (req.method !== 'GET' && /\/pos\/\d+\/expeditors?(\/\d+)?$/.test(p)) return null
+  return 'procurement'
+}))
 const db      = require('../db')       // connection pool — never createConnection
 const { dbError } = require('../utils/dbError')
 const path    = require('path')
@@ -51,8 +61,10 @@ const uploadBulk = multer({
 })
 
 // ─── ALLOWED ROLES ────────────────────────────────────────────────────────────
-// C-d #1: expeditor-assign was module-moved to `expediting`; procurement_manager dropped (stale).
-const EXPEDITOR_ASSIGN_ROLES  = new Set(['admin', 'expediting_manager'])
+// Expeditor-assign allowlist — the SINGLE gate for the 3 assign-write routes (enforce()
+// defers for them; see the router.use above). Widened so an expeditor and a procurement
+// manager can also (co-)assign, consistently on the PO Register and the Expediting drawer.
+const EXPEDITOR_ASSIGN_ROLES  = new Set(['admin', 'expediting_manager', 'expeditor', 'procurement_manager'])
 const OWNER_ASSIGN_ROLES      = new Set(['admin', 'procurement_manager'])
 const CRITICAL_PATH_ROLES     = new Set(['admin', 'project_manager', 'procurement_manager'])
 const APPROVAL_ROLES          = new Set(['admin', 'procurement_manager', 'procurement_officer'])
