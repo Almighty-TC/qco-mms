@@ -1,9 +1,14 @@
 # QCO MMS — HANDOVER: NEXT SESSION
-# Updated: 02 June 2026
-# Last commit: 9b605c0
+# Updated: 20 June 2026
+# Last commit: 8ea3eb1 (feat(ui): clickable breadcrumb trail) — ahead 1 of origin at write time
 # ⭐ THIS FILE IS THE SINGLE CANONICAL MODULE-STATUS DOC. HANDOVER.md and
 #    CLAUDE_CONTEXT.md point here for status (their own status tables are retired).
 # Read every word before doing anything.
+#
+# ✅ ALL PHASE-1 MODULES ARE BUILT & LIVE. The authoritative current state is the
+#    "## CURRENT STATUS & OPEN ITEMS (20 June 2026)" section just below the table.
+#    Sections §3a/3b/3c, §4, §5, §6 are HISTORICAL (point-in-time, ~02 Jun) and are
+#    superseded by that section — do NOT trust their "open"/"next"/"not built" claims.
 
 ---
 
@@ -47,9 +52,9 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 | Module | Status | Notes |
 |--------|--------|-------|
 | Login | ✅ Complete | |
-| Dashboard | ⏳ BUILD LAST | Reads from all modules |
+| Dashboard | ✅ BUILT | Project-list (Select a project) + per-project health screen (`DashboardProjectScreen`, `dashboard.js`): health score + band, by-module weights (configure modal), pipeline funnel. Reads across modules. |
 | Admin | ✅ Complete | Users, suppliers/AVL, settings; Subcontractor + Freight Forwarder roles in dropdown |
-| Foundational — WBS | ⚠️ Mostly complete | Tree, Gantt, tooltip, bulk ops, search, focus mode. **Delete-node flow FIXED (A3: `5ea7abd`+`81392fe`).** Remaining bug (see §3c): Tree depth filter leaks (A1, UI, MEDIUM). |
+| Foundational — WBS | ✅ Complete | Tree, Gantt, tooltip, bulk ops, search, focus mode. Delete-node flow fixed (`5ea7abd`+`81392fe`). **Tree depth control fixed** — now an expansion preset, not a leaky hide-filter (`49c836d`). Expand/collapse-all verified working. |
 | Foundational — Commodity Library | ✅ Complete | Table, add/edit, certs, template download |
 | Foundational — Equipment List | ✅ Complete | Table, add/edit, certs, template download |
 | Procurement — PO Register | ✅ Complete | Register, stat cards, search, RAG |
@@ -71,11 +76,51 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 | Audit | ✅ BUILT | AuditViewerScreen + audit.js (later session) |
 | Reports | ✅ BUILT & verified 19 Jun | Curated library + ad-hoc builder + saved views, across all 4 categories. Backend: `server/reports/{datasets,engine,catalog}.js` + `routes/reports.js` (one injection-safe engine; whitelisted datasets). **Double RBAC gate:** `enforce('reports')` (module) + per-dataset re-check of the SOURCE module's `can_view` (Reports is never a read-leak backdoor). Exports CSV/XLSX (server, exceljs) + PDF (client print view). Composite `project_health` cross-module rollup. Matrix seeded (17 internal roles, 0 external) via `scripts/rbac/rbac_reports_matrix_seed.cjs`. **⚠ PENDING (Thomas, admin creds): `node server/scripts/migrate-report-views.js` to create `report_saved_views`** — until then the saved-views feature returns empty / 503 (route degrades gracefully; everything else works). Verified in browser on project 27: curated flat + grouped + composite + ad-hoc all run; CSV/XLSX 200; dark mode OK; tsc clean. |
 
-**Remaining unbuilt modules:** Meeting/RFI Register · Audit · Reports · Dashboard (build last — reads from all modules).
+**Remaining unbuilt modules:** NONE — all of Meeting/RFI Register, Audit, Reports and Dashboard are built & live (see the CURRENT STATUS section below).
+
+---
+
+## ★ CURRENT STATUS & OPEN ITEMS (20 June 2026) — AUTHORITATIVE
+*(This section supersedes §3a/3b/3c/§4/§5/§6 below, which are point-in-time history.)*
+
+**State:** All Phase-1 modules are **built & live**. HEAD `8ea3eb1`. The app is functionally complete and walked; remaining work is targeted fixes/polish + the deliberately-deferred Phase-2 release gates (see TEST_READINESS.md).
+
+**Scope that grew beyond the original May spec (all built):**
+- **Reports** — curated library + ad-hoc builder + saved views; injection-safe whitelisted-dataset engine; double RBAC gate (`enforce('reports')` + per-dataset source-module `can_view`). Saved-views table migration still pending (admin creds) — route degrades gracefully.
+- **Meeting / RFI Register** (`rfiMeeting.js` + `MeetingRFIScreen`).
+- **Pending-Changes / Confirmer governance queue** (C-c: proposers route create/delete through an approval queue).
+- **RBAC / security layer** — PASS-1 matrix verification, strict read-authorization (C-e), tamper-evident audit (hash-chain + checkpoints), least-privilege DB user.
+- **Heat / lot tracking** (P0–P5, full stock lifecycle) and the **flowtest/ZZ** demo-data + canonical-baseline apparatus.
+
+**Standards (vs CLAUDE_CONTEXT §GLOBAL STANDARDS) — current compliance:**
+- **← Back button** on every screen ✅. **Clickable breadcrumb trail** `Dashboard › Project › Module › ref` in the shared topbar ✅ (built `8ea3eb1` — honors the NON-NEGOTIABLE; back AND trail).
+- **Pagination** ✅ broadly rolled out (12 list screens via `usePagedList`/`Pager`). Intentional non-paginated: the **WBS tree** (tree, uses expand/collapse), the **MTO register** (small), **Document Inbox** (aggregate). Confirm these are acceptable.
+- **Resizable columns + reset** ✅ rolled out (WBS, Commodity, Equipment, MTO, MC×, Traceability, Logistics + Procurement/Admin). **RAG vocab** ✅. Sticky headers / dark-light / text-size ✅.
+
+**Locked architectural decisions — all still honored** (see §10/§11): VDRL inside Expediting (no standalone route), Suppliers/AVL under Admin, MySQL pooling only (no `createConnection` in routes), Dashboard reads across modules, child line items max one level, dual columns never updated after creation.
+
+**Genuinely OPEN items (the real list — replaces the stale §6 "next priorities"):**
+1. **Expeditor-assign authorization** — IN PROGRESS / PAUSED. Widening the allowlist to `{admin, expediting_manager, expeditor, procurement_manager}` alone is **insufficient**: the router `enforce()` independently gates the co-assign routes (POST/DELETE `/expeditors` → procurement.create/delete; PUT `/expeditor` → expediting.edit), so allowlisted roles still 403. Proven live. Recommended Commit 1 = widen the constant **and** make the assign-write routes allowlist-only in `enforce()` (falsy-module residual). Awaiting Thomas's sign-off on the `enforce()` scope before building.
+2. **Stale ROS help line** — `Procurement.tsx:1140` still reads "required before expediting begins" (the spec calls this wrong; the field hint at :1000 is correct). Trivial fix.
+3. **Legends where colour carries meaning** (MC condition pills, Traceability holds, MC status) — not re-verified this pass; likely still partial.
+4. **A1 — Logistics SCN variation read-side** — shows "Additional item" with no parent link / no `is_variation` label; backend GET doesn't join the parent ref. Not re-verified; likely still open.
+5. **Modals don't scale with S/M/L zoom** — deferred by design (they portal at scale 1; BACKLOG.md).
+6. **Saved-views migration** (Reports) — run `node server/scripts/migrate-report-views.js` (admin creds) when wanted; inert until then.
+7. **Phase-2 release gates** (TEST_READINESS.md) — E2E (Playwright), security sweep (OWASP/SAST/secrets/headers), CI, load test, config/env (SMTP, rotate QCO_admin pw). Deliberately deferred until release.
+8. **From May, not re-verified:** MTO Rev-Diff logic question (§5); Transfers not stock-linked (§3a); Logistics Proof-of-Custody screen (§3a); Material Control contributes 0 docs to Document Inbox (§3a).
+
+**Working discipline (in force — carry forward):**
+- **Single channel** — no parallel/spawned tasks.
+- **Map/read-first** — read the wireframe (`public/QMAT-prototype.html`) + relevant code before building; report the map before changing for non-trivial work.
+- **One concern per commit; PASS C before push** (tsc clean · canonical 1–4 0 drift · audit chain intact).
+- **HOLD for review — do NOT self-push.** Thomas reviews each commit; push only on his say-so. Branch off main only if asked.
+- **Deviation-from-bible:** the wireframe is authoritative for design, CLAUDE_CONTEXT's standards/decisions for rules; flag drift, fix-vs-keep is Thomas's call.
+- Rolled-back / bad-payload probes for RBAC/data tests — never mutate canonical projects 1–4; ZZ project 27 for tests.
 
 ---
 
 ## 3a. KNOWN GAPS (as of 02 June 2026)
+> ⚠ HISTORICAL (≈02 Jun) — superseded by the CURRENT STATUS section above. Some items here are now resolved.
 
 - **Logistics — Proof of Custody screen not built** (spec'd in CLAUDE_CONTEXT; `CreateSCNWizard` exists but is launched from Expediting, not the Logistics register).
 - **Transfers — not stock-linked**: the 2-step new-transfer wizard uses free-text item/description + from/to locations, so it does **not** pick from or decrement real `warehouse_stock` rows.
@@ -84,6 +129,7 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 ---
 
 ## 3b. BACKLOG / NOT STARTED
+> ⚠ HISTORICAL (≈02 Jun) — superseded by the CURRENT STATUS section above. Heat/lot is COMPLETE; the "NEXT UP" manual/help pass and the items below reflect early-June state.
 
 - **Heat / lot tracking — ✅ COMPLETE (P0–P5).** Spec [docs/HEAT_LOT_TRACKING_SPEC.md](docs/HEAT_LOT_TRACKING_SPEC.md); build plan [docs/HEAT_LOT_TRACKING_PHASING.md](docs/HEAT_LOT_TRACKING_PHASING.md). Heat travels the FULL lifecycle:
   - **P0 (7b45ba0)** `warehouse_stock.heat_number` + Stock Register / stock-take read-through.
@@ -110,6 +156,7 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 ---
 
 ## 3c. WBS AUDIT FINDINGS + GLOBAL TABLE STANDARD (logged 02 Jun — read-only diagnosis, nothing built)
+> ⚠ HISTORICAL (≈02 Jun) — superseded. The WBS depth-filter "leak" diagnosed here is now FIXED (`49c836d`, depth = expansion preset). The resizable-tables rollout described as a future track is now largely DONE.
 
 ### ✅ WBS DELETE-NODE FLOW — FIXED (data-integrity; was HIGH) — backend `5ea7abd` + UI `81392fe`
 - **RESOLVED (A3, 02 Jun):** the 3-step delete flow is restored and the delete is hardened. **Backend `5ea7abd`** — transactional `DELETE` with guards (children → locked-PO → orphan-lines, all clean **409 + zero mutation**, proven 29/29 rolled-back), validated+scoped transactional `reallocate` (incl. locked-PO refusal), `is_locked` added to impact. **UI `81392fe`** — restored step-2 Reallocate + step-3 summary/Back, corrected routing (children/locked block, lines→reallocate), 🔒 locked-PO badges, fixed the false "child nodes will also be removed" copy. All browser proofs passed. (The delete now also writes a **correct** audit row — see the global `audit()` helper bug above, still open for other routes.)
@@ -149,6 +196,7 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 ---
 
 ## 4. WHAT WAS DONE THIS SESSION (01 June 2026 — final)
+> ⚠ HISTORICAL — a 01-Jun session log. Many more sessions have shipped since (see `git log`): RBAC hardening, Reports, MTO revision rules, commodity-WBS optional, audit duplicate-review warning, Materials-Control label + Actions headers, WBS depth fix, breadcrumb trail. Kept for context only.
 
 - **Material Control module:** Fully built — Receipting (5-step wizard), Stock Register,
   FMR Register, Transfers. 3 new DB tables (warehouse_stock, fmr_requests, warehouse_transfers).
@@ -195,6 +243,7 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 ---
 
 ## 5. OPEN BUGS / KNOWN ISSUES
+> ⚠ HISTORICAL (≈02 Jun) — superseded. Audit helpers are FIXED; the MTO Rev-Diff question + the deferred pending-changes edit-gating remain (carried into the CURRENT STATUS open list).
 
 - **SCNDetailModal status update** — status update via "Update Status" button doesn't close modal
   when API returns error (stale `selectedScn` state after direct API test). Works correctly in
@@ -256,17 +305,13 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 ---
 
 ## 6. NEXT SESSION PRIORITIES (in order)
+> ⚠ HISTORICAL — STALE. All five items below (Traceability, Document Inbox, Audit, Reports, Dashboard) are BUILT & live. For the real current priorities see the "Genuinely OPEN items" list in the CURRENT STATUS section near the top.
 
-1. **Traceability module** — READ `CLAUDE_CONTEXT.md` Section "Module 9: Traceability"
-   AND the wireframe (`QMAT-prototype.html`) before writing any instruction.
-
-2. **Document Inbox** — after Traceability
-
-3. **Audit** — immutable log viewer across all modules
-
-4. **Reports** — analytics and summary reports
-
-5. **Dashboard** — BUILD LAST (reads from all modules, AI health score)
+1. ~~Traceability module~~ — ✅ BUILT
+2. ~~Document Inbox~~ — ✅ BUILT
+3. ~~Audit~~ — ✅ BUILT
+4. ~~Reports~~ — ✅ BUILT
+5. ~~Dashboard~~ — ✅ BUILT
 
 ---
 

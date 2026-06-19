@@ -1,7 +1,18 @@
 # QMAT MMS — Master Context & Specification
-# Last updated: 30 May 2026
-# This file is the BIBLE. Claude Code must read this at the start of every session.
-# Nothing gets built that contradicts this document.
+# Last updated: 30 May 2026 (status banner added 20 Jun 2026)
+# This file is the BIBLE for DESIGN (module specs, wireframe) and RULES (GLOBAL
+# STANDARDS, RAG vocabulary, architectural decisions, branding, data-flow). Those
+# sections remain authoritative. Nothing gets built that contradicts them.
+#
+# ⚠ STATUS IS STALE BELOW. The "STATUS: NOT STARTED / NOT YET BUILT" lines and the
+#   "PENDING ITEMS (as of 30 May)" section are from 30 May and are WRONG now:
+#   ✅ ALL modules are BUILT & live (incl. Dashboard, PO Detail, Traceability,
+#   Document Inbox, Audit) plus Reports, Meeting/RFI, Pending-Changes governance,
+#   and an RBAC/security layer. The 30-May bugs (SQL group-function, ROS hint,
+#   commodity/tag column, PO upload template, BUG-08/09) are all FIXED.
+#   ➜ For true current status + open items, read HANDOVER_NEXT_SESSION.md
+#     ("CURRENT STATUS & OPEN ITEMS, 20 June 2026"). Treat status lines below as
+#     historical; the specs/standards/decisions around them still stand.
 
 ---
 
@@ -114,9 +125,9 @@ The left sidebar must contain these items in this order:
    - Admin (⚙️)
 4. User chip at bottom
 
-**IMPORTANT:** Foundational is MISSING from the current live app nav. It must be added.
-**IMPORTANT:** Dashboard has NOT been built yet. Do not touch it.
-**IMPORTANT:** AVL/Suppliers is under Admin, NOT under Foundational.
+**IMPORTANT (stale, 30 May):** ~~Foundational is MISSING from the nav~~ — Foundational (WBS/Commodity/Equipment) IS in the nav and built.
+**IMPORTANT (stale, 30 May):** ~~Dashboard has NOT been built~~ — Dashboard is built & live.
+**IMPORTANT:** AVL/Suppliers is under Admin, NOT under Foundational. *(rule — still holds)*
 
 ---
 
@@ -131,7 +142,7 @@ The left sidebar must contain these items in this order:
 8. **Traceability** → verifies certs (releasing goods from trace hold), maintains full chain per tag.
 9. **Document Inbox** → universal intake that classifies and routes files into the above registers.
 10. **Audit** → records every state change across all modules.
-11. **Dashboard** → reads across all modules to surface health score, problems, AI analysis. BUILD LAST.
+11. **Dashboard** → reads across all modules to surface health score, problems, AI analysis. *(Built — the "BUILD LAST" note is historical.)*
 
 ---
 
@@ -160,9 +171,9 @@ The left sidebar must contain these items in this order:
 ---
 
 ## MODULE 1: DASHBOARD
-**STATUS: NOT STARTED — DO NOT BUILD YET**
+**STATUS: ✅ BUILT (20 Jun 2026 — the "NOT STARTED" note below is stale).** Live as `DashboardProjectScreen` + `server/routes/dashboard.js`: project-list landing → per-project health screen (health score/band, by-module weights with a configure modal, pipeline funnel). Reads across modules.
 Dashboard is a 4-level drill-down: Project list → Project (WBS tree + health) → PO list under WBS node → PO detail.
-It reads data from ALL other modules. Build it last when all modules are complete.
+It reads data from ALL other modules.
 
 ---
 
@@ -309,7 +320,7 @@ It reads data from ALL other modules. Build it last when all modules are complet
 ## MODULE 4: PROCUREMENT
 
 ### IMPORTANT NOTES FROM INTERNAL REVIEW:
-1. **PO Detail Screen (Phase 3) is NOT yet built** — it is the most important next build
+1. ~~**PO Detail Screen (Phase 3) is NOT yet built**~~ — BUILT (`PODetailScreen.tsx`); the spec in §4.6 was implemented.
 2. **Milestones belong in Expediting only** — NOT shown in PO Register table
 3. **Expeditor assignment** belongs on the PO Register itself (column after Status), not inside the PO creation wizard — because assignment may happen months after PO creation
 4. **Owner** = commercial PO owner. **Expeditor** = assigned separately when expediting begins
@@ -456,7 +467,7 @@ Footer: Cancel · ← Back · ✓ Create PO (green)
 
 ---
 
-### 4.6 PO Detail Screen — Phase 3 (PODetailScreen) ❌ NOT YET BUILT
+### 4.6 PO Detail Screen — Phase 3 (PODetailScreen) ✅ BUILT (the "NOT YET BUILT" tag is stale — `src/pages/PODetailScreen.tsx`, full tabbed screen: Line Items · Key Dates · ITP · Documents · Action Notes · Variations · Audit Trail; approve & lock)
 **Route:** /project/:projectId/procurement/:poId
 **This is a FULL DEDICATED SCREEN — not a modal, not a drawer.**
 **The PO number in the side drawer header is already set up as a clickable link — it should navigate here.**
@@ -868,6 +879,12 @@ Immutable audit log across all modules. Search interface. Returns: who · what a
 ---
 
 ## PENDING ITEMS (as of 30 May 2026)
+> ⚠ HISTORICAL — ALL RESOLVED. Every bug and "next build" below is done: the SQL
+> group-function bug (now WHERE-style CASE), the ROS hint text (field corrected;
+> one stale help line remains, tracked in HANDOVER), the commodity/tag autocomplete
+> column (`/procurement/:pid/items/search`), the PO upload template redesign, and
+> BUG-08/BUG-09 (`9391bca`). PO Detail (Phase 3) and Foundational are built. Kept
+> for history; see HANDOVER_NEXT_SESSION.md for real current open items.
 
 ### Bugs to fix:
 1. **Fix 2 SQL bug:** Clicking Breached/At Risk summary cards returns "Invalid use of group function". The rag filter query uses aggregate functions where WHERE is needed. Fix: `rag=red` → WHERE cdd < CURDATE() AND status NOT IN ('complete','cancelled'); `rag=amber` → WHERE cdd BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL threshold DAY) AND status NOT IN ('complete','cancelled'). Pure WHERE conditions, no HAVING.
