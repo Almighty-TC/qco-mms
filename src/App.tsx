@@ -473,7 +473,7 @@ const Nav = ({
         {/* Material Control — subcontractor sees only Stock + FMR; others see all */}
         {userRole !== 'freight_forwarder' && <>
           {/* Subcontractors land on Stock Register; internal team on Receipting */}
-          {navItem('Material Control', '📦', userRole === 'subcontractor' ? 'mc-stock' : 'mc-receipting')}
+          {navItem('Materials Control', '📦', userRole === 'subcontractor' ? 'mc-stock' : 'mc-receipting')}
           {selectedProjectId && ['mc-receipting','mc-stock','mc-fmr','mc-transfers'].includes(activePage) && (
             <div style={{ paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 1 }}>
               {(userRole === 'subcontractor'

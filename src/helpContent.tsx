@@ -748,7 +748,7 @@ export const FMR_HELP: HelpSection[] = [
     title: 'What is this?',
     content: <>
       {P(<>The {B('FMR (Field Material Request) Register')} is where site crews request material from the
-        warehouse, and where Material Control approves and issues it. Each FMR can hold {B('multiple line items')}.</>)}
+        warehouse, and where Materials Control approves and issues it. Each FMR can hold {B('multiple line items')}.</>)}
       {P(<>The flow is: {Code('Raised → Approved → Issued / Picked up')}.</>)}
     </>,
   },
@@ -832,7 +832,7 @@ export const TRANSFERS_HELP: HelpSection[] = [
   {
     title: 'Raising & approving',
     content: <>
-      {P(<>Use {B('+ New transfer')} to request a move (from/to warehouse, item, qty). Material Control
+      {P(<>Use {B('+ New transfer')} to request a move (from/to warehouse, item, qty). Materials Control
         approves, then the status advances as the goods move and arrive.</>)}
     </>,
   },
@@ -921,7 +921,7 @@ export const LOGISTICS_HELP: HelpSection[] = [
     title: 'Status & delivery',
     content: <>
       {P(<>You can advance an SCN's status manually, but it flips to {B('Delivered')} automatically when the
-        shipment is {B('receipted')} in Material Control.</>)}
+        shipment is {B('receipted')} in Materials Control.</>)}
     </>,
   },
   {

@@ -331,7 +331,7 @@ const U_COLS: AdminCol[] = [
   { label: 'Contract End',   width: 135, minWidth: 120 },
   { label: 'Status',         width: 105, minWidth: 100 },
   { label: 'Last Login',     width: 125, minWidth: 120 },
-  { label: '',               width: 120, minWidth: 120, noResize: true },
+  { label: 'Actions',               width: 120, minWidth: 120, noResize: true },
 ]
 
 type UserForm = {
@@ -1557,7 +1557,7 @@ const N_COLS: AdminCol[] = [
   { label: 'Type',    width: 130, minWidth: 80  },
   { label: 'Message', width: 400, minWidth: 150, flex: true },
   { label: 'Date',    width: 120, minWidth: 80  },
-  { label: '',        width: 90,  minWidth: 90, noResize: true },
+  { label: 'Actions',        width: 90,  minWidth: 90, noResize: true },
 ]
 
 function NotificationsTab({ dark }: { dark: boolean }) {
@@ -1912,7 +1912,7 @@ const S_COLS: AdminCol[] = [
   { label: 'Phone',     width: 130, minWidth: 90  },
   { label: 'Addresses', width: 230, minWidth: 120 },
   { label: 'Status',    width: 90,  minWidth: 70  },
-  { label: '',          width: 90,  minWidth: 90,  noResize: true },
+  { label: 'Actions',          width: 90,  minWidth: 90,  noResize: true },
 ]
 
 function SuppliersTab({ dark }: { dark: boolean }) {
@@ -2339,7 +2339,7 @@ const P_COLS: AdminCol[] = [
   { label: 'Breach', width: 60,  minWidth: 50  },
   { label: 'Start',  width: 110, minWidth: 80, align: 'center' },
   { label: 'End',    width: 110, minWidth: 80, align: 'center' },
-  { label: '',       width: 90,  minWidth: 90,  noResize: true },
+  { label: 'Actions',       width: 90,  minWidth: 90,  noResize: true },
 ]
 
 function ProjectsAdminTab({ dark }: { dark: boolean }) {
@@ -2628,7 +2628,7 @@ const WH_COLS: AdminCol[] = [
   { label: 'Contact', width: 140, minWidth: 90  },
   { label: 'Phone',   width: 130, minWidth: 90  },
   { label: 'Status',  width: 90,  minWidth: 70  },
-  { label: '',        width: 90,  minWidth: 90,  noResize: true },
+  { label: 'Actions',        width: 90,  minWidth: 90,  noResize: true },
 ]
 
 function WarehousesTab({ dark }: { dark: boolean }) {
@@ -2867,7 +2867,7 @@ const UOM_COLS: AdminCol[] = [
   { label: 'Code',        width: 80,  minWidth: 70  },
   { label: 'Description', width: 300, minWidth: 150, flex: true },
   { label: 'Status',      width: 100, minWidth: 80  },
-  { label: '',            width: 90,  minWidth: 90,  noResize: true },
+  { label: 'Actions',            width: 90,  minWidth: 90,  noResize: true },
 ]
 
 function UomTab({ dark }: { dark: boolean }) {
@@ -3054,7 +3054,7 @@ const ACR_COLS: AdminCol[] = [
   { label: 'Definition', width: 260, minWidth: 130, flex: true },
   { label: 'Module',     width: 140, minWidth: 100 },
   { label: 'Notes',      width: 200, minWidth: 120 },
-  { label: '',           width: 90,  minWidth: 90,  noResize: true },
+  { label: 'Actions',           width: 90,  minWidth: 90,  noResize: true },
 ]
 
 function AcronymsTab({ dark }: { dark: boolean }) {
@@ -3215,7 +3215,7 @@ const INC_COLS: AdminCol[] = [
   { label: 'Risk Transfer',  width: 200, minWidth: 120 },
   { label: 'Transport Mode', width: 150, minWidth: 100 },
   { label: 'Status',         width: 90,  minWidth: 70  },
-  { label: '',               width: 90,  minWidth: 90,  noResize: true },
+  { label: 'Actions',               width: 90,  minWidth: 90,  noResize: true },
 ]
 
 function IncoTermsTab({ dark }: { dark: boolean }) {
