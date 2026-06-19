@@ -848,7 +848,9 @@ router.post('/:projectId/commodities', async (req, res) => {
     const pid = Number(req.params.projectId)
     const { code, name, uom, wbs_code, wbs_node_id, estimated_qty, trace_level, preservation, preferred_vendor, notes } = req.body
     if (!code?.trim() || !name?.trim()) return res.status(400).json({ error: 'Code and name are required' })
-    if (!wbs_code?.trim()) return res.status(400).json({ error: 'WBS code is required' })
+    // WBS is OPTIONAL (per the wireframe the field stays, but a commodity used across
+    // multiple WBS areas shouldn't be forced to pick one). Blank → NULL via the INSERT's
+    // coalescing below. A supplied WBS still maps to wbs_node_id exactly as before.
 
     const [[dup]] = await db.query(
       'SELECT id FROM commodity_library WHERE project_id=? AND code=?', [pid, code.trim()]

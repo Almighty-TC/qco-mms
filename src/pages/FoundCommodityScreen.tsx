@@ -69,14 +69,16 @@ const CommodityModal = ({ projectId, wbsNodes, item, dark, onClose, onSaved, onQ
   const col = dark ? '#f1f5f9' : '#0f172a'
 
   const wbsNode = wbsNodes.find(n => n.code === wbs)
-  const valid = code.trim() && name.trim() && wbs.trim()
+  // WBS is OPTIONAL — only code + name gate the form (matches the wireframe field,
+  // which stays, but no longer forces a single WBS on a reusable catalog item).
+  const valid = code.trim() && name.trim()
 
   const inp = { height: 34, padding: '0 10px', borderRadius: 6, width: '100%', border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' as const }
   const label = (t: string) => <div style={{ fontSize: 10, fontWeight: 600, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase' as const, marginBottom: 4, marginTop: 10 }}>{t}</div>
 
   const save = async () => {
     setSaving(true); setErr('')
-    const payload = { name, uom, wbs_code: wbs, wbs_node_id: wbsNode?.id ?? null, estimated_qty: qty ? Number(qty) : null, trace_level: trace, preservation: pres, preferred_vendor: vendor || null, notes: notes || null, status }
+    const payload = { name, uom, wbs_code: wbs || null, wbs_node_id: wbsNode?.id ?? null, estimated_qty: qty ? Number(qty) : null, trace_level: trace, preservation: pres, preferred_vendor: vendor || null, notes: notes || null, status }
     try {
       let result: Commodity
       if (editing && item) {
@@ -124,9 +126,9 @@ const CommodityModal = ({ projectId, wbsNodes, item, dark, onClose, onSaved, onQ
               style={{ ...inp, fontFamily: 'JetBrains Mono, monospace', opacity: editing ? 0.6 : 1 }} />
           </div>
           <div>
-            {label('WBS *')}
+            {label('WBS')}
             <select value={wbs} onChange={e => setWbs(e.target.value)} style={{ ...inp }}>
-              <option value="">— Select WBS</option>
+              <option value="">— None (optional)</option>
               {wbsNodes.map(n => <option key={n.id} value={n.code}>{n.code} — {n.description}</option>)}
             </select>
           </div>
