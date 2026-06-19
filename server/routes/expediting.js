@@ -329,7 +329,7 @@ router.get('/:projectId/po/:poId', async (req, res) => {
     let supplier_addresses = []
     if (po.supplier_id) {
       const [addrs] = await db.query(
-        `SELECT id, type, line1, line2, city, state, postcode, country, is_primary
+        `SELECT id, type, address_line1, address_line2, city, state, postcode, country, is_primary
          FROM supplier_addresses WHERE supplier_id=?
          ORDER BY is_primary DESC, id`, [po.supplier_id])
       supplier_addresses = addrs.map(a => ({
