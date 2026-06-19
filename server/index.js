@@ -75,6 +75,11 @@ app.use('/api/dashboard', require('./routes/dashboard'))
 // Read gated to admin + oversight roles; QA sign-off (C2) writes to audit_review only.
 app.use('/api/audit', require('./routes/audit'))
 
+// ─── REPORTS (curated + ad-hoc analytics, read-only) ─────────
+// Whitelisted, project-scoped queries via one injection-safe engine. Two gates:
+// reports.can_view (module) + can_view on each dataset's SOURCE module (no backdoor).
+app.use('/api/reports', require('./routes/reports'))
+
 // ─── GLOBAL ERROR HANDLER ────────────────────────────────────
 // Turns upload failures into clean 400s: multer size-limit errors and our own
 // fileFilter rejections (err.isUploadError) — instead of a default 500/HTML.

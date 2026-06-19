@@ -87,6 +87,28 @@ function requirePermission(module, action = 'can_view') {
   }
 }
 
+// ─── HAS PERMISSION (boolean form, for non-middleware checks) ─
+// Same resolution as requirePermission (admin bypass → user override → role
+// default), returned as a boolean instead of an Express gate. Used where a single
+// handler must check several modules at once — e.g. the Reports route re-checking
+// the SOURCE module's can_view per dataset, so Reports can't become a read-leak
+// backdoor for data a role can't otherwise see. NB: does NOT apply the WBS-scope
+// check (callers that need it gate the route with requirePermission as well).
+async function hasPermission(user, module, action = 'can_view') {
+  if (!VALID_ACTIONS.has(action)) throw new Error(`hasPermission: invalid action "${action}"`)
+  const userId = user?.id, role = user?.role
+  if (!userId || !role) return false
+  if (role === 'admin') return true
+  const [overrides] = await db.query(
+    `SELECT ${action} AS allowed FROM user_permission_overrides
+     WHERE user_id = ? AND module = ? LIMIT 1`, [userId, module])
+  if (overrides.length > 0 && overrides[0].allowed !== null) return !!overrides[0].allowed
+  const [perms] = await db.query(
+    `SELECT ${action} AS allowed FROM role_permissions
+     WHERE role = ? AND module = ? LIMIT 1`, [role, module])
+  return !!(perms.length && perms[0].allowed)
+}
+
 // ─── DENY READ-ONLY ROLES (C-a interim floor) ────────────────
 // Blanket floor: roles that may NEVER perform operational writes are blocked
 // on every write method (POST/PUT/PATCH/DELETE). Closes the demonstrated gap
@@ -176,4 +198,4 @@ function requireAdmin(req, res, next) {
   next()
 }
 
-module.exports = { requirePermission, requireAdmin, denyReadOnly, enforce, queueGate }
+module.exports = { requirePermission, requireAdmin, denyReadOnly, enforce, queueGate, hasPermission }
