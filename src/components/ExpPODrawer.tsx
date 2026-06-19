@@ -13,6 +13,11 @@ const ExpPODetailScreen = lazy(() => import('../pages/ExpPODetailScreen').then(m
 
 const API = 'http://localhost:3001/api'
 
+// Roles that may (co-)assign expeditors — MUST equal the backend's
+// EXPEDITOR_ASSIGN_ROLES (procurement.js). Client gate is defence-in-depth; the
+// API enforces the same set, so a non-assigner can never assign even if shown.
+const EXPEDITOR_ASSIGN_ROLES = new Set(['admin', 'expediting_manager', 'expeditor', 'procurement_manager'])
+
 // ─── PROPS ────────────────────────────────────────────────────
 interface Props {
   poId: number | null
@@ -22,16 +27,65 @@ interface Props {
   userRole?: string
   onClose: () => void
   onCreateSCN: (poId: number, preSelectedLineId?: number) => void
+  onAssigned?: () => void   // fired after an assign change so the register row refreshes
 }
 
 // ─── COMPONENT ────────────────────────────────────────────────
 export const ExpPODrawer: React.FC<Props> = ({
-  poId, projectId, projectName, dark, userRole = '', onClose, onCreateSCN,
+  poId, projectId, projectName, dark, userRole = '', onClose, onCreateSCN, onAssigned,
 }) => {
   const [po, setPO] = useState<any>(null)
   const [loading, setLoading] = useState(false)
   // Expand the drawer to a full-screen view that embeds the complete PO detail.
   const [expanded, setExpanded] = useState(false)
+
+  // ─── EXPEDITOR (CO-)ASSIGNMENT ────────────────────────────
+  // Reuses the procurement endpoints (same data as the PO Register). The control
+  // renders only for assigner roles; everyone else sees the assignees read-only.
+  const canAssign = EXPEDITOR_ASSIGN_ROLES.has(userRole)
+  const [assigned, setAssigned] = useState<{ id: number; name: string }[]>([])
+  const [eligible, setEligible] = useState<{ id: number; full_name: string; role: string }[]>([])
+  const [addId, setAddId] = useState('')
+  const [busyExp, setBusyExp] = useState(false)
+  const [assignErr, setAssignErr] = useState('')
+  const fromResp = (data: { expeditors?: { user_id: number; full_name: string }[] }) =>
+    (data.expeditors ?? []).map(e => ({ id: e.user_id, name: e.full_name }))
+
+  // Current assignees (ids needed for removal) — only fetchable by assigners
+  // (they hold procurement.can_view). Reset when the PO changes / drawer closes.
+  useEffect(() => {
+    setAddId(''); setAssignErr('')
+    if (!poId || !canAssign) { setAssigned([]); return }
+    axios.get(`${API}/procurement/pos/${poId}/expeditors`)
+      .then(r => setAssigned(fromResp(r.data)))
+      .catch(() => setAssigned([]))
+  }, [poId, canAssign])
+
+  // Eligible-users list — same source the PO Register uses. Fetched once per assigner.
+  useEffect(() => {
+    if (!canAssign) return
+    axios.get(`${API}/procurement/users/list`).then(r => setEligible(r.data)).catch(() => setEligible([]))
+  }, [canAssign])
+
+  const addExpeditor = async () => {
+    if (!addId) return
+    setBusyExp(true); setAssignErr('')
+    try {
+      const { data } = await axios.post(`${API}/procurement/pos/${poId}/expeditors`, { user_id: Number(addId) })
+      setAssigned(fromResp(data)); setAddId(''); onAssigned?.()
+    } catch (e: unknown) {
+      setAssignErr((e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'Could not add expeditor')
+    } finally { setBusyExp(false) }
+  }
+  const removeExpeditor = async (uid: number) => {
+    setBusyExp(true); setAssignErr('')
+    try {
+      const { data } = await axios.delete(`${API}/procurement/pos/${poId}/expeditors/${uid}`)
+      setAssigned(fromResp(data)); onAssigned?.()
+    } catch (e: unknown) {
+      setAssignErr((e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'Could not remove expeditor')
+    } finally { setBusyExp(false) }
+  }
 
   // ─── FETCH PO DETAIL ──────────────────────────────────────
   // Loads full PO detail when drawer opens; clears on close. Reset the expand
@@ -125,6 +179,48 @@ export const ExpPODrawer: React.FC<Props> = ({
               <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>
                 Owner: {po.owner_name || '—'} · Group: {po.group_category || '—'}
               </div>
+
+              {/* Expeditor (co-)assignment — assigners get the control; others read-only */}
+              <div style={{ marginTop: 8, paddingTop: 8, borderTop: border }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Expeditors</div>
+                {canAssign ? (
+                  <>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: assigned.length ? 6 : 0 }}>
+                      {assigned.length === 0 && <span style={{ fontSize: 12, color: '#94a3b8' }}>— None assigned</span>}
+                      {assigned.map((a, i) => (
+                        <span key={a.id} title={i === 0 ? 'Lead expeditor' : 'Assigned expeditor'}
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600, color: dark ? '#f1f5f9' : '#0f172a',
+                            background: dark ? '#1e293b' : '#fff', border: `1px solid ${i === 0 ? '#2563eb' : (dark ? '#334155' : '#dde3ed')}`, borderRadius: 12, padding: '2px 6px 2px 8px' }}>
+                          {i === 0 && <span style={{ color: '#2563eb', fontSize: 9 }}>★</span>}
+                          {a.name}
+                          <button onClick={() => removeExpeditor(a.id)} disabled={busyExp} title="Remove"
+                            style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: 0 }}>×</button>
+                        </span>
+                      ))}
+                    </div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <select value={addId} onChange={e => setAddId(e.target.value)}
+                        style={{ height: 28, fontSize: 11, flex: 1, borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: dark ? '#0f172a' : '#fff', color: dark ? '#f1f5f9' : '#0f172a', padding: '0 8px' }}>
+                        <option value="">+ Add expeditor…</option>
+                        {eligible
+                          .filter(u => EXPEDITOR_ASSIGN_ROLES.has(u.role))
+                          .filter(u => !assigned.some(a => a.id === u.id))
+                          .map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
+                      </select>
+                      <button onClick={addExpeditor} disabled={busyExp || !addId}
+                        style={{ padding: '3px 10px', borderRadius: 5, border: 'none', background: addId ? '#E84E0F' : '#94a3b8', color: '#fff', fontSize: 11, cursor: addId ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }}>
+                        {busyExp ? '…' : 'Add'}
+                      </button>
+                    </div>
+                    {assignErr && <div style={{ fontSize: 11, color: '#ef4444', marginTop: 4 }}>{assignErr}</div>}
+                  </>
+                ) : (
+                  <div style={{ fontSize: 12, color: '#94a3b8' }}>
+                    {(po.expeditor_names && po.expeditor_names.length) ? po.expeditor_names.join(', ') : '— Unassigned'}
+                  </div>
+                )}
+              </div>
+
               <div style={{ marginTop: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 {/* RAG pill */}
                 <span style={{

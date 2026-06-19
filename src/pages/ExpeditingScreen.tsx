@@ -518,7 +518,7 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, userRole = '', on
 
   const {
     data: pos, total, page, setPage, setPageSize, pageSize, loading,
-    sortCol, sortDir, toggleSort,
+    sortCol, sortDir, toggleSort, reload,
   } = usePagedList<PORow>({
     fetcher, deps: [projectId, subTab, ragFilter, debouncedSearch, criticalOnly, rosFrom, rosTo],
     pageSize: 50, initialSortCol: 'po_number', initialSortDir: 'asc',
@@ -1053,6 +1053,7 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, userRole = '', on
         userRole={userRole}
         onClose={() => setDrawerPoId(null)}
         onCreateSCN={(poId, lineId) => { setDrawerPoId(null); setSCNWizardState({ poId, lineId }) }}
+        onAssigned={reload}
       />
 
       {/* ── CREATE SCN WIZARD ── */}
