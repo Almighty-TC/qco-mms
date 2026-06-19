@@ -1018,3 +1018,36 @@ export const PENDING_CHANGES_HELP: HelpSection[] = [
     </>,
   },
 ]
+
+// ─── REPORTS ─────────────────────────────────────────────────
+export const REPORTS_HELP: HelpSection[] = [
+  {
+    title: 'What is this?',
+    content: <>
+      {P(<>{B('Reports')} turns the project's live data into shareable summaries. Pick a {B('curated report')}
+        from the library on the left, or {B('build your own')} ad-hoc report over any dataset.</>)}
+      {P(<>Reports are grouped into four areas: {B('Procurement & Expediting')}, {B('Materials & Logistics')},
+        {B('Quality & Traceability')} and {B('Project Health')}.</>)}
+    </>,
+  },
+  {
+    title: 'Ad-hoc reports',
+    content: <>
+      {Steps([
+        <>Choose a dataset under {B('Build your own')}.</>,
+        <>Toggle the {B('columns')} you want, add {B('filters')} (field · operator · value), and optionally
+          {B(' summarise')} by grouping on a field with a row count and an optional sum.</>,
+        <>Press {B('Run')}.</>,
+      ])}
+    </>,
+  },
+  {
+    title: 'Saved views & export',
+    content: <>
+      {P(<>Save an ad-hoc report as a {B('★ saved view')} to re-run it later (saved per user). Export any
+        result as {B('CSV')}, {B('Excel')} or {B('PDF')} (PDF opens a print-ready view → Save as PDF).</>)}
+      {P(<>Drag a column edge to resize and use {B('↺ Reset columns')} to restore defaults.</>)}
+      {Tip('You only ever see reports for data your role can access — the catalogue is filtered to your permissions.')}
+    </>,
+  },
+]

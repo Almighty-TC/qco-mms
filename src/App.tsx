@@ -27,6 +27,7 @@ import { DashboardProjectScreen } from './pages/DashboardProjectScreen'
 import { DocumentsScreen } from './pages/DocumentsScreen'
 import { ConfirmerQueueScreen } from './pages/ConfirmerQueueScreen'
 import { AuditViewerScreen } from './pages/AuditViewerScreen'
+import { ReportsScreen } from './pages/ReportsScreen'
 import { ForcePasswordChange } from './components/ForcePasswordChange'
 import { ChangePasswordModal } from './components/ChangePasswordModal'
 import { AcronymHeaderTitles } from './components/AcronymHeaderTitles'
@@ -37,7 +38,7 @@ import './App.css'
 // 'admin' enforces role === 'admin'; 'procurement' is project-scoped.
 // ─── ROUTING — state-based, no router library ─────────────────────────────────
 // 'po-detail' is Phase 3 PO Detail Screen — full dedicated screen.
-type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers' | 'traceability' | 'documents' | 'pending-changes' | 'audit' | 'rfi-meeting'
+type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers' | 'traceability' | 'documents' | 'pending-changes' | 'audit' | 'rfi-meeting' | 'reports'
 
 // ─── DEEP-LINK PARSING ───────────────────────────────────────
 // Maps a URL path segment (/project/:id/<segment>) to an internal Page,
@@ -48,7 +49,7 @@ const PAGE_SEGMENTS: Record<string, Page> = {
   procurement: 'procurement', 'po-detail': 'po-detail',
   expediting: 'expediting', 'expediting-po-detail': 'expediting-po-detail',
   'mto-list': 'mto-list', 'mto-detail': 'mto-detail',
-  logistics: 'logistics', traceability: 'traceability', documents: 'documents',
+  logistics: 'logistics', traceability: 'traceability', documents: 'documents', reports: 'reports',
   'mc-receipting': 'mc-receipting', 'mc-stock': 'mc-stock', 'mc-fmr': 'mc-fmr', 'mc-transfers': 'mc-transfers',
   'foundational-wbs': 'foundational-wbs', 'foundational-commodities': 'foundational-commodities', 'foundational-equipment': 'foundational-equipment',
   // friendly aliases
@@ -284,6 +285,10 @@ const READ_ONLY_ROLES = new Set(['ceo', 'director', 'project_director', 'viewer'
 // Roles with audit.can_view (matrix, viewer revoked) — gate the Audit Trail nav/screen.
 // Backend is source of truth (requirePermission('audit','can_view')); this just hides the nav.
 const AUDIT_VIEW_ROLES = new Set(['admin', 'auditor', 'ceo', 'director', 'expediting_manager', 'procurement_manager', 'project_director'])
+// Roles with reports.can_view (the 17 internal roles seeded into the matrix; the 4
+// external roles get no row). Backend enforce('reports') is the real gate — this
+// just hides the nav for external roles. Mirrors rbac_reports_matrix_seed.cjs.
+const REPORTS_VIEW_ROLES = new Set(['admin', 'auditor', 'ceo', 'director', 'engineering_lead', 'expediting_manager', 'expeditor', 'logistics_manager', 'materials_engineer', 'procurement_manager', 'procurement_officer', 'project_control', 'project_controls_manager', 'project_director', 'project_manager', 'viewer', 'warehouse'])
 
 // Dark-gradient sidebar with logo, nav items, and user chip.
 // activePage and onNavigate enable state-based page routing without
@@ -491,6 +496,9 @@ const Nav = ({
         {/* C-c confirmer queue — visible to roles that may confirm pending changes */}
         {['admin', 'project_controls_manager', 'engineering_lead', 'project_manager'].includes(userRole) && navItem('Pending Changes', '✔', 'pending-changes')}
         {AUDIT_VIEW_ROLES.has(userRole) && navItem('Audit', '🔍', 'audit')}
+        {/* Reports — internal roles only (external roles have no reports matrix row);
+            backend enforce('reports') is the real gate, plus a per-dataset re-check. */}
+        {REPORTS_VIEW_ROLES.has(userRole) && navItem('Reports', '📊', 'reports')}
         {/* Meetings & RFIs — all roles hold rfi_meeting.can_view per the C1 matrix
             (backend requirePermission is the real gate); shown to everyone. */}
         {navItem('Meetings & RFIs', '📋', 'rfi-meeting')}
@@ -1006,6 +1014,7 @@ function App() {
               : page === 'mto-detail' ? `MTO Detail · ${selectedProjectName}`
               : page === 'traceability' ? `Traceability · ${selectedProjectName}`
               : page === 'documents' ? `Document Inbox · ${selectedProjectName}`
+              : page === 'reports' ? `Reports · ${selectedProjectName}`
               : 'Dashboard'}
             </span>
           </div>
@@ -1314,6 +1323,13 @@ function App() {
               Project-wide aggregated, read-only document register. */}
           {page === 'documents' && selectedProjectId && (
             <DocumentsScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
+              onBack={() => setPage('dashboard')} />
+          )}
+
+          {/* ─── REPORTS (curated + ad-hoc analytics, read-only) ──
+              Internal roles only; backend double-gates (module + per-dataset). */}
+          {page === 'reports' && selectedProjectId && REPORTS_VIEW_ROLES.has(user?.role ?? '') && (
+            <ReportsScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
               onBack={() => setPage('dashboard')} />
           )}
 

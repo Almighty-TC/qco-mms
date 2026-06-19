@@ -67,9 +67,9 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 | Deep-link routing | ✅ Fixed | BUG-08 (project switching) + BUG-09 (deep-link hydrates active project from URL) fixed (commit 9391bca) |
 | Traceability | ✅ BUILT & verified 02 Jun | Certs/approvals/trace chain/holds + 6 modals. Hard-mandatory 3-point QA verify checklist (server 422s if any box false; verifying releases the linked hold). Commit e3e68dd. |
 | Document Inbox / Document Management | ✅ BUILT & verified 02 Jun | Project-wide aggregate, READ-ONLY register over every module's existing doc tables; jump-to-source via deep link; CSV export. Commit 1d1f775. |
-| Meeting / RFI Register | ⏳ Not started | |
-| Audit | ⏳ Not started | |
-| Reports | ⏳ Not started | |
+| Meeting / RFI Register | ✅ BUILT | rfi_meeting module (later session) |
+| Audit | ✅ BUILT | AuditViewerScreen + audit.js (later session) |
+| Reports | ✅ BUILT & verified 19 Jun | Curated library + ad-hoc builder + saved views, across all 4 categories. Backend: `server/reports/{datasets,engine,catalog}.js` + `routes/reports.js` (one injection-safe engine; whitelisted datasets). **Double RBAC gate:** `enforce('reports')` (module) + per-dataset re-check of the SOURCE module's `can_view` (Reports is never a read-leak backdoor). Exports CSV/XLSX (server, exceljs) + PDF (client print view). Composite `project_health` cross-module rollup. Matrix seeded (17 internal roles, 0 external) via `scripts/rbac/rbac_reports_matrix_seed.cjs`. **⚠ PENDING (Thomas, admin creds): `node server/scripts/migrate-report-views.js` to create `report_saved_views`** — until then the saved-views feature returns empty / 503 (route degrades gracefully; everything else works). Verified in browser on project 27: curated flat + grouped + composite + ad-hoc all run; CSV/XLSX 200; dark mode OK; tsc clean. |
 
 **Remaining unbuilt modules:** Meeting/RFI Register · Audit · Reports · Dashboard (build last — reads from all modules).
 
