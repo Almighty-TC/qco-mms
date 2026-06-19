@@ -1137,7 +1137,7 @@ const HelpModal = ({ dark, onClose }: { dark: boolean; onClose: () => void }) =>
       <div style={row}><span style={key}>★ Star</span><span style={val}>Toggle critical path flag — requires a reason. Use filter to show only ★ POs.</span></div>
       <div style={row}><span style={key}>Milestones</span><span style={val}>5 dots: green = complete, orange = pending, grey = not set. Hover for dates.</span></div>
       <div style={row}><span style={key}>CDD</span><span style={val}>Earliest Contract Delivery Date across all line items.</span></div>
-      <div style={row}><span style={key}>ROS Date</span><span style={val}>Required On Site date. Optional at creation — required before expediting begins.</span></div>
+      <div style={row}><span style={key}>ROS Date</span><span style={val}>Required On Site date. Optional at creation — can be entered later in Expediting.</span></div>
       <div style={row}><span style={key}>Owner/Expeditor</span><span style={val}>Owner is set at creation and can be reassigned from the drawer (one owner). Expeditors are co-assignable from the drawer or the row.</span></div>
 
       <div style={sec}>Actions</div>
