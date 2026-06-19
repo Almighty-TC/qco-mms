@@ -209,14 +209,18 @@ router.get('/:projectId/template', async (req, res) => {
   wb.created = new Date()
 
   // ── ONE sheet: MTO Details (top) + line-items table (below) ───────────────
+  // Line columns match the upload parser EXACTLY (line_number, wbs_code, description,
+  // quantity, uom, ros_date) + a Notes column the parser uses to skip example rows.
+  // The old Unit Rate / Total Value columns were removed — MTO carries no pricing
+  // (that lives on po_lines), so the parser never read them and they only misled.
   const ws = wb.addWorksheet('MTO Lines', { views: [{ state: 'frozen', ySplit: 8 }] })
   ws.columns = [
     { width: 18 }, { width: 16 }, { width: 50 }, { width: 10 },
-    { width: 8 }, { width: 14 }, { width: 12 }, { width: 12 }, { width: 30 },
+    { width: 8 }, { width: 14 }, { width: 30 },
   ]
 
   // Row 1: orange title banner
-  ws.mergeCells('A1:I1')
+  ws.mergeCells('A1:G1')
   const titleCell = ws.getCell('A1')
   titleCell.value = 'QCO MMS — MTO Import Template'
   titleCell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 13, name: 'Calibri' }
@@ -243,14 +247,15 @@ router.get('/:projectId/template', async (req, res) => {
   })
 
   // Row 7: guidance note across the sheet
-  ws.mergeCells('A7:I7')
+  ws.mergeCells('A7:G7')
   const note = ws.getCell('A7')
   note.value = '↓  Line items — enter one row per item below. Delete the grey example rows before uploading.'
   note.font = { italic: true, color: { argb: 'FF64748b' }, size: 10 }
   ws.getRow(7).height = 18
 
-  // Row 8: line column headers (dark blue)
-  const headers = ['Line Number','WBS Code','Description','Quantity','UOM','ROS Date','Unit Rate','Total Value','Notes']
+  // Row 8: line column headers (dark blue) — exactly the fields the parser reads,
+  // plus Notes (used to detect/skip the grey example rows on import).
+  const headers = ['Line Number','WBS Code','Description','Quantity','UOM','ROS Date','Notes']
   const headerRow = ws.getRow(8)
   headers.forEach((h, i) => {
     const cell = headerRow.getCell(i + 1)
@@ -264,9 +269,9 @@ router.get('/:projectId/template', async (req, res) => {
 
   // Rows 9-11: example rows (grey italic)
   const examples = [
-    ['L-001','02.01.01','HP Separator Vessel — 3-phase horizontal',1,'EA','31-Aug-2025','','','Delete before uploading'],
-    ['L-002','02.02.01','Centrifugal Feed Pump P-101A',2,'EA','31-Oct-2025','','','Delete before uploading'],
-    ['L-003','03.01.01','HV Cable 11kV 3C×150mm² XLPE',250,'m','15-Dec-2025','','','Delete before uploading'],
+    ['L-001','02.01.01','HP Separator Vessel — 3-phase horizontal',1,'EA','31-Aug-2025','Delete before uploading'],
+    ['L-002','02.02.01','Centrifugal Feed Pump P-101A',2,'EA','31-Oct-2025','Delete before uploading'],
+    ['L-003','03.01.01','HV Cable 11kV 3C×150mm² XLPE',250,'m','15-Dec-2025','Delete before uploading'],
   ]
   examples.forEach((ex, i) => {
     const row = ws.getRow(9 + i)
