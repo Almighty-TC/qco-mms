@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext'
 // ─── USER COLOUR SYSTEM ──────────────────────────────────────────────────────
 // Central colour logic — never hardcode user-type colours here; always import.
 // getUserPillStyle not imported: company names render as plain text, not pills.
-import { USER_COLOURS, getUserColour, getUserRowStyle } from '../utils/userColours'
+import { USER_COLOURS, getUserColour, getUserRowStyle, EXTERNAL_ROLE_SET } from '../utils/userColours'
 import { DeleteConfirmModal, SimpleConfirmModal } from '../components'
 import { AdminTable, AdminRow, AdminCell, AdminActions } from '../components/AdminTable'
 import { ToastProvider, useToast } from '../hooks/useToast'
@@ -1128,6 +1128,133 @@ const PERM_MATRIX_COLS: AdminCol[] = [
   { label: 'WBS Scoped', width: 90, minWidth: 70, noResize: true },
 ]
 
+// ─── USER PROJECT / WBS ACCESS PANEL ────────────────────────
+// Admin control (third panel under User Overrides) to grant/revoke a user's
+// project access. Reuses the EXISTING admin endpoints — GET/POST/DELETE
+// /wbs-access (admin-gated + audited as wbs.grant/wbs.revoke). No backend change.
+//
+// Granularity: the access gate (permissions.js) keys ONLY on (user_id, project_id)
+// for wbs-scoped modules — wbs_code is not consulted — so grants here are
+// PROJECT-LEVEL, sent as wbs_code='ALL' (the existing whole-project convention).
+// Legacy node-level rows (e.g. 'CLA','03.01') still display their own code.
+//
+// Internal vs external is informational only here (no convention change yet): the
+// parent passes the authoritative is_external split. Internal users bypass scoping
+// (all projects by role) — grants aren't what governs them; external users ARE
+// governed by these grants.
+type WbsGrant = { id: number; wbs_code: string; project_id: number; projectName: string; projectCode: string; grantedAt: string; grantedByName: string }
+type ProjOpt  = { id: number; code: string; name: string }
+
+function UserWbsAccessPanel({ userId, external, dark }: { userId: number; external: boolean; dark: boolean }) {
+  const { addToast } = useToast()
+  const [grants,   setGrants]   = useState<WbsGrant[]>([])
+  const [projects, setProjects] = useState<ProjOpt[]>([])
+  const [addId,    setAddId]    = useState('')
+  const [busy,     setBusy]     = useState(false)
+  const [loading,  setLoading]  = useState(false)
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+
+  // Current grants for this user — refetched after every grant/revoke.
+  const loadGrants = useCallback(async () => {
+    setLoading(true)
+    try {
+      const { data } = await axios.get<WbsGrant[]>(`${API}/wbs-access/${userId}`)
+      setGrants(data)
+    } catch { setGrants([]) }
+    finally { setLoading(false) }
+  }, [userId])
+
+  useEffect(() => { loadGrants() }, [loadGrants])
+  // Project options for the picker (loaded once).
+  useEffect(() => {
+    axios.get<ProjOpt[]>(`${API}/projects`)
+      .then(({ data }) => setProjects(data.map(p => ({ id: p.id, code: p.code, name: p.name }))))
+      .catch(() => setProjects([]))
+  }, [])
+
+  // Offer only projects the user can't already reach (any existing row = project access).
+  const grantedProjectIds = new Set(grants.map(g => g.project_id))
+  const available = projects.filter(p => !grantedProjectIds.has(p.id))
+
+  const grant = async () => {
+    if (!addId) return
+    setBusy(true)
+    try {
+      await axios.post(`${API}/wbs-access`, { userId, projectId: Number(addId), wbsCode: 'ALL' })
+      setAddId(''); await loadGrants()
+      addToast('success', 'Project access granted')
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      addToast('error', err.response?.data?.error ?? 'Grant failed')
+    } finally { setBusy(false) }
+  }
+  const revoke = async (id: number) => {
+    setBusy(true)
+    try {
+      await axios.delete(`${API}/wbs-access/${id}`)
+      await loadGrants()
+      addToast('success', 'Project access revoked')
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      addToast('error', err.response?.data?.error ?? 'Revoke failed')
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div style={{ marginTop: 22, paddingTop: 18, borderTop: bd }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: dark ? '#e2e8f0' : '#1e293b', marginBottom: 8 }}>
+        Project / WBS Access
+      </div>
+      {/* Internal note vs external panel — honest for the future scoping rule */}
+      {!external ? (
+        <div style={{ padding: '10px 12px', borderRadius: 6, background: dark ? 'rgba(37,99,235,0.08)' : 'rgba(37,99,235,0.05)', border: `1px solid ${dark ? 'rgba(37,99,235,0.2)' : 'rgba(37,99,235,0.15)'}`, fontSize: 12, color: '#2563eb' }}>
+          This is an <strong>internal</strong> role — it has access to <strong>all projects</strong> by role; project scoping does not apply. Grants below are not required for this user.
+        </div>
+      ) : (
+        <div style={{ fontSize: 12, color: '#64748b', marginBottom: 4 }}>
+          This <strong>external</strong> user can only access the projects granted below.
+        </div>
+      )}
+
+      {/* Current grants */}
+      <div style={{ marginTop: 12 }}>
+        {loading ? (
+          <div style={{ fontSize: 12, color: '#64748b' }}>Loading…</div>
+        ) : grants.length === 0 ? (
+          <div style={{ fontSize: 13, color: external ? '#E84E0F' : '#94a3b8', fontStyle: 'italic' }}>
+            {external ? 'No project access granted yet.' : 'No explicit project grants.'}
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {grants.map(g => (
+              <div key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc' }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: '#E84E0F', fontFamily: 'JetBrains Mono, monospace' }}>{g.projectCode}</span>
+                <span style={{ fontSize: 12, color: dark ? '#cbd5e1' : '#475569', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.projectName}</span>
+                <span title="WBS scope" style={{ fontSize: 10, padding: '2px 7px', borderRadius: 9999, background: 'rgba(100,116,139,0.12)', color: '#64748b', fontWeight: 600, flexShrink: 0 }}>{g.wbs_code === 'ALL' ? 'Whole project' : g.wbs_code}</span>
+                <button onClick={() => revoke(g.id)} disabled={busy} title="Revoke access" style={{ width: 22, height: 22, borderRadius: 4, border: 'none', background: 'rgba(239,68,68,0.12)', color: '#ef4444', cursor: busy ? 'not-allowed' : 'pointer', fontWeight: 700, fontSize: 13, lineHeight: 1, flexShrink: 0 }}>×</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Grant new access — project-level (whole project) */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}>
+        <select value={addId} onChange={e => setAddId(e.target.value)} style={{ ...inp(dark), width: 280, height: 34 }}>
+          <option value="">+ Grant project access…</option>
+          {available.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
+        </select>
+        <button onClick={grant} disabled={busy || !addId} style={{ padding: '7px 16px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#E84E0F', color: '#fff', cursor: (busy || !addId) ? 'not-allowed' : 'pointer', opacity: (busy || !addId) ? 0.5 : 1, fontFamily: 'IBM Plex Sans, sans-serif' }}>
+          {busy ? 'Saving…' : 'Grant'}
+        </button>
+        {available.length === 0 && projects.length > 0 && (
+          <span style={{ fontSize: 11, color: '#94a3b8' }}>All projects already granted.</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function PermissionsTab({ dark }: { dark: boolean }) {
   const { addToast } = useToast()
   // ─── MODE TOGGLE ──────────────────────────────────────────────
@@ -1142,7 +1269,7 @@ function PermissionsTab({ dark }: { dark: boolean }) {
   const [resetRoleSaving,  setResetRoleSaving]  = useState(false)
 
   // ─── USER OVERRIDES STATE ─────────────────────────────────────
-  const [usersList,       setUsersList]       = useState<{ id: number; fullName: string; role: string }[]>([])
+  const [usersList,       setUsersList]       = useState<{ id: number; fullName: string; role: string; isExternal?: number }[]>([])
   const [selUserId,       setSelUserId]       = useState<number | null>(null)
   const [userRole,        setUserRole]        = useState<string>('')
   // rolePerms removed — base dots now derived from global lookup via selUserRole
@@ -1268,6 +1395,14 @@ function PermissionsTab({ dark }: { dark: boolean }) {
   const selUserRole = useMemo(
     () => usersList.find(u => u.id === selUserId)?.role ?? userRole,
     [usersList, selUserId, userRole]
+  )
+  // Authoritative internal/external split for the WBS-access panel: the per-user
+  // is_external flag, with the shared EXTERNAL_ROLE_SET as belt-and-suspenders.
+  // Deliberately NOT FULL_ACCESS_ROLES or the matrix wbs_scoped flag (the
+  // inconsistent lists slated for retirement in the later convention step).
+  const selUserExternal = useMemo(
+    () => (usersList.find(u => u.id === selUserId)?.isExternal === 1) || EXTERNAL_ROLE_SET.has(selUserRole),
+    [usersList, selUserId, selUserRole]
   )
   // Base permissions for selected user — sourced directly from global lookup (already loaded).
   // admin role is handled separately in render (synthesised full access).
@@ -1516,6 +1651,8 @@ function PermissionsTab({ dark }: { dark: boolean }) {
                 Inheriting from role
               </span>
             </div>
+            {/* ─── PROJECT / WBS ACCESS PANEL ─────────── */}
+            <UserWbsAccessPanel userId={selUserId} external={selUserExternal} dark={dark} />
           </>)}
 
           {/* ─── RESET CONFIRM MODAL ───────────────────── */}
