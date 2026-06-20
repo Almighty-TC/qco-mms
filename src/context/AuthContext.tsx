@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import axios from 'axios';
+import { API } from '../lib/api';
 
 // ─── USER TYPE ───────────────────────────────────────────────
 // Mirrors the JWT payload.  forcePasswordChange and passwordExpiresAt
@@ -95,7 +96,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   // ── Login ────────────────────────────────────────────────
   const login = useCallback(async (email: string, password: string) => {
-    const response = await axios.post('http://localhost:3001/api/auth/login', { email, password });
+    const response = await axios.post(`${API}/auth/login`, { email, password });
     const { token: authToken, user: authUser } = response.data;
 
     localStorage.setItem(AUTH_TOKEN_KEY, authToken);

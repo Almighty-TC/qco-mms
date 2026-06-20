@@ -11,7 +11,7 @@ import { EXPEDITING_PO_DETAIL_HELP } from '../helpContent'
 import { CreateSCNWizard } from '../components/CreateSCNWizard'
 import { ToastProvider, useToast } from '../hooks/useToast'
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 // ─── TYPES ────────────────────────────────────────────────────
 interface Milestone {
@@ -1127,10 +1127,10 @@ const ITPItemModal = ({
       if (fcastChanged) body.forecast_reason = fcastReason.trim()
 
       if (mode === 'add') {
-        await axios.post(`http://localhost:3001/api/expediting/${projectId}/po/${poId}/itp`, body)
+        await axios.post(`${API}/expediting/${projectId}/po/${poId}/itp`, body)
         addToast('success', 'ITP item added')
       } else {
-        await axios.put(`http://localhost:3001/api/expediting/${projectId}/po/${poId}/itp/${item!.id}`, body)
+        await axios.put(`${API}/expediting/${projectId}/po/${poId}/itp/${item!.id}`, body)
         addToast('success', 'ITP item updated')
       }
       onSaved()

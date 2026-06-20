@@ -7,7 +7,7 @@ import axios from 'axios'
 // useToast is NOT used here — wizard renders in a portal outside ToastProvider.
 // Success/error feedback is handled by the parent via onCreated/onError props.
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 // ─── TYPES ────────────────────────────────────────────────────
 interface Props {

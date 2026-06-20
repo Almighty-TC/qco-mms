@@ -16,7 +16,7 @@ import { ToastProvider, useToast } from '../hooks/useToast'
 import { ToastContainer } from '../components/Toast'
 import { RFI_MEETING_HELP } from '../helpContent'
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 interface RfiRow {
   id: number; record_type: 'rfi' | 'meeting'; ref: string; title: string; status: string; priority: string

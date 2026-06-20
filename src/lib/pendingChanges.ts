@@ -7,7 +7,7 @@
 // enforces who may submit and who must confirm; this only completes the round-trip.
 import axios from 'axios'
 
-const API = 'http://localhost:3001/api'
+import { API } from './api'
 
 export type GatedModule = 'wbs' | 'commodity' | 'equipment' | 'mto'
 export type GatedAction = 'create' | 'delete'

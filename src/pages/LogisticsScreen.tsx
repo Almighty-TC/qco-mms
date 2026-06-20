@@ -20,7 +20,7 @@ const LOG_W   = [40, 110, 100, 130, 120, 160, 90, 100, 100, 60, 90, 130, 50]
 const LOG_MIN = [36, 80, 70, 90, 80, 100, 60, 70, 70, 50, 60, 90, 40]
 import { usePagedList } from '../hooks/usePagedList'
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 // ─── TYPES ────────────────────────────────────────────────────
 interface SCNRow {

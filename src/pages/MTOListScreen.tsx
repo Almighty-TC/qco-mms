@@ -20,7 +20,7 @@ import { BackButton } from '../components/BackButton'
 import { MilestoneLegend } from '../components/MilestoneLegend'
 
 // ─── API BASE ────────────────────────────────────────────────────────────────
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 // ─── TYPES ───────────────────────────────────────────────────────────────────
 interface MTORegister {

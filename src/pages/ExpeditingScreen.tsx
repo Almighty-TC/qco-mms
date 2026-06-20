@@ -23,7 +23,7 @@ import { ExpPODrawer } from '../components/ExpPODrawer'
 import { CreateSCNWizard } from '../components/CreateSCNWizard'
 import { ToastProvider, useToast } from '../hooks/useToast'
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 // ─── TYPES ────────────────────────────────────────────────────
 interface Milestone {

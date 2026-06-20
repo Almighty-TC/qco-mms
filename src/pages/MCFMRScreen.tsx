@@ -16,7 +16,7 @@ import { Pager } from '../components/Pager'
 import { usePagedList } from '../hooks/usePagedList'
 import { useColumnResize } from '../hooks/useColumnResize'
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 // ─── COLUMN RESIZE ────────────────────────────────────────────
 // Register grid columns persist their widths (localStorage qco_col_widths_fmr_register);

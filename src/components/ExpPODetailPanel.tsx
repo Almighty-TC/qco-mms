@@ -6,7 +6,7 @@ import { createPortal } from 'react-dom'
 import axios from 'axios'
 import { MilestoneTimeline } from './MilestoneTimeline'
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 // ─── TYPES ────────────────────────────────────────────────────
 interface Milestone {

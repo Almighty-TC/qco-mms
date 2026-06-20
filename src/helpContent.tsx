@@ -2,6 +2,7 @@
 // Help sections for each screen. Passed as props to HelpButton.
 // Add a new export for each new screen — no component changes needed.
 import type { HelpSection } from './components/HelpDrawer'
+import { API_BASE } from './lib/api'
 
 // ─── Shared prose helpers ─────────────────────────────────────
 const P = (children: React.ReactNode) => (
@@ -427,7 +428,7 @@ export const COMING_SOON_HELP: HelpSection[] = [
     title: 'Help coming soon',
     content: <>
       {P(<>This module's help content is being prepared and will be available when the module is fully built.</>)}
-      {P(<>For guidance on using this module, contact your system administrator or refer to the <a href="http://localhost:3001/docs/QCO_MMS_User_Manual.docx" target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>full user manual</a>.</>)}
+      {P(<>For guidance on using this module, contact your system administrator or refer to the <a href={`${API_BASE}/docs/QCO_MMS_User_Manual.docx`} target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>full user manual</a>.</>)}
     </>,
   },
 ]

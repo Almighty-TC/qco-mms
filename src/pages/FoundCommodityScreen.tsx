@@ -16,7 +16,7 @@ const FC_W   = [120, 200, 70, 110, 110, 100, 150, 100, 90]
 const FC_MIN = [80, 120, 50, 70, 70, 70, 100, 70, 70]
 import { isApprovalRequired, submitForApproval, approvalToast } from '../lib/pendingChanges'
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 // ─── TYPES ──────────────────────────────────────────────────
 interface Commodity {

@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import axios from 'axios'
+import { API } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 
 // ─── COMPLEXITY RULES ───────────────────────────────────────
@@ -49,7 +50,7 @@ export function ForcePasswordChange({ dark }: Props) {
 
     setSubmitting(true)
     try {
-      const { data } = await axios.post('http://localhost:3001/api/auth/change-password', {
+      const { data } = await axios.post(`${API}/auth/change-password`, {
         currentPassword: currentPw,
         newPassword:     newPw,
       })

@@ -19,7 +19,7 @@ const TR_W   = [120, 120, 220, 80, 100, 160, 150, 120, 110, 110]
 const TR_MIN = [80, 80, 120, 60, 70, 110, 100, 90, 90, 90]
 import { usePagedList } from '../hooks/usePagedList'
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 interface Transfer {
   id: number; transfer_ref: string; item_code?: string | null; description: string

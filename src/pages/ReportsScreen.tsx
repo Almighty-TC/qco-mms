@@ -11,8 +11,9 @@ import { ToastProvider, useToast } from '../hooks/useToast'
 import { useResizableTable, ResetColumnsButton } from '../components/colResize'
 import { HelpButton } from '../components/HelpDrawer'
 import { REPORTS_HELP } from '../helpContent'
+import { API_BASE } from '../lib/api'
 
-const API = 'http://localhost:3001/api/reports'
+const API = `${API_BASE}/api/reports`
 
 // ─── TYPES (mirror the backend dataset/engine shapes) ─────────
 type ColType = 'string' | 'number' | 'date' | 'enum' | 'bool'

@@ -31,7 +31,7 @@ const ColResizeHandle = ({ onMouseDown, dark }: { onMouseDown: (e: React.MouseEv
   )
 }
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 // ─── TYPES ──────────────────────────────────────────────────
 interface WBSNode {

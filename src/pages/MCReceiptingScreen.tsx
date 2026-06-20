@@ -13,7 +13,7 @@ import { useResizableTable, ResetColumnsButton, ColResizeHandle } from '../compo
 import { HelpButton } from '../components/HelpDrawer'
 import { RECEIPTING_HELP } from '../helpContent'
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 // Resizable column defaults — receipting queue (10 cols).
 const RC_W   = [130, 90, 240, 80, 100, 170, 100, 150, 110, 120]

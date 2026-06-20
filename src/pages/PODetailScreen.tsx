@@ -17,7 +17,7 @@ import { useResizableTable, ResetColumnsButton } from '../components/colResize'
 const POL_W   = [60, 240, 70, 60, 90, 90, 100, 110, 100, 100, 100, 110, 60]
 const POL_MIN = [50, 120, 50, 50, 70, 70, 80, 80, 70, 80, 80, 80, 50]
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 

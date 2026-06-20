@@ -17,8 +17,9 @@ import type { ActionItem } from '../components/ActionMenu'
 import { HelpModal } from '../components/HelpModal'
 import type { HelpSection } from '../components/HelpModal'
 import '../styles/admin.css'
+import { API_BASE } from '../lib/api'
 
-const API = 'http://localhost:3001/api/admin'
+const API = `${API_BASE}/api/admin`
 
 // ─── ROLES AND MODULES ──────────────────────────────────────
 // Single source of truth for all valid role and module names,

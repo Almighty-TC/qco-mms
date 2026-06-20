@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import axios from 'axios';
+import { API } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 
 export default function Login() {
@@ -33,7 +34,7 @@ export default function Login() {
     setForgotMsg('');
     setForgotLoading(true);
     try {
-      const { data } = await axios.post('http://localhost:3001/api/auth/forgot-password', { email });
+      const { data } = await axios.post(`${API}/auth/forgot-password`, { email });
       setForgotMsg(data?.message || 'If an account with that email exists, a temporary password has been emailed.');
     } catch (err: any) {
       // The endpoint is intentionally generic; only a missing email returns an error.

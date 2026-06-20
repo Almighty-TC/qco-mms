@@ -15,7 +15,7 @@ import { HelpButton } from '../components/HelpDrawer'
 import type { HelpSection } from '../components/HelpDrawer'
 import { SimpleConfirmModal } from '../components/SimpleConfirmModal'
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 // Roles that may post sign-off reviews (UI affordance only; backend enforces).
 const REVIEWER_ROLES = new Set(['admin', 'auditor'])

@@ -16,7 +16,7 @@ const FE_W   = [110, 220, 150, 90, 110, 150, 100, 90]
 const FE_MIN = [80, 120, 90, 60, 70, 100, 70, 70]
 import { isApprovalRequired, submitForApproval, approvalToast } from '../lib/pendingChanges'
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 // ─── TYPES ──────────────────────────────────────────────────
 interface Equipment {

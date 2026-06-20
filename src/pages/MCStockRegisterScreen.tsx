@@ -34,7 +34,7 @@ const STOCK_MIN_     = [50, 60, 120, 60, 60, 50, 45, 80, 90, 50, 90]
 const STOCK_MIN_SUB  = [70, 140, 60, 70, 60, 50, 80, 90]
 const ellipsisCell: React.CSSProperties = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 type GroupBy = 'warehouse' | 'wbs' | 'item'
 

@@ -13,7 +13,7 @@ import { ToastProvider, useToast } from '../hooks/useToast'
 import { ToastContainer } from '../components/Toast'
 import { DASHBOARD_HELP } from '../helpContent'
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 const RAG = { red: '#ef4444', amber: '#f59e0b', green: '#22c55e' }
 const bandColor = (b: string | null) => b === 'Excellent' ? '#22c55e' : b === 'Good' ? '#84cc16' : b === 'At risk' ? '#f59e0b' : b === 'Critical' ? '#ef4444' : '#94a3b8'
 

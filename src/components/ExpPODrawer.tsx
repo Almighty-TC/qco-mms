@@ -11,7 +11,7 @@ import { ExpandBtn } from './ExpandToggle'
 // HMR boundary clean + code-splits the detail view out of the main bundle).
 const ExpPODetailScreen = lazy(() => import('../pages/ExpPODetailScreen').then(m => ({ default: m.ExpPODetailScreen })))
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 // Roles that may (co-)assign expeditors — MUST equal the backend's
 // EXPEDITOR_ASSIGN_ROLES (procurement.js). Client gate is defence-in-depth; the

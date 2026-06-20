@@ -3,6 +3,7 @@
 // Each screen passes its own screenName + sections as props.
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
+import { API_BASE } from '../lib/api'
 
 export interface HelpSection {
   title: string
@@ -85,7 +86,7 @@ export const HelpDrawer = ({ screenName, sections, dark, onClose }: HelpDrawerPr
         {/* Footer */}
         <div style={{ padding: '12px 20px', borderTop: bd, flexShrink: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <a
-            href="http://localhost:3001/docs/QCO_MMS_User_Manual.docx"
+            href={`${API_BASE}/docs/QCO_MMS_User_Manual.docx`}
             target="_blank"
             rel="noreferrer"
             style={{ fontSize: 12, color: '#2563eb', textDecoration: 'none' }}

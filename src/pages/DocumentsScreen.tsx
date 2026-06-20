@@ -13,7 +13,7 @@ import { useResizableTable, ResetColumnsButton } from '../components/colResize'
 import { HelpButton } from '../components/HelpDrawer'
 import { DOCUMENT_INBOX_HELP } from '../helpContent'
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 type GroupBy = 'none' | 'module' | 'source' | 'type' | 'uploader'
 type RangeKey = '7' | '30' | '90' | 'all'

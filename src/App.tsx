@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import axios from 'axios'
+import { API } from './lib/api'
 import { useAuth } from './context/AuthContext'
 import Login from './pages/Login'
 import { useTableResize } from './hooks/useTableResize'
@@ -694,7 +695,7 @@ const ProfileModal = ({ dark, onClose }: { dark: boolean; onClose: () => void })
   const save = async () => {
     setSaving(true); setErr(''); setSuccess(false)
     try {
-      const { data } = await axios.put('http://localhost:3001/api/auth/profile', { phone })
+      const { data } = await axios.put(`${API}/auth/profile`, { phone })
       updateCredentials(data.token, data.user)
       setSuccess(true)
       setTimeout(onClose, 900)
@@ -901,7 +902,7 @@ function App() {
     setLoading(true)
     setError('')
     try {
-      const response = await axios.get('http://localhost:3001/api/projects', {
+      const response = await axios.get(`${API}/projects`, {
         headers: { Authorization: `Bearer ${token}` },
       })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -4,7 +4,7 @@
 // pattern used across the other module screens.
 import type React from 'react'
 
-export const API = 'http://localhost:3001/api'
+export { API } from '../../lib/api'
 
 // ─── TOKENS ───────────────────────────────────────────────────
 export interface Tokens {

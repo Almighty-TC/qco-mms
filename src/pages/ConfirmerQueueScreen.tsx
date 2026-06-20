@@ -12,7 +12,7 @@ import { PENDING_CHANGES_HELP } from '../helpContent'
 import { AdminTable, AdminRow, AdminCell } from '../components/AdminTable'
 import type { AdminCol } from '../components/AdminTable'
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 type PendingRow = {
   id: number; module: string; entity_type: string; entity_id: number | null

@@ -5,7 +5,7 @@ import { useEffect, useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import axios from 'axios'
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 // ─── TYPES ──────────────────────────────────────────────────
 export interface CertEntry {

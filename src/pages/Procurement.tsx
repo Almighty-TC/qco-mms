@@ -17,7 +17,7 @@ import { useExpand, ExpandBtn } from '../components/ExpandToggle'
 // HMR boundary clean + code-splits the detail view out of the main bundle).
 const PODetailScreen = lazy(() => import('./PODetailScreen').then(m => ({ default: m.PODetailScreen })))
 
-const API = 'http://localhost:3001/api'
+import { API } from '../lib/api'
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
