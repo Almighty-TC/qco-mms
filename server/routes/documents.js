@@ -10,8 +10,10 @@ const db      = require('../db')
 const path    = require('path')
 const fs      = require('fs')
 const { authenticateToken } = require('../middleware/auth')
+const { requireProjectScope } = require('../middleware/permissions')
 
 router.use(authenticateToken)
+router.param('projectId', requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects (closes the docs cross-project leak)
 
 // ─── NORMALISED STATUS ────────────────────────────────────────
 // Every source status maps to one of: Verified | Available | Under review | Missing.

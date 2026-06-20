@@ -15,9 +15,10 @@ const router  = express.Router()
 const db      = require('../db')
 const { dbError } = require('../utils/dbError')
 const { authenticateToken, } = require('../middleware/auth')
-const { requirePermission } = require('../middleware/permissions')
+const { requirePermission, requireProjectScope } = require('../middleware/permissions')
 
 router.use(authenticateToken)
+router.param('projectId', requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects
 
 async function writeAudit(userId, action, entity, id, before, after, resource, projectId = null) {
   try {

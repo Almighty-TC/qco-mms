@@ -22,6 +22,7 @@ router.use(authenticateToken)
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
 router.use(require('../middleware/permissions').enforce('mto')) // C-b2: matrix gate (engineering_lead/admin write; PM confirm)
 router.use(require('../middleware/permissions').queueGate(/\/mto\/\d+$|\/mto\/\d+\/\d+\/lines$/, /\/mto\/\d+\/\d+\/lines\/\d+$/)) // C-c D1: proposers (engineering_lead) must use approval queue for register/line create+delete; admin direct
+router.param('projectId', require('../middleware/permissions').requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects
 
 // ─── FILE UPLOAD CONFIG ───────────────────────────────────────────────────────
 // New-revision files accepted in memory buffer — parsed then discarded.

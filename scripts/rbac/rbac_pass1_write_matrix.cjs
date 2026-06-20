@@ -48,6 +48,7 @@ const probes = [
   ['admin','c','POST','/admin/users',false,false],
 ]
 const NOFLOOR = new Set(['audit_review','audit'])   // routes not behind denyReadOnly
+const EXTERNAL_ROLES = new Set(['vendor','subcontractor','site_contractor','freight_forwarder'])  // Stage 1: is_external → project-scoped (matches server/middleware/permissions.js)
 const A = { c:'can_create', e:'can_edit', a:'can_approve', d:'can_delete', v:'can_view' }
 
 // ── BESPOKE ENDPOINT RULES (Item 2 reconciliation) ───────────────────────────
@@ -98,7 +99,10 @@ const RULE = {
     if (rule === 'EXPEDITOR_ASSIGN') return RULE.EXPEDITOR_ASSIGN.has(role) ? 'ALLOW' : 'DENY'
     const row = mtx[role][mod]
     if (!row || !row[act]) return 'DENY'                            // underlying enforce() matrix gate
-    if (hasProj && row.wbs && !usr[role].wbsAccess) return 'DENY'   // wbs-scope check fires inside enforce
+    // Stage 1 (convention flip): external project-scope is now driven by IS_EXTERNAL +
+    // project context (router.param requireProjectScope), NOT the matrix wbs_scoped flag.
+    // Any external role on a :projectId route with no grant for PID → 403. (Was: row.wbs.)
+    if (hasProj && EXTERNAL_ROLES.has(role) && !usr[role].wbsAccess) return 'DENY'
     // Item 2: bespoke endpoint rule is the binding constraint, COMPOSED with the matrix gate above.
     // A role must satisfy BOTH the matrix cell (already checked) AND the endpoint's allowlist/row-scope.
     if (rule && RULE[rule]) return RULE[rule].has(role) ? 'ALLOW' : 'DENY'

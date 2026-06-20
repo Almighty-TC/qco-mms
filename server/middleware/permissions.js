@@ -187,6 +187,31 @@ function queueGate(createRe, deleteRe) {
   }
 }
 
+// ─── EXTERNAL PROJECT SCOPE (Stage 1: is_external + project-context gate) ─────
+// External roles (is_external=1 — DB-confirmed 1:1 with this role set) may only
+// touch projects they hold a user_wbs_access grant for. Wired via
+// `router.param('projectId', requireProjectScope)` on every project-bearing router,
+// so it fires with the RESOLVED projectId after route match — unlike the dead
+// wbs_scoped check in requirePermission, where req.params.projectId is undefined at
+// router.use level (Express 5). Internal roles (incl. admin) bypass entirely.
+const EXTERNAL_ROLES = new Set(['vendor', 'subcontractor', 'site_contractor', 'freight_forwarder'])
+async function requireProjectScope(req, res, next, projectId) {
+  const role = req.user?.role
+  if (!role) return res.status(401).json({ error: 'Not authenticated' })
+  if (role === 'admin' || !EXTERNAL_ROLES.has(role)) return next() // internals bypass
+  try {
+    const [rows] = await db.query(
+      `SELECT id FROM user_wbs_access WHERE user_id = ? AND project_id = ? LIMIT 1`,
+      [req.user.id, projectId]
+    )
+    if (!rows.length) return res.status(403).json({ error: 'No project access' })
+    next()
+  } catch (err) {
+    console.error('[permissions] Error checking project scope:', err.message)
+    res.status(500).json({ error: 'Permission check failed' })
+  }
+}
+
 // ─── REQUIRE ADMIN ──────────────────────────────────────────
 // Lightweight shortcut for routes that require the admin role.
 // Equivalent to requirePermission('admin', 'can_view') but cheaper —
@@ -198,4 +223,4 @@ function requireAdmin(req, res, next) {
   next()
 }
 
-module.exports = { requirePermission, requireAdmin, denyReadOnly, enforce, queueGate, hasPermission }
+module.exports = { requirePermission, requireAdmin, denyReadOnly, enforce, queueGate, hasPermission, requireProjectScope, EXTERNAL_ROLES }

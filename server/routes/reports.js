@@ -16,7 +16,7 @@ const router  = express.Router()
 const db      = require('../db')
 const ExcelJS = require('exceljs')
 const { authenticateToken } = require('../middleware/auth')
-const { denyReadOnly, enforce, hasPermission } = require('../middleware/permissions')
+const { denyReadOnly, enforce, hasPermission, requireProjectScope } = require('../middleware/permissions')
 const { DATASETS, publicDataset } = require('../reports/datasets')
 const { runReport } = require('../reports/engine')
 const { CATALOG, byId, publicCatalog } = require('../reports/catalog')
@@ -24,6 +24,7 @@ const { CATALOG, byId, publicCatalog } = require('../reports/catalog')
 router.use(authenticateToken)
 router.use(denyReadOnly)            // viewer/auditor barred from any write (saved-view create/delete)
 router.use(enforce('reports'))      // module-level gate: GET→can_view, POST→can_create, DELETE→can_delete
+router.param('projectId', requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects
 
 // Own-property-only registry lookup: a plain DATASETS[k]/byId[k] truthy check lets
 // inherited keys (constructor, __proto__, toString…) resolve to Object internals.

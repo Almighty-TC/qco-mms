@@ -2,6 +2,19 @@
 
 Tracked technical debt / future work. Newest first.
 
+## Security / RBAC
+
+- **External cross-project leak via `/pos/:id`.** Stage 1 of the WBS-scope flip
+  enforces external project-scope via `router.param('projectId', requireProjectScope)`
+  on all 12 project-bearing routers — but the `/api/procurement/pos/:id/...` family
+  is keyed on the PO id, **not** `:projectId`, so the param scope never fires for it.
+  A vendor (`procurement.can_view`) can therefore still `GET /api/procurement/pos/<any id>`
+  regardless of which projects they're granted. **Fix (Stage-1 follow-up):** resolve
+  `po → project_id` then apply the same scope check, **or** restrict vendors to POs of
+  their own supplier (needs a vendor↔supplier-PO access design decision). Deliberately
+  out of scope for the Stage 1 gate (see `server/middleware/permissions.js`
+  `requireProjectScope`).
+
 ## Schema
 
 - **No MTO→PO foreign key.** `po_lines` has no reference to the `mto_line` it

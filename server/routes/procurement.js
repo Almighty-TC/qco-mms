@@ -18,6 +18,7 @@ router.use(require('../middleware/permissions').enforce((p, req) => {
   if (req.method !== 'GET' && /\/pos\/\d+\/expeditors?(\/\d+)?$/.test(p)) return null
   return 'procurement'
 }))
+router.param('projectId', require('../middleware/permissions').requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects
 const db      = require('../db')       // connection pool — never createConnection
 const { dbError } = require('../utils/dbError')
 const path    = require('path')

@@ -26,6 +26,7 @@ const pocUpload = multer({
 router.use(authenticateToken)
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
 router.use(require('../middleware/permissions').enforce((p, req) => (req.method === 'POST' && /\/fmr$/.test(p)) ? 'fmr' : 'material_control')) // C-b2: FMR-raise→fmr (contractors wbs-scoped); else material_control
+router.param('projectId', require('../middleware/permissions').requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects
 
 // GET /api/mc/package-types — active package types for FMR packaging (MC-accessible).
 // Defined first so it isn't swallowed by a /:projectId route.

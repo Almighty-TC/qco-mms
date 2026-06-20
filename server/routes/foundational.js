@@ -22,6 +22,7 @@ router.use(require('../middleware/permissions').enforce(p =>
   : p.includes('/equipment') ? 'equipment'
   : 'wbs')) // C-b2: wbs/commodity/equipment per path
 router.use(require('../middleware/permissions').queueGate(/\/foundational\/\d+\/(wbs|commodities|equipment)$/, /\/foundational\/\d+\/(wbs|commodities|equipment)\/\d+$/)) // C-c D1: proposers (project_control) must use approval queue for create/delete; admin direct
+router.param('projectId', require('../middleware/permissions').requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects
 
 // Multer for certificate uploads
 const certStorage = multer.diskStorage({

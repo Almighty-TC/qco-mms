@@ -9,11 +9,12 @@ const router  = express.Router()
 const db      = require('../db')
 const { dbError } = require('../utils/dbError')
 const { authenticateToken } = require('../middleware/auth')
-const { enforce, denyReadOnly, requirePermission } = require('../middleware/permissions')
+const { enforce, denyReadOnly, requirePermission, requireProjectScope } = require('../middleware/permissions')
 
 router.use(authenticateToken)
 router.use(denyReadOnly)            // viewer/auditor barred from writes (floor)
 router.use(enforce('rfi_meeting'))  // POST→can_create, PATCH→can_edit, DELETE→can_delete; GET passes
+router.param('projectId', requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects
 
 // ─── AUDIT HELPER (mirrors the house writeAudit) ──────────────
 async function writeAudit(userId, action, entity, id, before, after, resource, projectId = null) {

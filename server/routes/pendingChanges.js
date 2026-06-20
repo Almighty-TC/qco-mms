@@ -7,9 +7,10 @@ const router  = express.Router()
 const db      = require('../db')
 const { dbError } = require('../utils/dbError')
 const { authenticateToken } = require('../middleware/auth')
-const { requirePermission } = require('../middleware/permissions')
+const { requirePermission, requireProjectScope } = require('../middleware/permissions')
 
 router.use(authenticateToken)
+router.param('projectId', requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects
 
 // module → real table + domain confirmer
 const MODULE_TABLE = { wbs: 'wbs_nodes', commodity: 'commodity_library', equipment: 'equipment_list', mto: 'mto_registers' }
