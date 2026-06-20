@@ -5,6 +5,7 @@ const db      = require('../db')
 const { dbError } = require('../utils/dbError')
 const { sendEmail, sendAlert, html }                  = require('../services/email')
 const { generate, addToHistory, expiresAt: pwExpiry } = require('../utils/password')
+const { EXTERNAL_ROLES }                               = require('../middleware/permissions') // Stage 2: same external set the access gate uses
 
 // ─── VALID ENUMERATIONS ──────────────────────────────────────
 // Validated against before writing to DB to prevent invalid data.
@@ -452,16 +453,21 @@ router.get('/users/:id/projects', async (req, res) => {
 })
 
 // ─── GET ASSIGNABLE PROJECTS (for the CURRENT admin) ────────
-// Projects the logged-in admin may own/filter warehouses by. Convention: a user
-// scoped via user_wbs_access sees only those projects; no rows = full access (all).
+// Projects the logged-in user may own/filter warehouses by. Stage 2 (convention
+// flip): align with the access gate — external roles see ONLY their granted
+// projects (empty when ungranted, never full access); internal roles bypass
+// scoping and see all projects. Same EXTERNAL_ROLES set the gate uses — NOT a
+// "no rows = full access" fallthrough (which wrongly gave ungranted externals all).
 router.get('/assignable-projects', async (req, res) => {
   try {
     const uid = req.user?.id
-    const [scoped] = await db.query(
-      `SELECT DISTINCT p.id, p.code, p.name
-       FROM user_wbs_access w JOIN projects p ON p.id = w.project_id
-       WHERE w.user_id = ? ORDER BY p.code`, [uid])
-    if (scoped.length) return res.json({ projects: scoped, fullAccess: false })
+    if (EXTERNAL_ROLES.has(req.user?.role)) {
+      const [scoped] = await db.query(
+        `SELECT DISTINCT p.id, p.code, p.name
+         FROM user_wbs_access w JOIN projects p ON p.id = w.project_id
+         WHERE w.user_id = ? ORDER BY p.code`, [uid])
+      return res.json({ projects: scoped, fullAccess: false })
+    }
     const [all] = await db.query('SELECT id, code, name FROM projects ORDER BY code')
     res.json({ projects: all, fullAccess: true })
   } catch (err) {

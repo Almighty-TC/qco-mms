@@ -52,15 +52,12 @@ type AdminUser = {
   hasCustomPermissions: number
 }
 
-// ─── FULL-ACCESS ROLES ───────────────────────────────────────
-// These roles are not WBS-scoped, so they can see all projects.
-// Used by the Projects column in the users table to display "All"
-// instead of a count from user_wbs_access.
-const FULL_ACCESS_ROLES = new Set([
-  'admin', 'ceo', 'director',
-  'procurement_manager', 'procurement_officer',
-  'expediting_manager', 'logistics_manager', 'viewer',
-])
+// ─── PROJECT-ACCESS DISPLAY RULE ─────────────────────────────
+// Stage 2 (convention flip): the Projects column derives "All Projects" vs
+// scoped pills from is_external — the SAME rule the access gate enforces, via
+// the shared EXTERNAL_ROLE_SET. Internal → all; external → only granted (or
+// "No access" when none). Retired the old hand-picked FULL_ACCESS_ROLES set
+// (it diverged from the gate); EXTERNAL_ROLE_SET is imported from userColours.
 type RolePerm = {
   id: number; role: string; module: string
   can_view: number; can_create: number; can_edit: number
@@ -369,7 +366,8 @@ function friendlyUserError(serverErr: string): string {
 
 // ─── PROJECTS CELL ──────────────────────────────────────────
 // Shows up to 2 project code pills. "+N more" shows full list as
-// a tooltip. Full-access roles show a single "All Projects" pill.
+// a tooltip. Internal roles show a single "All Projects" pill; external
+// roles show their granted pills, or "No access" when ungranted.
 type ProjectRow = { id: number; code: string; name: string }
 
 function ProjectsCell({ userId, count, fullAccess, dark }: {
@@ -406,8 +404,10 @@ function ProjectsCell({ userId, count, fullAccess, dark }: {
     )
   }
 
+  // count === 0 with !fullAccess ⟹ an external user with no grants — show an
+  // explicit "No access" (matches the gate's locked-out state, not a bare dash).
   if (count === 0) {
-    return <td style={tdStyle}><span style={{ fontSize: 13, color: dark ? '#475569' : '#94a3b8' }}>—</span></td>
+    return <td style={tdStyle}><span style={{ fontSize: 12, fontWeight: 600, color: dark ? '#64748b' : '#94a3b8' }}>No access</span></td>
   }
 
   if (projects === null) {
@@ -710,7 +710,7 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
               </div>
             </td>
             {/* ─── PROJECTS ───────────────────────────────── */}
-            <ProjectsCell userId={u.id} count={u.projectCount ?? 0} fullAccess={FULL_ACCESS_ROLES.has(u.role)} dark={dark} />
+            <ProjectsCell userId={u.id} count={u.projectCount ?? 0} fullAccess={!u.isExternal && !EXTERNAL_ROLE_SET.has(u.role)} dark={dark} />
             {/* ─── COMPANY / PHONE / DATES / STATUS / LAST LOGIN */}
             {/* Company name is plain text — colour tier is the row stripe only */}
             <AdminCell title={u.company || undefined}>
@@ -873,7 +873,7 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
                 <><strong>Name</strong> — full name. Orange left border = external user (vendor / freight forwarder / site contractor / subcontractor). No border = internal user.</>,
                 <><strong>Email</strong> — unique login identifier.</>,
                 <><strong>Role</strong> — assigned system role. Custom badge = has per-module permission overrides.</>,
-                <><strong>Projects</strong> — project codes the user can access. Full-access roles see "All Projects".</>,
+                <><strong>Projects</strong> — project codes the user can access. Internal roles see "All Projects"; external roles see only their granted projects, or "No access" when none are granted.</>,
                 <><strong>Contract End</strong> — colour coded: <span style={{ color: '#ef4444' }}>Red = expired</span>, <span style={{ color: '#d97706' }}>Amber = expiring within 30 days</span>, <span style={{ color: '#22c55e' }}>Green = more than 30 days remaining</span>, Grey dash = no expiry date (permanent internal staff).</>,
                 <><strong>Status</strong> — Active (can log in) or Inactive (account disabled).</>,
                 <><strong>Last Login</strong> — most recent successful login timestamp.</>,
