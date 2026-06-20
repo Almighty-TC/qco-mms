@@ -17,8 +17,11 @@ const VALID_ACTIONS = new Set([
 //      over the role default if a row exists (even if it grants access
 //      the role normally wouldn't have, or denies something it would).
 //   3. role_permissions for the user's role+module.
-//   4. If wbs_scoped is true AND req.params.projectId is present,
-//      validate user_wbs_access for that project.
+//
+// External project-scope is NOT checked here — it is enforced by
+// requireProjectScope (router.param('projectId', ...), see below). The old
+// in-line wbs_scoped scope check was dead (req.params.projectId is undefined at
+// router.use level in Express 5) and was retired in Stage 3 of the scope flip.
 //
 // Usage:
 //   router.get('/items', requirePermission('procurement', 'can_view'), handler)
@@ -55,7 +58,7 @@ function requirePermission(module, action = 'can_view') {
 
       // ── Fall back to role default ─────────────────────
       const [perms] = await db.query(
-        `SELECT ${action} AS allowed, wbs_scoped
+        `SELECT ${action} AS allowed
          FROM role_permissions
          WHERE role = ? AND module = ? LIMIT 1`,
         [role, module]
@@ -65,20 +68,8 @@ function requirePermission(module, action = 'can_view') {
         return res.status(403).json({ error: `Access denied to ${module}` })
       }
 
-      // ── WBS scope check ───────────────────────────────
-      // Only triggered when the role is WBS-scoped AND the route
-      // has a :projectId parameter to check against.
-      if (perms[0].wbs_scoped && req.params.projectId) {
-        const [wbs] = await db.query(
-          `SELECT id FROM user_wbs_access
-           WHERE user_id = ? AND project_id = ? LIMIT 1`,
-          [userId, req.params.projectId]
-        )
-        if (!wbs.length) {
-          return res.status(403).json({ error: 'No WBS access for this project' })
-        }
-      }
-
+      // External project-scope is enforced by requireProjectScope
+      // (router.param) — not here. (Stage 3: dead wbs_scoped check removed.)
       next()
     } catch (err) {
       console.error('[permissions] Error checking permissions:', err.message)
@@ -191,9 +182,10 @@ function queueGate(createRe, deleteRe) {
 // External roles (is_external=1 — DB-confirmed 1:1 with this role set) may only
 // touch projects they hold a user_wbs_access grant for. Wired via
 // `router.param('projectId', requireProjectScope)` on every project-bearing router,
-// so it fires with the RESOLVED projectId after route match — unlike the dead
-// wbs_scoped check in requirePermission, where req.params.projectId is undefined at
-// router.use level (Express 5). Internal roles (incl. admin) bypass entirely.
+// so it fires with the RESOLVED projectId after route match. This is the SINGLE
+// scope gate (the old wbs_scoped check in requirePermission never fired — projectId
+// is undefined at router.use level in Express 5 — and was retired in Stage 3).
+// Internal roles (incl. admin) bypass entirely.
 const EXTERNAL_ROLES = new Set(['vendor', 'subcontractor', 'site_contractor', 'freight_forwarder'])
 async function requireProjectScope(req, res, next, projectId) {
   const role = req.user?.role

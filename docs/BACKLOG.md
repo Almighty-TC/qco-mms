@@ -4,6 +4,15 @@ Tracked technical debt / future work. Newest first.
 
 ## Security / RBAC
 
+- **`role_permissions.wbs_scoped` column is now vestigial.** After the WBS-scope
+  convention flip (Stage 3), external project-scope is driven solely by `is_external`
+  via `requireProjectScope` (router.param). The `wbs_scoped` flag is no longer read as
+  a scope trigger anywhere — the dead in-line check in `requirePermission` was removed.
+  The column + its 3 rows (fmr/site_contractor, fmr/subcontractor, wbs/site_contractor)
+  are left in place (harmless, still surfaced/editable in the Permission Matrix admin
+  UI) rather than dropped (destructive). **Future DB cleanup (optional):** drop the
+  `wbs_scoped` column and its references in seed scripts + the admin matrix CRUD/UI.
+
 - **External cross-project leak via `/pos/:id`.** Stage 1 of the WBS-scope flip
   enforces external project-scope via `router.param('projectId', requireProjectScope)`
   on all 12 project-bearing routers — but the `/api/procurement/pos/:id/...` family
