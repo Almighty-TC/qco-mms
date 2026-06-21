@@ -15,6 +15,7 @@ import { ToastProvider, useToast } from '../hooks/useToast'
 import { ActionMenu, type ActionItem } from '../components/ActionMenu'
 import { acronymTitle } from '../lib/acronyms'
 import { API, tokens, fmtDate } from '../components/traceability/traceUtil'
+import { StatusLegend } from '../components/StatusLegend'
 import { UploadCertModal, type VdrlRow } from '../components/traceability/UploadCertModal'
 import { CertDetailModal } from '../components/traceability/CertDetailModal'
 import { ReviewCertModal, type ApprovalCert } from '../components/traceability/ReviewCertModal'
@@ -35,6 +36,11 @@ const vdrlPill = (status: string) => {
   if (status === 'rejected') return { label: 'Rejected', color: '#dc2626', bg: 'rgba(239,68,68,0.12)' }
   return { label: status, color: '#64748b', bg: 'rgba(100,116,139,0.12)' }
 }
+
+// ─── LEGEND ITEMS (derived from vdrlPill above — single source) ───────────────
+const VDRL_LEGEND = ['received', 'pending', 'overdue', 'rejected'].map(s => {
+  const p = vdrlPill(s); return { label: p.label, color: p.color }
+})
 
 // ─── TRACE NODE COLOURS ───────────────────────────────────────
 const NODE_COLOR: Record<string, string> = { complete: '#22c55e', warning: '#f59e0b', blocked: '#ef4444', pending: '#94a3b8' }
@@ -271,6 +277,7 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
                 </table>
               </div>
             </div>
+            <StatusLegend dark={dark} items={VDRL_LEGEND} />
             <div style={{ fontSize: 11, color: t.sub, marginTop: 10 }}>VDRL — Vendor Document Requirements List</div>
           </div>
         )}

@@ -14,6 +14,7 @@ import { HelpButton } from '../components/HelpDrawer'
 import { DOCUMENT_INBOX_HELP } from '../helpContent'
 
 import { API } from '../lib/api'
+import { StatusLegend } from '../components/StatusLegend'
 
 type GroupBy = 'none' | 'module' | 'source' | 'type' | 'uploader'
 type RangeKey = '7' | '30' | '90' | 'all'
@@ -39,6 +40,9 @@ const statusPill = (s: string) => {
     default:             return { color: '#2563eb', bg: 'rgba(37,99,235,0.1)' } // Available
   }
 }
+
+// ─── LEGEND ITEMS (derived from statusPill above — single source; label = status) ──
+const DOC_LEGEND = ['Verified', 'Available', 'Under review', 'Missing'].map(s => ({ label: s, color: statusPill(s).color }))
 const fmtBytes = (b: number | null) => !b ? '' : b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(0)} kB` : `${(b / 1048576).toFixed(1)} MB`
 const fmtDate = (d: string | null) => {
   if (!d) return '—'
@@ -278,6 +282,7 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
               </tbody>
             </table>
           </div>
+          <StatusLegend dark={dark} items={DOC_LEGEND} />
         </div>
       </div>
 
