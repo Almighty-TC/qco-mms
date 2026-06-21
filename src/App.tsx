@@ -804,6 +804,25 @@ function App() {
     // renders the correct screen immediately rather than showing the Dashboard.
     return parseDeepLink().page ?? 'dashboard'
   })
+  // ─── BACK NAVIGATION HISTORY (history-aware back) ─────────────────────────────
+  // Capped stack of pages the user came FROM, so goBack() returns to the actual
+  // source rather than a hardcoded parent. Forward navigations route through
+  // navigate() (sidebar nav + dashboard drill-throughs), which pushes the current
+  // page; the top is therefore always the immediate predecessor. Only goBack()'s
+  // consumers (mc-stock / mc-fmr) change behaviour — building history is inert for
+  // the hardcoded-back screens. Empty stack (deep-link/refresh) → project dashboard,
+  // never a dead button.
+  const [navHistory, setNavHistory] = useState<Page[]>([])
+  const navigate = (p: Page) => {
+    if (p !== page) setNavHistory(h => [...h.slice(-19), page])
+    setPage(p)
+  }
+  const goBack = () => {
+    if (navHistory.length === 0) { setPage('dashboard'); return }
+    const prev = navHistory[navHistory.length - 1]
+    setNavHistory(h => h.slice(0, -1))
+    setPage(prev)
+  }
   // ─── PROCUREMENT PROJECT SELECTION ──────────────────────────
   // Procurement is project-scoped. selectedProjectId tracks which
   // project the user is viewing. Defaults to the first project in
@@ -1003,7 +1022,7 @@ function App() {
         transition: 'width 200ms ease',
         zIndex: 90,
       }}>
-        <Nav userName={userName} userInitial={userInitial} userRole={user?.role ?? ''} activePage={page} onNavigate={setPage} selectedProjectId={selectedProjectId} collapsed={sidebarCollapsed} onToggleCollapse={toggleSidebarCollapse} />
+        <Nav userName={userName} userInitial={userInitial} userRole={user?.role ?? ''} activePage={page} onNavigate={navigate} selectedProjectId={selectedProjectId} collapsed={sidebarCollapsed} onToggleCollapse={toggleSidebarCollapse} />
       </div>
 
       {/* ─── MAIN COLUMN placeholder (layout provided by fixed children below) ── */}
@@ -1228,7 +1247,7 @@ function App() {
             <DashboardProjectScreen
               dark={dark} projectId={selectedProjectId} projectName={selectedProjectName} userRole={user?.role ?? ''}
               onBack={() => { setSelectedProjectId(null); setSelectedProjectName('') }}
-              onNavigate={p => setPage(p as Page)}
+              onNavigate={p => navigate(p as Page)}
             />
           )}
           {page === 'admin' && (
@@ -1347,11 +1366,11 @@ function App() {
           )}
           {page === 'mc-stock' && selectedProjectId && (
             <MCStockRegisterScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
-              onBack={() => setPage('mc-receipting')} />
+              onBack={goBack} />
           )}
           {page === 'mc-fmr' && selectedProjectId && (
             <MCFMRScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
-              userRole={user?.role ?? ''} onBack={() => setPage('mc-receipting')} />
+              userRole={user?.role ?? ''} onBack={goBack} />
           )}
           {page === 'mc-transfers' && selectedProjectId && (
             <MCTransferScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
