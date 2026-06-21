@@ -333,7 +333,7 @@ const Nav = ({
 }) => {
   const isReadOnly = READ_ONLY_ROLES.has(userRole)
   const isAdmin    = userRole === 'admin'
-  const [foundOpen, setFoundOpen] = useState(false)
+  const [foundOpen, setFoundOpen] = useState(true)   // default expanded so WBS/Commodity/Equipment show without a click (user can still collapse)
 
   const navItem = (label: string, icon: string, page?: Page, badge?: number) => {
     const active = page != null && page === activePage
