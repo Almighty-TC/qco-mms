@@ -19,7 +19,7 @@ const bandColor = (b: string | null) => b === 'Excellent' ? '#22c55e' : b === 'G
 
 interface Mod { key: string; rag: 'red' | 'amber' | 'green'; score: number; counts: { total: number; problems: number } }
 interface DashData {
-  health: { score: number | null; band: string | null; delta: number | null; weights: { module: string; weight: number }[]; modules: Mod[] }
+  health: { score: number | null; band: string | null; delta: number | null; delta_status?: 'ready' | 'collecting'; weights: { module: string; weight: number }[]; modules: Mod[] }
   stats: { mto_lines: number | null; pos_awarded: number | null; at_risk: number | null; breached: number | null }
   mine: { approvals_pos: number; confirmer_queue: number; rfis_assigned: number; actions_assigned: number }
   attention: Record<string, number | null>
@@ -368,6 +368,25 @@ function DashboardInner({ dark, projectId, projectName, userRole, onBack, onNavi
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
                 <span style={{ fontSize: 52, fontWeight: 800, color: bandColor(data.health.band), lineHeight: 1, letterSpacing: '-0.03em' }}>{data.health.score ?? '—'}</span>
                 <span style={{ fontSize: 16, fontWeight: 700, color: bandColor(data.health.band) }}>{data.health.band ?? ''}</span>
+              </div>
+              {/* Week-over-week delta vs the most recent canonical snapshot ≥7 days
+                  old. 'collecting' = honest empty state until a week of history exists
+                  (no fabricated/backfilled number). Up = healthier (green), down = worse (red). */}
+              <div style={{ marginTop: 7, fontSize: 12, minHeight: 16 }}>
+                {data.health.delta_status === 'ready' && data.health.delta != null ? (() => {
+                  const d = data.health.delta
+                  const flat = d === 0
+                  const c = flat ? sub : d > 0 ? '#22c55e' : '#ef4444'
+                  const arrow = flat ? '→' : d > 0 ? '▲' : '▼'
+                  return (
+                    <span style={{ color: c, fontWeight: 700 }}>
+                      {arrow} {d > 0 ? '+' : ''}{d}
+                      <span style={{ color: sub, fontWeight: 400, marginLeft: 6 }}>vs last week</span>
+                    </span>
+                  )
+                })() : (
+                  <span style={{ color: sub, fontStyle: 'italic' }}>Collecting trend — builds over the coming week</span>
+                )}
               </div>
               {/* gradient score bar with marker */}
               <div style={{ position: 'relative', height: 10, borderRadius: 999, marginTop: 14, background: 'linear-gradient(90deg,#ef4444 0%,#f59e0b 50%,#22c55e 100%)' }}>
