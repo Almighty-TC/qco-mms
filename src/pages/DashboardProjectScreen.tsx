@@ -32,6 +32,74 @@ const WEIGHT_KEYS = ['procurement', 'expediting', 'logistics', 'materials', 'tra
 const CAN_EDIT_ROLES = new Set(['admin', 'project_manager', 'project_director'])
 const fmt = (n: number | null | undefined) => (n == null ? '—' : n.toLocaleString())
 
+// ─── ROLE → PERSONA (Phase 1 role lens) ───────────────────────
+// Maps each internal role to a dashboard persona so the "Your focus" hero surfaces
+// the few KPIs that role acts on. Derived client-side from the auth role; the data
+// is still RBAC-gated server-side, so any focus item the role can't see (null) is
+// dropped — the hero never shows data the role isn't entitled to. Externals are
+// excluded (dashboard.can_view=0) — a scoped external dashboard is a later phase.
+type Persona = 'leadership' | 'controls' | 'procurement' | 'expediting' | 'logistics' | 'quality'
+const PERSONA_OF: Record<string, Persona> = {
+  admin: 'leadership', ceo: 'leadership', director: 'leadership', project_director: 'leadership',
+  project_manager: 'controls', project_controls_manager: 'controls', project_control: 'controls', engineering_lead: 'controls',
+  procurement_manager: 'procurement', procurement_officer: 'procurement',
+  expediting_manager: 'expediting', expeditor: 'expediting',
+  logistics_manager: 'logistics', warehouse: 'logistics',
+  auditor: 'quality', materials_engineer: 'quality',
+}
+const PERSONA_LABEL: Record<Persona, string> = {
+  leadership: 'Leadership', controls: 'Project Controls', procurement: 'Procurement',
+  expediting: 'Expediting', logistics: 'Logistics & Warehouse', quality: 'Quality & Traceability',
+}
+type FocusItem = { label: string; value: number; page: string; accent: string }
+// Build the persona's focus KPIs from the (already RBAC-gated) payload. Each def
+// references a payload field; null sources (modules the role can't see) are dropped.
+function buildFocus(persona: Persona, d: DashData): FocusItem[] {
+  const A = d.attention, M = d.mine, S = d.stats
+  const traceProblems = d.health.modules.find(m => m.key === 'traceability')?.counts.problems ?? null
+  const defs: Record<Persona, [string, number | null | undefined, string, string][]> = {
+    leadership: [
+      ['At risk', S.at_risk, 'procurement', '#f59e0b'],
+      ['Breached', S.breached, 'procurement', '#ef4444'],
+      ['Breached milestones', A.breached_milestones, 'expediting', '#ef4444'],
+      ['At-risk deliveries', A.at_risk_deliveries, 'expediting', '#f59e0b'],
+    ],
+    controls: [
+      ['Approvals waiting on me', M.approvals_pos, 'procurement', '#E84E0F'],
+      ['In my confirmer queue', M.confirmer_queue, 'pending-changes', '#E84E0F'],
+      ['Breached milestones', A.breached_milestones, 'expediting', '#ef4444'],
+      ['Overdue RFIs', A.overdue_rfis, 'rfi-meeting', '#ef4444'],
+      ['Overdue actions', A.overdue_actions, 'rfi-meeting', '#ef4444'],
+    ],
+    procurement: [
+      ['POs past ROS date', A.overdue_pos, 'procurement', '#ef4444'],
+      ['Pending receipts', A.pending_receipts, 'mc-receipting', '#f59e0b'],
+      ['POs awarded', S.pos_awarded, 'procurement', '#64748b'],
+      ['Approvals waiting on me', M.approvals_pos, 'procurement', '#E84E0F'],
+    ],
+    expediting: [
+      ['Breached milestones', A.breached_milestones, 'expediting', '#ef4444'],
+      ['At-risk deliveries (VDRL)', A.at_risk_deliveries, 'expediting', '#f59e0b'],
+      ['POs past ROS date', A.overdue_pos, 'procurement', '#ef4444'],
+      ['Pending receipts', A.pending_receipts, 'mc-receipting', '#64748b'],
+    ],
+    logistics: [
+      ['Pending receipts', A.pending_receipts, 'mc-receipting', '#f59e0b'],
+      ['Stock-outs', A.stockouts, 'mc-stock', '#ef4444'],
+      ['Negative stock', A.negative_stock, 'mc-stock', '#ef4444'],
+      ['At-risk deliveries', A.at_risk_deliveries, 'expediting', '#f59e0b'],
+    ],
+    quality: [
+      ['Cert exceptions', traceProblems, 'traceability', '#ef4444'],
+      ['At-risk deliveries (VDRL)', A.at_risk_deliveries, 'expediting', '#f59e0b'],
+      ['Open FMRs', A.open_fmrs, 'mc-fmr', '#64748b'],
+    ],
+  }
+  return defs[persona]
+    .filter(([, v]) => v != null)
+    .map(([label, v, page, accent]) => ({ label, value: v as number, page, accent }))
+}
+
 // ─── BAND ROW (Mine / Attention) — clickable, drills to a module ──
 function BandRow({ label, n, accent, dark, onClick }: { label: string; n: number; accent: string; dark: boolean; onClick: () => void }) {
   const sub = '#94a3b8'; const col = dark ? '#f1f5f9' : '#0f172a'; const active = n > 0
@@ -158,6 +226,7 @@ function DashboardInner({ dark, projectId, projectName, userRole, onBack, onNavi
   const [showConfig, setShowConfig] = useState(false)
   const [showExceptions, setShowExceptions] = useState(false)
   const canEdit = CAN_EDIT_ROLES.has(userRole)   // mirrors dashboard.can_edit (backend enforces)
+  const persona = PERSONA_OF[userRole]           // undefined for viewer/unmapped → no focus hero
 
   const load = useCallback(() => {
     setLoading(true)
@@ -257,6 +326,32 @@ function DashboardInner({ dark, projectId, projectName, userRole, onBack, onNavi
 
       {!loading && data && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {/* Your focus — persona hero (Phase 1 role lens). Additive: the full
+              dashboard stays below; this surfaces the role's 3–5 action KPIs first. */}
+          {persona && (() => {
+            const focus = buildFocus(persona, data)
+            if (focus.length === 0) return null
+            return (
+              <div style={card}>
+                <div style={{ fontSize: 11, color: sub, textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700, marginBottom: 12 }}>
+                  Your focus · {PERSONA_LABEL[persona]}
+                </div>
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                  {focus.map(f => (
+                    <button key={f.label} onClick={() => onNavigate(f.page)}
+                      onMouseEnter={e => (e.currentTarget.style.borderColor = '#E84E0F')}
+                      onMouseLeave={e => (e.currentTarget.style.borderColor = dark ? '#334155' : '#dde3ed')}
+                      style={{ flex: '1 1 150px', minWidth: 140, textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit',
+                        background: dark ? '#0f172a' : '#f8fafc', border: bd, borderRadius: 10, padding: '12px 14px', transition: 'border-color .15s' }}>
+                      <div style={{ fontSize: 24, fontWeight: 800, color: f.value > 0 ? f.accent : sub, letterSpacing: '-0.02em' }}>{fmt(f.value)}</div>
+                      <div style={{ fontSize: 11, color: sub, marginTop: 2, fontWeight: 600 }}>{f.label}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )
+          })()}
+
           {/* Stat strip */}
           <div style={{ display: 'flex', gap: 12 }}>
             <StatCard label="MTO line items" value={data.stats.mto_lines} />
