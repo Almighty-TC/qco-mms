@@ -1454,9 +1454,10 @@ interface ProcurementInnerProps {
   dark: boolean; projectId: number; projectName: string
   // Phase 3: callback to navigate to full PO Detail Screen
   onNavigateToPO?: (poId: number) => void
+  onBack?: () => void   // in-app Back target (project dashboard); falls back to no-op if unset
 }
 
-const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: ProcurementInnerProps) => {
+const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO, onBack }: ProcurementInnerProps) => {
   const { addToast } = useToast()
 
   // ── Data state ─────────────────────────────────────────────────────────────
@@ -1665,7 +1666,7 @@ const ProcurementInner = ({ dark, projectId, projectName, onNavigateToPO }: Proc
 
       {/* ── Back row ──────────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', paddingTop: 16, marginBottom: 0 }}>
-        <BackButton onFallback={() => {}} dark={dark} />
+        <BackButton onFallback={() => onBack?.()} dark={dark} />
       </div>
 
       {/* ── Page header ──────────────────────────────────────────────────────── */}
@@ -2195,10 +2196,11 @@ const BulkUploadModal = ({ dark, projectId, onClose, onImported }: BulkUploadMod
 export interface ProcurementProps {
   dark: boolean; projectId: number; projectName: string
   onNavigateToPO?: (poId: number) => void
+  onBack?: () => void
 }
 
-export const Procurement = ({ dark, projectId, projectName, onNavigateToPO }: ProcurementProps) => (
+export const Procurement = ({ dark, projectId, projectName, onNavigateToPO, onBack }: ProcurementProps) => (
   <ToastProvider>
-    <ProcurementInner dark={dark} projectId={projectId} projectName={projectName} onNavigateToPO={onNavigateToPO} />
+    <ProcurementInner dark={dark} projectId={projectId} projectName={projectName} onNavigateToPO={onNavigateToPO} onBack={onBack} />
   </ToastProvider>
 )

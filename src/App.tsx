@@ -1267,6 +1267,7 @@ function App() {
                   projectId={selectedProjectId}
                   projectName={selectedProjectName}
                   onNavigateToPO={(poId: number) => { setSelectedPOId(poId); setPage('po-detail') }}
+                  onBack={() => setPage('dashboard')}
                 />
               )
               : (
