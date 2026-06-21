@@ -11,6 +11,11 @@ node_modules/
 dist/
 dist-ssr/
 build/
+# backend deploy zip — regenerated each deploy (DEPLOY_AZURE.md step 2e)
+qmat-backend.zip
+
+# ─── STRAY / LOCAL DOCS ─────────────────────────────────────
+QCO MMS.docx
 
 # ─── LOGS ───────────────────────────────────────────────────
 logs/

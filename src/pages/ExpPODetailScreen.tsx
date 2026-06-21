@@ -12,6 +12,7 @@ import { CreateSCNWizard } from '../components/CreateSCNWizard'
 import { ToastProvider, useToast } from '../hooks/useToast'
 
 import { API } from '../lib/api'
+import { StatusLegend } from '../components/StatusLegend'
 
 // ─── TYPES ────────────────────────────────────────────────────
 interface Milestone {
@@ -103,6 +104,30 @@ const VDRL_STATUS_COLORS: Record<string, { bg: string; color: string }> = {
   'Not submitted': { bg: 'rgba(148,163,184,0.1)', color: '#64748b' },
   'Resubmit':      { bg: 'rgba(245,158,11,0.1)',  color: '#d97706' },
 }
+
+// ─── ITP COLOUR MAPS (module scope so the ITP table pills AND the ITP legends
+// share one source — referenced in the ITP tab render below) ──────────────────
+const ITP_TYPE_CONF: Record<string, { label: string; bg: string; color: string }> = {
+  hold_point: { label: 'Hold point',       bg: 'rgba(239,68,68,0.1)',   color: '#ef4444' },
+  witness:    { label: 'Witness point',    bg: 'rgba(232,78,15,0.1)',   color: '#E84E0F' },
+  review:     { label: 'Review point',     bg: 'rgba(37,99,235,0.1)',   color: '#2563eb' },
+  document:   { label: 'Information only', bg: 'rgba(148,163,184,0.1)', color: '#64748b' },
+}
+const ITP_STATUS_CONF: Record<string, { bg: string; color: string }> = {
+  not_started: { bg: 'rgba(148,163,184,0.12)', color: '#64748b' },
+  in_progress: { bg: 'rgba(37,99,235,0.1)',    color: '#2563eb' },
+  complete:    { bg: 'rgba(34,197,94,0.1)',     color: '#16a34a' },
+  on_hold:     { bg: 'rgba(245,158,11,0.1)',    color: '#d97706' },
+  waived:      { bg: 'rgba(124,58,237,0.1)',    color: '#7c3aed' },
+}
+
+// ─── LEGEND ITEMS (derived from the maps above — single source, no drift) ─────
+const MS_LEGEND = ([['complete', 'Complete'], ['breached', 'Breached'], ['at_risk', 'At risk'], ['in_progress', 'In progress'], ['not_started', 'Not started']] as [string, string][])
+  .map(([k, label]) => ({ label, color: MS_COLORS[k], hollow: k === 'not_started' }))
+const VDRL_LEGEND_EXP = Object.entries(VDRL_STATUS_COLORS).map(([label, v]) => ({ label, color: v.color, hollow: label === 'Not submitted' }))
+const ITP_TYPE_LEGEND = Object.values(ITP_TYPE_CONF).map(v => ({ label: v.label, color: v.color }))
+const ITP_STATUS_LEGEND = ([['not_started', 'Not started'], ['in_progress', 'In progress'], ['complete', 'Complete'], ['on_hold', 'On hold'], ['waived', 'Waived']] as [string, string][])
+  .map(([k, label]) => ({ label, color: ITP_STATUS_CONF[k].color, hollow: k === 'not_started' }))
 
 // ─── HELPERS ──────────────────────────────────────────────────
 const fmt = (d?: string | null) =>
@@ -576,6 +601,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
               <div style={{ marginBottom: 24, display: 'flex', alignItems: 'center', gap: 12 }}>
                 <MilestoneTimeline milestones={po.milestones} size="lg" showDates={true} dark={dark} />
               </div>
+              <StatusLegend dark={dark} items={MS_LEGEND} />
               {po.milestones.map((m, idx) => {
                 const msColor = MS_COLORS[m.status] || '#94a3b8'
                 const history = histByMs[m.id] || []
@@ -733,24 +759,8 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                     </thead>
                     <tbody>
                       {itpItems.map(item => {
-                        // ── inspection type pill colours
-                        const typeConf: Record<string, { label: string; bg: string; color: string }> = {
-                          hold_point:  { label: 'Hold point',       bg: 'rgba(239,68,68,0.1)',   color: '#ef4444' },
-                          witness:     { label: 'Witness point',    bg: 'rgba(232,78,15,0.1)',   color: '#E84E0F' },
-                          review:      { label: 'Review point',     bg: 'rgba(37,99,235,0.1)',   color: '#2563eb' },
-                          document:    { label: 'Information only', bg: 'rgba(148,163,184,0.1)', color: '#64748b' },
-                        }
-                        const tc = typeConf[item.inspection_type] || { label: item.inspection_type, bg: 'rgba(148,163,184,0.1)', color: '#64748b' }
-
-                        // ── status pill colours
-                        const stConf: Record<string, { bg: string; color: string }> = {
-                          not_started: { bg: 'rgba(148,163,184,0.12)', color: '#64748b' },
-                          in_progress: { bg: 'rgba(37,99,235,0.1)',    color: '#2563eb' },
-                          complete:    { bg: 'rgba(34,197,94,0.1)',     color: '#16a34a' },
-                          on_hold:     { bg: 'rgba(245,158,11,0.1)',    color: '#d97706' },
-                          waived:      { bg: 'rgba(124,58,237,0.1)',    color: '#7c3aed' },
-                        }
-                        const sc = stConf[item.status] || stConf.not_started
+                        const tc = ITP_TYPE_CONF[item.inspection_type] || { label: item.inspection_type, bg: 'rgba(148,163,184,0.1)', color: '#64748b' }
+                        const sc = ITP_STATUS_CONF[item.status] || ITP_STATUS_CONF.not_started
 
                         const timingPill = item.timing === 'pre_delivery'
                           ? { label: 'Pre-delivery', bg: 'rgba(37,99,235,0.1)', color: '#2563eb' }
@@ -856,6 +866,8 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                   </table>
                 </div>
               )}
+              <StatusLegend dark={dark} label="Inspection type" items={ITP_TYPE_LEGEND} />
+              <StatusLegend dark={dark} label="Status" items={ITP_STATUS_LEGEND} />
 
               {/* ── Delete confirm dialog ── */}
               {itpDelConfirm && createPortal(
@@ -961,6 +973,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                       </table>
                     </div>
                   )}
+                  <StatusLegend dark={dark} items={VDRL_LEGEND_EXP} />
                 </>
               )}
             </div>

@@ -44,6 +44,9 @@ const VDRL_LEGEND = ['received', 'pending', 'overdue', 'rejected'].map(s => {
 
 // ─── TRACE NODE COLOURS ───────────────────────────────────────
 const NODE_COLOR: Record<string, string> = { complete: '#22c55e', warning: '#f59e0b', blocked: '#ef4444', pending: '#94a3b8' }
+// Trace-chain node legend — derived from NODE_COLOR (single source); pending renders hollow.
+const TRACE_NODE_LEGEND = ([['complete', 'Complete'], ['warning', 'Warning'], ['blocked', 'Blocked'], ['pending', 'Pending']] as [string, string][])
+  .map(([k, label]) => ({ label, color: NODE_COLOR[k], hollow: k === 'pending' }))
 const BADGE_STYLE: Record<string, { color: string; bg: string }> = {
   WATCH:   { color: '#d97706', bg: 'rgba(245,158,11,0.14)' },
   BLOCKED: { color: '#dc2626', bg: 'rgba(239,68,68,0.14)' },
@@ -387,6 +390,7 @@ const TraceabilityInner = ({ dark, projectId, projectName, onBack }: {
                 </div>
               )}
             </div>
+            <StatusLegend dark={dark} items={TRACE_NODE_LEGEND} />
           </div>
         )}
 

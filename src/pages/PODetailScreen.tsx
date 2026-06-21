@@ -18,6 +18,7 @@ const POL_W   = [60, 240, 70, 60, 90, 90, 100, 110, 100, 100, 100, 110, 60]
 const POL_MIN = [50, 120, 50, 50, 70, 70, 80, 80, 70, 80, 80, 80, 50]
 
 import { API } from '../lib/api'
+import { StatusLegend } from '../components/StatusLegend'
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
@@ -720,6 +721,7 @@ const ITPTab = ({ po, dark }: { po: PO; dark: boolean }) => {
           ))}
         </div>
       )}
+      <StatusLegend dark={dark} items={Object.entries(STATUS_DOT).map(([k, c]) => ({ label: k.charAt(0).toUpperCase() + k.slice(1), color: c }))} />
     </div>
   )
 }
