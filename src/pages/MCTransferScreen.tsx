@@ -10,6 +10,7 @@ import { BackButton } from '../components/BackButton'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { useAutoTitle } from '../hooks/useAutoTitle'
 import { Pager } from '../components/Pager'
+import { StatusLegend } from '../components/StatusLegend'
 import { useResizableTable, ResetColumnsButton } from '../components/colResize'
 import { HelpButton } from '../components/HelpDrawer'
 import { TRANSFERS_HELP } from '../helpContent'
@@ -53,6 +54,12 @@ const statusPill = (s: string) => {
   if (lc) return { label: lc.label, color: lc.color, bg: `${lc.color}1a` }
   return { label: s, color: '#64748b', bg: 'rgba(100,116,139,0.1)' }
 }
+
+// ─── LEGEND ITEMS (derived from LIFECYCLE + statusPill above — single source) ──
+const TRANSFER_LEGEND = [
+  ...LIFECYCLE.map(l => ({ label: l.label, color: l.color })),
+  ...['pending_approval', 'rejected'].map(s => { const p = statusPill(s); return { label: p.label, color: p.color } }),
+]
 
 const MCTransferInner = ({ dark, projectId, projectName, onBack }: {
   dark: boolean; projectId: number; projectName: string; onBack: () => void
@@ -208,6 +215,7 @@ const MCTransferInner = ({ dark, projectId, projectName, onBack }: {
             </table>
           </div>
           <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} onPageSizeChange={setPageSize} />
+          <StatusLegend dark={dark} items={TRANSFER_LEGEND} />
         </div>
       </div>
 

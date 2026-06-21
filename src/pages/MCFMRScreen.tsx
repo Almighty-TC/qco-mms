@@ -13,6 +13,7 @@ import { useCurrentUser } from '../hooks/useCurrentUser'
 import { ScopeBanner } from '../components/ScopeBanner'
 import { useAutoTitle } from '../hooks/useAutoTitle'
 import { Pager } from '../components/Pager'
+import { StatusLegend } from '../components/StatusLegend'
 import { usePagedList } from '../hooks/usePagedList'
 import { useColumnResize } from '../hooks/useColumnResize'
 
@@ -63,6 +64,11 @@ const statusPill = (s: string) => {
   }
   return m[s] || { label: s, bg: 'rgba(148,163,184,0.1)', color: '#64748b' }
 }
+
+// ─── LEGEND ITEMS (derived from statusPill above — single source) ─────────────
+const FMR_LEGEND = ['pending_approval', 'approved', 'issued', 'partially_approved', 'partial_issued', 'rejected', 'cancelled'].map(s => {
+  const p = statusPill(s); return { label: p.label, color: p.color }
+})
 
 const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
   dark: boolean; projectId: number; projectName: string; onBack: () => void; userRole?: string
@@ -457,6 +463,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
             </table>
           </div>
           <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} onPageSizeChange={setPageSize} />
+          <StatusLegend dark={dark} items={FMR_LEGEND} />
         </div>
       </div>
 

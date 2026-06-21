@@ -7,6 +7,7 @@ import { useExpand, ExpandBtn } from '../components/ExpandToggle'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { Pager } from '../components/Pager'
+import { StatusLegend } from '../components/StatusLegend'
 import { useResizableTable, ResetColumnsButton } from '../components/colResize'
 import { HelpButton } from '../components/HelpDrawer'
 import { STOCK_REGISTER_HELP } from '../helpContent'
@@ -64,6 +65,14 @@ const certBadge = (s?: string) => {
     default:         return { label: 'no cert',     color: '#94a3b8', bg: 'rgba(148,163,184,0.12)' }
   }
 }
+
+// ─── LEGEND ITEMS (derived from the pill helpers above — single source) ───────
+const CONDITION_LEGEND = ['good', 'minor_damage', 'major_damage', 'quarantine'].map(s => {
+  const p = condPill(s); return { label: p.label, color: p.color }
+})
+const CERT_LEGEND = ['verified', 'pending', 'rejected', 'hold', 'none'].map(s => {
+  const p = certBadge(s); return { label: p.label, color: p.color, hollow: p.label === 'no cert' }
+})
 
 const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
   dark: boolean; projectId: number; projectName: string; onBack: () => void
@@ -316,6 +325,8 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
         </div>
 
         <Pager page={page} total={total} pageSize={pageSize} dark={dark} onPageChange={setPage} onPageSizeChange={setPageSize} />
+        <StatusLegend dark={dark} label="Condition" items={CONDITION_LEGEND} />
+        <StatusLegend dark={dark} label="Heat / cert" items={CERT_LEGEND} />
       </div>
 
       {/* Stock Take Modal */}

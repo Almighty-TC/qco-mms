@@ -12,6 +12,7 @@ import { useAutoTitle } from '../hooks/useAutoTitle'
 import { useResizableTable, ResetColumnsButton, ColResizeHandle } from '../components/colResize'
 import { HelpButton } from '../components/HelpDrawer'
 import { RECEIPTING_HELP } from '../helpContent'
+import { StatusLegend } from '../components/StatusLegend'
 
 import { API } from '../lib/api'
 
@@ -72,6 +73,11 @@ const statusPill = (s: string) => {
   }
   return m[s] || { label: s, bg: 'rgba(148,163,184,0.1)', color: '#64748b' }
 }
+
+// ─── LEGEND ITEMS (derived from statusPill above — single source) ─────────────
+const RECEIPTING_LEGEND = ['arrived', 'in_transit', 'customs_review', 'picked_up', 'draft', 'partially_received'].map(s => {
+  const p = statusPill(s); return { label: p.label, color: p.color }
+})
 
 // ─── INNER COMPONENT ──────────────────────────────────────────
 const MCReceiptingInner = ({ dark, projectId, projectName, onBack }: {
@@ -260,6 +266,7 @@ const MCReceiptingInner = ({ dark, projectId, projectName, onBack }: {
               </tbody>
             </table>
           </div>
+          <StatusLegend dark={dark} items={RECEIPTING_LEGEND} />
         </div>
       </div>
 
