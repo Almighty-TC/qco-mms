@@ -6,6 +6,9 @@ node_modules/
 .env
 .env.local
 .env.*.local
+# one-off admin DB creds for migrations — local only, never committed
+.env.admin
+**/.env.admin
 
 # ─── BUILD OUTPUT ───────────────────────────────────────────
 dist/

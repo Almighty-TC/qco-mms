@@ -140,12 +140,43 @@ router.get('/:projectId', requirePermission('dashboard', 'can_view'), async (req
     const projScore = wSum > 0 ? Math.round(visMods.reduce((a, m) => a + scoreOf(m.total, m.problems) * (wMap[m.key] || 0), 0) / wSum) : null
     const band = projScore == null ? null : projScore >= 85 ? 'Excellent' : projScore >= 70 ? 'Good' : projScore >= 50 ? 'At risk' : 'Critical'
 
+    // ── CANONICAL health score (viewer-independent) ──────────────
+    // Same scoreOf data as projScore, but weighted over ALL modules (not the
+    // viewer-visible subset) so it's a stable per-project number — the value we
+    // snapshot for the week-over-week delta. No new queries (MODS already fetched).
+    const cwSum = MODS.reduce((a, m) => a + (wMap[m.key] || 0), 0)
+    const canonicalScore = cwSum > 0
+      ? Math.round(MODS.reduce((a, m) => a + scoreOf(m.total, m.problems) * (wMap[m.key] || 0), 0) / cwSum)
+      : null
+
+    // ── SNAPSHOT-ON-VIEW + WEEKLY DELTA ──────────────────────────
+    // Append-only history, at most one row/day/project. delta = today's canonical
+    // score − the most recent snapshot ≥7 days old. Until a ≥7-day-old row exists,
+    // status is 'collecting' (no fabricated/backfilled history). The whole block is
+    // wrapped so any failure (missing table/grant) NEVER breaks the dashboard —
+    // it just falls back to the 'collecting' state.
+    let delta = null, delta_status = 'collecting'
+    if (canonicalScore != null) {
+      try {
+        const [[todayRow]] = await db.query(
+          'SELECT id FROM project_health_history WHERE project_id=? AND DATE(recorded_at)=CURDATE() LIMIT 1', [pid])
+        if (!todayRow) {
+          await db.query('INSERT INTO project_health_history (project_id, score) VALUES (?, ?)', [pid, canonicalScore])
+        }
+        const [[priorRow]] = await db.query(
+          'SELECT score FROM project_health_history WHERE project_id=? AND recorded_at <= (NOW() - INTERVAL 7 DAY) ORDER BY recorded_at DESC LIMIT 1', [pid])
+        if (priorRow) { delta = canonicalScore - priorRow.score; delta_status = 'ready' }
+      } catch (e) {
+        console.error('[dashboard] health-history snapshot/delta skipped:', e.message)
+      }
+    }
+
     const seeProc = vis.has('procurement'), seeExp = vis.has('expediting'), seeLog = vis.has('logistics'), seeMat = vis.has('material_control'), seeMto = vis.has('mto'), seeFmr = vis.has('fmr')
     const gate = (ok, v) => ok ? v : null   // omit (null), never a misleading zero
 
     res.json({
       health: {
-        score: projScore, band, delta: null,   // delta omitted: no score history stored yet — not fabricated
+        score: projScore, band, delta, delta_status,   // real delta vs ≥7-day-old canonical snapshot; 'collecting' until a week of history exists
         weights: Object.entries(wMap).map(([module, weight]) => ({ module, weight })),
         modules: modulesOut,
       },
