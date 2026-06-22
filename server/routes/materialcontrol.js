@@ -1381,67 +1381,79 @@ router.post('/:projectId/transfers', rejectExternal, async (req, res) => {
 
 // PUT /api/mc/:projectId/transfers/:transferId/status — advance status.
 // GATE: a 'pending_approval' transfer cannot be advanced here (must be approved
-// first via /approve). The atomic stock MOVE fires once, on first completion.
+// first via /approve). The atomic stock MOVE fires ONCE — guarded by stock_moved_at
+// under a transfer-row lock, so concurrent PUTs or a status replay can't double-move.
+const TRANSFER_ORDER = { requested: 0, in_transit: 1, picked_up: 2, delivered: 3, complete: 4 }
 router.put('/:projectId/transfers/:transferId/status', rejectExternal, async (req, res) => {
+  const pid = Number(req.params.projectId)
+  const { transferId } = req.params
+  const { status } = req.body
+  const userId = req.user?.id || 1
+
+  const VALID_STATUSES = ['requested','in_transit','picked_up','delivered','complete']
+  if (!VALID_STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status' })
+
+  // ── ONE transaction: lock the transfer row, guard, move-once, flip status, commit ──
+  // Locking warehouse_transfers FOR UPDATE serialises concurrent PUTs; the move is
+  // gated on stock_moved_at IS NULL so it can run at most once, ever. Mirrors the
+  // FMR-out pattern (lock + status-check + mutation + commit, all in-tx).
+  const conn = await db.getConnection()
   try {
-    const pid = Number(req.params.projectId)
-    const { transferId } = req.params
-    const { status } = req.body
-    const userId = req.user?.id || 1
-
-    const VALID_STATUSES = ['requested','in_transit','picked_up','delivered','complete']
-    if (!VALID_STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status' })
-
-    const [[tr]] = await db.query('SELECT * FROM warehouse_transfers WHERE id=? AND project_id=?', [transferId, pid])
-    if (!tr) return res.status(404).json({ error: 'Transfer not found' })
-
-    // Both halves of the real gate:
-    if (tr.status === 'pending_approval') return res.status(403).json({ error: 'Transfer is pending approval — it must be approved before it can proceed' })
-    if (tr.status === 'rejected')         return res.status(422).json({ error: 'Transfer was rejected and cannot be advanced' })
-
-    const doneStates = ['delivered','complete']
-    const firstCompletion = doneStates.includes(status) && !doneStates.includes(tr.status)
-
-    // ── Atomic stock MOVE on first completion (stock-linked transfers only) ──
-    // Split-holding: decrement source qty + qty_available; create a NEW DISTINCT
-    // destination holding carrying identity + condition (never pooled). Conserves totals.
-    if (firstCompletion && tr.stock_id) {
-      const conn = await db.getConnection()
-      try {
-        await conn.beginTransaction()
-        const [[src]] = await conn.query('SELECT * FROM warehouse_stock WHERE id=? FOR UPDATE', [tr.stock_id])
-        if (!src) throw new Error('source holding no longer exists')
-        const isQuar = src.condition_status === 'quarantine'
-        const srcMovable = isQuar ? Number(src.qty) : Number(src.qty_available)
-        if (Number(tr.qty) > srcMovable) throw new Error(`source no longer has ${tr.qty} available`)
-        // Decrement source: qty always; qty_available too unless quarantine (already 0, non-issuable).
-        const newQty   = Number(src.qty) - Number(tr.qty)
-        const newAvail = isQuar ? 0 : Number(src.qty_available) - Number(tr.qty)
-        if (newQty <= 0) await conn.query('DELETE FROM warehouse_stock WHERE id=?', [src.id])           // whole-holding move → row removed
-        else await conn.query('UPDATE warehouse_stock SET qty=?, qty_available=? WHERE id=?', [newQty, newAvail, src.id])
-        // Destination: distinct holding; quarantine stays non-issuable (qty_available 0).
-        const destAvail = isQuar ? 0 : Number(tr.qty)
-        await conn.query(
-          `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,commodity_id,equipment_tag,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by,notes)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-          [pid, tr.to_warehouse_id, src.scn_id, src.po_line_id, src.commodity_id, src.equipment_tag,
-           src.item_code, src.description, src.wbs_code, Number(tr.qty), destAvail, src.uom,
-           tr.to_location || src.location_code, src.condition_status, src.trace_hold, src.vendor_name,
-           src.heat_number, src.received_date, userId, `Transferred via ${tr.transfer_ref} from ${src.location_code || '—'}`])
-        await conn.commit()
-      } catch (mErr) { await conn.rollback(); conn.release(); return res.status(422).json({ error: 'Stock move failed: ' + mErr.message }) }
-      conn.release()
+    await conn.beginTransaction()
+    const [[tr]] = await conn.query('SELECT * FROM warehouse_transfers WHERE id=? AND project_id=? FOR UPDATE', [transferId, pid])
+    if (!tr) { await conn.rollback(); conn.release(); return res.status(404).json({ error: 'Transfer not found' }) }
+    if (tr.status === 'pending_approval') { await conn.rollback(); conn.release(); return res.status(403).json({ error: 'Transfer is pending approval — it must be approved before it can proceed' }) }
+    if (tr.status === 'rejected')         { await conn.rollback(); conn.release(); return res.status(422).json({ error: 'Transfer was rejected and cannot be advanced' }) }
+    // Forward-only: a transfer never moves backward (also stops the move being re-armed).
+    if (TRANSFER_ORDER[status] < TRANSFER_ORDER[tr.status]) {
+      await conn.rollback(); conn.release()
+      return res.status(422).json({ error: `Cannot move a transfer backward (${tr.status} → ${status})` })
     }
 
-    const dateField = status === 'picked_up' ? ', actual_pickup_date=CURDATE()' : status === 'delivered' ? ', delivered_date=CURDATE()' : ''
-    await db.query(`UPDATE warehouse_transfers SET status=? ${dateField} WHERE id=?`, [status, transferId])
+    const doneStates = ['delivered','complete']
+    // Move ONCE: into a done-state, stock-linked, and not already moved (the airtight gate).
+    const shouldMove = doneStates.includes(status) && tr.stock_id != null && tr.stock_moved_at == null
+
+    if (shouldMove) {
+      // Split-holding: decrement source qty + qty_available; create a NEW DISTINCT
+      // destination holding carrying identity + condition (never pooled). Conserves totals.
+      const [[src]] = await conn.query('SELECT * FROM warehouse_stock WHERE id=? FOR UPDATE', [tr.stock_id])
+      if (!src) { await conn.rollback(); conn.release(); return res.status(422).json({ error: 'Stock move failed: source holding no longer exists' }) }
+      const isQuar = src.condition_status === 'quarantine'
+      const srcMovable = isQuar ? Number(src.qty) : Number(src.qty_available)
+      if (Number(tr.qty) > srcMovable) { await conn.rollback(); conn.release(); return res.status(422).json({ error: `Stock move failed: source no longer has ${tr.qty} available` }) }
+      const newQty   = Number(src.qty) - Number(tr.qty)
+      const newAvail = isQuar ? 0 : Number(src.qty_available) - Number(tr.qty)
+      if (newQty <= 0) await conn.query('DELETE FROM warehouse_stock WHERE id=?', [src.id])           // whole-holding move → row removed
+      else await conn.query('UPDATE warehouse_stock SET qty=?, qty_available=? WHERE id=?', [newQty, newAvail, src.id])
+      const destAvail = isQuar ? 0 : Number(tr.qty)
+      await conn.query(
+        `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,commodity_id,equipment_tag,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by,notes)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [pid, tr.to_warehouse_id, src.scn_id, src.po_line_id, src.commodity_id, src.equipment_tag,
+         src.item_code, src.description, src.wbs_code, Number(tr.qty), destAvail, src.uom,
+         tr.to_location || src.location_code, src.condition_status, src.trace_hold, src.vendor_name,
+         src.heat_number, src.received_date, userId, `Transferred via ${tr.transfer_ref} from ${src.location_code || '—'}`])
+    }
+
+    // Flip status (+ lifecycle dates) and stamp stock_moved_at IN THE SAME TX as the move.
+    const dateField  = status === 'picked_up' ? ', actual_pickup_date=CURDATE()' : status === 'delivered' ? ', delivered_date=CURDATE()' : ''
+    const movedField = shouldMove ? ', stock_moved_at=NOW()' : ''
+    await conn.query(`UPDATE warehouse_transfers SET status=? ${dateField}${movedField} WHERE id=?`, [status, transferId])
+    await conn.commit()
+    conn.release()
+
     await writeAudit(userId, 'transfer_status', 'warehouse_transfer', transferId,
-      { status: tr.status }, { status, stock_moved: firstCompletion && !!tr.stock_id },
+      { status: tr.status }, { status, stock_moved: shouldMove },
       `/mc/${pid}/transfers/${transferId}/status`, Number(req.params.projectId) || null)
 
     const [[updated]] = await db.query('SELECT t.*, fw.name AS from_warehouse_name, tw.name AS to_warehouse_name FROM warehouse_transfers t LEFT JOIN warehouses fw ON t.from_warehouse_id=fw.id LEFT JOIN warehouses tw ON t.to_warehouse_id=tw.id WHERE t.id=?', [transferId])
     res.json({ success: true, transfer: updated })
-  } catch (e) { dbError(res, e) }
+  } catch (e) {
+    try { await conn.rollback() } catch { /* already settled */ }
+    conn.release()
+    dbError(res, e)
+  }
 })
 
 // POST /api/mc/:projectId/transfers/:transferId/approve — role-guarded (FMR pattern).
