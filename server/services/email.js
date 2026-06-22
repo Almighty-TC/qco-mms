@@ -84,4 +84,4 @@ function html(title, body) {
     </div></body></html>`
 }
 
-module.exports = { sendEmail, sendAlert, html }
+module.exports = { sendEmail, sendAlert, html, isEmailConfigured: isConfigured }

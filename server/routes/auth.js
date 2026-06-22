@@ -5,7 +5,7 @@ const db      = require('../db')
 const { dbError } = require('../utils/dbError')
 const { authenticateToken: authMiddleware } = require('../middleware/auth')
 const { validateComplexity, checkHistory, addToHistory, expiresAt: pwExpiry, generate } = require('../utils/password')
-const { sendEmail, html } = require('../services/email')
+const { sendEmail, html, isEmailConfigured } = require('../services/email')
 
 const router     = express.Router()
 const JWT_SECRET = process.env.JWT_SECRET || 'qmat_dev_secret'
@@ -82,6 +82,16 @@ router.post('/forgot-password', async (req, res) => {
   try {
     const email = String(req.body?.email || '').trim()
     if (!email) return res.status(400).json({ error: 'Email is required' })
+
+    // ── Email-reset availability guard (lockout-trap fix) ───────
+    // When SMTP isn't configured the temp-password email can't be delivered, so
+    // reset-by-email would only overwrite the password with a temp the user never
+    // receives — locking them out. Refuse HONESTLY and, crucially, WITHOUT mutating
+    // any password. Placed before the account lookup so it reveals nothing about
+    // whether the account exists (same response for every email).
+    if (!isEmailConfigured) {
+      return res.status(503).json({ error: 'Password reset by email is not available — please contact your administrator.' })
+    }
 
     // Per-email cooldown (also limits inbox spam for a real address).
     const now = Date.now()
