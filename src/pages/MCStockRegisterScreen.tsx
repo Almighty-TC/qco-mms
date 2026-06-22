@@ -267,13 +267,15 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                       const cond = condPill(item.condition_status)
                       return (
                         <tr key={item.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
-                          {!isSubcontractor && <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, ...ellipsisCell }}>{item.location_code || '—'}</td>}
-                          <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600, ...ellipsisCell }}>{item.item_code}</td>
+                          {!isSubcontractor && <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, ...ellipsisCell }} title={item.location_code || ''}>{item.location_code || '—'}</td>}
+                          <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600, ...ellipsisCell }} title={item.item_code}>{item.item_code}</td>
                           <td data-align="left" style={{ padding: '8px 12px', color: col, ...ellipsisCell }} title={item.description}>{item.description}</td>
-                          <td style={{ padding: '8px 12px', fontSize: 11 }}>
+                          <td style={{ padding: '8px 12px', fontSize: 11, overflow: 'hidden' }}>
                             {item.heat_number ? (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start' }}>
-                                <span style={{ fontFamily: 'JetBrains Mono, monospace', color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 86 }} title={item.heat_number}>{item.heat_number}</span>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start', minWidth: 0, maxWidth: '100%' }}>
+                                {/* maxWidth:'100%' (was a fixed 86px) lets the heat number ellipsize at the
+                                    HEAT column's real width and reveal more when the column is widened. */}
+                                <span style={{ fontFamily: 'JetBrains Mono, monospace', color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }} title={item.heat_number}>{item.heat_number}</span>
                                 {(() => { const b = certBadge(heatStatus[normHeat(item.heat_number)]?.status)
                                   return (
                                     <span onClick={e => { e.stopPropagation(); setHeatLink(item.heat_number!) }}
@@ -283,13 +285,13 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                               </div>
                             ) : <span style={{ color: sub }}>—</span>}
                           </td>
-                          <td data-align="left" style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, ...ellipsisCell }}>{item.wbs_code || '—'}</td>
+                          <td data-align="left" style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, ...ellipsisCell }} title={item.wbs_code || ''}>{item.wbs_code || '—'}</td>
                           <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col, fontWeight: 600, ...ellipsisCell }}>{Number(item.qty).toLocaleString()}</td>
                           <td style={{ padding: '8px 12px', color: sub, ...ellipsisCell }}>{item.uom}</td>
                           <td data-align="center" data-col="status" style={{ padding: '8px 12px' }}>
                             <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: cond.bg, color: cond.color, fontWeight: 600 }}>{cond.label}</span>
                           </td>
-                          <td data-align="left" style={{ padding: '8px 12px', color: sub, fontSize: 11, ...ellipsisCell }}>{item.vendor_name || '—'}</td>
+                          <td data-align="left" style={{ padding: '8px 12px', color: sub, fontSize: 11, ...ellipsisCell }} title={item.vendor_name || ''}>{item.vendor_name || '—'}</td>
                           {!isSubcontractor && (
                             <td data-align="center" style={{ padding: '8px 12px' }}>
                               {item.trace_hold ? <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: 'rgba(239,68,68,0.1)', color: '#ef4444', fontWeight: 600 }}>hold</span> : <span style={{ color: sub }}>—</span>}
