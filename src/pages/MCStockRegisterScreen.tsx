@@ -270,17 +270,21 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                           {!isSubcontractor && <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, ...ellipsisCell }} title={item.location_code || ''}>{item.location_code || '—'}</td>}
                           <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600, ...ellipsisCell }} title={item.item_code}>{item.item_code}</td>
                           <td data-align="left" style={{ padding: '8px 12px', color: col, ...ellipsisCell }} title={item.description}>{item.description}</td>
-                          <td style={{ padding: '8px 12px', fontSize: 11, overflow: 'hidden' }}>
+                          <td style={{ padding: '8px 12px', fontSize: 11, overflow: 'hidden', textIndent: 0 }}>
                             {item.heat_number ? (
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start', minWidth: 0, maxWidth: '100%' }}>
-                                {/* maxWidth:'100%' (was a fixed 86px) lets the heat number ellipsize at the
-                                    HEAT column's real width and reveal more when the column is widened. */}
-                                <span style={{ fontFamily: 'JetBrains Mono, monospace', color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }} title={item.heat_number}>{item.heat_number}</span>
+                                {/* alignSelf:'stretch' makes the heat number fill the cell width so it
+                                    reveals fully as the HEAT column widens (and ellipsizes only when
+                                    genuinely too narrow). Without it the wrapper's align-items:flex-start
+                                    shrink-fits the span, clipping it even when the column has room —
+                                    which is why the earlier maxWidth:86→100% change alone wasn't enough.
+                                    The cert pill below keeps its content width (default align). */}
+                                <span style={{ fontFamily: 'JetBrains Mono, monospace', color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', alignSelf: 'stretch' }} title={item.heat_number}>{item.heat_number}</span>
                                 {(() => { const b = certBadge(heatStatus[normHeat(item.heat_number)]?.status)
                                   return (
                                     <span onClick={e => { e.stopPropagation(); setHeatLink(item.heat_number!) }}
                                       title="View this heat's certificates"
-                                      style={{ fontSize: 9, fontWeight: 600, padding: '1px 6px', borderRadius: 6, background: b.bg, color: b.color, cursor: 'pointer', whiteSpace: 'nowrap' }}>{b.label}</span>
+                                      style={{ fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 6, background: b.bg, color: b.color, cursor: 'pointer', whiteSpace: 'nowrap' }}>{b.label}</span>
                                   ) })()}
                               </div>
                             ) : <span style={{ color: sub }}>—</span>}
