@@ -1,11 +1,20 @@
 const express = require('express')
 const cors    = require('cors')
+const helmet  = require('helmet')
 require('dotenv').config()
 
 const { authenticateToken: authMiddleware } = require('./middleware/auth')
 const { startExpiryChecker }               = require('./jobs/expiry-checker')
 
 const app = express()
+
+// ─── SECURITY HEADERS (helmet) ───────────────────────────────
+// Sets sane security headers on every response. This is a JSON API that also
+// streams file downloads to a DIFFERENT-origin SPA (the Static Web App), so we
+// relax Cross-Origin-Resource-Policy to 'cross-origin' — the same-origin default
+// would block those cross-origin downloads. CORS (below) remains the access gate.
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }))
+
 app.use(cors())
 app.use(express.json())
 
