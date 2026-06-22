@@ -1,6 +1,7 @@
 const express = require('express')
 const cors    = require('cors')
 const helmet  = require('helmet')
+const rateLimit = require('express-rate-limit')
 require('dotenv').config()
 
 const { authenticateToken: authMiddleware } = require('./middleware/auth')
@@ -17,6 +18,30 @@ app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }))
 
 app.use(cors())
 app.use(express.json())
+
+// ─── RATE LIMITING ───────────────────────────────────────────
+// Two tiers. The general limiter is deliberately GENEROUS so normal app use —
+// which fires many parallel API calls per screen, across several concurrent
+// testers behind one office IP/NAT — never trips it; it only stops abusive
+// floods. The auth limiter is STRICT but counts only FAILED attempts
+// (skipSuccessfulRequests), so brute-force/credential-stuffing on /auth/login
+// is throttled while legitimate logins (which succeed) never consume the budget.
+// Mounted under /api only — /health and /docs stay exempt (health checks, etc.).
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 5000,
+  standardHeaders: 'draft-7', legacyHeaders: false,
+  message: { error: 'Too many requests — please slow down and try again shortly.' },
+})
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 30, skipSuccessfulRequests: true,
+  standardHeaders: 'draft-7', legacyHeaders: false,
+  message: { error: 'Too many login attempts — please wait a few minutes and try again.' },
+})
+app.use('/api', generalLimiter)
+// Strict limiter on the brute-force surfaces only (NOT /auth/me, which the SPA
+// polls on every load to validate the session).
+app.use('/api/auth/login', authLimiter)
+app.use('/api/auth/forgot-password', authLimiter)
 
 // ─── HEALTH CHECK ───────────────────────────────────────────
 app.get('/health', (req, res) => {
