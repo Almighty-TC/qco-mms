@@ -147,6 +147,43 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
     }
   }
 
+  // ─── WBS 'multiple' POPOVER ──────────────────────────────────
+  // For multi-line FMRs the WBS cell shows 'multiple'; clicking lists every distinct
+  // WBS code. The codes live only in the per-line detail (not the register payload),
+  // so we reuse the SAME /fmr/:id/detail fetch + rowLines cache the ITEMS expander
+  // uses — no backend change. If the row is already expanded the data is cached.
+  const [wbsPopover, setWbsPopover] = useState<{ fmrId: number; codes: string[]; x: number; y: number } | null>(null)
+  const openWbsPopover = async (fmr: FMRRow, e: React.MouseEvent) => {
+    e.stopPropagation()
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    const anchor = { x: r.left, y: r.bottom + 4 }
+    let lines = rowLines[fmr.id]
+    if (!lines) {
+      try {
+        const { data } = await axios.get(`${API}/mc/${projectId}/fmr/${fmr.id}/detail`)
+        lines = data.lines || []
+        setRowLines(prev => ({ ...prev, [fmr.id]: lines as any[] }))
+      } catch (err: any) {
+        addToast('error', err.response?.data?.error || 'Failed to load WBS codes')
+        return
+      }
+    }
+    const codes = [...new Set((lines || []).map(l => l.wbs_code).filter(Boolean))] as string[]
+    setWbsPopover({ fmrId: fmr.id, codes, ...anchor })
+  }
+  // Close the popover on outside-click or Escape.
+  useEffect(() => {
+    if (!wbsPopover) return
+    const onDown = (ev: MouseEvent) => {
+      const t = ev.target as HTMLElement
+      if (!t.closest?.('[data-wbs-popover]') && !t.closest?.('[data-wbs-trigger]')) setWbsPopover(null)
+    }
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') setWbsPopover(null) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
+  }, [wbsPopover])
+
   // Toggle the per-FMR critical-path flag (MC controllers only — backend enforces the role).
   const toggleCritical = async (fmr: FMRRow) => {
     try {
@@ -338,7 +375,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
                   return (
                     <React.Fragment key={fmr.id}>
                     <tr style={{ borderBottom: expandedRows.has(fmr.id) ? 'none' : `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
-                      <td style={{ padding: '9px 12px' }}>
+                      <td style={{ padding: '9px 12px', overflow: 'hidden' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           {view === 'mc' ? (
                             <button onClick={e => { e.stopPropagation(); toggleCritical(fmr) }}
@@ -347,10 +384,14 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
                               {fmr.is_critical_path ? '★' : '☆'}
                             </button>
                           ) : (fmr.is_critical_path ? <span style={{ color: '#E84E0F' }}>★</span> : null)}
-                          <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600 }}>{fmr.fmr_ref}</span>
+                          {/* nowrap keeps the full reference on one line (was breaking mid-ref) */}
+                          <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600, whiteSpace: 'nowrap' }}>{fmr.fmr_ref}</span>
                         </div>
                       </td>
-                      <td data-align="left" style={{ padding: '9px 12px', overflow: 'hidden' }}>
+                      {/* textIndent:0 overrides the table's default 12% indent so the code-row
+                          (a flex container, which ignores text-indent) and the description
+                          block below it line up at the same left edge under the header. */}
+                      <td data-align="left" style={{ padding: '9px 12px', overflow: 'hidden', textIndent: 0 }}>
                         {(() => {
                           const multi = (fmr.line_count ?? 1) > 1
                           const open = expandedRows.has(fmr.id)
@@ -374,8 +415,14 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
                         })()}
                         <div style={{ fontSize: 11, color: sub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fmr.description}</div>
                       </td>
-                      <td data-align="left" style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>
-                        {(fmr.line_count ?? 1) > 1 ? 'multiple' : (fmr.wbs_code || '—')}
+                      <td data-align="left" style={{ padding: '9px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, textIndent: 0 }}>
+                        {(fmr.line_count ?? 1) > 1 ? (
+                          <button data-wbs-trigger onClick={e => openWbsPopover(fmr, e)}
+                            title="Show all WBS codes"
+                            style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, color: '#2563eb', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            multiple <span style={{ fontSize: 9 }}>▾</span>
+                          </button>
+                        ) : (fmr.wbs_code || '—')}
                       </td>
                       <td data-align="left" style={{ padding: '9px 12px', fontSize: 11, color: col, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {fmr.warehouse_code ? <><span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#2563eb' }}>{fmr.warehouse_code}</span> <span style={{ color: sub }}>· {fmr.warehouse_name}</span></> : '—'}
@@ -514,6 +561,26 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
           onIssued={(msg, short) => { setPocFmr(null); reload(); addToast(short ? 'error' : 'success', msg) }}
           addToast={addToast}
         />
+      )}
+
+      {/* WBS 'multiple' popover — lists every distinct WBS code for the FMR.
+          Portaled + position:fixed so it escapes the table's overflow clip. */}
+      {wbsPopover && createPortal(
+        <div data-wbs-popover role="dialog" aria-label="WBS codes"
+          style={{ position: 'fixed', top: wbsPopover.y, left: wbsPopover.x, zIndex: 7000,
+            background: cardBg, border: bd, borderRadius: 8, boxShadow: '0 8px 28px rgba(0,0,0,0.22)',
+            padding: '8px 10px', minWidth: 120, maxWidth: 240, maxHeight: 240, overflowY: 'auto',
+            fontFamily: 'IBM Plex Sans, sans-serif' }}>
+          <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', color: sub, marginBottom: 6 }}>
+            WBS codes ({wbsPopover.codes.length})
+          </div>
+          {wbsPopover.codes.length ? wbsPopover.codes.map(code => (
+            <div key={code} style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: col, padding: '2px 0' }}>{code}</div>
+          )) : (
+            <div style={{ fontSize: 11, color: sub }}>No WBS codes</div>
+          )}
+        </div>,
+        document.body,
       )}
     </div>
   )
