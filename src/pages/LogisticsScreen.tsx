@@ -402,12 +402,116 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
 // ═══════════════════════════════════════════════════════════════
 // SCN DETAIL MODAL
 // ═══════════════════════════════════════════════════════════════
+// ─── PROOF-OF-CUSTODY FORM (client-side print-to-PDF) ─────────
+// Mirrors ReportsScreen's printReport(): opens a window, writes a self-contained
+// HTML doc with @media print, and prints. No PDF dependency. The form is PRE-FILLED
+// from the already-loaded SCN detail, with BLANK areas for offline signing (vendor
+// release + forwarder acknowledgement + condition + notes). The signed copy is then
+// scanned and uploaded back via the PoC tab.
+function printPoC(scn: SCNDetail) {
+  const w = window.open('', '_blank', 'width=900,height=760')
+  if (!w) return
+  const esc = (s: any) => String(s == null || s === '' ? '—' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] as string))
+  const date = (s: any) => (s ? String(s).slice(0, 10) : '—')
+  const any = scn as any
+  const field = (label: string, val: any) => `<div class="f"><span class="k">${label}</span><span class="v">${esc(val)}</span></div>`
+
+  const pkgRows = (scn.packages || []).map(p =>
+    `<tr><td>${esc(p.package_number)}</td><td>${esc(p.description)}</td>` +
+    `<td>${[p.length_mm, p.width_mm, p.height_mm].every(d => d != null) ? `${p.length_mm}×${p.width_mm}×${p.height_mm}` : '—'}</td>` +
+    `<td style="text-align:right">${p.gross_weight_kg ?? '—'}</td><td>${p.is_dangerous_goods ? `DG ${esc(p.dg_class || '')}` : '—'}</td></tr>`).join('')
+  const lineRows = (scn.lines || []).map(l =>
+    `<tr><td>${esc(l.line_number)}</td><td>${esc(l.description)}</td><td style="text-align:right">${l.qty ?? '—'}</td><td>${esc(l.uom)}</td></tr>`).join('')
+
+  // Blank signing block: a labelled box with a ruled signature line + name/company/date.
+  const sigBlock = (title: string) => `
+    <div class="sig">
+      <div class="sigt">${title}</div>
+      <div class="sigrow"><span class="sk">Name</span><span class="line"></span></div>
+      <div class="sigrow"><span class="sk">Company</span><span class="line"></span></div>
+      <div class="sigrow"><span class="sk">Signature</span><span class="line tall"></span></div>
+      <div class="sigrow"><span class="sk">Date</span><span class="line"></span></div>
+    </div>`
+
+  w.document.write(`<!doctype html><html><head><title>Proof of Custody — ${esc(scn.scn_ref)}</title><style>
+    body{font-family:Arial,Helvetica,sans-serif;color:#0f172a;padding:28px;font-size:12px}
+    h1{font-size:18px;margin:0 0 2px;color:#E84E0F} .sub{color:#64748b;font-size:12px;margin:0 0 14px}
+    h2{font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:#334155;margin:18px 0 8px;border-bottom:1px solid #e2e8f0;padding-bottom:4px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 24px}
+    .f{display:flex;justify-content:space-between;gap:12px;padding:3px 0;border-bottom:1px dotted #e2e8f0}
+    .k{color:#64748b} .v{color:#0f172a;font-weight:600;text-align:right}
+    table{border-collapse:collapse;width:100%;font-size:11px;margin-top:4px} th{background:#E84E0F;color:#fff;padding:5px 8px;text-align:left}
+    td{padding:4px 8px;border-bottom:1px solid #e2e8f0}
+    .cond{display:flex;gap:24px;margin:8px 0} .cond label{display:flex;align-items:center;gap:6px} .box{width:14px;height:14px;border:1.5px solid #334155;display:inline-block}
+    .sigwrap{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:8px}
+    .sig{border:1px solid #cbd5e1;border-radius:6px;padding:12px} .sigt{font-weight:700;margin-bottom:10px;color:#0f172a}
+    .sigrow{display:flex;align-items:flex-end;gap:8px;margin-bottom:12px} .sk{color:#64748b;width:64px;flex-shrink:0}
+    .line{flex:1;border-bottom:1px solid #94a3b8;height:14px} .line.tall{height:34px}
+    .notes{border:1px solid #cbd5e1;border-radius:6px;height:60px;margin-top:6px}
+    .meta{color:#94a3b8;font-size:10px;margin-top:18px}
+    @media print{.noprint{display:none}}
+  </style></head><body>
+    <h1>QCO MMS — Proof of Custody</h1>
+    <p class="sub">Transfer of Custody, Care &amp; Control · SCN ${esc(scn.scn_ref)}</p>
+
+    <h2>Shipment</h2>
+    <div class="grid">
+      ${field('SCN Ref', scn.scn_ref)}${field('PO Ref', scn.po_ref)}
+      ${field('Vendor', scn.vendor_display || any.vendor_name)}${field('Forwarder', scn.forwarder_name)}
+      ${field('Mode', scn.mode)}${field('Incoterms', scn.incoterms)}
+      ${field('Origin', scn.origin_location)}${field('Destination', scn.destination_name || scn.destination_code)}
+      ${field('Pickup contact', any.pickup_contact_name)}${field('Pickup phone', any.pickup_contact_phone)}
+      ${field('Total packages', scn.total_packages)}${field('Total weight (kg)', scn.total_weight_kg)}
+    </div>
+
+    <h2>Dates</h2>
+    <div class="grid">
+      ${field('Cargo ready', date(any.cargo_ready_date))}${field('Cargo collection', date(any.cargo_collection_date))}
+      ${field('ETD', date(scn.etd))}${field('ATD', date(scn.atd))}
+      ${field('ETA', date(scn.eta))}${field('ATA', date(scn.ata))}
+      ${field('Customs cleared', date(scn.customs_cleared_date))}${field('Mode of transfer', scn.mode)}
+    </div>
+
+    <h2>Packages</h2>
+    <table><thead><tr><th>Pkg</th><th>Description</th><th>Dims (mm)</th><th style="text-align:right">Gross kg</th><th>DG</th></tr></thead>
+      <tbody>${pkgRows || '<tr><td colspan="5">No packages recorded</td></tr>'}</tbody></table>
+
+    <h2>PO Lines</h2>
+    <table><thead><tr><th>Line</th><th>Description</th><th style="text-align:right">Qty</th><th>UOM</th></tr></thead>
+      <tbody>${lineRows || '<tr><td colspan="4">No lines assigned</td></tr>'}</tbody></table>
+
+    <h2>Condition at handover</h2>
+    <div class="cond">
+      <label><span class="box"></span> Good</label>
+      <label><span class="box"></span> Damaged</label>
+      <label><span class="box"></span> Incomplete</label>
+    </div>
+
+    <h2>Signatures</h2>
+    <div class="sigwrap">${sigBlock('Vendor release')}${sigBlock('Forwarder acknowledgement')}</div>
+
+    <h2>Notes</h2>
+    <div class="notes"></div>
+
+    <p class="meta">Generated ${new Date().toLocaleString()} · Print or Save as PDF, sign offline, then upload the signed copy in the Proof of Custody tab.</p>
+    <button class="noprint" onclick="window.print()" style="margin-top:16px;padding:8px 16px;background:#E84E0F;color:#fff;border:none;border-radius:6px;cursor:pointer">Print / Save as PDF</button>
+  </body></html>`)
+  w.document.close()
+  setTimeout(() => w.print(), 400)
+}
+
+// ─── TAB LABELS ──────────────────────────────────────────────
+const TAB_LABELS: Record<string, string> = {
+  overview: 'Overview', packages: 'Packages', documents: 'Documents',
+  timeline: 'Timeline', poc: 'Proof of Custody',
+}
+
 const SCNDetailModal = ({ dark, scn, onClose, onRefresh, addToast, projectId }: {
   dark: boolean; scn: SCNDetail; onClose: () => void
   onRefresh: () => void; addToast: (t: 'success'|'error', m: string) => void
   projectId: number
 }) => {
-  const [tab, setTab] = useState<'overview'|'packages'|'documents'|'timeline'>('overview')
+  const [tab, setTab] = useState<'overview'|'packages'|'documents'|'timeline'|'poc'>('overview')
   const [showStatusModal, setShowStatusModal] = useState(false)
   const [expanded, toggleExpand] = useExpand()
 
@@ -461,15 +565,15 @@ const SCNDetailModal = ({ dark, scn, onClose, onRefresh, addToast, projectId }: 
 
         {/* Tabs */}
         <div style={{ display: 'flex', borderBottom: bd, background: cardBg, flexShrink: 0 }}>
-          {(['overview','packages','documents','timeline'] as const).map(t => (
+          {(['overview','packages','documents','timeline','poc'] as const).map(t => (
             <button key={t} onClick={() => setTab(t)}
               style={{
                 padding: '10px 18px', background: 'none', border: 'none', cursor: 'pointer',
                 fontSize: 13, fontWeight: tab === t ? 600 : 400,
                 color: tab === t ? '#E84E0F' : sub,
                 borderBottom: tab === t ? '2px solid #E84E0F' : '2px solid transparent',
-                fontFamily: 'inherit', textTransform: 'capitalize',
-              }}>{t}</button>
+                fontFamily: 'inherit', whiteSpace: 'nowrap',
+              }}>{TAB_LABELS[t]}</button>
           ))}
         </div>
 
@@ -479,6 +583,7 @@ const SCNDetailModal = ({ dark, scn, onClose, onRefresh, addToast, projectId }: 
           {tab === 'packages' && <PackagesTab dark={dark} scn={scn} onRefresh={onRefresh} addToast={addToast} />}
           {tab === 'documents' && <DocumentsTab dark={dark} scn={scn} onRefresh={onRefresh} addToast={addToast} />}
           {tab === 'timeline' && <TimelineTab dark={dark} scn={scn} />}
+          {tab === 'poc' && <PocTab dark={dark} scn={scn} projectId={projectId} onRefresh={onRefresh} addToast={addToast} />}
         </div>
       </div>
 
@@ -1046,6 +1151,134 @@ const DocumentsTab = ({ dark, scn, onRefresh, addToast }: {
                 <td style={{ padding: '7px 10px', color: sub }}>{d.notes || '—'}</td>
                 <td style={{ padding: '7px 10px' }}>
                   <button onClick={() => deleteDoc(d.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 14 }}>🗑</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
+// ─── PROOF-OF-CUSTODY TAB ────────────────────────────────────
+// Generate a pre-filled PoC form (print-to-PDF), then upload the offline-signed
+// copy. Storage reuses the existing scn_documents upload/download with a fixed
+// document_type='Proof of Custody' (so it also flows into the Document Inbox).
+// Upload/delete are internal-only — the route already blocks freight_forwarders;
+// here we also HIDE the controls from external users (read/download stays open).
+const POC_TYPE = 'Proof of Custody'
+const PocTab = ({ dark, scn, projectId, onRefresh, addToast }: {
+  dark: boolean; scn: SCNDetail; projectId: number; onRefresh: () => void
+  addToast: (t: 'success'|'error', m: string) => void
+}) => {
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const bd  = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const sub = '#94a3b8'
+  const theadBg = dark ? '#162032' : '#f8fafc'
+  const { isExternalUser } = useCurrentUser()
+
+  const [file, setFile] = useState<File | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState('')
+
+  const pocDocs = (scn.documents || []).filter(d => d.document_type === POC_TYPE)
+
+  const uploadSigned = async () => {
+    if (!file) return setUploadError('Please select the signed PoC file')
+    setUploading(true); setUploadError('')
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('document_type', POC_TYPE)   // fixed — this tab only handles PoCs
+      await axios.post(`${API}/logistics/scn/${scn.id}/documents`, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      setFile(null)
+      addToast('success', 'Signed Proof of Custody uploaded'); onRefresh()
+    } catch (e: any) {
+      setUploadError(e.response?.data?.error || 'Upload failed')
+    } finally { setUploading(false) }
+  }
+
+  // Auth-carrying download (blob), same approach as the Document Inbox.
+  const downloadDoc = async (docId: number, name?: string | null) => {
+    try {
+      const { data, headers } = await axios.get(
+        `${API}/documents/${projectId}/download/logistics:${docId}`, { responseType: 'blob' })
+      const url = URL.createObjectURL(new Blob([data], { type: (headers['content-type'] as string) || 'application/octet-stream' }))
+      const a = document.createElement('a'); a.href = url; a.download = name || `poc-${docId}`; a.click()
+      URL.revokeObjectURL(url)
+    } catch (_) { addToast('error', 'Download failed') }
+  }
+
+  const deleteDoc = async (docId: number) => {
+    try {
+      await axios.delete(`${API}/logistics/scn/${scn.id}/documents/${docId}`)
+      addToast('success', 'Proof of Custody deleted'); onRefresh()
+    } catch (_) { addToast('error', 'Failed to delete') }
+  }
+
+  return (
+    <div>
+      {/* Generate the pre-filled form (available to everyone who can see the SCN) */}
+      <div style={{ background: dark ? '#162032' : '#f8fafc', border: bd, borderRadius: 8, padding: 16, marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: col, marginBottom: 4 }}>1 · Generate the form</div>
+        <div style={{ fontSize: 12, color: sub, marginBottom: 12, lineHeight: 1.5 }}>
+          Download a Proof-of-Custody form pre-filled with this shipment's details, plus blank
+          areas for vendor &amp; forwarder signatures, condition and notes. Sign it offline, then
+          upload the signed copy below.
+        </div>
+        <button onClick={() => printPoC(scn)}
+          style={{ padding: '7px 16px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+          ⬇ Download / Print Proof-of-Custody form
+        </button>
+      </div>
+
+      {/* Upload the signed copy — internal only */}
+      {!isExternalUser && (
+        <div style={{ background: dark ? '#162032' : '#f0f9ff', border: `1px solid rgba(37,99,235,0.3)`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: col, marginBottom: 10 }}>2 · Upload the signed copy</div>
+          <input type="file" onChange={e => setFile(e.target.files?.[0] || null)} style={{ fontSize: 12, color: col, display: 'block', marginBottom: 10 }} />
+          {uploadError && <div style={{ color: '#ef4444', fontSize: 12, marginBottom: 8 }}>{uploadError}</div>}
+          <button onClick={uploadSigned} disabled={uploading || !file}
+            style={{ padding: '6px 14px', borderRadius: 6, border: 'none', background: (uploading || !file) ? '#64748b' : '#2563eb', color: '#fff', cursor: (uploading || !file) ? 'not-allowed' : 'pointer', fontSize: 12, fontWeight: 600 }}>
+            {uploading ? 'Uploading…' : 'Upload signed PoC'}
+          </button>
+        </div>
+      )}
+
+      {/* Signed PoCs on file */}
+      <div style={{ fontSize: 13, fontWeight: 600, color: col, marginBottom: 8 }}>
+        Signed Proof-of-Custody documents ({pocDocs.length})
+      </div>
+      {pocDocs.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: 32, color: sub }}>
+          <div style={{ fontSize: 24, marginBottom: 8 }}>📄</div>
+          <div>No signed Proof of Custody uploaded yet.</div>
+        </div>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <thead>
+            <tr style={{ background: theadBg, borderBottom: bd }}>
+              {['File Name','Uploaded By','Date','Actions'].map(h => (
+                <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {pocDocs.map(d => (
+              <tr key={d.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
+                <td style={{ padding: '7px 10px', color: col }}>{d.file_name || '—'}</td>
+                <td style={{ padding: '7px 10px', color: sub }}>{d.uploaded_by_name || '—'}</td>
+                <td style={{ padding: '7px 10px', color: sub, whiteSpace: 'nowrap' }}>{fmtFull(d.uploaded_at)}</td>
+                <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
+                  <button onClick={() => downloadDoc(d.id, d.file_name)} title="Download"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 14, marginRight: 6 }}>⬇</button>
+                  {!isExternalUser && (
+                    <button onClick={() => deleteDoc(d.id)} title="Delete"
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 14 }}>🗑</button>
+                  )}
                 </td>
               </tr>
             ))}
