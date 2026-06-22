@@ -19,6 +19,8 @@ qmat-backend.zip
 
 # ─── STRAY / LOCAL DOCS ─────────────────────────────────────
 QCO MMS.docx
+# Local-only docs (test creds, scratch notes) — never version-controlled
+*.local.md
 
 # ─── LOGS ───────────────────────────────────────────────────
 logs/
