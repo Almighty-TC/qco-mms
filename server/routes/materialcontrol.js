@@ -10,6 +10,13 @@ const fs      = require('fs')
 const multer  = require('multer')
 const { authenticateToken } = require('../middleware/auth')
 
+// ─── LOCATION-CODE NORMALIZATION ──────────────────────────────
+// Grid/bin codes are free-text user input and not a join key, so we store them
+// uppercase for consistency (z1-35 → Z1-35). Trims, uppercases, and preserves the
+// existing null/optional semantics: an empty/whitespace value normalizes to null
+// (callers that require a location validate the raw input separately, before this).
+const upLoc = s => { const v = (s ?? '').trim().toUpperCase(); return v || null }
+
 // PoC signature/photo files land in uploads/fmr-poc (10 MB cap).
 const pocDir = path.join(__dirname, '../uploads/fmr-poc')
 fs.mkdirSync(pocDir, { recursive: true })
@@ -303,7 +310,7 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
         // Good qty → available at its grid location. A split heat allocation may
         // carry its OWN bin (ln.location_code); blank falls back to the receipt
         // default. Heat (P2a) travels onto the holding.
-        const lineLoc = (ln.location_code || '').trim() || location_code
+        const lineLoc = upLoc(ln.location_code) || upLoc(location_code)
         if (goodQty > 0) {
           await db.query(
             `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by)
@@ -336,7 +343,7 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
            `SCN-${scn.scn_ref}-PKG${pkg.package_number}`,
            pkg.description || scn.notes || 'Received goods',
            null, pkg.gross_weight_kg || 1, pkg.gross_weight_kg || 1, 'EA',
-           location_code, condition, scn.vendor_name, userId])
+           upLoc(location_code), condition, scn.vendor_name, userId])
         stockCreated++
       }
     }
@@ -460,17 +467,18 @@ router.put('/:projectId/stock/:itemId/move', async (req, res) => {
     const { new_location, new_warehouse_id } = req.body
     if (!new_location) return res.status(400).json({ error: 'new_location is required' })
     const userId = req.user?.id || 1
+    const newLoc = upLoc(new_location)   // store uppercase
 
     const [[item]] = await db.query('SELECT * FROM warehouse_stock WHERE id=?', [itemId])
     if (!item) return res.status(404).json({ error: 'Stock item not found' })
 
     await db.query(
       'UPDATE warehouse_stock SET location_code=?, warehouse_id=COALESCE(?,warehouse_id) WHERE id=?',
-      [new_location, new_warehouse_id || null, itemId]
+      [newLoc, new_warehouse_id || null, itemId]
     )
     await writeAudit(userId, 'stock_move', 'warehouse_stock', itemId,
       { location_code: item.location_code, warehouse_id: item.warehouse_id },
-      { location_code: new_location, warehouse_id: new_warehouse_id || item.warehouse_id },
+      { location_code: newLoc, warehouse_id: new_warehouse_id || item.warehouse_id },
       `/mc/${req.params.projectId}/stock/${itemId}/move`, Number(req.params.projectId) || null)
 
     const [[updated]] = await db.query('SELECT * FROM warehouse_stock WHERE id=?', [itemId])
@@ -500,12 +508,13 @@ router.post('/:projectId/stock/:itemId/resolve', rejectExternal, async (req, res
 
     if (action === 'release') {
       if (!to_location || !to_location.trim()) return res.status(422).json({ error: 'A destination (normal) location is required to release' })
+      const relLoc = upLoc(to_location)   // store uppercase
       await db.query(
         `UPDATE warehouse_stock SET condition_status='good', trace_hold=0, qty_available=qty, location_code=? WHERE id=?`,
-        [to_location.trim(), itemId])
+        [relLoc, itemId])
       await writeAudit(userId, 'quarantine_release', 'warehouse_stock', itemId,
         { condition_status: 'quarantine', location_code: item.location_code, qty_available: item.qty_available },
-        { condition_status: 'good', location_code: to_location.trim(), qty_available: item.qty, reason: reason.trim() },
+        { condition_status: 'good', location_code: relLoc, qty_available: item.qty, reason: reason.trim() },
         `/mc/${pid}/stock/${itemId}/resolve`, Number(req.params.projectId) || null)
     } else {
       await db.query('DELETE FROM warehouse_stock WHERE id=?', [itemId])
@@ -1366,7 +1375,7 @@ router.post('/:projectId/transfers', rejectExternal, async (req, res) => {
       `INSERT INTO warehouse_transfers (project_id,transfer_ref,stock_id,item_code,description,wbs_code,heat_number,qty,uom,from_warehouse_id,from_location,to_warehouse_id,to_location,requested_by_name,requested_by_company,requested_by_user,status,est_pickup_date,notes)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [pid, ref, src.id, src.item_code, src.description, src.wbs_code, src.heat_number, moveQty, src.uom,
-       src.warehouse_id, src.location_code, to_warehouse_id, to_location || null,
+       src.warehouse_id, src.location_code, to_warehouse_id, upLoc(to_location),
        requested_by_name || null, requested_by_company || null, userId, status, est_pickup_date || null, notes || null])
     await writeAudit(userId, 'transfer_create', 'warehouse_transfer', result.insertId, null,
       { transfer_ref: ref, stock_id: src.id, qty: moveQty, status }, `/mc/${pid}/transfers`, Number(req.params.projectId) || null)
