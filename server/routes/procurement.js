@@ -20,6 +20,36 @@ router.use(require('../middleware/permissions').enforce((p, req) => {
 }))
 router.param('projectId', require('../middleware/permissions').requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects
 const db      = require('../db')       // connection pool — never createConnection
+
+// ─── PO PROJECT-SCOPE GUARD (close /pos/:id cross-project leak) ───
+// The /pos/:id* family carries no :projectId in the path, so the projectId param
+// guard above can't fire — any authed user could fetch a PO from a project they
+// don't belong to. Mirror requireProjectScope EXACTLY, but on the PO's OWN
+// project_id: internal roles (incl. admin) bypass; the four external roles must
+// hold a user_wbs_access grant for that PO's project. Wired via router.param('id')
+// so it covers EVERY /pos/:id route (read AND mutation) in one place. On denial:
+// 403 + no data (never leak the PO). A non-existent id falls through to the
+// handler's normal 404. (/pos/check-duplicate(s) are literal routes with no :id.)
+const { EXTERNAL_ROLES } = require('../middleware/permissions')
+async function requirePoScope(req, res, next, id) {
+  const role = req.user?.role
+  if (!role) return res.status(401).json({ error: 'Not authenticated' })
+  if (role === 'admin' || !EXTERNAL_ROLES.has(role)) return next() // internals bypass — mirrors requireProjectScope
+  try {
+    const [[po]] = await db.query('SELECT project_id FROM purchase_orders WHERE id = ?', [Number(id)])
+    if (!po) return next() // no such PO → handler returns its normal 404 (no data leaked)
+    const [rows] = await db.query(
+      'SELECT id FROM user_wbs_access WHERE user_id = ? AND project_id = ? LIMIT 1',
+      [req.user.id, po.project_id]
+    )
+    if (!rows.length) return res.status(403).json({ error: 'No project access' })
+    next()
+  } catch (err) {
+    console.error('[procurement] PO scope check failed:', err.message)
+    res.status(500).json({ error: 'Permission check failed' })
+  }
+}
+router.param('id', requirePoScope) // covers the whole /pos/:id* family (every :id here is a PO id)
 const { dbError } = require('../utils/dbError')
 const path    = require('path')
 const fs      = require('fs')
