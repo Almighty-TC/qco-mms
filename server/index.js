@@ -16,7 +16,20 @@ const app = express()
 // would block those cross-origin downloads. CORS (below) remains the access gate.
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }))
 
-app.use(cors())
+// ─── CORS (env-driven allowlist) ─────────────────────────────
+// The default INCLUDES the live SWA origin + local dev, so the real site works
+// even if CORS_ORIGINS is never set — a wrong/empty env can't silently lock out
+// production. Set CORS_ORIGINS (comma-separated) as an Azure app setting to adjust
+// origins WITHOUT a redeploy. No-origin requests (curl, health checks, server-to-
+// server) are allowed; unlisted browser origins get no CORS headers so the browser
+// blocks them. credentials:true so the SPA can send its Authorization header.
+const allowedOrigins = (process.env.CORS_ORIGINS ||
+  'https://ashy-plant-006662d00.7.azurestaticapps.net,http://localhost:5174')
+  .split(',').map(o => o.trim()).filter(Boolean)
+app.use(cors({
+  origin: (origin, cb) => (!origin || allowedOrigins.includes(origin)) ? cb(null, true) : cb(null, false),
+  credentials: true,
+}))
 app.use(express.json())
 
 // ─── RATE LIMITING ───────────────────────────────────────────
