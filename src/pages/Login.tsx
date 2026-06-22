@@ -3,6 +3,14 @@ import axios from 'axios';
 import { API } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 
+// ── Self-service password reset availability ─────────────────
+// The forgot-password flow emails a temporary password, which only works when
+// SMTP is configured on the server. Gate the login-page affordance on
+// VITE_ENABLE_PASSWORD_RESET (default off) so we never offer a reset the backend
+// can't deliver — it returns 503 when SMTP is unconfigured. Flip to 'true' once
+// SMTP is set up.
+const PASSWORD_RESET_ENABLED = import.meta.env.VITE_ENABLE_PASSWORD_RESET === 'true';
+
 export default function Login() {
   const { login } = useAuth();
   const [email, setEmail] = useState('');
@@ -232,27 +240,35 @@ export default function Login() {
                 : (forgotLoading ? 'Sending...' : 'Send temporary password')}
             </button>
 
-            {/* Mode toggle */}
+            {/* Mode toggle — honest about email-reset availability */}
             <div style={{ textAlign: 'center', marginTop: '1rem' }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setError('');
-                  setForgotMsg('');
-                  setMode(mode === 'signin' ? 'forgot' : 'signin');
-                }}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: '#888',
-                  fontSize: 13,
-                  cursor: 'pointer',
-                  textDecoration: 'underline',
-                  fontFamily: 'inherit',
-                }}
-              >
-                {mode === 'signin' ? 'Forgot password?' : '← Back to sign in'}
-              </button>
+              {mode === 'signin' && !PASSWORD_RESET_ENABLED ? (
+                // SMTP-backed reset is off: don't advertise a flow the server can't
+                // fulfil (it would return 503). Point the user to an admin instead.
+                <span style={{ color: '#666', fontSize: 13, lineHeight: 1.5 }}>
+                  Forgot your password? Contact your administrator to reset it.
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setError('');
+                    setForgotMsg('');
+                    setMode(mode === 'signin' ? 'forgot' : 'signin');
+                  }}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#888',
+                    fontSize: 13,
+                    cursor: 'pointer',
+                    textDecoration: 'underline',
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  {mode === 'signin' ? 'Forgot password?' : '← Back to sign in'}
+                </button>
+              )}
             </div>
           </form>
         </div>
