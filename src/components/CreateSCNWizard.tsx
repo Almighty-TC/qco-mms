@@ -776,19 +776,48 @@ export const CreateSCNWizard: React.FC<Props> = ({
             <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 6 }}>Contents (packing list)</div>
             {pkg.contents.map((c, ci) => {
               const line = allocatableLines().find(l => l.ref === c.lineRef)
-              const over = !!line && allocatedFor(c.lineRef) > line.scnQty + 1e-9
-              const availForRow = line ? line.scnQty - (allocatedFor(c.lineRef) - (Number(c.qty) || 0)) : 0
+              const allocatedAll = line ? allocatedFor(c.lineRef) : 0          // packed across ALL rows (incl. this one)
+              const over = !!line && allocatedAll > line.scnQty + 1e-9
+              const thisRowQty = Number(c.qty) || 0
+              // Line-level remaining = SCN qty still unpacked across every row → the "Remaining" read-out (→ 0 when full).
+              const lineRemaining = line ? Math.max(0, line.scnQty - allocatedAll) : 0
+              // Row capacity = most THIS row may hold without the line exceeding its SCN qty (D3).
+              // "+ Balance" SETS the row to this so the line lands exactly full (never adds → never overshoots).
+              const rowCap = line ? Math.max(0, line.scnQty - (allocatedAll - thisRowQty)) : 0
               return (
-                <div key={ci} style={{ display: 'grid', gridTemplateColumns: '1fr 90px 24px', gap: 6, marginBottom: 6, alignItems: 'center' }}>
-                  <select value={c.lineRef} onChange={e => updateContent(i, ci, 'lineRef', e.target.value)} style={{ ...inputStyle, width: '100%' }}>
-                    <option value="">Select line…</option>
-                    {allocatableLines().map(l => <option key={l.ref} value={l.ref}>{l.label} ({l.scnQty} {l.uom})</option>)}
-                  </select>
-                  <input type="number" min={0} value={c.qty} placeholder="qty"
-                    onChange={e => updateContent(i, ci, 'qty', e.target.value)}
-                    title={line ? `${availForRow} ${line.uom} available for this line` : ''}
-                    style={{ ...inputStyle, width: '100%', borderColor: over ? '#ef4444' : '#dde3ed' }} />
-                  <button onClick={() => removeContent(i, ci)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 15, cursor: 'pointer' }}>×</button>
+                <div key={ci} style={{ marginBottom: 6 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px 24px', gap: 6, alignItems: 'center' }}>
+                    <select value={c.lineRef} onChange={e => updateContent(i, ci, 'lineRef', e.target.value)} style={{ ...inputStyle, width: '100%' }}>
+                      <option value="">Select line…</option>
+                      {allocatableLines().map(l => <option key={l.ref} value={l.ref}>{l.label} ({l.scnQty} {l.uom})</option>)}
+                    </select>
+                    <input type="number" min={0} value={c.qty} placeholder="qty"
+                      onChange={e => updateContent(i, ci, 'qty', e.target.value)}
+                      title={line ? `${lineRemaining} ${line.uom} still unallocated on this line` : ''}
+                      style={{ ...inputStyle, width: '100%', borderColor: over ? '#ef4444' : '#dde3ed' }} />
+                    <button onClick={() => removeContent(i, ci)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 15, cursor: 'pointer' }}>×</button>
+                  </div>
+                  {/* "+ Balance" sets THIS row to the line's full remaining (capped at SCN qty, D3),
+                      with a live line-level remaining read-out. Only shown once a line is selected. */}
+                  {line && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, marginLeft: 2 }}>
+                      <button
+                        onClick={() => updateContent(i, ci, 'qty', String(rowCap))}
+                        disabled={lineRemaining <= 0 && !over}
+                        title={lineRemaining > 0 ? `Fill the remaining ${lineRemaining} ${line.uom} into this row` : over ? 'Over-allocated — reduce qty' : 'Line already fully allocated'}
+                        style={{
+                          fontSize: 10, padding: '2px 8px', borderRadius: 4, fontFamily: 'inherit',
+                          border: '1px solid #93c5fd', background: (lineRemaining > 0 || over) ? '#eff6ff' : '#f1f5f9',
+                          color: (lineRemaining > 0 || over) ? '#2563eb' : '#94a3b8',
+                          cursor: (lineRemaining > 0 || over) ? 'pointer' : 'not-allowed',
+                        }}>
+                        + Balance
+                      </button>
+                      <span style={{ fontSize: 11, color: over ? '#ef4444' : lineRemaining > 0 ? '#d97706' : '#16a34a' }}>
+                        {over ? `Over by ${(allocatedAll - line.scnQty)} ${line.uom}` : `Remaining: ${lineRemaining} ${line.uom}`}
+                      </span>
+                    </div>
+                  )}
                 </div>
               )
             })}
@@ -975,10 +1004,41 @@ export const CreateSCNWizard: React.FC<Props> = ({
     const warehouseName = warehouses.find((w: any) => w.id === warehouseId)?.name || '—'
     const modeName = MODES.find(m => m.id === transportMode)?.label || '—'
 
+    // ─── D2 GATE EXPLANATION ──────────────────────────────────
+    // Why "Create SCN" is disabled: list the lines that aren't exactly allocated
+    // (under = needs more packing; over = remove some) so the user knows what to fix.
+    const allocIssues = allocatableLines()
+      .map(l => ({ l, done: allocatedFor(l.ref) }))
+      .filter(({ l, done }) => Math.abs(done - l.scnQty) >= 1e-9)
+
     return (
       <div>
         <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>Confirm SCN</div>
         <div style={{ fontSize: 12, color: '#64748b', marginBottom: 16 }}>Review details before creating the shipment control note.</div>
+
+        {/* Disabled-reason banner — explains the D2 gate on the Create button below. */}
+        {allocIssues.length > 0 && (
+          <div style={{
+            background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 8,
+            padding: '10px 14px', marginBottom: 16, fontSize: 12, color: '#92400e',
+          }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>
+              ⚠ Cannot create — {allocIssues.length} line{allocIssues.length !== 1 ? 's' : ''} not fully allocated into packages
+            </div>
+            {allocIssues.map(({ l, done }) => {
+              const over = done > l.scnQty + 1e-9
+              return (
+                <div key={l.ref} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
+                  <span>{l.label}</span>
+                  <span style={{ fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, color: over ? '#dc2626' : '#b45309' }}>
+                    {done}/{l.scnQty} {l.uom} {over ? '⚠ over' : '— under'}
+                  </span>
+                </div>
+              )
+            })}
+            <div style={{ marginTop: 6, color: '#b45309' }}>Go back to <strong>Packages</strong> and use <strong>+ Balance</strong> to finish allocating.</div>
+          </div>
+        )}
 
         <div style={{ border: '1px solid #dde3ed', borderRadius: 10, overflow: 'hidden', marginBottom: 16 }}>
           {/* Items */}
