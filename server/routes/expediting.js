@@ -203,6 +203,15 @@ router.get('/:projectId/register', async (req, res) => {
   }
 })
 
+// Friendly SCN status for the PO-detail SCN list. Mirrors logistics.js dbToDisplay
+// so the PO "Line Items & SCNs" tab can reuse the same status-pill labels.
+const scnDisplayStatus = (s) => ({
+  draft: 'pending_pickup', pending: 'pending_pickup', 'in-transit': 'in_transit',
+  customs_review: 'customs_review', arrived: 'pending_delivery',
+  partially_received: 'delivered', received: 'delivered', closed: 'delivered',
+  pending_pickup: 'pending_pickup', in_transit: 'in_transit', pending_delivery: 'pending_delivery', delivered: 'delivered',
+}[s] || s)
+
 // ─── PO DETAIL ────────────────────────────────────────────────
 // Full PO detail including milestones, lines, child items, notes, VDRL.
 router.get('/:projectId/po/:poId', async (req, res) => {
@@ -343,6 +352,15 @@ router.get('/:projectId/po/:poId', async (req, res) => {
       supplier_addresses = [{ id: 0, type: 'primary', label: po.supplier_address, is_primary: 1 }]
     }
 
+    // ── SCNs raised against this PO (read-only) — for the "Line Items & SCNs" tab.
+    // display_status mirrors Logistics' friendly status so the tab reuses the pills. ──
+    const [scns] = await db.query(
+      `SELECT id, scn_ref, status, mode, eta, ata, total_packages, created_at
+       FROM shipment_control_notes WHERE po_id=? AND project_id=? ORDER BY created_at DESC`,
+      [Number(poId), Number(projectId)]
+    )
+    for (const s of scns) s.display_status = scnDisplayStatus(s.status)
+
     res.json({
       ...po,
       rag: computePORag(milestones),
@@ -353,6 +371,7 @@ router.get('/:projectId/po/:poId', async (req, res) => {
       action_notes: notes,
       forecast_history,
       vdrl_package,
+      scns,
     })
   } catch (e) {
     console.error(e)
