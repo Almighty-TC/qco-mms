@@ -32,6 +32,7 @@ interface ChildItem {
 interface POLine {
   id: number; line_number: string; description: string
   qty: number | null; uom: string; unit_price?: number | null; total_price?: number | null
+  qty_assigned?: number | null; qty_available?: number | null   // allocation status — same source as the drawer's line card
   ros_date?: string | null; cdd?: string | null; wbs_code?: string | null
   heat_number_required?: number; heat_number?: string | null
   commodity_id?: number | null; commodity_name?: string | null
@@ -500,6 +501,17 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                 <div style={{ color: sub, fontSize: 13, textAlign: 'center', padding: 40 }}>No line items.</div>
               ) : (po.po_lines || []).map(line => {
                 const isExpanded = expandedLines.has(line.id)
+                // Allocation breakdown — identical source/logic to the drawer's line card
+                // (qty / qty_assigned / qty_available from GET /po/:id). Shown when expanded
+                // so the full view is no less informative than the drawer it opens from.
+                const qtyTotal    = Number(line.qty || 0)
+                const qtyAssigned = Number(line.qty_assigned || 0)
+                const qtyAvail    = Number(line.qty_available ?? Math.max(0, qtyTotal - qtyAssigned))
+                const allocPct    = qtyTotal > 0 ? Math.round(qtyAssigned / qtyTotal * 100) : 0
+                // Child items are off-PO (they never roll into the line's qty_assigned), so they
+                // carry no per-child "remaining"; we surface their own count + summed qty instead.
+                const childItems  = line.child_items || []
+                const childQtySum = childItems.reduce((s, c) => s + (Number(c.qty) || 0), 0)
                 return (
                   <div key={line.id} style={{ border: bd, borderRadius: 8, marginBottom: 10, overflow: 'hidden' }}>
                     {/* Line header */}
@@ -542,15 +554,33 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                           </div>
                         ) : null}
 
-                        {/* Qty info */}
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
+                        {/* Allocation breakdown — Total / Assigned / Available (mirrors the drawer's
+                            line card) so the expanded view is at least as informative as the drawer. */}
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 8 }}>
                           {[
-                            ['Total Qty', `${line.qty ?? '—'} ${line.uom}`],
+                            ['Total', `${qtyTotal} ${line.uom}`, col],
+                            ['Assigned', `${qtyAssigned} ${line.uom}`, '#2563eb'],
+                            ['Available', `${qtyAvail} ${line.uom}`, qtyAvail > 0 ? '#16a34a' : sub],
+                          ].map(([l, v, c]) => (
+                            <div key={l} style={{ background: dark ? '#0f172a' : '#f8fafc', borderRadius: 5, padding: '8px 10px', border: bd }}>
+                              <div style={{ fontSize: 9, color: sub, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 2 }}>{l}</div>
+                              <div style={{ fontSize: 12, fontWeight: 600, color: c }}>{v}</div>
+                            </div>
+                          ))}
+                        </div>
+                        {/* Allocation progress bar (assigned ÷ total) — same metric as the drawer. */}
+                        <div style={{ height: 4, borderRadius: 2, background: dark ? '#334155' : '#e2e8f0', overflow: 'hidden', marginBottom: 12 }}>
+                          <div style={{ height: '100%', borderRadius: 2, background: '#2563eb', width: `${allocPct}%` }} />
+                        </div>
+
+                        {/* Pricing — kept below the allocation breakdown. */}
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, marginBottom: 12 }}>
+                          {[
                             ['Unit Price', fmtMoney(line.unit_price)],
                             ['Total Price', fmtMoney(line.total_price)],
                           ].map(([l, v]) => (
                             <div key={l} style={{ background: dark ? '#0f172a' : '#f8fafc', borderRadius: 5, padding: '8px 10px', border: bd }}>
-                              <div style={{ fontSize: 9, color: sub, textTransform: 'uppercase', marginBottom: 2 }}>{l}</div>
+                              <div style={{ fontSize: 9, color: sub, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 2 }}>{l}</div>
                               <div style={{ fontSize: 12, fontWeight: 600, color: col }}>{v}</div>
                             </div>
                           ))}
@@ -559,32 +589,41 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                         {/* Child items */}
                         <div style={{ marginBottom: 8 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                            <span style={{ fontSize: 11, fontWeight: 600, color: col }}>Child Items ({(line.child_items||[]).length})</span>
+                            <span style={{ fontSize: 11, fontWeight: 600, color: col }}>Child Items ({childItems.length})</span>
+                            {childItems.length > 0 && (
+                              <span style={{ fontSize: 10, color: sub }}>· {childQtySum} total qty</span>
+                            )}
                             <button
                               onClick={() => setAddChildLine(addChildLine === line.id ? null : line.id)}
                               style={{ fontSize: 10, padding: '3px 8px', borderRadius: 4, border: bd, background: 'transparent', color: col, cursor: 'pointer' }}>
                               + Add
                             </button>
                           </div>
-                          {(line.child_items||[]).length === 0 ? (
+                          {childItems.length === 0 ? (
                             <div style={{ fontSize: 11, color: sub, fontStyle: 'italic' }}>No child items.</div>
                           ) : (
-                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                            // Per-column alignment applied to BOTH th and td (was: centred headers
+                            // over left-aligned cells → columns didn't line up). Numbers right, text left.
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, tableLayout: 'fixed' }}>
+                              <colgroup>
+                                <col style={{ width: '12%' }} /><col /><col style={{ width: '14%' }} />
+                                <col style={{ width: '12%' }} /><col style={{ width: '20%' }} />
+                              </colgroup>
                               <thead>
                                 <tr style={{ borderBottom: bd }}>
-                                  {['#', 'Description', 'Qty', 'UOM', 'Status'].map(h => (
-                                    <th key={h} style={{ padding: '4px 8px', textAlign: 'center', color: sub, fontWeight: 600, fontSize: 9, textTransform: 'uppercase' }}>{h}</th>
+                                  {([['#','right'],['Description','left'],['Qty','right'],['UOM','left'],['Status','left']] as [string, 'left'|'right'][]).map(([h, a]) => (
+                                    <th key={h} style={{ padding: '4px 8px', textAlign: a, color: sub, fontWeight: 600, fontSize: 9, textTransform: 'uppercase' }}>{h}</th>
                                   ))}
                                 </tr>
                               </thead>
                               <tbody>
-                                {(line.child_items||[]).map(ci => (
+                                {childItems.map(ci => (
                                   <tr key={ci.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
-                                    <td style={{ padding: '4px 8px', color: sub }}>{ci.sub_number}</td>
-                                    <td style={{ padding: '4px 8px', color: col }}>{ci.description}</td>
-                                    <td style={{ padding: '4px 8px', color: col }}>{ci.qty}</td>
-                                    <td style={{ padding: '4px 8px', color: sub }}>{ci.uom}</td>
-                                    <td style={{ padding: '4px 8px' }}>
+                                    <td style={{ padding: '4px 8px', textAlign: 'right', color: sub, fontFamily: 'JetBrains Mono, monospace' }}>{ci.sub_number}</td>
+                                    <td style={{ padding: '4px 8px', textAlign: 'left', color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={ci.description}>{ci.description}</td>
+                                    <td style={{ padding: '4px 8px', textAlign: 'right', color: col, fontFamily: 'JetBrains Mono, monospace' }}>{ci.qty}</td>
+                                    <td style={{ padding: '4px 8px', textAlign: 'left', color: sub }}>{ci.uom}</td>
+                                    <td style={{ padding: '4px 8px', textAlign: 'left' }}>
                                       <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 8, background: 'rgba(148,163,184,0.1)', color: sub }}>{ci.status}</span>
                                     </td>
                                   </tr>
