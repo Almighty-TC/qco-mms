@@ -97,6 +97,15 @@ const RAG_LABELS: Record<string, string> = {
 const MS_COLORS: Record<string, string> = {
   complete: '#22c55e', breached: '#ef4444', at_risk: '#f59e0b', in_progress: '#2563eb', not_started: '#94a3b8'
 }
+// SCN status pills — mirrors Logistics STATUS_CONFIG so the PO's SCN list matches
+// the app's SCN status styling (keyed by the server's display_status).
+const SCN_PILL: Record<string, { label: string; bg: string; color: string }> = {
+  pending_pickup:   { label: 'Pending Pickup',   bg: 'rgba(100,116,139,0.12)', color: '#64748b' },
+  in_transit:       { label: 'In Transit',        bg: 'rgba(37,99,235,0.1)',    color: '#2563eb' },
+  customs_review:   { label: 'Customs Review',    bg: 'rgba(245,158,11,0.1)',   color: '#d97706' },
+  pending_delivery: { label: 'Pending Delivery',  bg: 'rgba(139,92,246,0.1)',   color: '#8b5cf6' },
+  delivered:        { label: 'Delivered',          bg: 'rgba(34,197,94,0.1)',    color: '#16a34a' },
+}
 const VDRL_STATUS_COLORS: Record<string, { bg: string; color: string }> = {
   'Approved':      { bg: 'rgba(34,197,94,0.1)',   color: '#16a34a' },
   'Under review':  { bg: 'rgba(37,99,235,0.1)',   color: '#1d4ed8' },
@@ -585,13 +594,47 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                           )}
                         </div>
 
-                        {/* SCN stub */}
-                        <div style={{ fontSize: 11, color: sub, fontStyle: 'italic' }}>SCN: No SCN assigned — Create SCN (coming soon)</div>
                       </div>
                     )}
                   </div>
                 )
               })}
+
+              {/* ── SCNs raised against this PO (Stage 2) ── */}
+              <div style={{ marginTop: 20 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: col, marginBottom: 8 }}>SCNs ({(po.scns || []).length})</div>
+                {(po.scns || []).length === 0 ? (
+                  <div style={{ color: sub, fontSize: 12, fontStyle: 'italic', padding: '8px 0' }}>No SCNs created yet for this PO.</div>
+                ) : (
+                  <div style={{ overflowX: 'auto', border: bd, borderRadius: 8 }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
+                          {['SCN Ref','Status','Created','Packages','Mode','ETA'].map(h => (
+                            <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(po.scns || []).map((s: any) => {
+                          const pill = SCN_PILL[s.display_status] || { label: s.display_status || s.status, bg: dark ? '#334155' : '#eef2f7', color: sub }
+                          const d = (v: any) => v ? new Date(v).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'
+                          return (
+                            <tr key={s.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
+                              <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', color: '#2563eb', fontWeight: 600 }}>{s.scn_ref}</td>
+                              <td style={{ padding: '7px 10px' }}><span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, background: pill.bg, color: pill.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{pill.label}</span></td>
+                              <td style={{ padding: '7px 10px', color: sub, whiteSpace: 'nowrap' }}>{d(s.created_at)}</td>
+                              <td style={{ padding: '7px 10px', color: col, fontFamily: 'JetBrains Mono, monospace' }}>{s.total_packages ?? '—'}</td>
+                              <td style={{ padding: '7px 10px', color: sub, textTransform: 'capitalize' }}>{s.mode || '—'}</td>
+                              <td style={{ padding: '7px 10px', color: sub, whiteSpace: 'nowrap' }}>{d(s.eta)}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
