@@ -515,10 +515,13 @@ const TAB_LABELS: Record<string, string> = {
 // hides the logistics-team write actions (status change, package add/edit/delete)
 // when opened from the PO context — Documents/PoC upload stays fully functional
 // (the scoped carve-out lets a logistics-viewer upload).
-export const SCNDetailModal = ({ dark, scn, onClose, onRefresh, addToast, projectId, readOnlyManagement = false }: {
+export const SCNDetailModal = ({ dark, scn, onClose, onRefresh, addToast, projectId, readOnlyManagement = false, zIndex = 4000 }: {
   dark: boolean; scn: SCNDetail; onClose: () => void
   onRefresh: () => void; addToast: (t: 'success'|'error', m: string) => void
   projectId: number; readOnlyManagement?: boolean
+  // Base stacking level (scrim = zIndex, panel = zIndex+1). Default 4000 for Logistics;
+  // raise it when opened above a higher-stacked host (e.g. the Expediting PO drawer at 8001).
+  zIndex?: number
 }) => {
   const [tab, setTab] = useState<'overview'|'packages'|'documents'|'timeline'|'poc'>('overview')
   const [showStatusModal, setShowStatusModal] = useState(false)
@@ -536,12 +539,12 @@ export const SCNDetailModal = ({ dark, scn, onClose, onRefresh, addToast, projec
   return createPortal(
     <>
       {/* Scrim */}
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 4000 }} />
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex }} />
 
       {/* Panel */}
       <div style={{
         position: 'fixed', top: 0, right: 0, bottom: 0, width: expanded ? '95vw' : 720, maxWidth: '95vw',
-        background: cardBg, borderLeft: bd, zIndex: 4001,
+        background: cardBg, borderLeft: bd, zIndex: zIndex + 1,
         display: 'flex', flexDirection: 'column', boxShadow: '-4px 0 32px rgba(0,0,0,0.2)',
         fontFamily: 'IBM Plex Sans, sans-serif',
       }}>

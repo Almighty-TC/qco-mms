@@ -1136,6 +1136,7 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
           scn={openScn}
           projectId={projectId}
           readOnlyManagement
+          zIndex={9000}   /* above the ExpPODrawer host (8001) so it isn't hidden behind it */
           onClose={() => setOpenScn(null)}
           onRefresh={() => { fetchPO(); openScnDetail(openScn.id) }}
           addToast={addToast}
