@@ -510,10 +510,15 @@ const TAB_LABELS: Record<string, string> = {
   timeline: 'Timeline', poc: 'Proof of Custody',
 }
 
-const SCNDetailModal = ({ dark, scn, onClose, onRefresh, addToast, projectId }: {
+// Exported so the Expediting PO "Line Items & SCNs" tab can reuse the exact SCN
+// detail (Documents/PoC upload included) without rebuilding it. readOnlyManagement
+// hides the logistics-team write actions (status change, package add/edit/delete)
+// when opened from the PO context — Documents/PoC upload stays fully functional
+// (the scoped carve-out lets a logistics-viewer upload).
+export const SCNDetailModal = ({ dark, scn, onClose, onRefresh, addToast, projectId, readOnlyManagement = false }: {
   dark: boolean; scn: SCNDetail; onClose: () => void
   onRefresh: () => void; addToast: (t: 'success'|'error', m: string) => void
-  projectId: number
+  projectId: number; readOnlyManagement?: boolean
 }) => {
   const [tab, setTab] = useState<'overview'|'packages'|'documents'|'timeline'|'poc'>('overview')
   const [showStatusModal, setShowStatusModal] = useState(false)
@@ -555,7 +560,7 @@ const SCNDetailModal = ({ dark, scn, onClose, onRefresh, addToast, projectId }: 
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              {NEXT_VALID[scn.display_status]?.length > 0 && (
+              {!readOnlyManagement && NEXT_VALID[scn.display_status]?.length > 0 && (
                 <button onClick={() => setShowStatusModal(true)}
                   style={{ padding: '6px 14px', borderRadius: 6, background: scn.display_status === 'in_transit' ? '#0ea5e9' : '#2563eb', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
                   {scn.display_status === 'in_transit' ? '📍 Confirm arrival' : 'Update Status'}
@@ -584,7 +589,7 @@ const SCNDetailModal = ({ dark, scn, onClose, onRefresh, addToast, projectId }: 
         {/* Content */}
         <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
           {tab === 'overview' && <OverviewTab dark={dark} scn={scn} onRefresh={onRefresh} addToast={addToast} />}
-          {tab === 'packages' && <PackagesTab dark={dark} scn={scn} onRefresh={onRefresh} addToast={addToast} />}
+          {tab === 'packages' && <PackagesTab dark={dark} scn={scn} onRefresh={onRefresh} addToast={addToast} readOnly={readOnlyManagement} />}
           {tab === 'documents' && <DocumentsTab dark={dark} scn={scn} onRefresh={onRefresh} addToast={addToast} />}
           {tab === 'timeline' && <TimelineTab dark={dark} scn={scn} />}
           {tab === 'poc' && <PocTab dark={dark} scn={scn} projectId={projectId} onRefresh={onRefresh} addToast={addToast} />}
@@ -883,9 +888,10 @@ const DateHistoryInline = ({ changes, dark }: { changes: DateChange[]; dark: boo
 }
 
 // ─── PACKAGES TAB ────────────────────────────────────────────
-const PackagesTab = ({ dark, scn, onRefresh, addToast }: {
+const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
   dark: boolean; scn: SCNDetail; onRefresh: () => void
   addToast: (t: 'success'|'error', m: string) => void
+  readOnly?: boolean   // hide package write controls (Add/edit/delete) — e.g. PO context
 }) => {
   const col    = dark ? '#f1f5f9' : '#0f172a'
   const bd     = `1px solid ${dark ? '#334155' : '#dde3ed'}`
@@ -934,7 +940,7 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast }: {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <span style={{ fontSize: 13, fontWeight: 600, color: col }}>{scn.packages?.length || 0} packages · {totalGross.toLocaleString('en-AU', { maximumFractionDigits: 1 })} kg total</span>
-        {!adding && !editingId && (
+        {!readOnly && !adding && !editingId && (
           <button onClick={() => { setAdding(true); setEditingId(null); setForm(emptyForm) }}
             style={{ padding: '5px 14px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
             + Add Package
@@ -1002,12 +1008,14 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast }: {
                   <td style={{ padding: '7px 8px', color: sub }}>{p.dg_class || '—'}</td>
                   <td style={{ padding: '7px 8px', color: sub, maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.marks_numbers || '—'}</td>
                   <td style={{ padding: '7px 8px' }}>
+                    {readOnly ? <span style={{ color: sub }}>—</span> : (
                     <div style={{ display: 'flex', gap: 4 }}>
                       <button onClick={() => { setEditingId(p.id); setAdding(false); setForm({ description: p.description||'', length_mm: String(p.length_mm||''), width_mm: String(p.width_mm||''), height_mm: String(p.height_mm||''), gross_weight_kg: String(p.gross_weight_kg||''), net_weight_kg: String(p.net_weight_kg||''), is_dangerous_goods: !!p.is_dangerous_goods, dg_class: p.dg_class||'', dg_un_number: p.dg_un_number||'', marks_numbers: p.marks_numbers||'' }) }}
                         style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 13 }}>✎</button>
                       <button onClick={() => deletePackage(p.id)}
                         style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 13 }}>🗑</button>
                     </div>
+                    )}
                   </td>
                 </tr>
               )

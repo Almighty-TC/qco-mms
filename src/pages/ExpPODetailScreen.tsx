@@ -13,6 +13,7 @@ import { ToastProvider, useToast } from '../hooks/useToast'
 
 import { API } from '../lib/api'
 import { StatusLegend } from '../components/StatusLegend'
+import { SCNDetailModal } from './LogisticsScreen'   // reuse the canonical SCN detail (Documents/PoC upload)
 
 // ─── TYPES ────────────────────────────────────────────────────
 interface Milestone {
@@ -242,6 +243,17 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
       .finally(() => setLoading(false))
   }
   useEffect(() => { fetchPO() }, [poId])
+
+  // ─── SCN CLICK-THROUGH ────────────────────────────────────
+  // Open an SCN from the "Line Items & SCNs" tab in the shared Logistics SCN detail
+  // (readOnlyManagement → docs/PoC upload only; logistics-team writes hidden). The
+  // scoped carve-out (Stage 3a) lets a logistics-viewer (e.g. expeditor) upload here.
+  const [openScn, setOpenScn] = useState<any | null>(null)
+  const openScnDetail = (scnId: number) => {
+    axios.get(`${API}/logistics/scn/${scnId}`)
+      .then(r => setOpenScn(r.data))
+      .catch(e => addToast(e.response?.data?.error || 'Could not open SCN', 'error'))
+  }
 
   // ─── VDRL DOCS LOAD ───────────────────────────────────────
   // Fetches documents for this PO's VDRL package when tab is active.
@@ -620,7 +632,10 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
                           const pill = SCN_PILL[s.display_status] || { label: s.display_status || s.status, bg: dark ? '#334155' : '#eef2f7', color: sub }
                           const d = (v: any) => v ? new Date(v).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'
                           return (
-                            <tr key={s.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
+                            <tr key={s.id} onClick={() => openScnDetail(s.id)} title="Open SCN — view detail & upload documents"
+                              style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, cursor: 'pointer' }}
+                              onMouseEnter={e => (e.currentTarget.style.background = dark ? '#162032' : '#f8fafc')}
+                              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                               <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', color: '#2563eb', fontWeight: 600 }}>{s.scn_ref}</td>
                               <td style={{ padding: '7px 10px' }}><span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, background: pill.bg, color: pill.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{pill.label}</span></td>
                               <td style={{ padding: '7px 10px', color: sub, whiteSpace: 'nowrap' }}>{d(s.created_at)}</td>
@@ -1111,6 +1126,19 @@ const ExpPODetailScreenInner = ({ dark, projectId, projectName, poId, onBack, us
           onClose={() => setShowSCNWizard(false)}
           onCreated={() => { setShowSCNWizard(false); fetchPO() }}
           onToast={(msg, type) => addToast(type, msg)}
+        />
+      )}
+
+      {/* ── SCN DETAIL (reused Logistics modal) — opened from the SCNs list ── */}
+      {openScn && (
+        <SCNDetailModal
+          dark={dark}
+          scn={openScn}
+          projectId={projectId}
+          readOnlyManagement
+          onClose={() => setOpenScn(null)}
+          onRefresh={() => { fetchPO(); openScnDetail(openScn.id) }}
+          addToast={addToast}
         />
       )}
     </div>

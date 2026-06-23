@@ -921,7 +921,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
         borderRadius: 8, padding: '10px 14px', marginBottom: 16,
         fontSize: 12, color: '#1d4ed8',
       }}>
-        ℹ Documents are not uploaded here — you will be able to attach them from the SCN detail view after creation.
+        ℹ Documents are not uploaded here — after creating the SCN, attach them from its detail view: find the SCN under the PO's "Line Items & SCNs" tab, or in Logistics.
       </div>
 
       <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
