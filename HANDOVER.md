@@ -476,6 +476,8 @@ The wireframe (QMAT-prototype.html) covers:
 
 **IMPORTANT:** The wireframe's PO Detail Screen is a basic scrolling view. The agreed enhancement is the full tabbed screen (7 tabs) which was confirmed by Thomas and is now built. This is the one agreed deviation — all other deviations require Thomas's approval.
 
+**Wireframe deviation (TC-approved, 23 Jun 2026):** Added structured per-package contents (`scn_lines` + `scn_package_lines`) to the SCN wizard. The wireframe's Step 3 Packages is dims/weight only; per-package contents were never designed — but the wireframe's own downstream views ("Items packed: PO line allocations", and Receipting's "Package · Description · Exp. qty · UOM") assume them, so the wireframe is internally inconsistent and this resolves it. Approved by Thomas. Built in stages (Stage 1 = schema: the two tables above).
+
 ---
 
 ## 16. INTERNAL CONVERSATION KEY DECISIONS
