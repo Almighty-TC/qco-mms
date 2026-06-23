@@ -551,7 +551,8 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                 SCN was created with structured packing contents — legacy SCNs render nothing here. */}
             {detail && (detail.packages || []).some((p: any) => p.contents && p.contents.length > 0) && (
               <div style={{ border: bd, borderRadius: 8, marginTop: 12, padding: '10px 14px', background: cardBg }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: sub, textTransform: 'uppercase', marginBottom: 8 }}>Declared package contents (packing list)</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: sub, textTransform: 'uppercase', marginBottom: 2 }}>Declared package contents (packing list)</div>
+                <div style={{ fontSize: 11, color: sub, fontStyle: 'italic', marginBottom: 8 }}>Reference only — goods are received per line below.</div>
                 {(detail.packages || []).filter((p: any) => p.contents && p.contents.length).map((p: any) => (
                   <div key={p.id} style={{ marginBottom: 8 }}>
                     <div style={{ fontSize: 12, fontWeight: 600, color: col }}>Package {p.package_number}{p.description ? ` · ${p.description}` : ''}</div>
