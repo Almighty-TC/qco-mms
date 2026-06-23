@@ -308,6 +308,45 @@ router.get('/scn/:scnId', async (req, res) => {
       [scnId]
     )
 
+    // ── Stage 4: per-package contents (scn_package_lines → scn_lines → PO line / off-PO item).
+    // Legacy packages (no contents) simply get an empty array — graceful, never an error. ──
+    if (packages.length) {
+      const [contents] = await db.query(
+        `SELECT spl.package_id, spl.qty, spl.uom,
+                sl.id AS scn_line_id, sl.po_line_id, sl.additional_item_id,
+                pol.line_number, pol.description AS po_description, pol.uom AS po_uom,
+                ai.description AS ai_description, ai.uom AS ai_uom
+         FROM scn_package_lines spl
+         JOIN scn_lines sl ON sl.id = spl.scn_line_id
+         LEFT JOIN po_lines pol ON pol.id = sl.po_line_id
+         LEFT JOIN scn_additional_items ai ON ai.id = sl.additional_item_id
+         WHERE spl.package_id IN (?)`,
+        [packages.map(p => p.id)]
+      )
+      const byPkg = {}
+      for (const c of contents) {
+        ;(byPkg[c.package_id] = byPkg[c.package_id] || []).push({
+          scn_line_id: c.scn_line_id, qty: c.qty,
+          uom: c.uom || c.po_uom || c.ai_uom || null,
+          label: c.po_line_id ? `Line ${c.line_number} — ${(c.po_description || '').trim()}`.replace(/—\s*$/, '').trim()
+                              : (c.ai_description || 'Off-PO item'),
+          kind: c.po_line_id ? 'po' : 'offpo',
+        })
+      }
+      for (const p of packages) p.contents = byPkg[p.id] || []
+    }
+
+    // Per-SCN line allocation (how much of each line is on this SCN + how much packed across boxes).
+    const [scn_lines] = await db.query(
+      `SELECT sl.id, sl.po_line_id, sl.additional_item_id, sl.qty, sl.uom,
+              pol.line_number, pol.description AS po_description,
+              ai.description AS ai_description,
+              COALESCE((SELECT SUM(qty) FROM scn_package_lines WHERE scn_line_id = sl.id), 0) AS packed_qty
+       FROM scn_lines sl
+       LEFT JOIN po_lines pol ON pol.id = sl.po_line_id
+       LEFT JOIN scn_additional_items ai ON ai.id = sl.additional_item_id
+       WHERE sl.scn_id = ? ORDER BY sl.id`, [scnId])
+
     // Documents
     const [documents] = await db.query(
       `SELECT d.*, u.full_name AS uploaded_by_name
@@ -345,6 +384,7 @@ router.get('/scn/:scnId', async (req, res) => {
       lines,
       additional_items,
       packages,
+      scn_lines,   // Stage 4: per-SCN line allocation (qty on this SCN + packed across boxes)
       documents,
       status_log,
       date_changes,

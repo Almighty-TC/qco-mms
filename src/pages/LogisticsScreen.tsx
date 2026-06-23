@@ -44,6 +44,7 @@ interface SCNDetail extends SCNRow {
   forwarder_notified: number; forwarder_user_id?: number | null
   po_id?: number | null; vendor_display?: string | null
   lines: POLine[]; additional_items: any[]; packages: Package[]
+  scn_lines?: ScnLineAlloc[]   // Stage 4: per-SCN line allocation (qty on SCN + packed)
   documents: Doc[]; status_log: StatusLogEntry[]; date_changes: DateChange[]
   etd_change_count?: number; eta_change_count?: number
 }
@@ -54,7 +55,10 @@ interface Package {
   gross_weight_kg?: number | null; net_weight_kg?: number | null
   is_dangerous_goods: number; dg_class?: string | null; dg_un_number?: string | null
   marks_numbers?: string | null
+  contents?: PkgContentView[]   // Stage 4: declared packing-list contents for this box
 }
+interface PkgContentView { scn_line_id: number; qty: number | string; uom?: string | null; label: string; kind?: string }
+interface ScnLineAlloc { id: number; po_line_id?: number | null; additional_item_id?: number | null; qty: number | string; uom?: string | null; line_number?: string | null; po_description?: string | null; ai_description?: string | null; packed_qty: number | string }
 interface Doc {
   id: number; document_type: string; file_name?: string | null; notes?: string | null
   uploaded_by_name?: string | null; uploaded_at: string
@@ -937,11 +941,31 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast }: {
           </button>
         )}
       </div>
+
+      {/* Stage 4: per-line packing allocation (how much of each line is packed across boxes).
+          Only shown for SCNs that have structured contents — legacy SCNs render nothing here. */}
+      {(scn.scn_lines && scn.scn_lines.length > 0) && (
+        <div style={{ border: bd, borderRadius: 8, padding: '10px 12px', marginBottom: 12, background: dark ? '#162032' : '#f8fafc' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: sub, textTransform: 'uppercase', marginBottom: 6 }}>Packing allocation (per line)</div>
+          {scn.scn_lines.map(sl => {
+            const label = sl.po_line_id ? `Line ${sl.line_number} — ${sl.po_description || ''}` : (sl.ai_description || 'Off-PO item')
+            const packed = Number(sl.packed_qty), total = Number(sl.qty)
+            const ok = Math.abs(packed - total) < 1e-9
+            return (
+              <div key={sl.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 12, padding: '2px 0', color: col }}>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+                <span style={{ fontFamily: 'JetBrains Mono, monospace', whiteSpace: 'nowrap', color: ok ? '#16a34a' : '#d97706' }}>{packed}/{total} {sl.uom || ''} {ok ? '✓' : 'packed'}</span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
             <tr style={{ background: theadBg, borderBottom: bd }}>
-              {['#','Description','L × W × H (mm)','Gross kg','Net kg','DG','Class','Marks','Actions'].map(h => (
+              {['#','Description','Contents','L × W × H (mm)','Gross kg','Net kg','DG','Class','Marks','Actions'].map(h => (
                 <th key={h} style={{ padding: '7px 8px', textAlign: h === 'DG' ? 'center' : 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
@@ -950,7 +974,7 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast }: {
             {(scn.packages || []).map(p => (
               editingId === p.id ? (
                 <tr key={p.id}>
-                  <td colSpan={9} style={{ padding: 10 }}>
+                  <td colSpan={10} style={{ padding: 10 }}>
                     <PackageFormRow form={form} setForm={setForm} inputSt={inputSt} col={col} sub={sub} bd={bd} dark={dark} error={formError}
                       onSave={savePackage} onCancel={() => { setEditingId(null); setForm(emptyForm); setFormError('') }} saving={saving} mode="edit" />
                   </td>
@@ -959,6 +983,18 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast }: {
                 <tr key={p.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
                   <td style={{ padding: '7px 8px', fontFamily: 'JetBrains Mono, monospace', color: '#E84E0F', fontSize: 11 }}>{p.package_number}</td>
                   <td style={{ padding: '7px 8px', color: col }}>{p.description || '—'}</td>
+                  <td style={{ padding: '7px 8px', color: col, minWidth: 160 }}>
+                    {(p.contents && p.contents.length) ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        {p.contents.map((c, ci) => (
+                          <span key={ci} style={{ fontSize: 11 }}>
+                            <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#2563eb' }}>{Number(c.qty)}{c.uom ? ` ${c.uom}` : ''}</span>
+                            <span style={{ color: sub }}> · {c.label}</span>
+                          </span>
+                        ))}
+                      </div>
+                    ) : <span style={{ color: sub }}>—</span>}
+                  </td>
                   <td style={{ padding: '7px 8px', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{p.length_mm} × {p.width_mm} × {p.height_mm}</td>
                   <td style={{ padding: '7px 8px', color: col, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{p.gross_weight_kg}</td>
                   <td style={{ padding: '7px 8px', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{p.net_weight_kg || '—'}</td>
@@ -988,7 +1024,7 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast }: {
           {(scn.packages?.length || 0) > 0 && (
             <tfoot>
               <tr style={{ background: dark ? '#162032' : '#f8fafc', borderTop: bd }}>
-                <td colSpan={2} style={{ padding: '7px 8px', fontSize: 11, fontWeight: 600, color: col }}>TOTALS</td>
+                <td colSpan={3} style={{ padding: '7px 8px', fontSize: 11, fontWeight: 600, color: col }}>TOTALS</td>
                 <td style={{ padding: '7px 8px', fontSize: 11, color: sub }}>{scn.packages?.length} packages</td>
                 <td style={{ padding: '7px 8px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 600, color: col }}>{totalGross.toLocaleString('en-AU', { maximumFractionDigits: 1 })}</td>
                 <td colSpan={5} />

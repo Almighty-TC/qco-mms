@@ -546,6 +546,25 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
               </tbody>
             </table>
             </div>
+
+            {/* Stage 4: declared per-package contents (read-only reference). Shown only when the
+                SCN was created with structured packing contents — legacy SCNs render nothing here. */}
+            {detail && (detail.packages || []).some((p: any) => p.contents && p.contents.length > 0) && (
+              <div style={{ border: bd, borderRadius: 8, marginTop: 12, padding: '10px 14px', background: cardBg }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: sub, textTransform: 'uppercase', marginBottom: 8 }}>Declared package contents (packing list)</div>
+                {(detail.packages || []).filter((p: any) => p.contents && p.contents.length).map((p: any) => (
+                  <div key={p.id} style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: col }}>Package {p.package_number}{p.description ? ` · ${p.description}` : ''}</div>
+                    {p.contents.map((c: any, ci: number) => (
+                      <div key={ci} style={{ fontSize: 12, color: sub, paddingLeft: 12 }}>
+                        <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#2563eb' }}>{Number(c.qty)}{c.uom ? ` ${c.uom}` : ''}</span> · {c.label}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div style={{ background: dark ? '#162032' : '#f0f9ff', border: bd, borderRadius: 8, padding: '10px 14px', marginTop: 12, display: 'flex', gap: 16, fontSize: 12, color: sub }}>
               <span>{(detail?.lines || []).length} line items</span>
               <span>{scn.total_weight_kg ? `${scn.total_weight_kg} t total` : '—'}</span>

@@ -213,6 +213,29 @@ router.get('/:projectId/receipting/:scnId', rejectExternal, async (req, res) => 
     if (!scn) return res.status(404).json({ error: 'SCN not found' })
 
     const [packages] = await db.query('SELECT * FROM scn_packages WHERE scn_id = ?', [scnId])
+    // Stage 4: attach declared per-package contents (read-only reference for the receiver).
+    // Legacy packages with no contents get an empty array — graceful.
+    if (packages.length) {
+      const [contents] = await db.query(
+        `SELECT spl.package_id, spl.qty, spl.uom,
+                sl.po_line_id, pol.line_number, pol.description AS po_description, pol.uom AS po_uom,
+                ai.description AS ai_description, ai.uom AS ai_uom
+         FROM scn_package_lines spl
+         JOIN scn_lines sl ON sl.id = spl.scn_line_id
+         LEFT JOIN po_lines pol ON pol.id = sl.po_line_id
+         LEFT JOIN scn_additional_items ai ON ai.id = sl.additional_item_id
+         WHERE spl.package_id IN (?)`,
+        [packages.map(p => p.id)]
+      )
+      const byPkg = {}
+      for (const c of contents) {
+        ;(byPkg[c.package_id] = byPkg[c.package_id] || []).push({
+          qty: c.qty, uom: c.uom || c.po_uom || c.ai_uom || null,
+          label: c.po_line_id ? `Line ${c.line_number} — ${(c.po_description || '').trim()}`.replace(/—\s*$/, '').trim() : (c.ai_description || 'Off-PO item'),
+        })
+      }
+      for (const p of packages) p.contents = byPkg[p.id] || []
+    }
     // Heat/Lot P2a: the SCN's declared heats (P1) — the dropdown source for the
     // receipting heat picker, scoped to this shipment.
     const [heats] = await db.query(
