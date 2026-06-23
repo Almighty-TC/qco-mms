@@ -13,7 +13,22 @@ const fs      = require('fs')
 
 router.use(authenticateToken)
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
-router.use(require('../middleware/permissions').enforce('logistics')) // C-b2: matrix gate
+// ─── LOGISTICS MATRIX GATE (+ scoped SCN-documents carve-out) ───────────────────
+// Normal rule: enforce('logistics') maps method→action (POST→can_create, etc.).
+// Carve-out: the SCN *documents* sub-route (upload/delete) is treated as needing
+// only can_VIEW — so a logistics VIEWER (e.g. an expeditor opening an SCN from the
+// PO) can attach the deferred docs, WITHOUT being granted broader logistics
+// create/delete. Mirrors the procurement expeditor-assign carve-out. Tightly
+// anchored to /scn/:id/documents(/:docId) only — every other write stays gated,
+// and can_view is still required (zero-logistics-access roles are NOT let in).
+const { enforce, requirePermission } = require('../middleware/permissions')
+const SCN_DOCS_RE = /\/scn\/\d+\/documents(\/\d+)?$/
+router.use((req, res, next) => {
+  if (req.method !== 'GET' && SCN_DOCS_RE.test((req.originalUrl || req.url).split('?')[0])) {
+    return requirePermission('logistics', 'can_view')(req, res, next)
+  }
+  return enforce('logistics')(req, res, next)
+})
 router.param('projectId', require('../middleware/permissions').requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects
 
 // ─── ROLE HELPERS ─────────────────────────────────────────────
