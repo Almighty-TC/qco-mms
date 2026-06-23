@@ -818,7 +818,7 @@ router.get('/:projectId/warehouses', async (req, res) => {
 router.post('/:projectId/scn', async (req, res) => {
   const pid = Number(req.params.projectId)
   const {
-    po_id, selected_lines = [], additional_items = [],
+    po_id, selected_lines = [], additional_items = [], variations = [],
     pickup_location, destination_warehouse_id, grid_bay,
     cdd, crd, ccd, etd, eta, transport_mode, forwarder_name, incoterms,
     packages = [], notify_forwarder,
@@ -861,11 +861,18 @@ router.post('/:projectId/scn', async (req, res) => {
     // GUARD (Commit 1): row-lock the line (FOR UPDATE — concurrency-safe) and reject any
     // allocation that would push qty_assigned over qty. Reject = rollback the whole txn
     // (the SCN insert + any prior line updates), never a partial write.
+    // ── Packing-contents (Stage 2): map each allocatable line's client line_ref to
+    // the scn_lines row created for it, plus its SCN qty, so scn_package_lines can
+    // reference them. PO lines use ref 'po:<po_line_id>' (derived); off-PO variations
+    // use the client-supplied line_ref (their additional_item id doesn't exist yet). ──
+    const refToScnLineId = {}   // line_ref → scn_lines.id
+    const refToScnQty    = {}   // line_ref → that line's SCN qty (for D3 server-side cap)
+
     const assignments = [] // Commit 2: collect for the audit row
-    for (const { po_line_id, qty_allocated } of selected_lines) {
+    for (const { po_line_id, qty_allocated, uom } of selected_lines) {
       const add = Number(qty_allocated) || 0
       const [[ln]] = await conn.query(
-        'SELECT line_number, qty, COALESCE(qty_assigned,0) AS qa FROM po_lines WHERE id = ? AND po_id = ? FOR UPDATE',
+        'SELECT line_number, qty, uom, COALESCE(qty_assigned,0) AS qa FROM po_lines WHERE id = ? AND po_id = ? FOR UPDATE',
         [po_line_id, po_id]
       )
       if (!ln) { await conn.rollback(); return res.status(404).json({ error: `PO line ${po_line_id} not found on PO ${po_id}` }) }
@@ -878,10 +885,44 @@ router.post('/:projectId/scn', async (req, res) => {
         'UPDATE po_lines SET qty_assigned = COALESCE(qty_assigned,0) + ? WHERE id = ? AND po_id = ?',
         [add, po_line_id, po_id]
       )
+      // Per-SCN line allocation (D4=(i)) — how much of this PO line is on THIS SCN.
+      const [sl] = await conn.query(
+        'INSERT INTO scn_lines (scn_id, po_line_id, qty, uom) VALUES (?,?,?,?)',
+        [scnId, po_line_id, add, uom || ln.uom || null]
+      )
+      const ref = `po:${po_line_id}`
+      refToScnLineId[ref] = sl.insertId
+      refToScnQty[ref]    = add
       assignments.push({ po_line_id, line_number: ln.line_number, qty_allocated: add, new_qty_assigned: Number(ln.qa) + add })
     }
 
-    // Insert additional items (not on PO)
+    // ── Off-PO variations (now in the SAME txn — retires the old 2-phase POST) ──
+    // Each is a NEW item tied to a parent PO line (is_variation=1), then gets its own
+    // scn_lines row so it's allocatable into packages. Validated against this project.
+    for (const v of variations) {
+      const desc = (v.description || '').trim()
+      const parentId = Number(v.parent_po_line_id) || null
+      if (!desc) { await conn.rollback(); return res.status(422).json({ error: 'Each off-PO variation needs a description.' }) }
+      if (!parentId) { await conn.rollback(); return res.status(422).json({ error: 'Each off-PO variation must name its parent PO line.' }) }
+      const [[pl]] = await conn.query(
+        'SELECT pl.id FROM po_lines pl JOIN purchase_orders p ON p.id=pl.po_id WHERE pl.id=? AND p.project_id=?',
+        [parentId, pid]
+      )
+      if (!pl) { await conn.rollback(); return res.status(404).json({ error: `Parent PO line ${parentId} not found in this project` }) }
+      const vqty = Number(v.qty) || 0
+      const [ai] = await conn.query(
+        `INSERT INTO scn_additional_items (scn_id, parent_po_line_id, is_variation, description, qty, uom, notes, created_by)
+         VALUES (?,?,1,?,?,?,?,?)`,
+        [scnId, parentId, desc, vqty || null, v.uom || 'EA', v.notes || null, req.user.id]
+      )
+      const [sl] = await conn.query(
+        'INSERT INTO scn_lines (scn_id, additional_item_id, qty, uom) VALUES (?,?,?,?)',
+        [scnId, ai.insertId, vqty, v.uom || 'EA']
+      )
+      if (v.line_ref) { refToScnLineId[v.line_ref] = sl.insertId; refToScnQty[v.line_ref] = vqty }
+    }
+
+    // Legacy unlinked additional items (back-compat — no line_ref / not allocatable).
     for (const item of additional_items) {
       if (!item.description?.trim()) continue
       await conn.query(
@@ -911,16 +952,41 @@ router.post('/:projectId/scn', async (req, res) => {
     // so the Logistics Packages tab showed nothing. scn_packages has no qty column,
     // so a "qty N" line is expanded into N numbered package rows.
     const num = v => (v == null || v === '') ? null : Number(v)
-    let pkgNum = 0
+    let pkgNum = 0, contentRows = 0
+    const allocated = {}   // line_ref → running total packed across all packages (D3 cap)
+    const insertPkg = async (p, n) => {
+      const [pr] = await conn.query(
+        `INSERT INTO scn_packages (scn_id, package_number, description, length_mm, width_mm, height_mm, gross_weight_kg, is_dangerous_goods)
+         VALUES (?,?,?,?,?,?,?,?)`,
+        [scnId, String(n).padStart(2, '0'), (p.type || '').trim() || null,
+         num(p.length), num(p.width), num(p.height), num(p.weight), p.is_dg ? 1 : 0])
+      return pr.insertId
+    }
     for (const p of (packages || [])) {
-      const count = Math.min(500, Math.max(1, Math.floor(Number(p.qty) || 1)))
-      for (let k = 0; k < count; k++) {
+      const contents = (p.contents || []).filter(c => c && c.line_ref && Number(c.qty) > 0)
+      if (contents.length) {
+        // Itemized package = ONE physical box (qty forced to 1); record its contents.
         pkgNum++
-        await conn.query(
-          `INSERT INTO scn_packages (scn_id, package_number, description, length_mm, width_mm, height_mm, gross_weight_kg, is_dangerous_goods)
-           VALUES (?,?,?,?,?,?,?,?)`,
-          [scnId, String(pkgNum).padStart(2, '0'), (p.type || '').trim() || null,
-           num(p.length), num(p.width), num(p.height), num(p.weight), p.is_dg ? 1 : 0])
+        const packageId = await insertPkg(p, pkgNum)
+        for (const c of contents) {
+          const ref = c.line_ref
+          const scnLineId = refToScnLineId[ref]
+          if (!scnLineId) { await conn.rollback(); return res.status(422).json({ error: `Package contents reference an unknown line (${ref}).` }) }
+          const q = Number(c.qty)
+          allocated[ref] = (allocated[ref] || 0) + q
+          if (allocated[ref] > Number(refToScnQty[ref]) + 1e-9) {  // D3: never pack more than the line's SCN qty
+            await conn.rollback()
+            return res.status(422).json({ error: `Allocated ${allocated[ref]} of line ${ref} exceeds its SCN qty ${refToScnQty[ref]}.` })
+          }
+          await conn.query(
+            'INSERT INTO scn_package_lines (package_id, scn_line_id, qty, uom) VALUES (?,?,?,?)',
+            [packageId, scnLineId, q, c.uom || null])
+          contentRows++
+        }
+      } else {
+        // Non-itemized: a "qty N" row expands into N numbered package rows (legacy behaviour).
+        const count = Math.min(500, Math.max(1, Math.floor(Number(p.qty) || 1)))
+        for (let k = 0; k < count; k++) { pkgNum++; await insertPkg(p, pkgNum) }
       }
     }
     if (pkgNum > 0) {
@@ -936,7 +1002,7 @@ router.post('/:projectId/scn', async (req, res) => {
       `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, after_value, resource, ip)
        VALUES (?,?,?,?,?,?,?,?)`,
       [req.user.id, 'scn_created', 'scn', scnId, pid,
-       JSON.stringify({ scn_ref: scnRef, po_id, assignments, additional_items: (additional_items || []).length, packages: pkgNum }),
+       JSON.stringify({ scn_ref: scnRef, po_id, assignments, variations: (variations || []).length, additional_items: (additional_items || []).length, packages: pkgNum, package_contents: contentRows }),
        (req.originalUrl || '').split('?')[0].replace(/^\/api(?=\/)/, ''), req.ip]
     )
 

@@ -23,10 +23,12 @@ type Step = 1 | 2 | 3 | 4 | 5 | 6
 
 interface SelectedLineVal { checked: boolean; qty: string }
 interface AdditionalItem  { desc: string; qty: string; uom: string; parentLineId: string } // parentLineId REQUIRED — off-PO variation must name its parent PO line
+interface PkgContent { lineRef: string; qty: string }   // which allocatable line + how much is in this box
 interface PackageRow {
   type: string; customType?: string; qty: string
   length: string; width: string; height: string; weight: string
   is_dg: boolean
+  contents: PkgContent[]   // Stage 2: itemized packing list. Non-empty → this is ONE physical box.
 }
 // Heat/Lot P1: one declared heat for the shipment (heat_number required; grade/cert optional).
 interface HeatRow { heat_number: string; grade: string; cert: string }
@@ -187,11 +189,51 @@ export const CreateSCNWizard: React.FC<Props> = ({
 
   // ─── PACKAGES ─────────────────────────────────────────────
   const addPackage = () =>
-    setPackages(prev => [...prev, { type: 'Pallet', qty: '1', length: '', width: '', height: '', weight: '', is_dg: false }])
+    setPackages(prev => [...prev, { type: 'Pallet', qty: '1', length: '', width: '', height: '', weight: '', is_dg: false, contents: [] }])
   const updatePkg = (i: number, field: keyof PackageRow, val: any) =>
     setPackages(prev => prev.map((p, idx) => idx === i ? { ...p, [field]: val } : p))
   const removePkg = (i: number) =>
     setPackages(prev => prev.filter((_, idx) => idx !== i))
+
+  // ─── PACKAGE CONTENTS (Stage 2 — D1 per-package picker) ────
+  const addContent = (pi: number) =>
+    setPackages(prev => prev.map((p, idx) => idx === pi ? { ...p, contents: [...p.contents, { lineRef: '', qty: '' }] } : p))
+  const updateContent = (pi: number, ci: number, field: keyof PkgContent, val: string) =>
+    setPackages(prev => prev.map((p, idx) => idx === pi
+      ? { ...p, contents: p.contents.map((c, j) => j === ci ? { ...c, [field]: val } : c) } : p))
+  const removeContent = (pi: number, ci: number) =>
+    setPackages(prev => prev.map((p, idx) => idx === pi
+      ? { ...p, contents: p.contents.filter((_, j) => j !== ci) } : p))
+
+  // ─── ALLOCATABLE LINES (the SCN's selected lines + off-PO variations) ──
+  // The single source for the contents picker AND the D2/D3 reconciliation. Each entry:
+  // { ref, label, scnQty, uom }. PO lines use ref 'po:<id>'; off-PO use 'add:<i>' / 'child:<id>'
+  // — these refs are sent verbatim so the backend can map contents → the scn_lines it creates.
+  const allocatableLines = (): { ref: string; label: string; scnQty: number; uom: string }[] => {
+    const out: { ref: string; label: string; scnQty: number; uom: string }[] = []
+    const poLines = po?.po_lines || []
+    Object.entries(selectedLines).filter(([, v]) => v.checked).forEach(([id, v]) => {
+      const l = poLines.find((x: any) => String(x.id) === String(id))
+      out.push({ ref: `po:${id}`, label: `Line ${l?.line_number ?? id} — ${(l?.description || '').slice(0, 40)}`, scnQty: Number(v.qty) || 0, uom: l?.uom || 'EA' })
+    })
+    additionalItems.forEach((it, i) => {
+      if (!it.desc.trim()) return
+      out.push({ ref: `add:${i}`, label: `Off-PO — ${it.desc.slice(0, 40)}`, scnQty: Number(it.qty) || 0, uom: it.uom || 'EA' })
+    })
+    Object.entries(selectedChildren).filter(([, v]) => v.checked).forEach(([id, c]) => {
+      out.push({ ref: `child:${id}`, label: `Child — ${(c.description || '').slice(0, 40)}`, scnQty: Number(c.qty) || 0, uom: c.uom || 'EA' })
+    })
+    return out
+  }
+  // qty packed for a ref across ALL packages
+  const allocatedFor = (ref: string) =>
+    packages.reduce((s, p) => s + p.contents.filter(c => c.lineRef === ref).reduce((t, c) => t + (Number(c.qty) || 0), 0), 0)
+  // D2: every allocatable line fully (and not over-) allocated → Confirm allowed
+  const allFullyAllocated = () => {
+    const lines = allocatableLines()
+    if (!lines.length) return true   // no lines selected → nothing to reconcile (edge; step 1 already requires ≥1)
+    return lines.every(l => Math.abs(allocatedFor(l.ref) - l.scnQty) < 1e-9)
+  }
 
   // ─── HEATS (Heat/Lot P1) ──────────────────────────────────
   const addHeat = () =>
@@ -210,25 +252,33 @@ export const CreateSCNWizard: React.FC<Props> = ({
   // ─── SUBMIT ───────────────────────────────────────────────
   // Posts SCN to backend; shows toast and calls parent callback.
   const handleCreate = async () => {
-    // Off-PO VARIATIONS (Commit 3 UI): each must name a parent PO line + description.
-    // Legacy unlinked additional_items path is retired — we no longer send additional_items
-    // in the create body; instead we POST each variation to /scn/:id/variation after the SCN exists.
-    // Selected child lines ship as linked off-PO variations (parent = their PO line).
-    const childVariations: AdditionalItem[] = Object.values(selectedChildren)
-      .filter(c => c.checked)
-      .map(c => ({ desc: c.description, qty: c.qty, uom: c.uom, parentLineId: String(c.parentLineId) }))
-    const variations = [...additionalItems.filter(i => i.desc.trim() || i.parentLineId), ...childVariations]
+    // Off-PO variations carry a client line_ref (matching allocatableLines) so the backend
+    // can map package contents → the scn_lines it creates. Built in ONE create call now —
+    // the old 2-phase /variation POST is retired (variations are created in the same txn).
+    const itemVariations = additionalItems
+      .map((it, i) => ({ it, i }))
+      .filter(({ it }) => it.desc.trim() || it.parentLineId)
+      .map(({ it, i }) => ({ line_ref: `add:${i}`, parent_po_line_id: Number(it.parentLineId) || null, description: it.desc.trim(), qty: Number(it.qty) || 1, uom: it.uom }))
+    const childVariations = Object.entries(selectedChildren)
+      .filter(([, c]) => c.checked)
+      .map(([id, c]) => ({ line_ref: `child:${id}`, parent_po_line_id: c.parentLineId, description: c.description, qty: Number(c.qty) || 1, uom: c.uom }))
+    const variations = [...itemVariations, ...childVariations]
     for (const v of variations) {
-      if (!v.parentLineId) { onToast?.('Each off-PO variation must select a parent PO line.', 'error'); return }
-      if (!v.desc.trim())  { onToast?.('Each off-PO variation needs a description.', 'error'); return }
+      if (!v.parent_po_line_id) { onToast?.('Each off-PO variation must select a parent PO line.', 'error'); return }
+      if (!v.description)       { onToast?.('Each off-PO variation needs a description.', 'error'); return }
     }
+    // D2: every selected line must be fully allocated into packages before creating.
+    if (!allFullyAllocated()) { onToast?.('Allocate every selected line fully into packages before creating the SCN.', 'error'); return }
+
+    const poLines = po?.po_lines || []
     setCreating(true)
     try {
       const body = {
         po_id: poId,
         selected_lines: Object.entries(selectedLines)
           .filter(([, v]) => v.checked)
-          .map(([id, v]) => ({ po_line_id: Number(id), qty_allocated: Number(v.qty) || 1 })),
+          .map(([id, v]) => ({ line_ref: `po:${id}`, po_line_id: Number(id), qty_allocated: Number(v.qty) || 1, uom: poLines.find((l: any) => String(l.id) === String(id))?.uom || 'EA' })),
+        variations,
         pickup_location: pickupLocation || null,
         destination_warehouse_id: warehouseId || null,
         grid_bay: gridBay || null,
@@ -240,8 +290,15 @@ export const CreateSCNWizard: React.FC<Props> = ({
         transport_mode: transportMode || null,
         forwarder_name: forwarder || null,
         incoterms: incoterms || null,
-        // "Others" → send the user-defined type as the package type.
-        packages: packages.map(p => ({ ...p, type: p.type === 'Others' ? ((p.customType || '').trim() || 'Other') : p.type })),
+        // Itemized package → qty forced to 1 (one physical box); contents carry the packing list.
+        packages: packages.map(p => ({
+          type: p.type === 'Others' ? ((p.customType || '').trim() || 'Other') : p.type,
+          qty: p.contents.length ? 1 : (Number(p.qty) || 1),
+          length: p.length, width: p.width, height: p.height, weight: p.weight, is_dg: p.is_dg,
+          contents: p.contents
+            .filter(c => c.lineRef && Number(c.qty) > 0)
+            .map(c => ({ line_ref: c.lineRef, qty: Number(c.qty), uom: allocatableLines().find(l => l.ref === c.lineRef)?.uom || null })),
+        })),
         // Heat/Lot P1: declared heats for this shipment (optional — empty is fine).
         heats: heats
           .filter(h => h.heat_number.trim())
@@ -253,13 +310,6 @@ export const CreateSCNWizard: React.FC<Props> = ({
         notify_forwarder: notifyForwarder,
       }
       const { data } = await axios.post(`${API}/expediting/${projectId}/scn`, body)
-      // Two-phase: create the SCN, then add each off-PO variation (linked + audited) to it.
-      for (const v of variations) {
-        await axios.post(`${API}/expediting/${projectId}/scn/${data.id}/variation`, {
-          parent_po_line_id: Number(v.parentLineId), description: v.desc.trim(),
-          qty: Number(v.qty) || 1, uom: v.uom,
-        })
-      }
       onToast?.(`${data.scn_ref} created successfully${variations.length ? ` (+${variations.length} off-PO variation${variations.length > 1 ? 's' : ''})` : ''}`, 'success')
       onCreated(data)
     } catch (e: any) {
@@ -673,12 +723,16 @@ export const CreateSCNWizard: React.FC<Props> = ({
               )}
             </div>
             <div>
-              <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Qty</label>
+              <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>
+                {pkg.contents.length > 0 ? 'Qty (itemized)' : 'Qty'}
+              </label>
               <input
                 type="number" min={1}
-                value={pkg.qty}
+                value={pkg.contents.length > 0 ? '1' : pkg.qty}
+                disabled={pkg.contents.length > 0}
+                title={pkg.contents.length > 0 ? 'Itemized package = one physical box' : undefined}
                 onChange={e => updatePkg(i, 'qty', e.target.value)}
-                style={{ ...inputStyle, width: '100%' }}
+                style={{ ...inputStyle, width: '100%', background: pkg.contents.length > 0 ? '#f1f5f9' : '#fff', color: pkg.contents.length > 0 ? '#94a3b8' : '#0f172a' }}
               />
             </div>
           </div>
@@ -715,8 +769,59 @@ export const CreateSCNWizard: React.FC<Props> = ({
             />
             Dangerous goods (DG)
           </label>
+
+          {/* Contents (Stage 2 — D1 per-package picker). Adding any content makes this
+              ONE physical box (qty locked to 1). Draws from the SCN's selected lines. */}
+          <div style={{ marginTop: 12, borderTop: '1px dashed #e2e8f0', paddingTop: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 6 }}>Contents (packing list)</div>
+            {pkg.contents.map((c, ci) => {
+              const line = allocatableLines().find(l => l.ref === c.lineRef)
+              const over = !!line && allocatedFor(c.lineRef) > line.scnQty + 1e-9
+              const availForRow = line ? line.scnQty - (allocatedFor(c.lineRef) - (Number(c.qty) || 0)) : 0
+              return (
+                <div key={ci} style={{ display: 'grid', gridTemplateColumns: '1fr 90px 24px', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+                  <select value={c.lineRef} onChange={e => updateContent(i, ci, 'lineRef', e.target.value)} style={{ ...inputStyle, width: '100%' }}>
+                    <option value="">Select line…</option>
+                    {allocatableLines().map(l => <option key={l.ref} value={l.ref}>{l.label} ({l.scnQty} {l.uom})</option>)}
+                  </select>
+                  <input type="number" min={0} value={c.qty} placeholder="qty"
+                    onChange={e => updateContent(i, ci, 'qty', e.target.value)}
+                    title={line ? `${availForRow} ${line.uom} available for this line` : ''}
+                    style={{ ...inputStyle, width: '100%', borderColor: over ? '#ef4444' : '#dde3ed' }} />
+                  <button onClick={() => removeContent(i, ci)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 15, cursor: 'pointer' }}>×</button>
+                </div>
+              )
+            })}
+            <button onClick={() => addContent(i)}
+              style={{ fontSize: 11, color: '#2563eb', background: 'none', border: '1px dashed #93c5fd', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontFamily: 'inherit' }}>
+              + add content
+            </button>
+          </div>
         </div>
       ))}
+
+      {/* Reconciliation (D2) — every selected line must be fully packed before Confirm. */}
+      {allocatableLines().length > 0 && (
+        <div style={{ border: '1px solid #dde3ed', borderRadius: 8, padding: '12px 14px', margin: '4px 0 12px', background: '#f8fafc' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#374151', marginBottom: 8 }}>Allocation reconciliation</div>
+          {allocatableLines().map(l => {
+            const done = allocatedFor(l.ref)
+            const ok = Math.abs(done - l.scnQty) < 1e-9
+            const over = done > l.scnQty + 1e-9
+            return (
+              <div key={l.ref} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '2px 0', color: '#475569' }}>
+                <span>{l.label}</span>
+                <span style={{ color: over ? '#ef4444' : ok ? '#16a34a' : '#d97706', fontWeight: 600, fontFamily: 'JetBrains Mono, monospace' }}>
+                  {done}/{l.scnQty} {l.uom} {over ? '⚠ over' : ok ? '✓' : ''}
+                </span>
+              </div>
+            )
+          })}
+          {!allFullyAllocated() && (
+            <div style={{ fontSize: 11, color: '#d97706', marginTop: 6 }}>All selected lines must be fully allocated before you can create the SCN.</div>
+          )}
+        </div>
+      )}
 
       <button
         onClick={addPackage}
@@ -1023,8 +1128,9 @@ export const CreateSCNWizard: React.FC<Props> = ({
             ) : (
               <button
                 onClick={handleCreate}
-                disabled={creating}
-                style={{ ...greenBtn, opacity: creating ? 0.7 : 1, cursor: creating ? 'not-allowed' : 'pointer' }}
+                disabled={creating || !allFullyAllocated()}
+                title={!allFullyAllocated() ? 'Allocate every selected line fully into packages first' : undefined}
+                style={{ ...greenBtn, opacity: (creating || !allFullyAllocated()) ? 0.5 : 1, cursor: (creating || !allFullyAllocated()) ? 'not-allowed' : 'pointer' }}
               >
                 {creating ? 'Creating…' : '✓ Create SCN'}
               </button>
