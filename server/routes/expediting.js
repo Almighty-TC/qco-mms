@@ -10,6 +10,21 @@ const { authenticateToken } = require('../middleware/auth')
 const { fileFilter } = require('../utils/upload')
 const { dateOrder } = require('../utils/validate')
 
+// ─── Q3 CHILD-STOCK CAPABILITY DETECT ─────────────────────────
+// Did migrate-child-stock.js run? Cached sticky-true (re-checked only while false →
+// self-heals after the migration without a restart). Lets the create path degrade
+// gracefully when the inheritance columns aren't live yet (child created as before,
+// no inherit/block) instead of erroring on a missing column.
+let _childStockCols = false
+async function childStockColsLive() {
+  if (_childStockCols) return true
+  const [[r]] = await db.query(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'scn_additional_items' AND column_name = 'wbs_code_snapshot'`)
+  _childStockCols = r.n > 0
+  return _childStockCols
+}
+
 router.use(authenticateToken)
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
 router.use(require('../middleware/permissions').enforce(p => p.includes('/vdrl') ? 'vdrl' : 'expediting')) // C-b2: vdrl routes→vdrl, else expediting
@@ -918,22 +933,51 @@ router.post('/:projectId/scn', async (req, res) => {
     // ── Off-PO variations (now in the SAME txn — retires the old 2-phase POST) ──
     // Each is a NEW item tied to a parent PO line (is_variation=1), then gets its own
     // scn_lines row so it's allocatable into packages. Validated against this project.
+    // Q3: a child inherits its parent PO line's identity (commodity/tag) + WBS snapshot
+    // at write (immutable). Blocked if the parent is unlinked or has no WBS. Gated on the
+    // child-stock columns being live (pre-migration → old behaviour, no inherit/block).
+    const childCols = await childStockColsLive()
     for (const v of variations) {
       const desc = (v.description || '').trim()
       const parentId = Number(v.parent_po_line_id) || null
       if (!desc) { await conn.rollback(); return res.status(422).json({ error: 'Each off-PO variation needs a description.' }) }
       if (!parentId) { await conn.rollback(); return res.status(422).json({ error: 'Each off-PO variation must name its parent PO line.' }) }
+      // Fetch the parent line's identity + WBS snapshot (for the block guard + inheritance).
       const [[pl]] = await conn.query(
-        'SELECT pl.id FROM po_lines pl JOIN purchase_orders p ON p.id=pl.po_id WHERE pl.id=? AND p.project_id=?',
+        'SELECT pl.id, pl.line_number, pl.commodity_id, pl.equipment_tag, pl.tag_number, pl.wbs_code_snapshot FROM po_lines pl JOIN purchase_orders p ON p.id=pl.po_id WHERE pl.id=? AND p.project_id=?',
         [parentId, pid]
       )
       if (!pl) { await conn.rollback(); return res.status(404).json({ error: `Parent PO line ${parentId} not found in this project` }) }
+
+      // ── BLOCK-ON-UNLINKED (Q3, only when child-stock is live) ──
+      // A child must inherit a real identity + WBS to become tracked stock, so the
+      // parent must be linked (commodity/tag) AND have a WBS. Name the missing field.
+      if (childCols) {
+        const linked = pl.commodity_id != null || (pl.equipment_tag || '').trim() || (pl.tag_number || '').trim()
+        if (!linked) {
+          await conn.rollback()
+          return res.status(422).json({ error: `Cannot add off-PO item under line ${pl.line_number}: that line has no commodity/tag link — link a commodity or equipment tag to it first.` })
+        }
+        if (!(pl.wbs_code_snapshot || '').trim()) {
+          await conn.rollback()
+          return res.status(422).json({ error: `Cannot add off-PO item under line ${pl.line_number}: that line has no WBS — set its WBS first.` })
+        }
+      }
+
       const vqty = Number(v.qty) || 0
-      const [ai] = await conn.query(
-        `INSERT INTO scn_additional_items (scn_id, parent_po_line_id, is_variation, description, qty, uom, notes, created_by)
-         VALUES (?,?,1,?,?,?,?,?)`,
-        [scnId, parentId, desc, vqty || null, v.uom || 'EA', v.notes || null, req.user.id]
-      )
+      const rosDate = (v.ros_date || '').trim() || null   // user-supplied, NOT inherited
+      const [ai] = childCols
+        ? await conn.query(
+            `INSERT INTO scn_additional_items
+               (scn_id, parent_po_line_id, is_variation, description, qty, uom, notes, created_by,
+                commodity_id, equipment_tag, tag_number, wbs_code_snapshot, ros_date)
+             VALUES (?,?,1,?,?,?,?,?,?,?,?,?,?)`,
+            [scnId, parentId, desc, vqty || null, v.uom || 'EA', v.notes || null, req.user.id,
+             pl.commodity_id ?? null, pl.equipment_tag ?? null, pl.tag_number ?? null, pl.wbs_code_snapshot ?? null, rosDate])
+        : await conn.query(
+            `INSERT INTO scn_additional_items (scn_id, parent_po_line_id, is_variation, description, qty, uom, notes, created_by)
+             VALUES (?,?,1,?,?,?,?,?)`,
+            [scnId, parentId, desc, vqty || null, v.uom || 'EA', v.notes || null, req.user.id])
       const [sl] = await conn.query(
         'INSERT INTO scn_lines (scn_id, additional_item_id, qty, uom) VALUES (?,?,?,?)',
         [scnId, ai.insertId, vqty, v.uom || 'EA']
