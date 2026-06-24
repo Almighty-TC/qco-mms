@@ -538,7 +538,9 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                     <td style={{ padding: '8px 12px', color: col }}>{l.description || 'Line item'}</td>
                     <td style={{ padding: '8px 12px', color: col, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>
                       {lineExpected(l)}
-                      {Number(l.received_to_date) > 0 && <span style={{ color: sub }}> <span title="already received-to-date">(of {Number(l.qty)} ordered)</span></span>}
+                      {l.expected_on_scn != null
+                        ? <span style={{ color: sub }} title="this SCN's allocation · already received on this SCN"> (of {Number(l.expected_on_scn)} for this SCN{Number(l.received_on_scn) > 0 ? ` · ${Number(l.received_on_scn)} in` : ''})</span>
+                        : (Number(l.received_to_date) > 0 && <span style={{ color: sub }} title="already received-to-date"> (of {Number(l.qty)} ordered)</span>)}
                     </td>
                     <td style={{ padding: '8px 12px', color: sub }}>{l.uom || 'EA'}</td>
                   </tr>
@@ -733,21 +735,32 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                         <td style={{ padding: '8px 12px', color: col }}>{l.description || 'Line item'}</td>
                         <td style={{ padding: '8px 12px', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>
                           {expected}
-                          {Number(l.received_to_date) > 0 && <span title="already received-to-date"> (of {Number(l.qty)})</span>}
+                          {/* Q1: remaining is per-SCN-allocation (Guard B). Show the allocation +
+                              what's already in on THIS SCN; legacy lines fall back to PO ordered. */}
+                          {l.expected_on_scn != null
+                            ? <span title="this SCN's allocation · already received on this SCN"> (of {Number(l.expected_on_scn)} for this SCN{Number(l.received_on_scn) > 0 ? ` · ${Number(l.received_on_scn)} in` : ''})</span>
+                            : (Number(l.received_to_date) > 0 && <span title="already received-to-date"> (of {Number(l.qty)} ordered)</span>)}
                         </td>
                         <td style={{ padding: '8px 12px', color: sub }}>{l.uom || 'EA'}</td>
                         <td style={{ padding: '8px 12px' }}>
-                          <input type="number" value={actual} min={0}
+                          {expected === 0 ? (
+                            // Fully received on this SCN → locked (Q1 re-entry: no double-receipt).
+                            <span title="Fully received on this SCN" style={{ fontSize: 11, color: '#16a34a', fontWeight: 600 }}>✓ fully received</span>
+                          ) : (
+                          <input type="number" value={actual} min={0} max={expected}
                             onChange={e => {
-                              const v = Number(e.target.value)
+                              let v = Number(e.target.value)
+                              if (!(v >= 0)) v = 0
+                              if (v > expected) v = expected   // mirror Guard B: never exceed remaining on this SCN
                               setActuals(prev => ({ ...prev, [l.id]: v }))
                               // damaged can't exceed received — clamp if needed (1:1 only)
                               if (!split && dmg > v) setDamaged(prev => ({ ...prev, [l.id]: v }))
                               clearIfClean(l, v, split ? dmg : Math.min(dmg, v))
                             }}
                             style={{ ...inputSt, width: 80, textAlign: 'center', borderColor: actual !== expected ? '#f59e0b' : undefined }} />
+                          )}
                           {/* Split reconcile indicator */}
-                          {split && (
+                          {split && expected !== 0 && (
                             <div style={{ fontSize: 10, marginTop: 3, color: reconciled ? '#22c55e' : '#ef4444', fontFamily: 'JetBrains Mono, monospace' }}
                               title="Σ sub-line received must equal the line total">
                               {reconciled ? `✓ allocated ${allocated}` : `allocated ${allocated} of ${actual}`}

@@ -240,40 +240,71 @@ router.get('/:projectId/receipting/:scnId', rejectExternal, async (req, res) => 
     // receipting heat picker, scoped to this shipment.
     const [heats] = await db.query(
       'SELECT id, heat_number, material_grade FROM scn_heats WHERE scn_id = ? ORDER BY heat_number', [scnId])
-    // Phase 4: received-to-date is DERIVED from receipt_lines (single source of
-    // truth — no qty_received/qty_assigned writes). remaining = ordered − received,
-    // clamped ≥ 0 so over-receipt never shows a negative balance.
-    const [lines] = await db.query(
+    // Q1: received/remaining are DERIVED from receipt_lines (no stored qty). The UI
+    // must mirror Guard B, which caps at THIS SCN's allocation (scn_lines) — so we
+    // return both the SCN-scoped figures and the PO-line cumulative (for context),
+    // then compute the binding `remaining` per line:
+    //   allocated line  → remaining = scn_alloc − received_on_scn   (per-SCN cap)
+    //   un-allocated    → remaining = ordered  − received_to_date   (legacy fallback)
+    const [linesRaw] = await db.query(
       `SELECT pl.id, pl.line_number, pl.description, pl.qty, pl.uom, pl.qty_assigned,
               pl.wbs_code_snapshot, pl.tag_number, pl.equipment_tag, pl.commodity_id,
               COALESCE((SELECT SUM(rl.received_qty) FROM receipt_lines rl WHERE rl.po_line_id = pl.id), 0) AS received_to_date,
-              GREATEST(0, pl.qty - COALESCE((SELECT SUM(rl.received_qty) FROM receipt_lines rl WHERE rl.po_line_id = pl.id), 0)) AS remaining
+              COALESCE((SELECT SUM(sl.qty)          FROM scn_lines sl   WHERE sl.scn_id = ? AND sl.po_line_id = pl.id), 0) AS scn_alloc,
+              COALESCE((SELECT SUM(rl.received_qty) FROM receipt_lines rl WHERE rl.scn_id = ? AND rl.po_line_id = pl.id), 0) AS received_on_scn
        FROM po_lines pl WHERE pl.po_id = ?`,
-      [scn.po_id || 0]
+      [scnId, scnId, scn.po_id || 0]
     )
+    const lines = linesRaw.map(l => {
+      const alloc = Number(l.scn_alloc)
+      const remaining = alloc > 1e-9
+        ? Math.max(0, alloc - Number(l.received_on_scn))           // per-SCN allocation cap (binding)
+        : Math.max(0, Number(l.qty) - Number(l.received_to_date))  // legacy: no allocation on this SCN
+      // `expected_on_scn` = the denominator the UI shows ("Y of X for this SCN").
+      return { ...l, remaining, expected_on_scn: alloc > 1e-9 ? alloc : null }
+    })
 
     res.json({ ...scn, packages, lines, heats })
   } catch (e) { dbError(res, e) }
 })
 
 // POST /api/mc/:projectId/receipting/:scnId/complete — complete receipt (creates stock)
+// Q1 (partial receipting): the whole receipt runs in ONE transaction with per-PO-line
+// FOR UPDATE locking, so an SCN can be received across multiple sessions safely.
+//   Guard A (no double-receipt): re-entry recomputes received-to-date under the row
+//     lock, so a repeat/concurrent submit can never receive the same units twice; a
+//     fully closed SCN is rejected outright.
+//   Guard B (over-receipt cap): cumulative received for a PO line can never exceed the
+//     ordered qty — rejected with a clean 422 and zero mutation (the txn rolls back).
+// Status is DERIVED from remaining: any outstanding qty → 'partially_received', else
+// 'received' (replaces the old wholesale-'received' close).
 router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req, res) => {
+  const scnId = Number(req.params.scnId)
+  const pid   = Number(req.params.projectId)
+  // Phase 1: `lines` carries the per-PO-line received quantities + discrepancy
+  // detail the wizard now sends. `actual_packages` kept for back-compat.
+  const { location_code, cargo_condition, actual_packages, notes, warehouse_id, lines } = req.body
+  const userId = req.user?.id || 1
+
+  if (!location_code) return res.status(400).json({ error: 'Grid location is required' })
+
+  // READ COMMITTED for this txn only (reverts on release): the post-lock
+  // received-to-date recompute must see other sessions' COMMITTED receipts.
+  const conn = await db.getConnection()
   try {
-    const scnId = Number(req.params.scnId)
-    const pid   = Number(req.params.projectId)
-    // Phase 1: `lines` carries the per-PO-line received quantities + discrepancy
-    // detail the wizard now sends. `actual_packages` kept for back-compat.
-    const { location_code, cargo_condition, actual_packages, notes, warehouse_id, lines } = req.body
-    const userId = req.user?.id || 1
+    await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+    await conn.beginTransaction()
 
-    if (!location_code) return res.status(400).json({ error: 'Grid location is required' })
+    // Lock the SCN row so two concurrent completes serialize on it.
+    const [[scn]] = await conn.query('SELECT * FROM shipment_control_notes WHERE id = ? FOR UPDATE', [scnId])
+    if (!scn) { await conn.rollback(); return res.status(404).json({ error: 'SCN not found' }) }
 
-    const [[scn]] = await db.query('SELECT * FROM shipment_control_notes WHERE id = ?', [scnId])
-    if (!scn) return res.status(404).json({ error: 'SCN not found' })
-
-    // Stamp arrival now; the OPEN-vs-CLOSED status is decided AFTER the lines are
-    // persisted, based on received-to-date vs ordered (Phase 4 partial-remainder).
-    await db.query('UPDATE shipment_control_notes SET ata=CURDATE() WHERE id=?', [scnId])
+    // Guard A (SCN level): a fully-closed SCN cannot be received again. A
+    // 'partially_received' (or arrived/in-transit) SCN MAY be re-opened for the balance.
+    if (['received', 'closed', 'delivered'].includes(scn.status)) {
+      await conn.rollback()
+      return res.status(409).json({ error: `SCN ${scn.scn_ref} is already ${scn.status} — it cannot be received again.` })
+    }
 
     const whId = warehouse_id || scn.destination_warehouse_id || 1
     const condition = cargo_condition === 'good' ? 'good'
@@ -283,23 +314,69 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
     let stockCreated = 0
 
     if (Array.isArray(lines) && lines.length > 0) {
-      // ── Phase 1 path: receive against real PO lines ──────────
-      // Persist each line to receipt_lines, then create stock from the
-      // RECEIVED qty (not package weight). All received qty goes to
-      // available stock for now — good/quarantine split is Phase 3.
-      // Server-side validation: damaged units cannot exceed received qty.
+      // ── VALIDATE FIRST (no mutation) — any reject rolls back the whole txn ──
+      // Per-entry sanity: damaged ≤ received, off-list heat needs a reason.
       for (const ln of lines) {
         const rq = Number(ln.received_qty)
         const dq = Number(ln.damaged_qty || 0)
         if (rq >= 0 && dq > rq) {
+          await conn.rollback()
           return res.status(422).json({ error: `Line ${ln.line_number || ln.po_line_id}: damaged qty (${dq}) cannot exceed received qty (${rq})` })
         }
         // Heat/Lot P2a: an off-list heat is allowed but REQUIRES a reason. Heat
         // itself stays optional (a line may be received with no heat at all).
         if (ln.heat_off_list && !(ln.heat_off_list_reason || '').trim()) {
+          await conn.rollback()
           return res.status(422).json({ error: `Line ${ln.line_number || ln.po_line_id}: a reason is required for an off-list heat` })
         }
       }
+
+      // Guard A + B: aggregate requested received per PO line (split lines fan out
+      // into multiple entries sharing a po_line_id), then lock each PO line and
+      // recompute received-to-date so cumulative can never exceed the ordered qty.
+      const reqByLine = new Map()
+      for (const ln of lines) {
+        const rq = Number(ln.received_qty)
+        if (rq > 0 && ln.po_line_id) {
+          const k = Number(ln.po_line_id)
+          reqByLine.set(k, (reqByLine.get(k) || 0) + rq)
+        }
+      }
+      for (const [poLineId, reqQty] of reqByLine) {
+        // Lock the PO line row to serialise concurrent receipts of this line.
+        const [[pl]] = await conn.query(
+          'SELECT line_number, qty FROM po_lines WHERE id = ? AND po_id = ? FOR UPDATE',
+          [poLineId, scn.po_id || 0])
+        if (!pl) { await conn.rollback(); return res.status(404).json({ error: `PO line ${poLineId} not found on this SCN's PO` }) }
+        // Cap denominator = THIS SCN's OWN allocation for the line (scn_lines), so
+        // receiving one SCN can never consume a sibling SCN's allocation (TC-locked).
+        // received-to-date is scoped to this scn_id too. Legacy/unallocated lines
+        // (no scn_lines on this SCN) fall back to the PO ordered qty across all SCNs.
+        const [[alloc]] = await conn.query(
+          'SELECT COALESCE(SUM(qty), 0) AS a FROM scn_lines WHERE scn_id = ? AND po_line_id = ?', [scnId, poLineId])
+        const allocation = Number(alloc.a)
+        let remaining, denomDesc
+        if (allocation > 1e-9) {
+          const [[{ rcv }]] = await conn.query(
+            'SELECT COALESCE(SUM(received_qty), 0) AS rcv FROM receipt_lines WHERE scn_id = ? AND po_line_id = ?', [scnId, poLineId])
+          remaining = allocation - Number(rcv)
+          denomDesc = `SCN allocation ${allocation}, already received on this SCN ${Number(rcv)}`
+        } else {
+          const [[{ rcv }]] = await conn.query(
+            'SELECT COALESCE(SUM(received_qty), 0) AS rcv FROM receipt_lines WHERE po_line_id = ?', [poLineId])
+          remaining = Number(pl.qty) - Number(rcv)
+          denomDesc = `ordered ${Number(pl.qty)}, already received ${Number(rcv)}`
+        }
+        if (reqQty > remaining + 1e-9) {
+          await conn.rollback()
+          return res.status(422).json({
+            error: `Line ${pl.line_number}: cannot receive ${reqQty} — only ${remaining} remaining (${denomDesc}).`,
+          })
+        }
+      }
+
+      // ── MUTATE (all validated) ──────────────────────────────
+      // Persist each line to receipt_lines, then create stock from the RECEIVED qty.
       for (const ln of lines) {
         const receivedQty = Number(ln.received_qty)
         if (!(receivedQty >= 0)) continue
@@ -312,7 +389,7 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
         const heatOffList = ln.heat_off_list ? 1 : 0
         const heatReason  = heatOffList ? ((ln.heat_off_list_reason || '').trim() || null) : null
 
-        await db.query(
+        await conn.query(
           `INSERT INTO receipt_lines
              (project_id, scn_id, scn_ref, po_line_id, heat_number, heat_off_list, heat_off_list_reason,
               description, expected_qty, received_qty, damaged_qty, uom,
@@ -335,7 +412,7 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
         // default. Heat (P2a) travels onto the holding.
         const lineLoc = upLoc(ln.location_code) || upLoc(location_code)
         if (goodQty > 0) {
-          await db.query(
+          await conn.query(
             `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by)
              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,CURDATE(),?)`,
             [pid, whId, scnId, ln.po_line_id || null, itemCode, descr, wbs,
@@ -345,7 +422,7 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
 
         // Damaged qty → QUARANTINE location, NOT issuable (qty_available = 0). Same heat travels.
         if (damagedQty > 0) {
-          await db.query(
+          await conn.query(
             `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by,notes)
              VALUES (?,?,?,?,?,?,?,?,0,?,?,?,1,?,?,CURDATE(),?,?)`,
             [pid, whId, scnId, ln.po_line_id || null, itemCode, descr, wbs,
@@ -357,9 +434,9 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
     } else {
       // ── Fallback (SCN with no linked PO lines): legacy package path ──
       // TODO(phase-later): drop once every SCN receipts against PO lines.
-      const [pkgs] = await db.query('SELECT * FROM scn_packages WHERE scn_id=?', [scnId])
+      const [pkgs] = await conn.query('SELECT * FROM scn_packages WHERE scn_id=?', [scnId])
       for (const pkg of pkgs) {
-        await db.query(
+        await conn.query(
           `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,vendor_name,received_date,received_by)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,CURDATE(),?)`,
           [pid, whId, scnId,
@@ -371,22 +448,42 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
       }
     }
 
-    // ── An SCN is ONE physical shipment → completing its receipt = delivered ──
-    // It is never "partially delivered": any outstanding PO-line balance is a
-    // PO-line concern (tracked via received_to_date) and arrives on a NEW SCN.
-    // So the SCN closes as 'received' here regardless of the PO line's total.
-    const newStatus = 'received'
-    await db.query('UPDATE shipment_control_notes SET status=? WHERE id=?', [newStatus, scnId])
+    // Stamp arrival.
+    await conn.query('UPDATE shipment_control_notes SET ata=CURDATE() WHERE id=?', [scnId])
 
+    // ── Status DERIVED from remaining (Q1) — PER THIS SCN ───────
+    // An SCN closes when ITS OWN allocation has fully arrived, not when the whole PO
+    // is in (other SCNs carry their own balance — a PO-line concern). Expected = the
+    // SCN's scn_lines allocation; received = receipt_lines booked against this scn_id.
+    // Both computed on read (never stored). Legacy SCNs with no scn_lines can't be
+    // measured → close as 'received'.
+    // NOTE for TC: this interprets the locked "all PO lines received → received" rule
+    // as "all of THIS SCN's lines received", to avoid a multi-SCN PO never closing any
+    // single SCN. Flagged in the HOLD report.
+    let newStatus = 'received'
+    const [[exp]] = await conn.query('SELECT COALESCE(SUM(qty),0) AS expected FROM scn_lines WHERE scn_id = ?', [scnId])
+    const expectedOnScn = Number(exp.expected)
+    if (expectedOnScn > 1e-9) {
+      const [[rcv]] = await conn.query('SELECT COALESCE(SUM(received_qty),0) AS received FROM receipt_lines WHERE scn_id = ?', [scnId])
+      newStatus = Number(rcv.received) + 1e-9 >= expectedOnScn ? 'received' : 'partially_received'
+    }
+    await conn.query('UPDATE shipment_control_notes SET status=? WHERE id=?', [newStatus, scnId])
+
+    await conn.commit()
+
+    // Audit AFTER commit (pool write — kept out of the txn so a rollback leaves no orphan row).
     await writeAudit(userId, 'receipt_complete', 'scn', scnId,
       { status: scn.status },
       { status: newStatus, location_code, cargo_condition, lines: Array.isArray(lines) ? lines.length : 0 },
-      `/mc/${pid}/receipting/${scnId}/complete`, Number(req.params.projectId) || null)
+      `/mc/${pid}/receipting/${scnId}/complete`, pid || null)
 
     res.json({ success: true, stock_created: stockCreated, scn_status: newStatus })
   } catch (e) {
+    try { await conn.rollback() } catch (_) { /* already rolled back */ }
     console.error('[mc:receipt-complete]', e.message)
     dbError(res, e)
+  } finally {
+    conn.release()
   }
 })
 

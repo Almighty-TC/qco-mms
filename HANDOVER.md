@@ -482,6 +482,8 @@ The wireframe (QMAT-prototype.html) covers:
 
 **KNOWN GAP — no SCN delete/cancel capability (found 23 Jun 2026):** There is no app route to delete or cancel an SCN, and `qmat_app` has no DELETE grant on `shipment_control_notes` / `scn_additional_items`. So a created SCN cannot be removed via the app or runtime user — only by an admin DB delete (and SCN children don't all cascade from `shipment_control_notes`, e.g. `scn_packages` FK has no ON DELETE CASCADE, so children must be removed in FK order first). Address later: either an admin-only SCN-cancel/delete route (soft-cancel preferred over hard delete), or document that SCN removal is admin-only. Not in scope for the packing-contents stages.
 
+**Scope deviation (TC-approved, 24 Jun 2026):** Q1 receipting: kept pre-fill-to-remaining instead of scope's blank pre-fill — blank would flag every line as a discrepancy and break the all-match fast path. Approved by TC.
+
 ---
 
 ## 16. INTERNAL CONVERSATION KEY DECISIONS
