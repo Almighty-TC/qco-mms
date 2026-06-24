@@ -527,6 +527,28 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, userRole = '', on
   // v6: stripe column removed (now a cell accent) — bump id; column count changed.
   const rt = useResizableTable('expediting_pos_v6', EXP_W, EXP_MIN)
 
+  // ─── CRITICAL-PATH STAR TOGGLE ────────────────────────────
+  // The register ★ looked clickable (pointer cursor + title) but carried NO onClick
+  // — so it did nothing. Wire the one-click toggle to the procurement quick-star
+  // endpoint (no reason needed), then reload() to reflect the persisted flag. The
+  // cell already stops propagation, so the row's drawer-open never fires.
+  const [starBusy, setStarBusy] = useState<number | null>(null)
+  const toggleCritical = async (po: PORow) => {
+    if (starBusy) return
+    setStarBusy(po.id)
+    try {
+      await axios.patch(`${API}/procurement/pos/${po.id}/star`)
+      addToast('success', po.is_critical_path
+        ? `${po.po_number} removed from critical path`
+        : `${po.po_number} marked critical path`)
+      reload()
+    } catch (e: any) {
+      addToast('error', e.response?.data?.error || 'Could not change the critical path flag')
+    } finally {
+      setStarBusy(null)
+    }
+  }
+
   // ─── VDRL DATA LOAD ───────────────────────────────────────
   // Loads stats and packages when VDRL tab is activated.
   useEffect(() => {
@@ -720,8 +742,9 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, userRole = '', on
                             (inset shadow → no layout cost, so no wasted column space). */}
                         <td style={{ padding: '10px 6px 10px 12px', textAlign: 'center', boxShadow: `inset 4px 0 0 0 ${RAG_COLORS[po.rag] || '#94a3b8'}` }}
                             onClick={e => e.stopPropagation()}>
-                          <span title={po.is_critical_path ? 'Critical path' : 'Not critical path'}
-                            style={{ fontSize: 16, color: po.is_critical_path ? '#E84E0F' : '#c4cedf', cursor: 'pointer', userSelect: 'none' }}>
+                          <span onClick={() => toggleCritical(po)}
+                            title={po.is_critical_path ? 'Critical path — click to clear' : 'Not critical path — click to mark'}
+                            style={{ fontSize: 16, color: po.is_critical_path ? '#E84E0F' : '#c4cedf', cursor: starBusy === po.id ? 'wait' : 'pointer', userSelect: 'none', opacity: starBusy === po.id ? 0.5 : 1 }}>
                             {po.is_critical_path ? '★' : '☆'}
                           </span>
                         </td>
