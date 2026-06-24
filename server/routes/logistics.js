@@ -691,20 +691,82 @@ router.put('/scn/:scnId/packages/:packageId', async (req, res) => {
   } catch (e) { dbError(res, e) }
 })
 
-// DELETE /api/logistics/scn/:scnId/packages/:packageId
+// Migration tolerance: does scn_packages.parent_package_id exist yet? Cached sticky-
+// true (re-checked only while false → self-heals after the migration without a
+// restart, negligible cost). Lets the delete route work in EITHER deploy order:
+// column present → hierarchy-aware (409/cascade); column absent → old flat delete
+// (no column can exist → every package is a leaf), so a code-before-migration deploy
+// never breaks existing package deletes.
+let _parentColPresent = false
+async function scnPackagesHasParentCol() {
+  if (_parentColPresent) return true
+  const [[r]] = await db.query(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'scn_packages' AND column_name = 'parent_package_id'`)
+  _parentColPresent = r.n > 0
+  return _parentColPresent
+}
+
+// DELETE /api/logistics/scn/:scnId/packages/:packageId[?cascade=1]
+// Q2 nested packaging: DEFAULT-DENY a container delete. If the package has
+// sub-packages, return a clean 409 ("remove sub-packages first, or delete with
+// contents"); the FK is ON DELETE RESTRICT so a bare delete would otherwise throw a
+// raw constraint error. `?cascade=1` opts in to atomically delete the package + all
+// descendant sub-packages (their scn_package_lines cascade via the package_id FK).
+// Default-deny, opt-in to cascade — same shape as the WBS node-delete wizard.
+// Order-tolerant: falls back to flat delete when parent_package_id isn't live yet.
 router.delete('/scn/:scnId/packages/:packageId', async (req, res) => {
+  const { scnId, packageId } = req.params
+  const cascade = req.query.cascade === '1' || req.query.cascade === 'true'
+  const hierarchy = await scnPackagesHasParentCol()
+  const conn = await db.getConnection()
   try {
-    const { scnId, packageId } = req.params
-    await db.query('DELETE FROM scn_packages WHERE id=? AND scn_id=?', [packageId, scnId])
-    await db.query(
+    await conn.beginTransaction()
+    const [[pkg]] = await conn.query('SELECT id FROM scn_packages WHERE id=? AND scn_id=? FOR UPDATE', [packageId, scnId])
+    if (!pkg) { await conn.rollback(); return res.status(404).json({ error: 'Package not found on this SCN.' }) }
+
+    // Pre-migration fallback: no parent_package_id column → no containers possible →
+    // every package is a leaf → plain single-row delete (preserves old behaviour).
+    let toDelete = [Number(packageId)]
+    let hasChildren = false
+    if (hierarchy) {
+      // Collect descendants (multi-level) via parent_package_id — BFS, level by level.
+      let frontier = [Number(packageId)]
+      while (frontier.length) {
+        const [kids] = await conn.query(
+          `SELECT id FROM scn_packages WHERE parent_package_id IN (${frontier.map(() => '?').join(',')})`, frontier)
+        const ids = kids.map(k => k.id)
+        if (!ids.length) break
+        toDelete.push(...ids); frontier = ids
+      }
+      hasChildren = toDelete.length > 1
+      if (hasChildren && !cascade) {
+        await conn.rollback()
+        return res.status(409).json({
+          error: 'This package contains sub-packages. Remove the sub-packages first, or delete the container with its contents.',
+          child_count: toDelete.length - 1,
+        })
+      }
+    }
+
+    // Delete deepest-first so ON DELETE RESTRICT (parent_package_id) is never violated;
+    // each scn_packages delete cascades its scn_package_lines via the package_id FK.
+    for (const id of toDelete.reverse()) {
+      await conn.query('DELETE FROM scn_packages WHERE id=?', [id])
+    }
+    await conn.query(
       `UPDATE shipment_control_notes SET
          total_packages = (SELECT COUNT(*) FROM scn_packages WHERE scn_id=?),
          total_weight_kg = (SELECT COALESCE(SUM(gross_weight_kg),0) FROM scn_packages WHERE scn_id=?)
        WHERE id = ?`,
       [scnId, scnId, scnId]
     )
-    res.json({ success: true })
-  } catch (e) { dbError(res, e) }
+    await conn.commit()
+    res.json({ success: true, deleted_packages: toDelete.length, cascaded: hasChildren })
+  } catch (e) {
+    try { await conn.rollback() } catch (_) { /* already rolled back */ }
+    dbError(res, e)
+  } finally { conn.release() }
 })
 
 // ═══════════════════════════════════════════════════════════════

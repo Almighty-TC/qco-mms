@@ -25,6 +25,8 @@ interface SelectedLineVal { checked: boolean; qty: string }
 interface AdditionalItem  { desc: string; qty: string; uom: string; parentLineId: string } // parentLineId REQUIRED — off-PO variation must name its parent PO line
 interface PkgContent { lineRef: string; qty: string }   // which allocatable line + how much is in this box
 interface PackageRow {
+  id: string                 // Q2: stable client ref for nesting (sent to backend as `ref`)
+  parentId: string           // Q2: id of the container this nests under ('' = top-level)
   type: string; customType?: string; qty: string
   length: string; width: string; height: string; weight: string
   is_dg: boolean
@@ -188,12 +190,34 @@ export const CreateSCNWizard: React.FC<Props> = ({
     setAdditionalItems(prev => prev.filter((_, idx) => idx !== i))
 
   // ─── PACKAGES ─────────────────────────────────────────────
+  const newPkgId = () => `p${Date.now()}${Math.floor(Math.random() * 1000)}`
   const addPackage = () =>
-    setPackages(prev => [...prev, { type: 'Pallet', qty: '1', length: '', width: '', height: '', weight: '', is_dg: false, contents: [] }])
+    setPackages(prev => [...prev, { id: newPkgId(), parentId: '', type: 'Pallet', qty: '1', length: '', width: '', height: '', weight: '', is_dg: false, contents: [] }])
   const updatePkg = (i: number, field: keyof PackageRow, val: any) =>
     setPackages(prev => prev.map((p, idx) => idx === i ? { ...p, [field]: val } : p))
+  // Removing a package re-parents any children to top-level (no orphan refs on submit).
   const removePkg = (i: number) =>
-    setPackages(prev => prev.filter((_, idx) => idx !== i))
+    setPackages(prev => {
+      const removed = prev[i]
+      return prev.filter((_, idx) => idx !== i).map(p => p.parentId === removed?.id ? { ...p, parentId: '' } : p)
+    })
+
+  // ─── Q2 HIERARCHY HELPERS ─────────────────────────────────
+  // A package is a container if any other package nests under it.
+  const isContainer = (pkgId: string) => packages.some(p => p.parentId === pkgId)
+  const pkgHasContents = (p: PackageRow) => p.contents.some(c => c.lineRef && Number(c.qty) > 0)
+  // Valid parents for package i: not itself, not a descendant (no cycles), and not an
+  // item-holding package (a container can't hold items → mirrors the backend leaf rule).
+  const validParents = (i: number) => {
+    const me = packages[i]
+    const descendants = new Set<string>()
+    const collect = (id: string) => packages.forEach(p => { if (p.parentId === id && !descendants.has(p.id)) { descendants.add(p.id); collect(p.id) } })
+    collect(me.id)
+    return packages.filter((p, idx) => idx !== i && p.id !== me.id && !descendants.has(p.id) && !pkgHasContents(p))
+  }
+  // Set/clear the parent of package i (designating the target as a container).
+  const setParent = (i: number, parentId: string) =>
+    setPackages(prev => prev.map((p, idx) => idx === i ? { ...p, parentId } : p))
 
   // ─── PACKAGE CONTENTS (Stage 2 — D1 per-package picker) ────
   const addContent = (pi: number) =>
@@ -290,15 +314,29 @@ export const CreateSCNWizard: React.FC<Props> = ({
         transport_mode: transportMode || null,
         forwarder_name: forwarder || null,
         incoterms: incoterms || null,
+        // Q2: send ref + parent_ref so the backend persists the hierarchy. Order
+        // parents BEFORE children at any depth (backend resolves ids single-pass).
         // Itemized package → qty forced to 1 (one physical box); contents carry the packing list.
-        packages: packages.map(p => ({
-          type: p.type === 'Others' ? ((p.customType || '').trim() || 'Other') : p.type,
-          qty: p.contents.length ? 1 : (Number(p.qty) || 1),
-          length: p.length, width: p.width, height: p.height, weight: p.weight, is_dg: p.is_dg,
-          contents: p.contents
-            .filter(c => c.lineRef && Number(c.qty) > 0)
-            .map(c => ({ line_ref: c.lineRef, qty: Number(c.qty), uom: allocatableLines().find(l => l.ref === c.lineRef)?.uom || null })),
-        })),
+        packages: (() => {
+          const byParent: Record<string, PackageRow[]> = {}
+          packages.forEach(p => { (byParent[p.parentId || ''] = byParent[p.parentId || ''] || []).push(p) })
+          const ordered: PackageRow[] = []
+          const seen = new Set<string>()
+          const walk = (pid: string) => (byParent[pid] || []).forEach(p => { if (seen.has(p.id)) return; seen.add(p.id); ordered.push(p); walk(p.id) })
+          walk('')
+          packages.forEach(p => { if (!seen.has(p.id)) ordered.push(p) })   // orphans → append
+          return ordered
+        })()
+          .map(p => ({
+            ref: p.id,
+            parent_ref: p.parentId || undefined,
+            type: p.type === 'Others' ? ((p.customType || '').trim() || 'Other') : p.type,
+            qty: p.contents.length ? 1 : (Number(p.qty) || 1),
+            length: p.length, width: p.width, height: p.height, weight: p.weight, is_dg: p.is_dg,
+            contents: p.contents
+              .filter(c => c.lineRef && Number(c.qty) > 0)
+              .map(c => ({ line_ref: c.lineRef, qty: Number(c.qty), uom: allocatableLines().find(l => l.ref === c.lineRef)?.uom || null })),
+          })),
         // Heat/Lot P1: declared heats for this shipment (optional — empty is fine).
         heats: heats
           .filter(h => h.heat_number.trim())
@@ -694,15 +732,33 @@ export const CreateSCNWizard: React.FC<Props> = ({
         Optional — add package details for freight booking.
       </div>
 
-      {packages.map((pkg, i) => (
+      {packages.map((pkg, i) => {
+        const container = isContainer(pkg.id)   // Q2: another package nests under this one
+        const parents = validParents(i)         // valid containers to nest THIS package under
+        return (
         <div key={i} style={{
-          border: '1px solid #dde3ed', borderRadius: 8, padding: '14px 16px', marginBottom: 12,
+          border: container ? '1px solid #c4b5fd' : '1px solid #dde3ed', borderRadius: 8, padding: '14px 16px', marginBottom: 12,
+          background: container ? 'rgba(124,58,237,0.03)' : undefined,
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>Package {i + 1}</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'flex', alignItems: 'center', gap: 6 }}>
+              Package {i + 1}
+              {container && <span title="Container — holds sub-packages, not items directly" style={{ fontSize: 9, fontWeight: 700, color: '#7c3aed', background: 'rgba(124,58,237,0.1)', borderRadius: 6, padding: '1px 6px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>📦 container</span>}
+            </span>
             <button onClick={() => removePkg(i)}
               style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 16, cursor: 'pointer' }}>×</button>
           </div>
+          {/* Q2: nest this package under a container (sets parent_package_id). Containers
+              (item-holders) are excluded from the options — a container can't hold items. */}
+          {packages.length > 1 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <label style={{ fontSize: 10, color: '#64748b', whiteSpace: 'nowrap' }}>Nest under</label>
+              <select value={pkg.parentId} onChange={e => setParent(i, e.target.value)} style={{ ...inputStyle, flex: 1, padding: '5px 8px' }}>
+                <option value="">— Top-level (no container)</option>
+                {parents.map(pp => { const idx = packages.indexOf(pp); return <option key={pp.id} value={pp.id}>Package {idx + 1}{pp.type ? ` · ${pp.type}` : ''}</option> })}
+              </select>
+            </div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px', gap: 8, marginBottom: 8 }}>
             <div>
               <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Type</label>
@@ -770,8 +826,15 @@ export const CreateSCNWizard: React.FC<Props> = ({
             Dangerous goods (DG)
           </label>
 
-          {/* Contents (Stage 2 — D1 per-package picker). Adding any content makes this
-              ONE physical box (qty locked to 1). Draws from the SCN's selected lines. */}
+          {/* Q2: a container holds sub-packages, NOT items directly (mirrors the backend
+              leaf rule). Hide the contents picker for containers — items go on its leaves. */}
+          {container ? (
+            <div style={{ marginTop: 12, borderTop: '1px dashed #e2e8f0', paddingTop: 10, fontSize: 11, color: '#7c3aed', fontStyle: 'italic' }}>
+              📦 Container — items are packed into its sub-packages, not here.
+            </div>
+          ) : (
+          /* Contents (Stage 2 — D1 per-package picker). Adding any content makes this
+             ONE physical box (qty locked to 1). Draws from the SCN's selected lines. */
           <div style={{ marginTop: 12, borderTop: '1px dashed #e2e8f0', paddingTop: 10 }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 6 }}>Contents (packing list)</div>
             {pkg.contents.map((c, ci) => {
@@ -826,8 +889,10 @@ export const CreateSCNWizard: React.FC<Props> = ({
               + add content
             </button>
           </div>
+          )}
         </div>
-      ))}
+        )
+      })}
 
       {/* Reconciliation (D2) — every selected line must be fully packed before Confirm. */}
       {allocatableLines().length > 0 && (

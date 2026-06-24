@@ -51,11 +51,37 @@ interface SCNDetail extends SCNRow {
 interface POLine { id: number; line_number: string; description: string; qty: number | null; qty_assigned: number | null; uom: string }
 interface Package {
   id: number; scn_id: number; package_number: string; description?: string | null
+  parent_package_id?: number | null   // Q2: nesting — set when this is a sub-package of a container
   length_mm?: number | null; width_mm?: number | null; height_mm?: number | null
   gross_weight_kg?: number | null; net_weight_kg?: number | null
   is_dangerous_goods: number; dg_class?: string | null; dg_un_number?: string | null
   marks_numbers?: string | null
   contents?: PkgContentView[]   // Stage 4: declared packing-list contents for this box
+}
+
+// ─── Q2 PACKAGE TREE ──────────────────────────────────────────
+// Orders a flat package list depth-first (container → sub-packages) for display,
+// tagging each row with its nesting depth + whether it's a container (has children).
+// Orphans (parent not in the set) fall back to top-level — never dropped.
+function orderPackagesTree<T extends { id: number; parent_package_id?: number | null }>(packages: T[]) {
+  const byParent = new Map<string, T[]>()
+  packages.forEach(p => {
+    const k = p.parent_package_id == null ? 'root' : String(p.parent_package_id)
+    ;(byParent.get(k) || byParent.set(k, []).get(k)!).push(p)
+  })
+  const out: { pkg: T; depth: number; isContainer: boolean }[] = []
+  const seen = new Set<number>()
+  const walk = (key: string, depth: number) => {
+    (byParent.get(key) || []).forEach(p => {
+      if (seen.has(p.id)) return
+      seen.add(p.id)
+      out.push({ pkg: p, depth, isContainer: byParent.has(String(p.id)) })
+      walk(String(p.id), depth + 1)
+    })
+  }
+  walk('root', 0)
+  packages.forEach(p => { if (!seen.has(p.id)) out.push({ pkg: p, depth: 0, isContainer: byParent.has(String(p.id)) }) })
+  return out
 }
 interface PkgContentView { scn_line_id: number; qty: number | string; uom?: string | null; label: string; kind?: string }
 interface ScnLineAlloc { id: number; po_line_id?: number | null; additional_item_id?: number | null; qty: number | string; uom?: string | null; line_number?: string | null; po_description?: string | null; ai_description?: string | null; packed_qty: number | string }
@@ -907,12 +933,17 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
   const [editingId, setEditingId] = useState<number|null>(null)
+  // Q2: explicit delete-with-contents confirm for containers.
+  const [confirmDel, setConfirmDel] = useState<{ id: number; childCount: number } | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const inputSt: React.CSSProperties = {
     fontSize: 11, padding: '4px 7px', borderRadius: 5, border: bd,
     background: dark ? '#0f172a' : '#f8fafc', color: col, fontFamily: 'inherit', width: '100%',
   }
 
   const totalGross = scn.packages?.reduce((s, p) => s + (Number(p.gross_weight_kg) || 0), 0) || 0
+  // Q2: tree-ordered packages (container → sub-packages) for display.
+  const tree = orderPackagesTree(scn.packages || [])
 
   const savePackage = async () => {
     if (!form.length_mm || !form.width_mm || !form.height_mm || !form.gross_weight_kg)
@@ -932,11 +963,26 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
     } finally { setSaving(false) }
   }
 
-  const deletePackage = async (pkgId: number) => {
+  // Q2: cascade only when explicitly confirmed (container + contents). The backend
+  // default-denies a container delete with a 409, which we surface verbatim.
+  const deletePackage = async (pkgId: number, cascade = false) => {
+    setDeleting(true)
     try {
-      await axios.delete(`${API}/logistics/scn/${scn.id}/packages/${pkgId}`)
-      addToast('success', 'Package deleted'); onRefresh()
-    } catch (_) { addToast('error', 'Failed to delete package') }
+      await axios.delete(`${API}/logistics/scn/${scn.id}/packages/${pkgId}${cascade ? '?cascade=1' : ''}`)
+      addToast('success', cascade ? 'Container + sub-packages deleted' : 'Package deleted')
+      setConfirmDel(null); onRefresh()
+    } catch (e: any) {
+      addToast('error', e.response?.data?.error || 'Failed to delete package')
+    } finally { setDeleting(false) }
+  }
+  // 🗑 click: a container (has children) → explicit confirm step; a leaf → delete directly.
+  const onDeleteClick = (pkgId: number, isContainer: boolean) => {
+    if (isContainer) {
+      const childCount = (scn.packages || []).filter(p => p.parent_package_id === pkgId).length
+      setConfirmDel({ id: pkgId, childCount })
+    } else {
+      deletePackage(pkgId, false)
+    }
   }
 
   return (
@@ -980,7 +1026,7 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
             </tr>
           </thead>
           <tbody>
-            {(scn.packages || []).map(p => (
+            {tree.map(({ pkg: p, depth, isContainer }) => (
               editingId === p.id ? (
                 <tr key={p.id}>
                   <td colSpan={10} style={{ padding: 10 }}>
@@ -990,10 +1036,17 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
                 </tr>
               ) : (
                 <tr key={p.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
-                  <td style={{ padding: '7px 8px', fontFamily: 'JetBrains Mono, monospace', color: '#E84E0F', fontSize: 11 }}>{p.package_number}</td>
-                  <td style={{ padding: '7px 8px', color: col }}>{p.description || '—'}</td>
+                  <td style={{ padding: '7px 8px', fontFamily: 'JetBrains Mono, monospace', color: '#E84E0F', fontSize: 11, paddingLeft: 8 + depth * 18 }}>
+                    {depth > 0 && <span style={{ color: sub }}>└ </span>}{p.package_number}
+                  </td>
+                  <td style={{ padding: '7px 8px', color: col }}>
+                    {p.description || '—'}
+                    {isContainer && <span title="Container — holds sub-packages, not items directly" style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, color: '#7c3aed', background: 'rgba(124,58,237,0.1)', borderRadius: 6, padding: '1px 6px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>📦 container</span>}
+                  </td>
                   <td style={{ padding: '7px 8px', color: col, minWidth: 160 }}>
-                    {(p.contents && p.contents.length) ? (
+                    {isContainer ? (
+                      <span style={{ color: sub, fontStyle: 'italic', fontSize: 11 }}>items in sub-packages</span>
+                    ) : (p.contents && p.contents.length) ? (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                         {p.contents.map((c, ci) => (
                           <span key={ci} style={{ fontSize: 11 }}>
@@ -1015,7 +1068,8 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
                     <div style={{ display: 'flex', gap: 4 }}>
                       <button onClick={() => { setEditingId(p.id); setAdding(false); setForm({ description: p.description||'', length_mm: String(p.length_mm||''), width_mm: String(p.width_mm||''), height_mm: String(p.height_mm||''), gross_weight_kg: String(p.gross_weight_kg||''), net_weight_kg: String(p.net_weight_kg||''), is_dangerous_goods: !!p.is_dangerous_goods, dg_class: p.dg_class||'', dg_un_number: p.dg_un_number||'', marks_numbers: p.marks_numbers||'' }) }}
                         style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 13 }}>✎</button>
-                      <button onClick={() => deletePackage(p.id)}
+                      <button onClick={() => onDeleteClick(p.id, isContainer)}
+                        title={isContainer ? 'Delete container (asks about sub-packages)' : 'Delete package'}
                         style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 13 }}>🗑</button>
                     </div>
                     )}
@@ -1044,6 +1098,29 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
           )}
         </table>
       </div>
+
+      {/* Q2: explicit delete-with-contents confirm for a container. */}
+      {confirmDel && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9600 }}
+          onClick={() => !deleting && setConfirmDel(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: dark ? '#1e293b' : '#fff', border: bd, borderRadius: 10, padding: 22, maxWidth: 420, width: '90%' }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: col, marginBottom: 8 }}>Delete container with contents?</div>
+            <div style={{ fontSize: 13, color: sub, marginBottom: 18 }}>
+              This package is a <strong style={{ color: '#7c3aed' }}>container</strong> holding{' '}
+              <strong style={{ color: col }}>{confirmDel.childCount}</strong> sub-package{confirmDel.childCount !== 1 ? 's' : ''}.
+              Deleting it removes the container, all its sub-packages, and their packing-list contents. This cannot be undone.
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setConfirmDel(null)} disabled={deleting}
+                style={{ padding: '7px 14px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+              <button onClick={() => deletePackage(confirmDel.id, true)} disabled={deleting}
+                style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#ef4444', color: '#fff', cursor: deleting ? 'wait' : 'pointer', fontSize: 13, fontWeight: 600, opacity: deleting ? 0.6 : 1 }}>
+                {deleting ? 'Deleting…' : 'Delete container + contents'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

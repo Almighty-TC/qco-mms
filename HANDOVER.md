@@ -484,6 +484,8 @@ The wireframe (QMAT-prototype.html) covers:
 
 **Scope deviation (TC-approved, 24 Jun 2026):** Q1 receipting: kept pre-fill-to-remaining instead of scope's blank pre-fill — blank would flag every line as a discrepancy and break the all-match fast path. Approved by TC.
 
+**Wireframe deviation (TC-approved, 24 Jun 2026):** Q2 nested packaging. The wireframe's Create-SCN Step 3 "Packages" (WIREFRAME_INVENTORY.md:197) is a flat dims/weight table — it has NO container/sub-package hierarchy concept. TC scoped nested packaging (container → sub-packages → items, shipment-only) on top of it: schema `scn_packages.parent_package_id` self-FK (ON DELETE RESTRICT); leaf-only rule (a container holds sub-packages, never items directly) enforced in the create txn AND mirrored in the wizard UI; container delete is default-deny (409) with an opt-in atomic cascade; rendered as a tree in SCN-detail + receipting reference. Wizard Step 3 gains a per-package "Nest under" selector + container badge. Approved by TC. Hierarchy is shipment-only (dropped at receipt — no `warehouse_stock.package_id`).
+
 ---
 
 ## 16. INTERNAL CONVERSATION KEY DECISIONS

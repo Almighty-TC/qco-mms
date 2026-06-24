@@ -973,20 +973,59 @@ router.post('/:projectId/scn', async (req, res) => {
     const num = v => (v == null || v === '') ? null : Number(v)
     let pkgNum = 0, contentRows = 0
     const allocated = {}   // line_ref → running total packed across all packages (D3 cap)
-    const insertPkg = async (p, n) => {
+    // Q2 hierarchy: a package may carry a client `ref` and a `parent_ref` (the ref of
+    // its container). parent_package_id is persisted ONLY when parent_ref is present —
+    // so flat payloads never touch the new column (deploy-safe pre-migration).
+    const insertPkg = async (p, n, parentId) => {
+      const cols = ['scn_id', 'package_number', 'description', 'length_mm', 'width_mm', 'height_mm', 'gross_weight_kg', 'is_dangerous_goods']
+      const vals = [scnId, String(n).padStart(2, '0'), (p.type || '').trim() || null,
+        num(p.length), num(p.width), num(p.height), num(p.weight), p.is_dg ? 1 : 0]
+      if (parentId != null) { cols.push('parent_package_id'); vals.push(parentId) }   // ⚠ needs the migration applied
       const [pr] = await conn.query(
-        `INSERT INTO scn_packages (scn_id, package_number, description, length_mm, width_mm, height_mm, gross_weight_kg, is_dangerous_goods)
-         VALUES (?,?,?,?,?,?,?,?)`,
-        [scnId, String(n).padStart(2, '0'), (p.type || '').trim() || null,
-         num(p.length), num(p.width), num(p.height), num(p.weight), p.is_dg ? 1 : 0])
+        `INSERT INTO scn_packages (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`, vals)
       return pr.insertId
     }
+
+    // ── LEAF-ONLY RULE (both directions) — payload-level, the create txn is the ONLY
+    //    write path into scn_package_lines (census-confirmed), so this is complete.
+    //    A container (a package referenced as a parent) must NOT hold items directly;
+    //    equivalently, an item-holding package must NOT be made a parent. Reject before
+    //    any insert (so the reject path never touches parent_package_id — provable
+    //    pre-migration). ──
+    const containerRefs = new Set()
+    ;(packages || []).forEach(p => { if (p.parent_ref != null && p.parent_ref !== '') containerRefs.add(String(p.parent_ref)) })
     for (const p of (packages || [])) {
+      const myRef = p.ref != null ? String(p.ref) : ''
+      const isContainer = myRef !== '' && containerRefs.has(myRef)
+      const hasContents = (p.contents || []).some(c => c && c.line_ref && Number(c.qty) > 0)
+      if (isContainer && hasContents) {
+        await conn.rollback()
+        return res.status(422).json({ error: `Package "${(p.type || myRef)}" is a container (holds sub-packages) and cannot hold items directly — allocate items to its sub-packages.` })
+      }
+      // Parent ref must resolve to another package in this shipment.
+      if (p.parent_ref != null && p.parent_ref !== '' &&
+          !(packages || []).some(q => q !== p && p.ref !== q.ref && String(q.ref ?? '') === String(p.parent_ref))) {
+        await conn.rollback()
+        return res.status(422).json({ error: `Package parent_ref "${p.parent_ref}" does not match any package in this shipment.` })
+      }
+    }
+
+    // ── Persist packages. Contract: parents appear BEFORE their children in the payload
+    //    (so parent ids resolve single-pass); the wizard guarantees this ordering. ──
+    const refToPkgId = {}   // client ref → inserted scn_packages.id
+    for (const p of (packages || [])) {
+      const parentRef = (p.parent_ref != null && p.parent_ref !== '') ? String(p.parent_ref) : null
+      if (parentRef && refToPkgId[parentRef] === undefined) {
+        await conn.rollback()
+        return res.status(422).json({ error: `Package parent "${parentRef}" must be listed before its sub-packages.` })
+      }
+      const parentId = parentRef ? refToPkgId[parentRef] : null
       const contents = (p.contents || []).filter(c => c && c.line_ref && Number(c.qty) > 0)
       if (contents.length) {
-        // Itemized package = ONE physical box (qty forced to 1); record its contents.
+        // Itemized package (a leaf) = ONE physical box; record its contents.
         pkgNum++
-        const packageId = await insertPkg(p, pkgNum)
+        const packageId = await insertPkg(p, pkgNum, parentId)
+        if (p.ref != null) refToPkgId[String(p.ref)] = packageId
         for (const c of contents) {
           const ref = c.line_ref
           const scnLineId = refToScnLineId[ref]
@@ -1002,10 +1041,15 @@ router.post('/:projectId/scn', async (req, res) => {
             [packageId, scnLineId, q, c.uom || null])
           contentRows++
         }
+      } else if (p.ref != null || parentId != null) {
+        // A container or an empty leaf that participates in the hierarchy → ONE row.
+        pkgNum++
+        const id = await insertPkg(p, pkgNum, parentId)
+        if (p.ref != null) refToPkgId[String(p.ref)] = id
       } else {
-        // Non-itemized: a "qty N" row expands into N numbered package rows (legacy behaviour).
+        // Non-itemized flat package: a "qty N" row expands into N numbered rows (legacy).
         const count = Math.min(500, Math.max(1, Math.floor(Number(p.qty) || 1)))
-        for (let k = 0; k < count; k++) { pkgNum++; await insertPkg(p, pkgNum) }
+        for (let k = 0; k < count; k++) { pkgNum++; await insertPkg(p, pkgNum, null) }
       }
     }
     if (pkgNum > 0) {

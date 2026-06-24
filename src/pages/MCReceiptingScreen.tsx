@@ -555,16 +555,34 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
               <div style={{ border: bd, borderRadius: 8, marginTop: 12, padding: '10px 14px', background: cardBg }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: sub, textTransform: 'uppercase', marginBottom: 2 }}>Declared package contents (packing list)</div>
                 <div style={{ fontSize: 11, color: sub, fontStyle: 'italic', marginBottom: 8 }}>Reference only — goods are received per line below.</div>
-                {(detail.packages || []).filter((p: any) => p.contents && p.contents.length).map((p: any) => (
-                  <div key={p.id} style={{ marginBottom: 8 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: col }}>Package {p.package_number}{p.description ? ` · ${p.description}` : ''}</div>
-                    {p.contents.map((c: any, ci: number) => (
-                      <div key={ci} style={{ fontSize: 12, color: sub, paddingLeft: 12 }}>
-                        <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#2563eb' }}>{Number(c.qty)}{c.uom ? ` ${c.uom}` : ''}</span> · {c.label}
+                {/* Q2: render container → sub-package → items as a tree (depth-first, indented).
+                    Containers hold no items directly; their sub-packages carry the contents. */}
+                {(() => {
+                  const pkgs = detail.packages || []
+                  const byParent: Record<string, any[]> = {}
+                  pkgs.forEach((p: any) => { const k = p.parent_package_id == null ? 'root' : String(p.parent_package_id); (byParent[k] = byParent[k] || []).push(p) })
+                  const rows: { p: any; depth: number; isContainer: boolean }[] = []
+                  const seen = new Set<number>()
+                  const walk = (k: string, depth: number) => { (byParent[k] || []).forEach((p: any) => { if (seen.has(p.id)) return; seen.add(p.id); rows.push({ p, depth, isContainer: !!byParent[String(p.id)] }); walk(String(p.id), depth + 1) }) }
+                  walk('root', 0)
+                  pkgs.forEach((p: any) => { if (!seen.has(p.id)) rows.push({ p, depth: 0, isContainer: !!byParent[String(p.id)] }) })
+                  return rows.map(({ p, depth, isContainer }) => (
+                    <div key={p.id} style={{ marginBottom: 8, paddingLeft: depth * 16 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: col }}>
+                        {depth > 0 && <span style={{ color: sub }}>└ </span>}
+                        Package {p.package_number}{p.description ? ` · ${p.description}` : ''}
+                        {isContainer && <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, color: '#7c3aed' }}>📦 CONTAINER</span>}
                       </div>
-                    ))}
-                  </div>
-                ))}
+                      {isContainer ? (
+                        <div style={{ fontSize: 11, color: sub, fontStyle: 'italic', paddingLeft: 12 }}>items in sub-packages</div>
+                      ) : (p.contents || []).map((c: any, ci: number) => (
+                        <div key={ci} style={{ fontSize: 12, color: sub, paddingLeft: 12 }}>
+                          <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#2563eb' }}>{Number(c.qty)}{c.uom ? ` ${c.uom}` : ''}</span> · {c.label}
+                        </div>
+                      ))}
+                    </div>
+                  ))
+                })()}
               </div>
             )}
 
