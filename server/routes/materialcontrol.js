@@ -76,6 +76,33 @@ async function writeAudit(userId, action, entity, id, before, after, resource, p
   } catch (e) { console.error('[audit] insert failed:', e.message) }
 }
 
+// ─── Q3 CHILD-STOCK CAPABILITY DETECT ─────────────────────────
+// Did migrate-child-stock.js run? Cached sticky-true (re-checked only while false →
+// self-heals after the migration). Lets the receipting path skip the child branch
+// gracefully when warehouse_stock.additional_item_id isn't live yet.
+let _childStockLive = false
+async function childStockLive() {
+  if (_childStockLive) return true
+  const [[r]] = await db.query(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'warehouse_stock' AND column_name = 'additional_item_id'`)
+  _childStockLive = r.n > 0
+  return _childStockLive
+}
+
+// ─── SHARED item_code COMPUTATION (Q3) ────────────────────────
+// Single source of truth so a parent PO line and its off-PO child land the SAME
+// item_code → they nest (group) in the Stock Register. An explicit tag/identity wins;
+// otherwise generate from the line number. A CHILD passes its PARENT's line number as
+// the fallback so the generated codes match when the parent has no tag.
+// (Replaces the duplicated expressions at materialcontrol.js:406 + MCReceiptingScreen.tsx:391.)
+function effectiveItemCode(explicitTag, scnRef, lineNumberForFallback) {
+  const tag = (explicitTag || '').toString().trim()
+  if (tag) return tag
+  return (lineNumberForFallback != null && lineNumberForFallback !== '')
+    ? `${scnRef}-L${lineNumberForFallback}` : `SCN-${scnRef}`
+}
+
 // ═══════════════════════════════════════════════════════════════
 // RECEIPTING
 // ═══════════════════════════════════════════════════════════════
@@ -264,7 +291,29 @@ router.get('/:projectId/receipting/:scnId', rejectExternal, async (req, res) => 
       return { ...l, remaining, expected_on_scn: alloc > 1e-9 ? alloc : null }
     })
 
-    res.json({ ...scn, packages, lines, heats })
+    // ── Q3: child / off-PO items as receivable rows — PARALLEL branch keyed on
+    // additional_item_id (the po_line query above is untouched). Each child's
+    // expected = its scn_lines allocation; received = receipt_lines by additional_item_id.
+    // Capability-gated: empty until migrate-child-stock.js is live. ──
+    let child_lines = []
+    if (await childStockLive()) {
+      const [crows] = await db.query(
+        `SELECT ai.id AS additional_item_id, ai.description, ai.uom, ai.parent_po_line_id,
+                ai.commodity_id, ai.equipment_tag, ai.tag_number, ai.wbs_code_snapshot, ai.ros_date,
+                ppl.line_number AS parent_line_number,
+                COALESCE((SELECT SUM(sl.qty)          FROM scn_lines sl   WHERE sl.scn_id = ? AND sl.additional_item_id = ai.id), 0) AS scn_alloc,
+                COALESCE((SELECT SUM(rl.received_qty) FROM receipt_lines rl WHERE rl.scn_id = ? AND rl.additional_item_id = ai.id), 0) AS received_on_scn
+         FROM scn_additional_items ai
+         LEFT JOIN po_lines ppl ON ppl.id = ai.parent_po_line_id
+         WHERE ai.scn_id = ? AND ai.is_variation = 1`,
+        [scnId, scnId, scnId])
+      child_lines = crows.map(c => {
+        const alloc = Number(c.scn_alloc)
+        return { ...c, remaining: Math.max(0, alloc - Number(c.received_on_scn)), expected_on_scn: alloc }
+      })
+    }
+
+    res.json({ ...scn, packages, lines, child_lines, heats })
   } catch (e) { dbError(res, e) }
 })
 
@@ -375,11 +424,101 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
         }
       }
 
+      // ── Q3: child / off-PO lines — PARALLEL Guard A+B keyed on additional_item_id ──
+      // Same discipline as PO lines: aggregate per child, lock the child row FOR UPDATE,
+      // recompute received-to-date for THIS child, cap at its own SCN allocation. childInfo
+      // caches the locked row (incl parent_line_number for item_code) for the mutation pass.
+      const childCols = await childStockLive()
+      const childInfo = new Map()
+      if (childCols) {
+        const reqByChild = new Map()
+        for (const ln of lines) {
+          const rq = Number(ln.received_qty)
+          if (rq > 0 && ln.additional_item_id) {
+            const k = Number(ln.additional_item_id)
+            reqByChild.set(k, (reqByChild.get(k) || 0) + rq)
+          }
+        }
+        for (const [aiId, reqQty] of reqByChild) {
+          // No FOR UPDATE here: a child belongs to exactly ONE SCN, and the SCN row is
+          // already locked FOR UPDATE above (line ~299), so concurrent receipts of this
+          // child are serialised by that lock. READ COMMITTED makes the received-to-date
+          // recompute below see the prior session's committed child receipts (Guard A).
+          // (Also: qmat_app has no lock-clause privilege on scn_additional_items.)
+          const [[ai]] = await conn.query(
+            `SELECT ai.id, ai.tag_number, ai.equipment_tag, ai.commodity_id, ai.wbs_code_snapshot,
+                    ai.parent_po_line_id, ppl.line_number AS parent_line_number
+             FROM scn_additional_items ai LEFT JOIN po_lines ppl ON ppl.id = ai.parent_po_line_id
+             WHERE ai.id = ? AND ai.scn_id = ?`, [aiId, scnId])
+          if (!ai) { await conn.rollback(); return res.status(404).json({ error: `Off-PO item ${aiId} not found on this SCN` }) }
+          const [[alloc]] = await conn.query(
+            'SELECT COALESCE(SUM(qty), 0) AS a FROM scn_lines WHERE scn_id = ? AND additional_item_id = ?', [scnId, aiId])
+          const [[{ rcv }]] = await conn.query(
+            'SELECT COALESCE(SUM(received_qty), 0) AS rcv FROM receipt_lines WHERE scn_id = ? AND additional_item_id = ?', [scnId, aiId])
+          const allocation = Number(alloc.a)
+          const remaining = allocation - Number(rcv)
+          if (reqQty > remaining + 1e-9) {
+            await conn.rollback()
+            return res.status(422).json({
+              error: `Off-PO item "${ai.tag_number || ai.equipment_tag || aiId}": cannot receive ${reqQty} — only ${remaining} remaining (SCN allocation ${allocation}, already received ${Number(rcv)}).`,
+            })
+          }
+          childInfo.set(aiId, ai)
+        }
+      }
+
       // ── MUTATE (all validated) ──────────────────────────────
       // Persist each line to receipt_lines, then create stock from the RECEIVED qty.
       for (const ln of lines) {
         const receivedQty = Number(ln.received_qty)
         if (!(receivedQty >= 0)) continue
+
+        // ── Q3 child branch: off-PO item → receipt_lines + warehouse_stock keyed on
+        // additional_item_id, with the PARENT's effective item_code (so they nest) and
+        // the inherited WBS snapshot. PO-line logic below is untouched. ──
+        if (childCols && ln.additional_item_id) {
+          const aiId = Number(ln.additional_item_id)
+          const ai = childInfo.get(aiId)
+          if (!ai) continue   // received_qty was 0 → not capped/locked; nothing to write
+          const dmg  = Number(ln.damaged_qty || 0)
+          const cuom = ln.uom || 'EA'
+          const cHeatNo      = (ln.heat_number || '').trim() || null
+          const cHeatOffList = ln.heat_off_list ? 1 : 0
+          const cHeatReason  = cHeatOffList ? ((ln.heat_off_list_reason || '').trim() || null) : null
+          await conn.query(
+            `INSERT INTO receipt_lines
+               (project_id, scn_id, scn_ref, additional_item_id, heat_number, heat_off_list, heat_off_list_reason,
+                description, expected_qty, received_qty, damaged_qty, uom,
+                discrepancy_type, discrepancy_notes, received_by, received_date)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURDATE())`,
+            [pid, scnId, scn.scn_ref, aiId, cHeatNo, cHeatOffList, cHeatReason,
+             ln.description || null,
+             ln.expected_qty != null ? Number(ln.expected_qty) : null, receivedQty, dmg, cuom,
+             ln.discrepancy_type || null, ln.discrepancy_notes || null, userId])
+          const cItemCode = effectiveItemCode(ai.tag_number || ai.equipment_tag, scn.scn_ref, ai.parent_line_number)
+          const cWbs   = ai.wbs_code_snapshot || null
+          const cGood  = receivedQty - dmg
+          const cLoc   = upLoc(ln.location_code) || upLoc(location_code)
+          if (cGood > 0) {
+            await conn.query(
+              `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,additional_item_id,commodity_id,equipment_tag,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,CURDATE(),?)`,
+              [pid, whId, scnId, aiId, ai.commodity_id ?? null, ai.equipment_tag ?? null, cItemCode, ln.description || 'Off-PO item', cWbs,
+               cGood, cGood, cuom, cLoc, (dmg > 0 ? 'good' : condition), scn.vendor_name, cHeatNo, userId])
+            stockCreated++
+          }
+          if (dmg > 0) {
+            await conn.query(
+              `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,additional_item_id,commodity_id,equipment_tag,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by,notes)
+               VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,?,1,?,?,CURDATE(),?,?)`,
+              [pid, whId, scnId, aiId, ai.commodity_id ?? null, ai.equipment_tag ?? null, cItemCode, ln.description || 'Off-PO item', cWbs,
+               dmg, cuom, QUARANTINE_LOCATION, 'quarantine', scn.vendor_name, cHeatNo, userId,
+               `Damaged on receipt — ${ln.discrepancy_notes || 'pending QA review'}`])
+            stockCreated++
+          }
+          continue
+        }
+
         const expectedQty = ln.expected_qty != null ? Number(ln.expected_qty) : null
         const damagedQty = Number(ln.damaged_qty || 0)
         const uom = ln.uom || 'EA'
@@ -403,7 +542,7 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
         // ── Phase 3: split good vs damaged into DISTINCT per-line holdings ──
         // (HEAT-READY: never pooled into a shared row — each split is its own row.)
         const goodQty    = receivedQty - damagedQty
-        const itemCode   = ln.item_code || (ln.po_line_id ? `${scn.scn_ref}-L${ln.line_number || ln.po_line_id}` : `SCN-${scn.scn_ref}`)
+        const itemCode   = effectiveItemCode(ln.item_code, scn.scn_ref, ln.line_number || ln.po_line_id)
         const descr      = ln.description || scn.notes || 'Received goods'
         const wbs        = ln.wbs_code || null
 
@@ -511,8 +650,11 @@ router.get('/:projectId/stock', async (req, res) => {
       )
       subWbsCodes = wbsRows.map(r => r.wbs_code).filter(c => c !== 'ALL')
       if (subWbsCodes.length > 0) {
-        const placeholders = subWbsCodes.map(() => 'LIKE ?').join(' OR ')
-        conditions.push(`(s.wbs_code IS NULL OR ${subWbsCodes.map(() => 's.wbs_code LIKE ?').join(' OR ')})`)
+        // Q3: dropped the `s.wbs_code IS NULL OR …` bypass. It let NULL-wbs stock leak to
+        // every subcontractor regardless of scope; with children now inheriting their
+        // parent's WBS snapshot, all stock carries a real WBS (0 NULL-wbs rows exist), so
+        // strict scoping loses nothing and children are correctly visible only within scope.
+        conditions.push(`(${subWbsCodes.map(() => 's.wbs_code LIKE ?').join(' OR ')})`)
         subWbsCodes.forEach(c => params.push(`${c}%`))
       }
     }
@@ -553,7 +695,11 @@ router.get('/:projectId/stock', async (req, res) => {
       // total for the filtered set (conditions are all on s.* — no join needed)
       db.query(`SELECT COUNT(*) AS total FROM warehouse_stock s WHERE ${whereSql}`, params),
       db.query(
-        `SELECT s.*, w.name AS warehouse_name, w.code AS warehouse_code
+        // Q3: `is_child` discriminates off-PO child stock (additional_item_id set) from
+        // PO-line stock — additive (s.* already carries additional_item_id + item_code).
+        // The UI nests children under the parent sharing the SAME item_code (effectiveItemCode).
+        `SELECT s.*, (s.additional_item_id IS NOT NULL) AS is_child,
+                w.name AS warehouse_name, w.code AS warehouse_code
          FROM warehouse_stock s
          JOIN warehouses w ON s.warehouse_id = w.id
          WHERE ${whereSql}
