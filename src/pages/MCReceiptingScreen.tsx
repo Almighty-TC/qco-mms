@@ -325,6 +325,10 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
   const [cargoCondition, setCargo] = useState('')
   const [notes, setNotes]       = useState('')
   const [saving, setSaving]     = useState(false)
+  // Q3 — off-PO child lines receive in a simple parallel sub-table (own qty + own bin),
+  // keyed by additional_item_id. No splits/heat path (children are simple holdings).
+  const [childActuals, setChildActuals] = useState<Record<number, number>>({})
+  const [childLoc, setChildLoc]         = useState<Record<number, string>>({})
 
   // ─── Resizable wizard tables (per-step, persisted by id) ──
   const rvTable = useResizableTable('mc_receipt_review', RV_W, RV_MIN)   // Step 1
@@ -348,6 +352,10 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
         const init: Record<number, number> = {}
         ;(r.data.lines || []).forEach((l: any) => { init[l.id] = lineExpected(l) })
         setActuals(init)
+        // Q3: default child actual = its remaining (own per-SCN allocation).
+        const cinit: Record<number, number> = {}
+        ;(r.data.child_lines || []).forEach((c: any) => { cinit[c.additional_item_id] = Number(c.remaining ?? c.expected_on_scn) || 0 })
+        setChildActuals(cinit)
       })
       .catch(() => setDetail({ packages: [], lines: [] }))
   }, [scn.id, projectId]) // eslint-disable-line
@@ -435,10 +443,20 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
           location_code: (lineLoc[l.id] || '').trim() || null,
         }]
       })
+      // Q3: off-PO child entries — keyed on additional_item_id, own qty + own bin.
+      const childRows = (detail?.child_lines || [])
+        .map((c: any) => ({
+          additional_item_id: c.additional_item_id,
+          description: c.description,
+          received_qty: Number(childActuals[c.additional_item_id] ?? c.remaining) || 0,
+          uom: c.uom || 'EA',
+          location_code: (childLoc[c.additional_item_id] || '').trim() || null,
+        }))
+        .filter((c: any) => c.received_qty > 0)
       await axios.post(`${API}/mc/${projectId}/receipting/${scn.id}/complete`, {
         location_code: location.trim(), cargo_condition: cargoCondition, notes,
         actual_packages: Object.values(actuals).length, warehouse_id: scn.destination_warehouse_id,
-        lines,
+        lines: [...lines, ...childRows],
       })
       setStep(5)
     } catch (e: any) {
@@ -928,6 +946,59 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                 </tbody>
               </table>
               </div>
+
+              {/* Q3: off-PO child items — receivable in a simple parallel sub-table
+                  (own qty + own bin). Capped at each child's remaining (server enforces). */}
+              {(detail?.child_lines || []).length > 0 && (
+                <div style={{ marginTop: 14, border: bd, borderRadius: 8, overflow: 'hidden' }}>
+                  <div style={{ padding: '8px 12px', background: dark ? '#1a1230' : '#faf5ff', fontSize: 11, fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Off-PO items ({(detail.child_lines).length}) · received as their own stock
+                  </div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, background: cardBg }}>
+                    <thead>
+                      <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
+                        {['ITEM', 'INHERITS', 'REMAINING', 'UOM', 'RECEIVE', 'GRID LOCATION'].map(h => (
+                          <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(detail.child_lines).map((c: any) => {
+                        const rem = Number(c.remaining ?? c.expected_on_scn) || 0
+                        const ident = c.tag_number || c.equipment_tag || (c.commodity_id ? `commodity #${c.commodity_id}` : '—')
+                        return (
+                          <tr key={c.additional_item_id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
+                            <td style={{ padding: '7px 10px', color: col }}>{c.description || 'Off-PO item'}</td>
+                            <td style={{ padding: '7px 10px', color: sub, fontSize: 11 }}>
+                              {ident} · WBS <span style={{ fontFamily: 'JetBrains Mono, monospace' }}>{c.wbs_code_snapshot || '—'}</span>
+                            </td>
+                            <td style={{ padding: '7px 10px', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{rem}{Number(c.received_on_scn) > 0 ? ` (of ${Number(c.expected_on_scn)})` : ''}</td>
+                            <td style={{ padding: '7px 10px', color: sub }}>{c.uom || 'EA'}</td>
+                            <td style={{ padding: '7px 10px' }}>
+                              {rem === 0 ? (
+                                <span style={{ fontSize: 11, color: '#16a34a', fontWeight: 600 }}>✓ fully received</span>
+                              ) : (
+                                <input type="number" min={0} max={rem}
+                                  value={childActuals[c.additional_item_id] ?? rem}
+                                  onChange={e => { let v = Number(e.target.value); if (!(v >= 0)) v = 0; if (v > rem) v = rem; setChildActuals(p => ({ ...p, [c.additional_item_id]: v })) }}
+                                  style={{ ...inputSt, width: 80, textAlign: 'center' }} />
+                              )}
+                            </td>
+                            <td style={{ padding: '7px 10px' }}>
+                              {rem !== 0 && (
+                                <input value={childLoc[c.additional_item_id] || ''}
+                                  onChange={e => setChildLoc(p => ({ ...p, [c.additional_item_id]: e.target.value }))}
+                                  placeholder="blank → receipt default"
+                                  style={{ ...inputSt, width: 160 }} />
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
 
               {/* Discrepancy notes — shown live whenever any line has an issue */}
               {anyIssue && (

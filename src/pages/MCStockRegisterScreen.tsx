@@ -45,6 +45,21 @@ interface StockItem {
   condition_status: string; trace_hold: number; vendor_name?: string | null
   heat_number?: string | null
   warehouse_id: number; warehouse_name: string; warehouse_code: string
+  is_child?: number; additional_item_id?: number | null   // Q3: off-PO child stock (nests under parent sharing item_code)
+}
+
+// Q3: order rows so off-PO children sit directly under the parent sharing their
+// item_code (parents keep their natural order); orphan children fall through at the end.
+function nestStock(rows: StockItem[]): StockItem[] {
+  const out: StockItem[] = []
+  const seen = new Set<number>()
+  rows.forEach(r => {
+    if (r.is_child || seen.has(r.id)) return
+    out.push(r); seen.add(r.id)
+    rows.forEach(c => { if (c.is_child && !seen.has(c.id) && c.item_code === r.item_code) { out.push(c); seen.add(c.id) } })
+  })
+  rows.forEach(r => { if (!seen.has(r.id)) out.push(r) })   // orphan children / leftovers
+  return out
 }
 
 const condPill = (s: string) => {
@@ -263,12 +278,15 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                     </tr>
                   </thead>
                   <tbody>
-                    {stock.map(item => {
+                    {nestStock(stock).map(item => {
                       const cond = condPill(item.condition_status)
+                      const isChild = !!item.is_child   // Q3: off-PO child → nested under its parent (shared item_code)
                       return (
-                        <tr key={item.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
+                        <tr key={item.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, background: isChild ? (dark ? 'rgba(124,58,237,0.06)' : 'rgba(124,58,237,0.04)') : undefined }}>
                           {!isSubcontractor && <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, ...ellipsisCell }} title={item.location_code || ''}>{item.location_code || '—'}</td>}
-                          <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600, ...ellipsisCell }} title={item.item_code}>{item.item_code}</td>
+                          <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600, ...ellipsisCell, paddingLeft: isChild ? 28 : 12 }} title={item.item_code}>
+                            {isChild && <span title="Off-PO child item — nested under its parent" style={{ color: '#7c3aed', fontWeight: 700 }}>↳ </span>}{item.item_code}
+                          </td>
                           <td data-align="left" style={{ padding: '8px 12px', color: col, ...ellipsisCell }} title={item.description}>{item.description}</td>
                           <td style={{ padding: '8px 12px', fontSize: 11, overflow: 'hidden', textIndent: 0 }}>
                             {item.heat_number ? (

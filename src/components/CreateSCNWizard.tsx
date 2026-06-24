@@ -22,7 +22,7 @@ interface Props {
 type Step = 1 | 2 | 3 | 4 | 5 | 6
 
 interface SelectedLineVal { checked: boolean; qty: string }
-interface AdditionalItem  { desc: string; qty: string; uom: string; parentLineId: string } // parentLineId REQUIRED — off-PO variation must name its parent PO line
+interface AdditionalItem  { desc: string; qty: string; uom: string; parentLineId: string; ros: string } // parentLineId REQUIRED — off-PO variation must name its parent PO line; ros user-supplied (Q3)
 interface PkgContent { lineRef: string; qty: string }   // which allocatable line + how much is in this box
 interface PackageRow {
   id: string                 // Q2: stable client ref for nesting (sent to backend as `ref`)
@@ -183,7 +183,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
 
   // ─── ADDITIONAL ITEMS ─────────────────────────────────────
   const addAdditional = () =>
-    setAdditionalItems(prev => [...prev, { desc: '', qty: '1', uom: 'EA', parentLineId: '' }])
+    setAdditionalItems(prev => [...prev, { desc: '', qty: '1', uom: 'EA', parentLineId: '', ros: '' }])
   const updateAdditional = (i: number, field: keyof AdditionalItem, val: string) =>
     setAdditionalItems(prev => prev.map((it, idx) => idx === i ? { ...it, [field]: val } : it))
   const removeAdditional = (i: number) =>
@@ -282,7 +282,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
     const itemVariations = additionalItems
       .map((it, i) => ({ it, i }))
       .filter(({ it }) => it.desc.trim() || it.parentLineId)
-      .map(({ it, i }) => ({ line_ref: `add:${i}`, parent_po_line_id: Number(it.parentLineId) || null, description: it.desc.trim(), qty: Number(it.qty) || 1, uom: it.uom }))
+      .map(({ it, i }) => ({ line_ref: `add:${i}`, parent_po_line_id: Number(it.parentLineId) || null, description: it.desc.trim(), qty: Number(it.qty) || 1, uom: it.uom, ros_date: it.ros || null }))
     const childVariations = Object.entries(selectedChildren)
       .filter(([, c]) => c.checked)
       .map(([id, c]) => ({ line_ref: `child:${id}`, parent_po_line_id: c.parentLineId, description: c.description, qty: Number(c.qty) || 1, uom: c.uom }))
@@ -513,8 +513,17 @@ export const CreateSCNWizard: React.FC<Props> = ({
           </div>
           {showAdditional && (
             <>
-              {additionalItems.map((item, i) => (
-                <div key={i} style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+              {additionalItems.map((item, i) => {
+                // Q3: the child inherits the parent line's identity + WBS (read-only context).
+                // Blocked at create if the parent is unlinked or has no WBS (backend 422 surfaced).
+                const parent = (po?.po_lines || []).find((l: any) => String(l.id) === String(item.parentLineId))
+                const parentIdentity = parent ? (parent.tag_number || parent.equipment_tag || (parent.commodity_name ? `commodity ${parent.commodity_name}` : (parent.commodity_id ? `commodity #${parent.commodity_id}` : null))) : null
+                const parentWbs = parent ? (parent.wbs_code_snapshot || null) : null
+                const unlinked = parent && !parentIdentity
+                const noWbs = parent && !parentWbs
+                return (
+                <div key={i} style={{ marginTop: 8, borderTop: i ? '1px dashed #fde68a' : undefined, paddingTop: i ? 8 : 0 }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   <select
                     value={item.parentLineId}
                     onChange={e => updateAdditional(i, 'parentLineId', e.target.value)}
@@ -529,7 +538,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
                   <input
                     value={item.desc}
                     onChange={e => updateAdditional(i, 'desc', e.target.value)}
-                    placeholder="Variation description (e.g. specialised crate for P-101)"
+                    placeholder="Off-PO item (e.g. fridge door handle)"
                     style={{ ...inputStyle, flex: 1 }}
                   />
                   <input
@@ -546,6 +555,14 @@ export const CreateSCNWizard: React.FC<Props> = ({
                   >
                     {UOM_OPTIONS.map(u => <option key={u}>{u}</option>)}
                   </select>
+                  <label style={{ fontSize: 10, color: '#64748b', whiteSpace: 'nowrap' }}>ROS</label>
+                  <input
+                    type="date"
+                    value={item.ros}
+                    onChange={e => updateAdditional(i, 'ros', e.target.value)}
+                    title="Required-on-site date (user-supplied — not inherited)"
+                    style={{ ...inputStyle, width: 140 }}
+                  />
                   <button
                     onClick={() => removeAdditional(i)}
                     style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 16, cursor: 'pointer', padding: '0 4px' }}
@@ -553,7 +570,21 @@ export const CreateSCNWizard: React.FC<Props> = ({
                     ×
                   </button>
                 </div>
-              ))}
+                {/* Inherited identity + WBS (read-only) / block warning */}
+                {parent && (
+                  unlinked || noWbs ? (
+                    <div style={{ marginTop: 4, marginLeft: 2, fontSize: 11, color: '#dc2626' }}>
+                      ⚠ Line {parent.line_number} {unlinked ? 'has no commodity/tag link' : 'has no WBS'} — {unlinked ? 'link a commodity/tag' : 'set its WBS'} before adding an off-PO item under it.
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: 4, marginLeft: 2, fontSize: 11, color: '#64748b' }}>
+                      Inherits from line {parent.line_number}: <span style={{ color: '#475569' }}>{parentIdentity}</span> · WBS <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#475569' }}>{parentWbs}</span> <span style={{ color: '#94a3b8' }}>(read-only)</span>
+                    </div>
+                  )
+                )}
+                </div>
+                )
+              })}
               <button
                 onClick={addAdditional}
                 style={{
