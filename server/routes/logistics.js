@@ -24,11 +24,69 @@ router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/aud
 // and can_view is still required (zero-logistics-access roles are NOT let in).
 const { enforce, requirePermission } = require('../middleware/permissions')
 const SCN_DOCS_RE = /\/scn\/\d+\/documents(\/\d+)?$/
+
+// ─── PACKAGE-ROUTE AUTHORIZATION CARVE-OUT (forwarder-delegated packaging) ─────
+// THE SECURITY CORE. Package create/edit/read (+ seal) is normally internal, gated by
+// the logistics matrix via enforce('logistics'). A freight_forwarder is an EXTERNAL role
+// with NO blanket package access — but when an expeditor delegates an SCN's packing to a
+// specific forwarder (shipment_control_notes.packaging_delegated_to = that forwarder's
+// user id), that forwarder may read/create/edit packages + set seals on THAT SCN ONLY.
+//
+// Why this lives at the ROUTER level (not route middleware): enforce('logistics') maps
+// POST→can_create, which freight_forwarder lacks, so a forwarder's package POST is killed
+// at this router gate BEFORE any route-level middleware runs. The carve-out therefore
+// replaces the matrix gate for forwarders here. It also REPLACES the old blunt
+// requireInternalLogistics on the package POST (removed deliberately, paired with this
+// scoped predicate — not a bare removal).
+//
+// ⚠ The predicate keys off the URL :scnId, NEVER req.body. A forwarder must not reach
+//   packages on any SCN not delegated to them. DELETE is intentionally NOT carved out —
+//   it falls through to enforce('logistics')→can_delete (forwarder=0 → 403), so a
+//   forwarder can pack but cannot delete packages.
+const SCN_PKG_RE = /\/scn\/(\d+)\/packages(\/\d+)?$/
+
+// Capability-detect the delegation column (deploy-tolerance). Cached sticky-true. If the
+// column isn't live yet (code-before-migration), NO SCN can be delegated → forwarders are
+// denied (fail-closed); internal roles are unaffected (they never hit this path).
+let _delegateColPresent = false
+async function scnHasDelegateCol(conn = db) {
+  if (_delegateColPresent) return true
+  const [[r]] = await conn.query(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'shipment_control_notes'
+       AND column_name = 'packaging_delegated_to'`)
+  _delegateColPresent = r.n > 0
+  return _delegateColPresent
+}
+
+// True iff the calling forwarder is the delegated packer for the SCN named in the URL.
+// scnId comes from the URL path ONLY — req.body is never consulted, so a forged body
+// scnId cannot redirect the check. `conn` is injectable for transactional proofs.
+async function forwarderOwnsScnPackaging(req, conn = db) {
+  const pth = (req.originalUrl || req.url || '').split('?')[0]
+  const m = pth.match(SCN_PKG_RE)               // ← scnId from URL, NEVER req.body
+  const scnId = m ? Number(m[1]) : NaN
+  if (!scnId) return false
+  if (!(await scnHasDelegateCol(conn))) return false           // pre-migration → fail-closed
+  const [[scn]] = await conn.query(
+    'SELECT packaging_delegated_to FROM shipment_control_notes WHERE id = ?', [scnId])
+  return !!scn && scn.packaging_delegated_to != null && scn.packaging_delegated_to === req.user.id
+}
+
 router.use((req, res, next) => {
-  if (req.method !== 'GET' && SCN_DOCS_RE.test((req.originalUrl || req.url).split('?')[0])) {
+  const p = (req.originalUrl || req.url).split('?')[0]
+  // Package read/create/edit by a freight_forwarder → authorized by DELEGATION, not the
+  // matrix. (DELETE excluded → falls through to enforce → can_delete=0 → 403.)
+  if (req.method !== 'DELETE' && SCN_PKG_RE.test(p) && req.user?.role === 'freight_forwarder') {
+    return forwarderOwnsScnPackaging(req)
+      .then(ok => ok ? next() : res.status(403).json({ error: 'You are not the delegated packer for this SCN.' }))
+      .catch(e => { console.error('[pkg-authz]', e.message); return res.status(500).json({ error: 'Authorization check failed' }) })
+  }
+  // Documents carve-out (existing): non-GET docs need only can_view.
+  if (req.method !== 'GET' && SCN_DOCS_RE.test(p)) {
     return requirePermission('logistics', 'can_view')(req, res, next)
   }
-  return enforce('logistics')(req, res, next)
+  return enforce('logistics')(req, res, next)   // internal roles unchanged
 })
 router.param('projectId', require('../middleware/permissions').requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects
 
@@ -630,7 +688,11 @@ router.get('/scn/:scnId/packages', async (req, res) => {
 })
 
 // POST /api/logistics/scn/:scnId/packages
-router.post('/scn/:scnId/packages', requireInternalLogistics, async (req, res) => {
+// Authorization handled at the router level (carve-out): internal roles via
+// enforce('logistics')→can_create; a delegated freight_forwarder via the delegation
+// predicate. requireInternalLogistics is intentionally NOT here — the scoped predicate
+// replaces it (see the carve-out near the top of this file).
+router.post('/scn/:scnId/packages', async (req, res) => {
   try {
     const scnId = Number(req.params.scnId)
     const { description, length_mm, width_mm, height_mm, gross_weight_kg, net_weight_kg,
@@ -874,3 +936,5 @@ router.put('/scn/:scnId/critical-path', async (req, res) => {
 })
 
 module.exports = router
+// Exported for the D2 authorization proofs (exercise the EXACT predicate, no drift).
+module.exports.forwarderOwnsScnPackaging = forwarderOwnsScnPackaging
