@@ -1025,33 +1025,23 @@ router.post('/:projectId/scn', async (req, res) => {
       const vals = [scnId, String(n).padStart(2, '0'), (p.type || '').trim() || null,
         num(p.length), num(p.width), num(p.height), num(p.weight), p.is_dg ? 1 : 0]
       if (parentId != null) { cols.push('parent_package_id'); vals.push(parentId) }   // ⚠ needs the migration applied
+      // Q4: persist the container type when declared. Value-gated like parent_package_id
+      // so flat/Q2 payloads never touch the new column (deploy-safe pre migrate-containers).
+      if (p.container_type_id != null && p.container_type_id !== '') { cols.push('container_type_id'); vals.push(Number(p.container_type_id)) }
       const [pr] = await conn.query(
         `INSERT INTO scn_packages (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`, vals)
       return pr.insertId
     }
 
-    // ── LEAF-ONLY RULE (both directions) — payload-level, the create txn is the ONLY
-    //    write path into scn_package_lines (census-confirmed), so this is complete.
-    //    A container (a package referenced as a parent) must NOT hold items directly;
-    //    equivalently, an item-holding package must NOT be made a parent. Reject before
-    //    any insert (so the reject path never touches parent_package_id — provable
-    //    pre-migration). ──
-    const containerRefs = new Set()
-    ;(packages || []).forEach(p => { if (p.parent_ref != null && p.parent_ref !== '') containerRefs.add(String(p.parent_ref)) })
-    for (const p of (packages || [])) {
-      const myRef = p.ref != null ? String(p.ref) : ''
-      const isContainer = myRef !== '' && containerRefs.has(myRef)
-      const hasContents = (p.contents || []).some(c => c && c.line_ref && Number(c.qty) > 0)
-      if (isContainer && hasContents) {
-        await conn.rollback()
-        return res.status(422).json({ error: `Package "${(p.type || myRef)}" is a container (holds sub-packages) and cannot hold items directly — allocate items to its sub-packages.` })
-      }
-      // Parent ref must resolve to another package in this shipment.
-      if (p.parent_ref != null && p.parent_ref !== '' &&
-          !(packages || []).some(q => q !== p && p.ref !== q.ref && String(q.ref ?? '') === String(p.parent_ref))) {
-        await conn.rollback()
-        return res.status(422).json({ error: `Package parent_ref "${p.parent_ref}" does not match any package in this shipment.` })
-      }
+    // ── HIERARCHY RULES (Q2 leaf-only EXTENDED to Q4 three-level typed) — payload-level,
+    //    the create txn is the ONLY write path into scn_packages/scn_package_lines
+    //    (census-confirmed), so this is complete. The verdict is computed by the pure
+    //    validatePackageHierarchy() (defined + exported below); a reject rolls back BEFORE
+    //    any insert, so the reject path never touches parent_package_id/container_type_id. ──
+    const hierarchyVerdict = validatePackageHierarchy(packages)
+    if (!hierarchyVerdict.ok) {
+      await conn.rollback()
+      return res.status(422).json({ error: hierarchyVerdict.error })
     }
 
     // ── Persist packages. Contract: parents appear BEFORE their children in the payload
@@ -1672,4 +1662,47 @@ router.put('/:projectId/po/:poId/lines/:lineId/heat-number', async (req, res) =>
   }
 })
 
+// ─── PACKAGE HIERARCHY GUARD (Q2 leaf-only EXTENDED to Q4 three-level typed) ───
+// Pure verdict function (no DB/no res) — the SCN-create txn calls it before any insert,
+// so a reject never touches parent_package_id/container_type_id (provable pre-migration).
+// Exported so the Q4.2 proof harness exercises THIS exact code (no drifting copy).
+//   Model: container (typed: container_type_id set) → sub-package → items.
+//     • A container MUST be top-level (no parent_ref) and hold NO items; it only parents sub-packages.
+//     • A nested package's parent must exist, be top-level, and be a container — enforcing the
+//       depth-3 cap (no container-in-container; no sub-package under a sub-package).
+//     • A loose top-level package (untyped, no parent) may hold items directly (mixed shipment).
+// Returns { ok:true } or { ok:false, error } (caller maps !ok → 422).
+function validatePackageHierarchy (packages) {
+  const list = packages || []
+  const isTypedContainer = q => q && q.container_type_id != null && q.container_type_id !== ''
+  const hasParentRef     = q => q && q.parent_ref != null && q.parent_ref !== ''
+  const byRef = new Map()
+  list.forEach(p => { if (p.ref != null && p.ref !== '') byRef.set(String(p.ref), p) })
+  const containerRefs = new Set()
+  list.forEach(p => { if (hasParentRef(p)) containerRefs.add(String(p.parent_ref)) })
+  for (const p of list) {
+    const myRef = p.ref != null ? String(p.ref) : ''
+    const isReferencedAsParent = myRef !== '' && containerRefs.has(myRef)
+    const hasContents = (p.contents || []).some(c => c && c.line_ref && Number(c.qty) > 0)
+
+    // (Q4) A typed container is top-level and items-free; it only parents sub-packages.
+    if (isTypedContainer(p)) {
+      if (hasParentRef(p)) return { ok: false, error: `Package "${(p.type || myRef)}" is a container and must be top-level — a container cannot be nested inside another package.` }
+      if (hasContents)     return { ok: false, error: `Package "${(p.type || myRef)}" is a container and cannot hold items directly — allocate items to its sub-packages.` }
+    }
+    // (Q2, retained) A package that parents others must not also hold items directly.
+    if (isReferencedAsParent && hasContents) return { ok: false, error: `Package "${(p.type || myRef)}" holds sub-packages and cannot hold items directly — allocate items to its sub-packages.` }
+    // (Q4) A nested package's parent must exist, be top-level, and be a container.
+    //      Parent-with-a-parent ⇒ depth-4 (reject); parent-not-a-container ⇒ invalid nest.
+    if (hasParentRef(p)) {
+      const parent = byRef.get(String(p.parent_ref))
+      if (!parent || parent === p) return { ok: false, error: `Package parent_ref "${p.parent_ref}" does not match any package in this shipment.` }
+      if (hasParentRef(parent))    return { ok: false, error: `Package "${(p.type || myRef)}" exceeds the 3-level limit (container → sub-package → items) — sub-packages cannot be nested under other sub-packages.` }
+      if (!isTypedContainer(parent)) return { ok: false, error: `Package "${(p.type || myRef)}" must be nested under a container — its parent "${p.parent_ref}" is not a container.` }
+    }
+  }
+  return { ok: true }
+}
+
 module.exports = router
+module.exports.validatePackageHierarchy = validatePackageHierarchy
