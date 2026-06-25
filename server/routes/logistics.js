@@ -7,6 +7,7 @@ const router  = express.Router()
 const db      = require('../db')
 const { dbError } = require('../utils/dbError')
 const { authenticateToken } = require('../middleware/auth')
+const { setSealNo, setContainerNo, SealGovernanceError } = require('../lib/sealGovernance') // Q4.3 shared seal governance
 const multer  = require('multer')
 const path    = require('path')
 const fs      = require('fs')
@@ -673,13 +674,31 @@ router.post('/scn/:scnId/packages', requireInternalLogistics, async (req, res) =
 })
 
 // PUT /api/logistics/scn/:scnId/packages/:packageId
+// Dimensional/DG fields are free COALESCE updates. container_no is free-edit; seal_no
+// is GOVERNED — routed through the SHARED lib/sealGovernance (set-once + reasoned,
+// audited, atomic), the SAME path Expediting uses. The whole edit runs in ONE
+// transaction so a governed seal change and its audit row commit/rollback together.
+// ⚠⚠ seal_no MUST NEVER be added to the blanket COALESCE below: that is exactly the
+//    silent-overwrite hole this closes (it would replace an existing seal with no
+//    reason and no audit). Route seal_no through setSealNo ONLY.
+// NB: this route is NOT internal-only — freight forwarders retain access (TC ruling:
+// the forwarder is often the party that physically seals the container). The seal is
+// protected by governance (set-once + reasoned, audited re-seal), not by barring a role.
 router.put('/scn/:scnId/packages/:packageId', async (req, res) => {
+  const { scnId, packageId } = req.params
+  const { description, length_mm, width_mm, height_mm, gross_weight_kg, net_weight_kg,
+          is_dangerous_goods, dg_class, dg_un_number, marks_numbers,
+          container_no, seal_no, seal_reason } = req.body
+  const resource = (req.originalUrl || '').split('?')[0].replace(/^\/api(?=\/)/, '')
+  const conn = await db.getConnection()
   try {
-    const { scnId, packageId } = req.params
-    const { description, length_mm, width_mm, height_mm, gross_weight_kg, net_weight_kg,
-            is_dangerous_goods, dg_class, dg_un_number, marks_numbers } = req.body
+    await conn.beginTransaction()
+    // project_id for the audit — derived from the SCN, never guessed.
+    const [[scn]] = await conn.query('SELECT project_id FROM shipment_control_notes WHERE id=?', [scnId])
+    const pid = scn?.project_id ?? null
 
-    await db.query(
+    // Free dimensional/DG fields. ⚠ Do NOT add seal_no to this COALESCE (see header).
+    await conn.query(
       `UPDATE scn_packages SET
          description=COALESCE(?,description), length_mm=COALESCE(?,length_mm),
          width_mm=COALESCE(?,width_mm), height_mm=COALESCE(?,height_mm),
@@ -691,15 +710,25 @@ router.put('/scn/:scnId/packages/:packageId', async (req, res) => {
        is_dangerous_goods !== undefined ? (is_dangerous_goods ? 1 : 0) : null,
        dg_class, dg_un_number, marks_numbers, packageId, scnId]
     )
-    await db.query(
+
+    // container_no: free-edit (identifier). seal_no: GOVERNED — same shared path as Expediting.
+    if (container_no !== undefined) await setContainerNo(conn, { packageId, scnId, newContainerNo: container_no, userId: req.user.id, resource, ip: req.ip, projectId: pid })
+    if (seal_no !== undefined)      await setSealNo(conn,      { packageId, scnId, newSeal: seal_no, reason: seal_reason, userId: req.user.id, resource, ip: req.ip, projectId: pid })
+
+    await conn.query(
       `UPDATE shipment_control_notes SET
          total_weight_kg = (SELECT SUM(gross_weight_kg) FROM scn_packages WHERE scn_id=?)
        WHERE id = ?`,
       [scnId, scnId]
     )
+    await conn.commit()
     const [[pkg]] = await db.query('SELECT * FROM scn_packages WHERE id = ?', [packageId])
     res.json(pkg)
-  } catch (e) { dbError(res, e) }
+  } catch (e) {
+    await conn.rollback()
+    if (e instanceof SealGovernanceError) return res.status(e.status).json({ error: e.message })
+    dbError(res, e)
+  } finally { conn.release() }
 })
 
 // Migration tolerance: does scn_packages.parent_package_id exist yet? Cached sticky-

@@ -9,6 +9,7 @@ const { dbError } = require('../utils/dbError')
 const { authenticateToken } = require('../middleware/auth')
 const { fileFilter } = require('../utils/upload')
 const { dateOrder } = require('../utils/validate')
+const { setSealNo, setContainerNo, SealGovernanceError } = require('../lib/sealGovernance') // Q4.3 shared seal governance
 
 // ─── Q3 CHILD-STOCK CAPABILITY DETECT ─────────────────────────
 // Did migrate-child-stock.js run? Cached sticky-true (re-checked only while false →
@@ -1151,6 +1152,46 @@ router.post('/:projectId/scn/:scnId/variation', async (req, res) => {
     console.error('[scn:variation]', e.message)
     dbError(res, e)
   }
+})
+
+// ─── EDIT CONTAINER IDENTIFIERS (container_no / seal_no) — Q4.3 ────────────────
+// Both Expediting and Logistics can set a container's number/seal. seal_no is GOVERNED
+// (set-once + reasoned, audited re-seal — atomic) via the SHARED lib/sealGovernance so
+// the two modules cannot drift; container_no is free-edit. The whole edit runs in ONE
+// transaction so the seal change and its audit row commit/rollback together.
+// Body: { container_no?, seal_no?, seal_reason? }. seal_reason is required only when
+// CHANGING an existing seal (enforced inside setSealNo).
+router.put('/:projectId/scn/:scnId/packages/:packageId/identifiers', async (req, res) => {
+  const pid = Number(req.params.projectId)
+  const scnId = Number(req.params.scnId)
+  const packageId = Number(req.params.packageId)
+  const { container_no, seal_no, seal_reason } = req.body
+  const resource = (req.originalUrl || '').split('?')[0].replace(/^\/api(?=\/)/, '')
+  const conn = await db.getConnection()
+  try {
+    await conn.beginTransaction()
+    // Package must belong to an SCN in THIS project (project-scope check the shared lib
+    // can't do). The container-only rule is enforced inside setSealNo/setContainerNo
+    // (the single governance point), so it isn't duplicated here.
+    const [[pkg]] = await conn.query(
+      `SELECT sp.id FROM scn_packages sp
+       JOIN shipment_control_notes s ON s.id = sp.scn_id
+       WHERE sp.id=? AND sp.scn_id=? AND s.project_id=?`, [packageId, scnId, pid])
+    if (!pkg) { await conn.rollback(); return res.status(404).json({ error: 'Container not found on this SCN in this project.' }) }
+
+    const out = {}
+    if (container_no !== undefined) out.container_no = await setContainerNo(conn, { packageId, scnId, newContainerNo: container_no, userId: req.user.id, resource, ip: req.ip, projectId: pid })
+    if (seal_no !== undefined)      out.seal_no      = await setSealNo(conn,      { packageId, scnId, newSeal: seal_no, reason: seal_reason, userId: req.user.id, resource, ip: req.ip, projectId: pid })
+
+    await conn.commit()
+    const [[fresh]] = await db.query('SELECT id, container_no, seal_no FROM scn_packages WHERE id=?', [packageId])
+    res.json({ ...fresh, result: out })
+  } catch (e) {
+    await conn.rollback()
+    if (e instanceof SealGovernanceError) return res.status(e.status).json({ error: e.message })
+    console.error('[scn:identifiers]', e.message)
+    dbError(res, e)
+  } finally { conn.release() }
 })
 
 // ─── VDRL PO LIST ─────────────────────────────────────────────
