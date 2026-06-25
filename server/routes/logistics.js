@@ -297,12 +297,23 @@ router.get('/scn/:scnId', async (req, res) => {
     )
     if (!scn) return res.status(404).json({ error: 'SCN not found' })
 
-    // PO lines assigned to this SCN
+    // PRE-EXISTING BUG FIX (not part of Q1/Q2/Q3): scope the "PO Lines" block to the
+    // lines THIS SCN actually allocated, via scn_lines. The old query pulled EVERY line
+    // of the parent PO (`WHERE pl.po_id = ?`) with the PO-WIDE `pl.qty_assigned` (summed
+    // across all SCNs) — so an SCN that allocated one line showed all the PO's lines with
+    // inflated assigned qtys. `qty_assigned` here = THIS SCN's allocation (SUM scn_lines.qty).
+    // Off-PO children (scn_lines.po_line_id IS NULL) are excluded — they render in the
+    // separate "Additional Items" section.
     const [lines] = await db.query(
-      `SELECT pl.id, pl.line_number, pl.description, pl.qty, pl.qty_assigned, pl.uom
-       FROM po_lines pl
-       WHERE pl.po_id = ? ORDER BY pl.line_number`,
-      [scn.po_id || 0]
+      `SELECT pl.id, pl.line_number, pl.description, pl.qty,
+              COALESCE(SUM(sl.qty), 0) AS qty_assigned,
+              pl.uom
+       FROM scn_lines sl
+       JOIN po_lines pl ON pl.id = sl.po_line_id
+       WHERE sl.scn_id = ?
+       GROUP BY pl.id, pl.line_number, pl.description, pl.qty, pl.uom
+       ORDER BY pl.line_number`,
+      [scnId]
     )
 
     // Off-PO additional items — LEFT JOIN the parent po_line so the read side can
