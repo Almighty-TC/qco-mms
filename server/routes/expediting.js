@@ -26,6 +26,55 @@ async function childStockColsLive() {
   return _childStockCols
 }
 
+// Did migrate-delegated-packaging.js run? Cached sticky-true (D3 deploy-tolerance). Lets
+// the SCN-create path degrade gracefully when the delegation columns aren't live yet
+// (SCN created without delegation fields) instead of erroring on a missing column.
+let _delegCols = false
+async function scnDelegationColsLive() {
+  if (_delegCols) return true
+  const [[r]] = await db.query(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'shipment_control_notes' AND column_name = 'packaging_delegated_to'`)
+  _delegCols = r.n > 0
+  return _delegCols
+}
+
+// ─── DELEGATION VALIDATION (forwarder-delegated packaging, D3) ─────────────────
+// Pure verdict (uses conn only for the freight_forwarder lookup) — the SCN-create route
+// calls it; exported so the D3 proofs run THIS exact code (no drift).
+//   packed_by_type='forwarder' → packaging_delegated_to MUST be an ACTIVE freight_forwarder
+//     user; on success forwarder_user_id is set to the delegate (visibility scoping) and
+//     packaging_status starts 'pending' (hand-back lifecycle, D4).
+//   packed_by_type='internal'|'vendor' → packaging_delegated_to MUST be empty (NULL) —
+//     no external write access (vendor packages are entered by the expeditor).
+// Returns { ok:true, packedBy, delegateId, packagingStatus, forwarderUserId }
+//      or { ok:false, status, error } (caller maps !ok → status).
+async function resolveDelegation(packed_by_type, packaging_delegated_to, conn) {
+  const PACKED_TYPES = new Set(['internal', 'vendor', 'forwarder'])
+  const packedBy = packed_by_type || 'internal'
+  if (!PACKED_TYPES.has(packedBy)) {
+    return { ok: false, status: 422, error: "packed_by_type must be 'internal', 'vendor', or 'forwarder'." }
+  }
+  if (packedBy === 'forwarder') {
+    const delegateId = Number(packaging_delegated_to) || null
+    if (!delegateId) {
+      return { ok: false, status: 422, error: 'packed_by_type=forwarder requires packaging_delegated_to (an active freight forwarder).' }
+    }
+    const [[ff]] = await conn.query(
+      "SELECT id FROM users WHERE id = ? AND role = 'freight_forwarder' AND is_active = 1", [delegateId])
+    if (!ff) {
+      return { ok: false, status: 422, error: 'packaging_delegated_to must be an active freight_forwarder user.' }
+    }
+    // forwarder_user_id = the delegate → existing forwarder visibility scoping surfaces it.
+    return { ok: true, packedBy, delegateId, packagingStatus: 'pending', forwarderUserId: delegateId }
+  }
+  // internal / vendor → must NOT name a delegate (no external write access).
+  if (packaging_delegated_to != null && packaging_delegated_to !== '') {
+    return { ok: false, status: 422, error: 'packaging_delegated_to must be empty unless packed_by_type=forwarder.' }
+  }
+  return { ok: true, packedBy, delegateId: null, packagingStatus: null, forwarderUserId: null }
+}
+
 router.use(authenticateToken)
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
 router.use(require('../middleware/permissions').enforce(p => p.includes('/vdrl') ? 'vdrl' : 'expediting')) // C-b2: vdrl routes→vdrl, else expediting
@@ -857,6 +906,7 @@ router.post('/:projectId/scn', async (req, res) => {
     pickup_location, destination_warehouse_id, grid_bay,
     cdd, crd, ccd, etd, eta, transport_mode, forwarder_name, incoterms,
     packages = [], notify_forwarder,
+    packed_by_type, packaging_delegated_to,   // ── Forwarder-delegated packaging (D3) ──
     heats = [],   // ── Heat/Lot P1: per-shipment declared heats (additive) ──
   } = req.body
 
@@ -880,16 +930,30 @@ router.post('/:projectId/scn', async (req, res) => {
     const [[{ n }]] = await conn.query('SELECT COUNT(*) AS n FROM shipment_control_notes')
     const scnRef = `SCN-${new Date().getFullYear()}-${String(n + 1).padStart(4, '0')}`
 
-    // Insert SCN
+    // ── Forwarder-delegated packaging (D3): validate packed_by_type + delegate ──
+    // Verdict computed by the pure resolveDelegation() (defined + exported below, so the
+    // D3 proofs exercise THIS exact code). 'forwarder' delegates packing to a freight
+    // forwarder (who gets scoped write access via the D2 carve-out) and needs a valid
+    // ACTIVE freight_forwarder; 'vendor'/'internal' must NOT name a delegate.
+    const deleg = await resolveDelegation(packed_by_type, packaging_delegated_to, conn)
+    if (!deleg.ok) { await conn.rollback(); return res.status(deleg.status).json({ error: deleg.error }) }
+    const { packedBy, delegateId, packagingStatus, forwarderUserId } = deleg
+
+    // Insert SCN (delegation columns appended only when live — deploy-tolerant).
+    const cols = ['scn_ref', 'po_id', 'project_id', 'origin_location', 'destination_warehouse_id',
+      'cargo_ready_date', 'cargo_collection_date', 'etd', 'eta', 'mode', 'forwarder_name', 'incoterms', 'status', 'notes', 'created_by']
+    const vals = [scnRef, po_id, pid, pickup_location || null, destination_warehouse_id || null,
+      crd || null, ccd || null, etd || null, eta || null, transport_mode || null, forwarder_name || null,
+      incoterms || null, 'draft', null, req.user.id]
+    if (await scnDelegationColsLive()) {
+      cols.push('forwarder_user_id', 'packed_by_type', 'packaging_delegated_to', 'packaging_status')
+      vals.push(forwarderUserId, packedBy, delegateId, packagingStatus)
+    } else if (packedBy === 'forwarder') {
+      // Can't delegate without the columns live — fail clearly rather than silently dropping it.
+      await conn.rollback(); return res.status(409).json({ error: 'Delegated packaging is unavailable until the delegation migration is applied.' })
+    }
     const [r] = await conn.query(
-      `INSERT INTO shipment_control_notes
-        (scn_ref, po_id, project_id, origin_location, destination_warehouse_id,
-         cargo_ready_date, cargo_collection_date, etd, eta, mode, forwarder_name, incoterms, status, notes, created_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?)`,
-      [scnRef, po_id, pid, pickup_location || null, destination_warehouse_id || null,
-       crd || null, ccd || null, etd || null, eta || null, transport_mode || null, forwarder_name || null,
-       incoterms || null, null, req.user.id]
-    )
+      `INSERT INTO shipment_control_notes (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`, vals)
     const scnId = r.insertId
 
     // Update po_lines qty_assigned for each selected line.
@@ -1747,3 +1811,4 @@ function validatePackageHierarchy (packages) {
 
 module.exports = router
 module.exports.validatePackageHierarchy = validatePackageHierarchy
+module.exports.resolveDelegation = resolveDelegation   // D3 proofs
