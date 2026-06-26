@@ -8,6 +8,7 @@ import axios from 'axios'
 // Success/error feedback is handled by the parent via onCreated/onError props.
 
 import { API } from '../lib/api'
+import { containerDimViolations, containerDimMessage } from '../lib/packaging'
 
 // ─── TYPES ────────────────────────────────────────────────────
 interface Props {
@@ -108,6 +109,11 @@ export const CreateSCNWizard: React.FC<Props> = ({
   const [eta, setEta]                         = useState('')
   const [transportMode, setTransportMode]     = useState('')
   const [transportError, setTransportError]   = useState('')
+  // Item 2 (multi-modal): constituent legs + free-text leg detail. ⚠ Persistence is
+  // FLAGGED — shipment_control_notes.mode has no 'multi' value and there's no column for
+  // the legs; storage approach is pending TC's schema decision (not wired to create yet).
+  const [multiModes, setMultiModes]           = useState<string[]>([])
+  const [multiNotes, setMultiNotes]           = useState('')
   const [forwarder, setForwarder]             = useState('')
   const [incoterms, setIncoterms]             = useState('')
 
@@ -321,6 +327,16 @@ export const CreateSCNWizard: React.FC<Props> = ({
     // Q4: every container must declare its ISO container type.
     const untypedContainer = packages.find(p => p.kind === 'container' && !p.containerTypeId)
     if (untypedContainer) { onToast?.('Select an ISO container type for each container.', 'error'); return }
+    // Item 1: a sub-package must FIT its container's inner dims (per-type relaxation —
+    // open-top relaxes height, flat-rack carries out-of-gauge). Wizard dims are cm → mm.
+    for (const p of packages) {
+      if (p.kind !== 'package' || !p.parentId) continue
+      const parent = packages.find(c => c.id === p.parentId)
+      const ct = ctById(parent?.containerTypeId)
+      if (!ct) continue
+      const v = containerDimViolations({ length_mm: (Number(p.length) || 0) * 10, width_mm: (Number(p.width) || 0) * 10, height_mm: (Number(p.height) || 0) * 10 }, ct as any)
+      if (v) { onToast?.(containerDimMessage(v, ct as any), 'error'); return }
+    }
 
     const poLines = po?.po_lines || []
     setCreating(true)
@@ -761,6 +777,25 @@ export const CreateSCNWizard: React.FC<Props> = ({
             </button>
           ))}
         </div>
+        {/* Item 2: multi-modal → constituent legs + leg notes. (Persistence pending TC schema.) */}
+        {transportMode === 'multi' && (
+          <div style={{ marginTop: 10, border: '1px solid #c7d2fe', background: 'rgba(37,99,235,0.04)', borderRadius: 8, padding: '10px 12px' }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#1d4ed8', marginBottom: 6 }}>CONSTITUENT MODES</div>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
+              {['sea', 'air', 'road', 'rail', 'courier'].map(m => (
+                <label key={m} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#374151', cursor: 'pointer', textTransform: 'capitalize' }}>
+                  <input type="checkbox" checked={multiModes.includes(m)}
+                    onChange={e => setMultiModes(prev => e.target.checked ? [...prev, m] : prev.filter(x => x !== m))} />
+                  {m}
+                </label>
+              ))}
+            </div>
+            <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Leg detail (optional)</label>
+            <textarea value={multiNotes} onChange={e => setMultiNotes(e.target.value)} rows={2}
+              placeholder="e.g. Sea to Singapore, road to site"
+              style={{ ...inputStyle, width: '100%', resize: 'vertical', fontFamily: 'inherit' }} />
+          </div>
+        )}
         {/* ─── TRANSPORT ERROR ──────────────────────────────── */}
         {transportError && (
           <p style={{ color: '#ef4444', fontSize: 12, marginTop: 4, marginBottom: 0 }}>
@@ -771,13 +806,17 @@ export const CreateSCNWizard: React.FC<Props> = ({
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <div>
-          <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>Forwarder name</label>
-          <input
+          <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>Forwarder</label>
+          {/* Item 4: dropdown of project freight forwarders (same source as the delegation
+              picker). Writes forwarder_name — the field the register/detail display use. */}
+          <select
             value={forwarder}
             onChange={e => setForwarder(e.target.value)}
-            placeholder="e.g. Toll Group"
             style={{ ...inputStyle, width: '100%' }}
-          />
+          >
+            <option value="">— Select forwarder</option>
+            {forwarders.map(f => <option key={f.id} value={f.company ? `${f.full_name} · ${f.company}` : f.full_name}>{f.full_name}{f.company ? ` · ${f.company}` : ''}</option>)}
+          </select>
         </div>
         <div>
           <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>Incoterms</label>
@@ -849,7 +888,15 @@ export const CreateSCNWizard: React.FC<Props> = ({
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px 24px', gap: 6, alignItems: 'center' }}>
                 <select value={c.lineRef} onChange={e => updateContent(i, ci, 'lineRef', e.target.value)} style={{ ...inputStyle, width: '100%' }}>
                   <option value="">Select line…</option>
-                  {allocatableLines().map(l => <option key={l.ref} value={l.ref}>{l.label} ({l.scnQty} {l.uom})</option>)}
+                  {/* Item 5: only show lines not yet fully packed (+ this row's own line),
+                      labelled with the BALANCE available to pack (reuses allocatedFor). */}
+                  {allocatableLines().filter(l => {
+                    const avail = l.scnQty - allocatedFor(l.ref) + (l.ref === c.lineRef ? (Number(c.qty) || 0) : 0)
+                    return avail > 1e-9 || l.ref === c.lineRef
+                  }).map(l => {
+                    const avail = Math.max(0, l.scnQty - allocatedFor(l.ref) + (l.ref === c.lineRef ? (Number(c.qty) || 0) : 0))
+                    return <option key={l.ref} value={l.ref}>{l.label} — {avail} {l.uom} to pack</option>
+                  })}
                 </select>
                 <input type="number" min={0} value={c.qty} placeholder="qty"
                   onChange={e => updateContent(i, ci, 'qty', e.target.value)}

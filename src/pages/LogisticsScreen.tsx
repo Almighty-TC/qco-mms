@@ -21,6 +21,7 @@ const LOG_MIN = [36, 80, 70, 90, 80, 100, 60, 70, 70, 50, 60, 90, 40]
 import { usePagedList } from '../hooks/usePagedList'
 
 import { API } from '../lib/api'
+import { containerDimViolations, containerDimMessage } from '../lib/packaging'
 
 // ─── TYPES ────────────────────────────────────────────────────
 interface SCNRow {
@@ -982,12 +983,28 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
   const totalGross = scn.packages?.reduce((s, p) => s + (Number(p.gross_weight_kg) || 0), 0) || 0
   // Q2: tree-ordered packages (container → sub-packages) for display.
   const tree = orderPackagesTree(scn.packages || [])
+  // Item 3 (display-only): top-level units (containers + loose) number consecutively
+  // 01, 02, 03… (the DB package_number is a flat sequence that counts nested rows, so
+  // containers appeared as 01, 04…). Nested rows are labelled "Item" — not a number.
+  const displayLabel = new Map<number, string>()
+  let _topN = 0
+  tree.forEach(({ pkg: tp, depth }) => displayLabel.set(tp.id, depth === 0 ? String(++_topN).padStart(2, '0') : 'Item'))
 
   const savePackage = async () => {
     const isContainer = !!form.container_type_id
     // Dimensions required for ordinary packages only — a container's dims are display-only.
     if (!isContainer && (!form.length_mm || !form.width_mm || !form.height_mm || !form.gross_weight_kg))
       return setFormError('Dimensions and gross weight are required')
+    // Item 1: a sub-package nested into a container must FIT its inner dims (per-type
+    // relaxation — open-top relaxes height, flat-rack carries out-of-gauge). Dims are mm.
+    if (form.parent_package_id) {
+      const parentPkg = (scn.packages || []).find(p => p.id === Number(form.parent_package_id))
+      const ct = containerTypes.find(c => c.id === parentPkg?.container_type_id)
+      if (ct) {
+        const v = containerDimViolations({ length_mm: form.length_mm, width_mm: form.width_mm, height_mm: form.height_mm }, ct as any)
+        if (v) return setFormError(containerDimMessage(v, ct as any))
+      }
+    }
     // Q4.3 seal governance (client guard mirrors the backend): CHANGING an existing seal
     // requires a reason. First-set needs none. Backend enforces it regardless.
     const sealChanged = (form.seal_no || '').trim() !== (originalSeal || '').trim()
@@ -1138,8 +1155,8 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
                 </tr>
               ) : (
                 <tr key={p.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
-                  <td style={{ padding: '7px 8px', fontFamily: 'JetBrains Mono, monospace', color: '#E84E0F', fontSize: 11, paddingLeft: 8 + depth * 18 }}>
-                    {depth > 0 && <span style={{ color: sub }}>└ </span>}{p.package_number}
+                  <td style={{ padding: '7px 8px', fontFamily: 'JetBrains Mono, monospace', color: depth > 0 ? sub : '#E84E0F', fontSize: 11, paddingLeft: 8 + depth * 18 }}>
+                    {depth > 0 && <span style={{ color: sub }}>└ </span>}{displayLabel.get(p.id) ?? p.package_number}
                   </td>
                   <td style={{ padding: '7px 8px', color: col }}>
                     {p.description || '—'}
