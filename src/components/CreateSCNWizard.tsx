@@ -27,10 +27,13 @@ interface PkgContent { lineRef: string; qty: string }   // which allocatable lin
 interface PackageRow {
   id: string                 // Q2: stable client ref for nesting (sent to backend as `ref`)
   parentId: string           // Q2: id of the container this nests under ('' = top-level)
+  kind: 'container' | 'package'   // D5.1 container-first: 'container' = top-level typed container (holds sub-packages, no items); 'package' = leaf (sub-package or loose) that holds items
   type: string; customType?: string; qty: string
   length: string; width: string; height: string; weight: string
   is_dg: boolean
   contents: PkgContent[]   // Stage 2: itemized packing list. Non-empty → this is ONE physical box.
+  containerTypeId?: number | ''   // Q4: ISO container type — set on 'container' rows
+  containerNo?: string; sealNo?: string   // Q4: optional on a container row at creation (seal routes through governance)
 }
 // Heat/Lot P1: one declared heat for the shipment (heat_number required; grade/cert optional).
 interface HeatRow { heat_number: string; grade: string; cert: string }
@@ -110,6 +113,12 @@ export const CreateSCNWizard: React.FC<Props> = ({
 
   // ─── STEP 3: Packages ─────────────────────────────────────
   const [packages, setPackages] = useState<PackageRow[]>([])
+  // Q4/D5: who physically packs this SCN. 'forwarder' delegates packing to a freight
+  // forwarder (picked below) and lets the SCN be created with packaging UNFINISHED.
+  const [packedByType, setPackedByType] = useState<'internal'|'vendor'|'forwarder'>('internal')
+  const [forwarderUserId, setForwarderUserId] = useState<number | ''>('')
+  const [forwarders, setForwarders] = useState<{ id: number; full_name: string; company?: string }[]>([])
+  const [containerTypes, setContainerTypes] = useState<{ id: number; code: string; description: string; inner_length_mm?: number; inner_width_mm?: number; inner_height_mm?: number; capacity_m3?: number | null; max_payload_kg?: number | null }[]>([])
 
   // ─── STEP 4: Heats (Heat/Lot P1) ──────────────────────────
   const [heats, setHeats] = useState<HeatRow[]>([])
@@ -152,6 +161,10 @@ export const CreateSCNWizard: React.FC<Props> = ({
     axios.get(`${API}/expediting/${projectId}/warehouses`)
       .then(r => setWarehouses(r.data))
       .catch(() => {})
+
+    // D5: active freight forwarders (delegation picker) + ISO container types (Q4 picker).
+    axios.get(`${API}/expediting/forwarders`).then(r => setForwarders(r.data || [])).catch(() => {})
+    axios.get(`${API}/logistics/container-types`).then(r => setContainerTypes(r.data || [])).catch(() => {})
   }, [poId, projectId, preSelectedLineId])
 
   // ─── LINE SELECTION HELPERS ───────────────────────────────
@@ -189,35 +202,33 @@ export const CreateSCNWizard: React.FC<Props> = ({
   const removeAdditional = (i: number) =>
     setAdditionalItems(prev => prev.filter((_, idx) => idx !== i))
 
-  // ─── PACKAGES ─────────────────────────────────────────────
+  // ─── PACKAGES (D5.1 container-first) ──────────────────────
+  // A CONTAINER is a top-level typed object you create first (pick ISO type), then add
+  // packages INTO it. A LOOSE PACKAGE is a top-level leaf that holds items directly. A
+  // SUB-PACKAGE is a leaf nested under a container. Items live in leaves only.
   const newPkgId = () => `p${Date.now()}${Math.floor(Math.random() * 1000)}`
-  const addPackage = () =>
-    setPackages(prev => [...prev, { id: newPkgId(), parentId: '', type: 'Pallet', qty: '1', length: '', width: '', height: '', weight: '', is_dg: false, contents: [] }])
+  const blankLeaf = (parentId: string): PackageRow => ({ id: newPkgId(), parentId, kind: 'package', type: 'Pallet', qty: '1', length: '', width: '', height: '', weight: '', is_dg: false, contents: [], containerTypeId: '' })
+  const addContainer = () =>
+    setPackages(prev => [...prev, { id: newPkgId(), parentId: '', kind: 'container', type: 'Container', qty: '1', length: '', width: '', height: '', weight: '', is_dg: false, contents: [], containerTypeId: '', containerNo: '', sealNo: '' }])
+  const addLoosePackage = () => setPackages(prev => [...prev, blankLeaf('')])
+  const addPackageInto = (containerId: string) => setPackages(prev => [...prev, blankLeaf(containerId)])
   const updatePkg = (i: number, field: keyof PackageRow, val: any) =>
     setPackages(prev => prev.map((p, idx) => idx === i ? { ...p, [field]: val } : p))
-  // Removing a package re-parents any children to top-level (no orphan refs on submit).
+  // Removing a container also removes its sub-packages (a container can't outlive… nor
+  // strand… its contents); removing a leaf just drops it.
   const removePkg = (i: number) =>
     setPackages(prev => {
       const removed = prev[i]
-      return prev.filter((_, idx) => idx !== i).map(p => p.parentId === removed?.id ? { ...p, parentId: '' } : p)
+      if (!removed) return prev
+      return prev.filter((_, idx) => idx !== i).filter(p => p.parentId !== removed.id)
     })
 
-  // ─── Q2 HIERARCHY HELPERS ─────────────────────────────────
-  // A package is a container if any other package nests under it.
-  const isContainer = (pkgId: string) => packages.some(p => p.parentId === pkgId)
-  const pkgHasContents = (p: PackageRow) => p.contents.some(c => c.lineRef && Number(c.qty) > 0)
-  // Valid parents for package i: not itself, not a descendant (no cycles), and not an
-  // item-holding package (a container can't hold items → mirrors the backend leaf rule).
-  const validParents = (i: number) => {
-    const me = packages[i]
-    const descendants = new Set<string>()
-    const collect = (id: string) => packages.forEach(p => { if (p.parentId === id && !descendants.has(p.id)) { descendants.add(p.id); collect(p.id) } })
-    collect(me.id)
-    return packages.filter((p, idx) => idx !== i && p.id !== me.id && !descendants.has(p.id) && !pkgHasContents(p))
-  }
-  // Set/clear the parent of package i (designating the target as a container).
-  const setParent = (i: number, parentId: string) =>
-    setPackages(prev => prev.map((p, idx) => idx === i ? { ...p, parentId } : p))
+  // ─── HIERARCHY HELPERS ────────────────────────────────────
+  const containerRows = () => packages.filter(p => p.kind === 'container')
+  const looseRows = () => packages.filter(p => p.kind === 'package' && !p.parentId)
+  const subRows = (containerId: string) => packages.filter(p => p.parentId === containerId)
+  const pkgIndex = (id: string) => packages.findIndex(p => p.id === id)
+  const ctById = (id?: number | '') => containerTypes.find(c => c.id === id)
 
   // ─── PACKAGE CONTENTS (Stage 2 — D1 per-package picker) ────
   const addContent = (pi: number) =>
@@ -291,8 +302,15 @@ export const CreateSCNWizard: React.FC<Props> = ({
       if (!v.parent_po_line_id) { onToast?.('Each off-PO variation must select a parent PO line.', 'error'); return }
       if (!v.description)       { onToast?.('Each off-PO variation needs a description.', 'error'); return }
     }
-    // D2: every selected line must be fully allocated into packages before creating.
-    if (!allFullyAllocated()) { onToast?.('Allocate every selected line fully into packages before creating the SCN.', 'error'); return }
+    // D2: every selected line must be fully allocated into packages before creating —
+    // RELAXED for delegated-forwarder packing (D5): when the forwarder will pack, the
+    // expeditor may leave packaging unfinished (the forwarder completes it later).
+    if (packedByType !== 'forwarder' && !allFullyAllocated()) { onToast?.('Allocate every selected line fully into packages before creating the SCN.', 'error'); return }
+    // If delegating, a forwarder must be chosen.
+    if (packedByType === 'forwarder' && !forwarderUserId) { onToast?.('Pick the freight forwarder to delegate packing to.', 'error'); return }
+    // Q4: every container must declare its ISO container type.
+    const untypedContainer = packages.find(p => p.kind === 'container' && !p.containerTypeId)
+    if (untypedContainer) { onToast?.('Select an ISO container type for each container.', 'error'); return }
 
     const poLines = po?.po_lines || []
     setCreating(true)
@@ -314,6 +332,10 @@ export const CreateSCNWizard: React.FC<Props> = ({
         transport_mode: transportMode || null,
         forwarder_name: forwarder || null,
         incoterms: incoterms || null,
+        // D5: who packs. 'forwarder' → delegate packing to the picked freight forwarder
+        // (backend validates: forwarder requires an active FF; internal/vendor forbid it).
+        packed_by_type: packedByType,
+        packaging_delegated_to: packedByType === 'forwarder' ? (forwarderUserId || null) : null,
         // Q2: send ref + parent_ref so the backend persists the hierarchy. Order
         // parents BEFORE children at any depth (backend resolves ids single-pass).
         // Itemized package → qty forced to 1 (one physical box); contents carry the packing list.
@@ -330,8 +352,13 @@ export const CreateSCNWizard: React.FC<Props> = ({
           .map(p => ({
             ref: p.id,
             parent_ref: p.parentId || undefined,
-            type: p.type === 'Others' ? ((p.customType || '').trim() || 'Other') : p.type,
+            type: p.kind === 'container' ? 'Container' : (p.type === 'Others' ? ((p.customType || '').trim() || 'Other') : p.type),
             qty: p.contents.length ? 1 : (Number(p.qty) || 1),
+            // Q4: a typed container carries its ISO container_type_id + optional
+            // container_no/seal_no. seal_no routes through governance in the create txn.
+            container_type_id: p.kind === 'container' ? (p.containerTypeId || undefined) : undefined,
+            container_no: p.kind === 'container' ? ((p.containerNo || '').trim() || undefined) : undefined,
+            seal_no: p.kind === 'container' ? ((p.sealNo || '').trim() || undefined) : undefined,
             length: p.length, width: p.width, height: p.height, weight: p.weight, is_dg: p.is_dg,
             contents: p.contents
               .filter(c => c.lineRef && Number(c.qty) > 0)
@@ -756,172 +783,191 @@ export const CreateSCNWizard: React.FC<Props> = ({
 
   // ─── STEP 3: PACKAGES ─────────────────────────────────────
   // Add one or more package rows with dimensions and weight.
+  // Leaf-package body (dims + DG + contents) — shared by sub-packages and loose packages.
+  const renderLeafBody = (pkg: PackageRow, i: number) => (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px', gap: 8, marginBottom: 8 }}>
+        <div>
+          <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Type</label>
+          <select value={pkg.type} onChange={e => updatePkg(i, 'type', e.target.value)} style={{ ...inputStyle, width: '100%' }}>
+            {PKG_TYPES.map(t => <option key={t}>{t}</option>)}
+          </select>
+          {pkg.type === 'Others' && (
+            <input value={pkg.customType || ''} onChange={e => updatePkg(i, 'customType', e.target.value)} placeholder="Specify package type *"
+              style={{ ...inputStyle, width: '100%', marginTop: 6, borderColor: (pkg.customType || '').trim() ? undefined : '#f59e0b' }} />
+          )}
+        </div>
+        <div>
+          <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>{pkg.contents.length > 0 ? 'Qty (itemized)' : 'Qty'}</label>
+          <input type="number" min={1} value={pkg.contents.length > 0 ? '1' : pkg.qty} disabled={pkg.contents.length > 0}
+            title={pkg.contents.length > 0 ? 'Itemized package = one physical box' : undefined}
+            onChange={e => updatePkg(i, 'qty', e.target.value)}
+            style={{ ...inputStyle, width: '100%', background: pkg.contents.length > 0 ? '#f1f5f9' : '#fff', color: pkg.contents.length > 0 ? '#94a3b8' : '#0f172a' }} />
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8, marginBottom: 8 }}>
+        {(['length', 'width', 'height'] as const).map(dim => (
+          <div key={dim}>
+            <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3, textTransform: 'capitalize' }}>{dim} (cm)</label>
+            <input type="number" min={0} value={pkg[dim]} onChange={e => updatePkg(i, dim, e.target.value)} style={{ ...inputStyle, width: '100%' }} />
+          </div>
+        ))}
+        <div>
+          <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Weight (kg)</label>
+          <input type="number" min={0} value={pkg.weight} onChange={e => updatePkg(i, 'weight', e.target.value)} style={{ ...inputStyle, width: '100%' }} />
+        </div>
+      </div>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#374151', cursor: 'pointer' }}>
+        <input type="checkbox" checked={pkg.is_dg} onChange={e => updatePkg(i, 'is_dg', e.target.checked)} style={{ accentColor: '#ef4444' }} />
+        Dangerous goods (DG)
+      </label>
+      {/* Contents (packing list) — items go in leaf packages. */}
+      <div style={{ marginTop: 12, borderTop: '1px dashed #e2e8f0', paddingTop: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 6 }}>Contents (packing list)</div>
+        {pkg.contents.map((c, ci) => {
+          const line = allocatableLines().find(l => l.ref === c.lineRef)
+          const allocatedAll = line ? allocatedFor(c.lineRef) : 0
+          const over = !!line && allocatedAll > line.scnQty + 1e-9
+          const thisRowQty = Number(c.qty) || 0
+          const lineRemaining = line ? Math.max(0, line.scnQty - allocatedAll) : 0
+          const rowCap = line ? Math.max(0, line.scnQty - (allocatedAll - thisRowQty)) : 0
+          return (
+            <div key={ci} style={{ marginBottom: 6 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px 24px', gap: 6, alignItems: 'center' }}>
+                <select value={c.lineRef} onChange={e => updateContent(i, ci, 'lineRef', e.target.value)} style={{ ...inputStyle, width: '100%' }}>
+                  <option value="">Select line…</option>
+                  {allocatableLines().map(l => <option key={l.ref} value={l.ref}>{l.label} ({l.scnQty} {l.uom})</option>)}
+                </select>
+                <input type="number" min={0} value={c.qty} placeholder="qty"
+                  onChange={e => updateContent(i, ci, 'qty', e.target.value)}
+                  title={line ? `${lineRemaining} ${line.uom} still unallocated on this line` : ''}
+                  style={{ ...inputStyle, width: '100%', borderColor: over ? '#ef4444' : '#dde3ed' }} />
+                <button onClick={() => removeContent(i, ci)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 15, cursor: 'pointer' }}>×</button>
+              </div>
+              {line && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, marginLeft: 2 }}>
+                  <button onClick={() => updateContent(i, ci, 'qty', String(rowCap))} disabled={lineRemaining <= 0 && !over}
+                    title={lineRemaining > 0 ? `Fill the remaining ${lineRemaining} ${line.uom} into this row` : over ? 'Over-allocated — reduce qty' : 'Line already fully allocated'}
+                    style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontFamily: 'inherit', border: '1px solid #93c5fd',
+                      background: (lineRemaining > 0 || over) ? '#eff6ff' : '#f1f5f9', color: (lineRemaining > 0 || over) ? '#2563eb' : '#94a3b8',
+                      cursor: (lineRemaining > 0 || over) ? 'pointer' : 'not-allowed' }}>+ Balance</button>
+                  <span style={{ fontSize: 11, color: over ? '#ef4444' : lineRemaining > 0 ? '#d97706' : '#16a34a' }}>
+                    {over ? `Over by ${(allocatedAll - line.scnQty)} ${line.uom}` : `Remaining: ${lineRemaining} ${line.uom}`}
+                  </span>
+                </div>
+              )}
+            </div>
+          )
+        })}
+        <button onClick={() => addContent(i)} style={{ fontSize: 11, color: '#2563eb', background: 'none', border: '1px dashed #93c5fd', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontFamily: 'inherit' }}>+ add content</button>
+      </div>
+    </div>
+  )
+
   const Step3 = () => (
     <div>
       <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>Packages</div>
       <div style={{ fontSize: 12, color: '#64748b', marginBottom: 16 }}>
-        Optional — add package details for freight booking.
+        Build the shipment container-first — add a container and pack into it, or add loose packages.
       </div>
 
-      {packages.map((pkg, i) => {
-        const container = isContainer(pkg.id)   // Q2: another package nests under this one
-        const parents = validParents(i)         // valid containers to nest THIS package under
-        return (
-        <div key={i} style={{
-          border: container ? '1px solid #c4b5fd' : '1px solid #dde3ed', borderRadius: 8, padding: '14px 16px', marginBottom: 12,
-          background: container ? 'rgba(124,58,237,0.03)' : undefined,
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'flex', alignItems: 'center', gap: 6 }}>
-              Package {i + 1}
-              {container && <span title="Container — holds sub-packages, not items directly" style={{ fontSize: 9, fontWeight: 700, color: '#7c3aed', background: 'rgba(124,58,237,0.1)', borderRadius: 6, padding: '1px 6px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>📦 container</span>}
-            </span>
-            <button onClick={() => removePkg(i)}
-              style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 16, cursor: 'pointer' }}>×</button>
-          </div>
-          {/* Q2: nest this package under a container (sets parent_package_id). Containers
-              (item-holders) are excluded from the options — a container can't hold items. */}
-          {packages.length > 1 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-              <label style={{ fontSize: 10, color: '#64748b', whiteSpace: 'nowrap' }}>Nest under</label>
-              <select value={pkg.parentId} onChange={e => setParent(i, e.target.value)} style={{ ...inputStyle, flex: 1, padding: '5px 8px' }}>
-                <option value="">— Top-level (no container)</option>
-                {parents.map(pp => { const idx = packages.indexOf(pp); return <option key={pp.id} value={pp.id}>Package {idx + 1}{pp.type ? ` · ${pp.type}` : ''}</option> })}
-              </select>
-            </div>
-          )}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px', gap: 8, marginBottom: 8 }}>
-            <div>
-              <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Type</label>
-              <select
-                value={pkg.type}
-                onChange={e => updatePkg(i, 'type', e.target.value)}
-                style={{ ...inputStyle, width: '100%' }}
-              >
-                {PKG_TYPES.map(t => <option key={t}>{t}</option>)}
-              </select>
-              {pkg.type === 'Others' && (
-                <input
-                  value={pkg.customType || ''}
-                  onChange={e => updatePkg(i, 'customType', e.target.value)}
-                  placeholder="Specify package type *"
-                  style={{ ...inputStyle, width: '100%', marginTop: 6, borderColor: (pkg.customType || '').trim() ? undefined : '#f59e0b' }}
-                />
-              )}
-            </div>
-            <div>
-              <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>
-                {pkg.contents.length > 0 ? 'Qty (itemized)' : 'Qty'}
-              </label>
-              <input
-                type="number" min={1}
-                value={pkg.contents.length > 0 ? '1' : pkg.qty}
-                disabled={pkg.contents.length > 0}
-                title={pkg.contents.length > 0 ? 'Itemized package = one physical box' : undefined}
-                onChange={e => updatePkg(i, 'qty', e.target.value)}
-                style={{ ...inputStyle, width: '100%', background: pkg.contents.length > 0 ? '#f1f5f9' : '#fff', color: pkg.contents.length > 0 ? '#94a3b8' : '#0f172a' }}
-              />
-            </div>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8, marginBottom: 8 }}>
-            {(['length', 'width', 'height'] as const).map(dim => (
-              <div key={dim}>
-                <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3, textTransform: 'capitalize' }}>
-                  {dim} (cm)
-                </label>
-                <input
-                  type="number" min={0}
-                  value={pkg[dim]}
-                  onChange={e => updatePkg(i, dim, e.target.value)}
-                  style={{ ...inputStyle, width: '100%' }}
-                />
-              </div>
-            ))}
-            <div>
-              <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Weight (kg)</label>
-              <input
-                type="number" min={0}
-                value={pkg.weight}
-                onChange={e => updatePkg(i, 'weight', e.target.value)}
-                style={{ ...inputStyle, width: '100%' }}
-              />
-            </div>
-          </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#374151', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={pkg.is_dg}
-              onChange={e => updatePkg(i, 'is_dg', e.target.checked)}
-              style={{ accentColor: '#ef4444' }}
-            />
-            Dangerous goods (DG)
-          </label>
-
-          {/* Q2: a container holds sub-packages, NOT items directly (mirrors the backend
-              leaf rule). Hide the contents picker for containers — items go on its leaves. */}
-          {container ? (
-            <div style={{ marginTop: 12, borderTop: '1px dashed #e2e8f0', paddingTop: 10, fontSize: 11, color: '#7c3aed', fontStyle: 'italic' }}>
-              📦 Container — items are packed into its sub-packages, not here.
-            </div>
-          ) : (
-          /* Contents (Stage 2 — D1 per-package picker). Adding any content makes this
-             ONE physical box (qty locked to 1). Draws from the SCN's selected lines. */
-          <div style={{ marginTop: 12, borderTop: '1px dashed #e2e8f0', paddingTop: 10 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 6 }}>Contents (packing list)</div>
-            {pkg.contents.map((c, ci) => {
-              const line = allocatableLines().find(l => l.ref === c.lineRef)
-              const allocatedAll = line ? allocatedFor(c.lineRef) : 0          // packed across ALL rows (incl. this one)
-              const over = !!line && allocatedAll > line.scnQty + 1e-9
-              const thisRowQty = Number(c.qty) || 0
-              // Line-level remaining = SCN qty still unpacked across every row → the "Remaining" read-out (→ 0 when full).
-              const lineRemaining = line ? Math.max(0, line.scnQty - allocatedAll) : 0
-              // Row capacity = most THIS row may hold without the line exceeding its SCN qty (D3).
-              // "+ Balance" SETS the row to this so the line lands exactly full (never adds → never overshoots).
-              const rowCap = line ? Math.max(0, line.scnQty - (allocatedAll - thisRowQty)) : 0
-              return (
-                <div key={ci} style={{ marginBottom: 6 }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px 24px', gap: 6, alignItems: 'center' }}>
-                    <select value={c.lineRef} onChange={e => updateContent(i, ci, 'lineRef', e.target.value)} style={{ ...inputStyle, width: '100%' }}>
-                      <option value="">Select line…</option>
-                      {allocatableLines().map(l => <option key={l.ref} value={l.ref}>{l.label} ({l.scnQty} {l.uom})</option>)}
-                    </select>
-                    <input type="number" min={0} value={c.qty} placeholder="qty"
-                      onChange={e => updateContent(i, ci, 'qty', e.target.value)}
-                      title={line ? `${lineRemaining} ${line.uom} still unallocated on this line` : ''}
-                      style={{ ...inputStyle, width: '100%', borderColor: over ? '#ef4444' : '#dde3ed' }} />
-                    <button onClick={() => removeContent(i, ci)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 15, cursor: 'pointer' }}>×</button>
-                  </div>
-                  {/* "+ Balance" sets THIS row to the line's full remaining (capped at SCN qty, D3),
-                      with a live line-level remaining read-out. Only shown once a line is selected. */}
-                  {line && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, marginLeft: 2 }}>
-                      <button
-                        onClick={() => updateContent(i, ci, 'qty', String(rowCap))}
-                        disabled={lineRemaining <= 0 && !over}
-                        title={lineRemaining > 0 ? `Fill the remaining ${lineRemaining} ${line.uom} into this row` : over ? 'Over-allocated — reduce qty' : 'Line already fully allocated'}
-                        style={{
-                          fontSize: 10, padding: '2px 8px', borderRadius: 4, fontFamily: 'inherit',
-                          border: '1px solid #93c5fd', background: (lineRemaining > 0 || over) ? '#eff6ff' : '#f1f5f9',
-                          color: (lineRemaining > 0 || over) ? '#2563eb' : '#94a3b8',
-                          cursor: (lineRemaining > 0 || over) ? 'pointer' : 'not-allowed',
-                        }}>
-                        + Balance
-                      </button>
-                      <span style={{ fontSize: 11, color: over ? '#ef4444' : lineRemaining > 0 ? '#d97706' : '#16a34a' }}>
-                        {over ? `Over by ${(allocatedAll - line.scnQty)} ${line.uom}` : `Remaining: ${lineRemaining} ${line.uom}`}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-            <button onClick={() => addContent(i)}
-              style={{ fontSize: 11, color: '#2563eb', background: 'none', border: '1px dashed #93c5fd', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontFamily: 'inherit' }}>
-              + add content
+      {/* D5: who physically packs this SCN. 'Freight forwarder' delegates packing to a
+          chosen forwarder and lets you create the SCN with packaging unfinished. */}
+      <div style={{ border: '1px solid #dde3ed', borderRadius: 8, padding: '12px 14px', marginBottom: 16, background: '#f8fafc' }}>
+        <label style={{ fontSize: 11, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 8 }}>WHO PACKS THIS SHIPMENT?</label>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {([['internal','We pack (internal)'],['vendor','Vendor packs'],['forwarder','Freight forwarder packs']] as const).map(([val, lbl]) => (
+            <button key={val} type="button" onClick={() => setPackedByType(val)}
+              style={{ padding: '6px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                border: packedByType === val ? '1.5px solid #2563eb' : '1px solid #cbd5e1',
+                background: packedByType === val ? '#eff6ff' : '#fff', color: packedByType === val ? '#1d4ed8' : '#475569' }}>
+              {lbl}
             </button>
-          </div>
-          )}
+          ))}
         </div>
+        {packedByType === 'forwarder' && (
+          <div style={{ marginTop: 12 }}>
+            <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Delegate packing to *</label>
+            <select value={forwarderUserId} onChange={e => setForwarderUserId(e.target.value ? Number(e.target.value) : '')}
+              style={{ ...inputStyle, width: '100%', borderColor: forwarderUserId ? undefined : '#f59e0b' }}>
+              <option value="">— Select a freight forwarder —</option>
+              {forwarders.map(f => <option key={f.id} value={f.id}>{f.full_name}{f.company ? ` · ${f.company}` : ''}</option>)}
+            </select>
+            <div style={{ fontSize: 11, color: '#7c3aed', marginTop: 8, lineHeight: 1.4 }}>
+              📦 The forwarder will pack and seal this shipment. You can create the SCN now with packaging <strong>unfinished</strong> — they’ll complete it.
+            </div>
+          </div>
+        )}
+        {packedByType === 'vendor' && (
+          <div style={{ fontSize: 11, color: '#64748b', marginTop: 8 }}>Vendor-packed — enter the packages yourself below (the vendor doesn’t log in).</div>
+        )}
+      </div>
+
+      {/* Containers (top-level, typed) — pack sub-packages INTO each. */}
+      {containerRows().map(cont => {
+        const ci = pkgIndex(cont.id)
+        const ct = ctById(cont.containerTypeId)
+        const subs = subRows(cont.id)
+        return (
+        <div key={cont.id} style={{ border: '1.5px solid #c4b5fd', borderRadius: 10, padding: '14px 16px', marginBottom: 14, background: 'rgba(124,58,237,0.04)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: '#6d28d9', display: 'flex', alignItems: 'center', gap: 6 }}>📦 Container{ct ? ` · ${ct.code}` : ''}</span>
+            <button onClick={() => removePkg(ci)} title="Remove container + its packages" style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 16, cursor: 'pointer' }}>×</button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+            <div>
+              <label style={{ fontSize: 10, color: '#7c3aed', fontWeight: 700, display: 'block', marginBottom: 3 }}>Container type *</label>
+              <select value={cont.containerTypeId ?? ''} onChange={e => updatePkg(ci, 'containerTypeId', e.target.value ? Number(e.target.value) : '')}
+                style={{ ...inputStyle, width: '100%', borderColor: cont.containerTypeId ? '#c4b5fd' : '#f59e0b' }}>
+                <option value="">— Select ISO container type —</option>
+                {containerTypes.map(t => <option key={t.id} value={t.id}>{t.code} · {t.description}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Inner dimensions (reference)</label>
+              <div style={{ ...inputStyle, width: '100%', background: '#f1f5f9', color: '#475569', display: 'flex', alignItems: 'center', minHeight: 30 }}>
+                {ct ? `${ct.inner_length_mm} × ${ct.inner_width_mm} × ${ct.inner_height_mm} mm${ct.capacity_m3 ? ` · ${ct.capacity_m3} m3` : ''}` : '—'}
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+            <div>
+              <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Container No. (optional)</label>
+              <input value={cont.containerNo || ''} onChange={e => updatePkg(ci, 'containerNo', e.target.value)} placeholder="e.g. MSKU1234567" style={{ ...inputStyle, width: '100%' }} />
+            </div>
+            <div>
+              <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Seal No. (optional)</label>
+              <input value={cont.sealNo || ''} onChange={e => updatePkg(ci, 'sealNo', e.target.value)} placeholder={packedByType === 'forwarder' ? 'Forwarder seals on packing' : 'Seal number'} style={{ ...inputStyle, width: '100%' }} />
+            </div>
+          </div>
+          {subs.map(sub => {
+            const si = pkgIndex(sub.id)
+            return (
+              <div key={sub.id} style={{ border: '1px solid #dde3ed', borderRadius: 8, padding: '12px 14px', marginBottom: 8, background: '#fff', marginLeft: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: '#374151' }}>↳ Package in container</span>
+                  <button onClick={() => removePkg(si)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 15, cursor: 'pointer' }}>×</button>
+                </div>
+                {renderLeafBody(sub, si)}
+              </div>
+            )
+          })}
+          <button onClick={() => addPackageInto(cont.id)} style={{ fontSize: 11, color: '#7c3aed', background: 'none', border: '1px dashed #c4b5fd', borderRadius: 6, padding: '6px 12px', cursor: 'pointer', fontFamily: 'inherit', marginLeft: 12 }}>+ Add package into this container</button>
+        </div>
+        )
+      })}
+
+      {/* Loose packages (top-level leaves that hold items directly). */}
+      {looseRows().map(lp => {
+        const li = pkgIndex(lp.id)
+        return (
+          <div key={lp.id} style={{ border: '1px solid #dde3ed', borderRadius: 8, padding: '14px 16px', marginBottom: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>📦 Loose package</span>
+              <button onClick={() => removePkg(li)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 16, cursor: 'pointer' }}>×</button>
+            </div>
+            {renderLeafBody(lp, li)}
+          </div>
         )
       })}
 
@@ -948,17 +994,16 @@ export const CreateSCNWizard: React.FC<Props> = ({
         </div>
       )}
 
-      <button
-        onClick={addPackage}
-        style={{
-          width: '100%', padding: '10px',
-          border: '1px dashed #2563eb', borderRadius: 8,
-          background: 'none', color: '#2563eb',
-          cursor: 'pointer', fontFamily: 'inherit', fontSize: 12,
-        }}
-      >
-        + Add package
-      </button>
+      <div style={{ display: 'flex', gap: 10 }}>
+        <button onClick={addContainer}
+          style={{ flex: 1, padding: '10px', border: '1px dashed #7c3aed', borderRadius: 8, background: 'rgba(124,58,237,0.04)', color: '#6d28d9', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600 }}>
+          📦 + Add container
+        </button>
+        <button onClick={addLoosePackage}
+          style={{ flex: 1, padding: '10px', border: '1px dashed #2563eb', borderRadius: 8, background: 'none', color: '#2563eb', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600 }}>
+          + Add loose package
+        </button>
+      </div>
     </div>
   )
 
