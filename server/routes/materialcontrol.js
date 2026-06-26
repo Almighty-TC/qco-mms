@@ -90,6 +90,19 @@ async function childStockLive() {
   return _childStockLive
 }
 
+// Did migrate-receipt-provenance.js run? (3b) — gates the receipt→provenance capture +
+// the warehouse_stock.receipt_line_id trace pointer. Cached sticky-true. Checking
+// warehouse_stock.receipt_line_id is sufficient (one migration adds all three columns).
+let _provLive = false
+async function receiptProvenanceLive() {
+  if (_provLive) return true
+  const [[r]] = await db.query(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'warehouse_stock' AND column_name = 'receipt_line_id'`)
+  _provLive = r.n > 0
+  return _provLive
+}
+
 // ─── SHARED item_code COMPUTATION (Q3) ────────────────────────
 // Single source of truth so a parent PO line and its off-PO child land the SAME
 // item_code → they nest (group) in the Stock Register. An explicit tag/identity wins;
@@ -469,6 +482,16 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
 
       // ── MUTATE (all validated) ──────────────────────────────
       // Persist each line to receipt_lines, then create stock from the RECEIVED qty.
+      // 3b: provenance capture — record source package/heat on the (append-only) receipt
+      // line and stamp warehouse_stock.receipt_line_id (the trace-back pointer). Capability-
+      // detected; the column suffixes append AFTER existing columns so the rest of each
+      // INSERT is byte-for-byte unchanged. provLive/suffixes are constant for this txn.
+      const provLive = await receiptProvenanceLive()
+      const rlProvCols = provLive ? ', source_scn_package_id, scn_heat_id' : ''   // appended after received_date
+      const rlProvPh   = provLive ? ', ?, ?' : ''
+      const rlProvVals = (l) => provLive ? [l.source_scn_package_id ? Number(l.source_scn_package_id) : null, l.scn_heat_id ? Number(l.scn_heat_id) : null] : []
+      const wsProvCol = provLive ? ', receipt_line_id' : ''                        // appended after received_by
+      const wsProvPh  = provLive ? ', ?' : ''
       for (const ln of lines) {
         const receivedQty = Number(ln.received_qty)
         if (!(receivedQty >= 0)) continue
@@ -485,35 +508,35 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
           const cHeatNo      = (ln.heat_number || '').trim() || null
           const cHeatOffList = ln.heat_off_list ? 1 : 0
           const cHeatReason  = cHeatOffList ? ((ln.heat_off_list_reason || '').trim() || null) : null
-          await conn.query(
+          const [rlChild] = await conn.query(
             `INSERT INTO receipt_lines
                (project_id, scn_id, scn_ref, additional_item_id, heat_number, heat_off_list, heat_off_list_reason,
                 description, expected_qty, received_qty, damaged_qty, uom,
-                discrepancy_type, discrepancy_notes, received_by, received_date)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURDATE())`,
+                discrepancy_type, discrepancy_notes, received_by, received_date${rlProvCols})
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURDATE()${rlProvPh})`,
             [pid, scnId, scn.scn_ref, aiId, cHeatNo, cHeatOffList, cHeatReason,
              ln.description || null,
              ln.expected_qty != null ? Number(ln.expected_qty) : null, receivedQty, dmg, cuom,
-             ln.discrepancy_type || null, ln.discrepancy_notes || null, userId])
+             ln.discrepancy_type || null, ln.discrepancy_notes || null, userId, ...rlProvVals(ln)])
           const cItemCode = effectiveItemCode(ai.tag_number || ai.equipment_tag, scn.scn_ref, ai.parent_line_number)
           const cWbs   = ai.wbs_code_snapshot || null
           const cGood  = receivedQty - dmg
           const cLoc   = upLoc(ln.location_code) || upLoc(location_code)
           if (cGood > 0) {
             await conn.query(
-              `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,additional_item_id,commodity_id,equipment_tag,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,CURDATE(),?)`,
+              `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,additional_item_id,commodity_id,equipment_tag,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by${wsProvCol})
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,CURDATE(),?${wsProvPh})`,
               [pid, whId, scnId, aiId, ai.commodity_id ?? null, ai.equipment_tag ?? null, cItemCode, ln.description || 'Off-PO item', cWbs,
-               cGood, cGood, cuom, cLoc, (dmg > 0 ? 'good' : condition), scn.vendor_name, cHeatNo, userId])
+               cGood, cGood, cuom, cLoc, (dmg > 0 ? 'good' : condition), scn.vendor_name, cHeatNo, userId, ...(provLive ? [rlChild.insertId] : [])])
             stockCreated++
           }
           if (dmg > 0) {
             await conn.query(
-              `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,additional_item_id,commodity_id,equipment_tag,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by,notes)
-               VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,?,1,?,?,CURDATE(),?,?)`,
+              `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,additional_item_id,commodity_id,equipment_tag,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by,notes${wsProvCol})
+               VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,?,1,?,?,CURDATE(),?,?${wsProvPh})`,
               [pid, whId, scnId, aiId, ai.commodity_id ?? null, ai.equipment_tag ?? null, cItemCode, ln.description || 'Off-PO item', cWbs,
                dmg, cuom, QUARANTINE_LOCATION, 'quarantine', scn.vendor_name, cHeatNo, userId,
-               `Damaged on receipt — ${ln.discrepancy_notes || 'pending QA review'}`])
+               `Damaged on receipt — ${ln.discrepancy_notes || 'pending QA review'}`, ...(provLive ? [rlChild.insertId] : [])])
             stockCreated++
           }
           continue
@@ -528,16 +551,16 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
         const heatOffList = ln.heat_off_list ? 1 : 0
         const heatReason  = heatOffList ? ((ln.heat_off_list_reason || '').trim() || null) : null
 
-        await conn.query(
+        const [rlPo] = await conn.query(
           `INSERT INTO receipt_lines
              (project_id, scn_id, scn_ref, po_line_id, heat_number, heat_off_list, heat_off_list_reason,
               description, expected_qty, received_qty, damaged_qty, uom,
-              discrepancy_type, discrepancy_notes, received_by, received_date)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURDATE())`,
+              discrepancy_type, discrepancy_notes, received_by, received_date${rlProvCols})
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURDATE()${rlProvPh})`,
           [pid, scnId, scn.scn_ref, ln.po_line_id || null, heatNo, heatOffList, heatReason,
            ln.description || null,
            expectedQty, receivedQty, damagedQty, uom,
-           ln.discrepancy_type || null, ln.discrepancy_notes || null, userId])
+           ln.discrepancy_type || null, ln.discrepancy_notes || null, userId, ...rlProvVals(ln)])
 
         // ── Phase 3: split good vs damaged into DISTINCT per-line holdings ──
         // (HEAT-READY: never pooled into a shared row — each split is its own row.)
@@ -552,21 +575,21 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
         const lineLoc = upLoc(ln.location_code) || upLoc(location_code)
         if (goodQty > 0) {
           await conn.query(
-            `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,CURDATE(),?)`,
+            `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by${wsProvCol})
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,CURDATE(),?${wsProvPh})`,
             [pid, whId, scnId, ln.po_line_id || null, itemCode, descr, wbs,
-             goodQty, goodQty, uom, lineLoc, (damagedQty > 0 ? 'good' : condition), scn.vendor_name, heatNo, userId])
+             goodQty, goodQty, uom, lineLoc, (damagedQty > 0 ? 'good' : condition), scn.vendor_name, heatNo, userId, ...(provLive ? [rlPo.insertId] : [])])
           stockCreated++
         }
 
         // Damaged qty → QUARANTINE location, NOT issuable (qty_available = 0). Same heat travels.
         if (damagedQty > 0) {
           await conn.query(
-            `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by,notes)
-             VALUES (?,?,?,?,?,?,?,?,0,?,?,?,1,?,?,CURDATE(),?,?)`,
+            `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by,notes${wsProvCol})
+             VALUES (?,?,?,?,?,?,?,?,0,?,?,?,1,?,?,CURDATE(),?,?${wsProvPh})`,
             [pid, whId, scnId, ln.po_line_id || null, itemCode, descr, wbs,
              damagedQty, uom, QUARANTINE_LOCATION, 'quarantine', scn.vendor_name, heatNo, userId,
-             `Damaged on receipt — ${ln.discrepancy_notes || 'pending QA review'}`])
+             `Damaged on receipt — ${ln.discrepancy_notes || 'pending QA review'}`, ...(provLive ? [rlPo.insertId] : [])])
           stockCreated++
         }
       }
