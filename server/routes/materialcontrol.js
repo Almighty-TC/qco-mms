@@ -1725,13 +1725,21 @@ router.put('/:projectId/transfers/:transferId/status', rejectExternal, async (re
       if (newQty <= 0) await conn.query('DELETE FROM warehouse_stock WHERE id=?', [src.id])           // whole-holding move → row removed
       else await conn.query('UPDATE warehouse_stock SET qty=?, qty_available=? WHERE id=?', [newQty, newAvail, src.id])
       const destAvail = isQuar ? 0 : Number(tr.qty)
+      // 3b-3: carry the origin-receipt trace pointer forward onto the moved holding —
+      // copied from src exactly like heat_number, so transferred stock still traces back
+      // to the receipt (even when the source row is DELETEd on a whole-holding move).
+      // Capability-detected; the column appends AFTER notes so the rest is byte-for-byte.
+      const provLive = await receiptProvenanceLive()
+      const wsProvCol = provLive ? ', receipt_line_id' : ''
+      const wsProvPh  = provLive ? ', ?' : ''
       await conn.query(
-        `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,commodity_id,equipment_tag,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by,notes)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,commodity_id,equipment_tag,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by,notes${wsProvCol})
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?${wsProvPh})`,
         [pid, tr.to_warehouse_id, src.scn_id, src.po_line_id, src.commodity_id, src.equipment_tag,
          src.item_code, src.description, src.wbs_code, Number(tr.qty), destAvail, src.uom,
          tr.to_location || src.location_code, src.condition_status, src.trace_hold, src.vendor_name,
-         src.heat_number, src.received_date, userId, `Transferred via ${tr.transfer_ref} from ${src.location_code || '—'}`])
+         src.heat_number, src.received_date, userId, `Transferred via ${tr.transfer_ref} from ${src.location_code || '—'}`,
+         ...(provLive ? [src.receipt_line_id ?? null] : [])])
     }
 
     // Flip status (+ lifecycle dates) and stamp stock_moved_at IN THE SAME TX as the move.
