@@ -80,6 +80,18 @@ router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/aud
 router.use(require('../middleware/permissions').enforce(p => p.includes('/vdrl') ? 'vdrl' : 'expediting')) // C-b2: vdrl routes→vdrl, else expediting
 router.param('projectId', require('../middleware/permissions').requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects
 
+// GET /api/expediting/forwarders — active freight_forwarder users for the delegation
+// picker (D5). GET → enforce('expediting') can_view (expeditors have it). Read-only,
+// no project param (forwarders aren't project-scoped). Returns id + name + company.
+router.get('/forwarders', async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT id, full_name, company, email FROM users
+       WHERE role = 'freight_forwarder' AND is_active = 1 ORDER BY full_name`)
+    res.json(rows)
+  } catch (e) { dbError(res, e) }
+})
+
 // ─── ACCESS CONTROL ───────────────────────────────────────────
 // Roles that can see all POs; others see only their assigned ones.
 function canSeeAllPOs(role) {
@@ -1093,9 +1105,19 @@ router.post('/:projectId/scn', async (req, res) => {
       // Q4: persist the container type when declared. Value-gated like parent_package_id
       // so flat/Q2 payloads never touch the new column (deploy-safe pre migrate-containers).
       if (p.container_type_id != null && p.container_type_id !== '') { cols.push('container_type_id'); vals.push(Number(p.container_type_id)) }
+      // D5.1: optional container_no at creation (plain, value-gated).
+      if (p.container_no != null && String(p.container_no).trim() !== '') { cols.push('container_no'); vals.push(String(p.container_no).trim()) }
       const [pr] = await conn.query(
         `INSERT INTO scn_packages (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`, vals)
-      return pr.insertId
+      const packageId = pr.insertId
+      // D5.1: optional seal_no at creation → routes through the SAME governance as the
+      // post-creation paths (setSealNo: set-once, reasoned, atomic audit; container-only
+      // enforced inside). In-txn → a seal/audit failure rolls back the whole SCN create.
+      if (p.seal_no != null && String(p.seal_no).trim() !== '') {
+        await setSealNo(conn, { packageId, scnId, newSeal: p.seal_no, reason: p.seal_reason,
+          userId: req.user.id, resource: (req.originalUrl || '').split('?')[0].replace(/^\/api(?=\/)/, ''), ip: req.ip, projectId: pid })
+      }
+      return packageId
     }
 
     // ── HIERARCHY RULES (Q2 leaf-only EXTENDED to Q4 three-level typed) — payload-level,
@@ -1172,6 +1194,7 @@ router.post('/:projectId/scn', async (req, res) => {
     res.status(201).json({ id: scnId, scn_ref: scnRef, status: 'draft' })
   } catch (e) {
     await conn.rollback()
+    if (e instanceof SealGovernanceError) return res.status(e.status).json({ error: e.message })   // D5.1: governed seal reject → clean 4xx
     console.error('[scn:create]', e.message)
     dbError(res, e)
   } finally {

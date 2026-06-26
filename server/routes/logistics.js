@@ -59,6 +59,13 @@ async function scnHasDelegateCol(conn = db) {
   return _delegateColPresent
 }
 
+// THE ownership predicate (shared by D2 package authz + D4 hand-back) — a forwarder is
+// the delegated packer iff the SCN's packaging_delegated_to equals their user id. Kept as
+// a one-liner so the two call sites can NEVER drift.
+function isPackagingDelegate(delegatedTo, userId) {
+  return delegatedTo != null && delegatedTo === userId
+}
+
 // True iff the calling forwarder is the delegated packer for the SCN named in the URL.
 // scnId comes from the URL path ONLY — req.body is never consulted, so a forged body
 // scnId cannot redirect the check. `conn` is injectable for transactional proofs.
@@ -70,7 +77,40 @@ async function forwarderOwnsScnPackaging(req, conn = db) {
   if (!(await scnHasDelegateCol(conn))) return false           // pre-migration → fail-closed
   const [[scn]] = await conn.query(
     'SELECT packaging_delegated_to FROM shipment_control_notes WHERE id = ?', [scnId])
-  return !!scn && scn.packaging_delegated_to != null && scn.packaging_delegated_to === req.user.id
+  return !!scn && isPackagingDelegate(scn.packaging_delegated_to, req.user.id)
+}
+
+// ─── HAND-BACK LIFECYCLE (D4) ─────────────────────────────────
+// Mark an SCN's delegated packaging complete. Pure unit (operates on the given conn) so
+// the route is a thin wrapper and the proofs exercise THIS exact logic in a rolled-back
+// txn. scnId comes from the route's URL param (never the body).
+//   • Forwarder may complete ONLY their delegated SCN — the SAME predicate as D2
+//     (isPackagingDelegate, keyed off the URL :scnId). Internal roles may set too.
+//   • Only delegated-packaging SCNs have a lifecycle (packaging_status NOT NULL).
+//   • IDEMPOTENT: re-completing an already-complete SCN is a no-op that PRESERVES the
+//     original packaging_completed_at (tolerant of double-submit). (Alternative: reject
+//     with 409 — flagged for TC; idempotent chosen so a double-click can't error or
+//     re-stamp the timestamp.)
+// Returns { ok:true, idempotent, packaging_status, packaging_completed_at } or { ok:false, status, error }.
+async function completePackaging(conn, { scnId, userId, role }) {
+  const [[scn]] = await conn.query(
+    'SELECT id, packaging_status, packaging_completed_at, packaging_delegated_to FROM shipment_control_notes WHERE id = ?', [scnId])
+  if (!scn) return { ok: false, status: 404, error: 'SCN not found.' }
+  // Authorization: forwarder must be the delegate (D2 predicate, URL :scnId). Internal
+  // roles already cleared enforce('logistics') can_edit at the router gate.
+  if (role === 'freight_forwarder' && !isPackagingDelegate(scn.packaging_delegated_to, userId)) {
+    return { ok: false, status: 403, error: 'You are not the delegated packer for this SCN.' }
+  }
+  if (scn.packaging_status == null) {
+    return { ok: false, status: 409, error: 'This SCN does not have delegated packaging to complete.' }
+  }
+  if (scn.packaging_status === 'complete') {   // idempotent no-op — preserve original timestamp
+    return { ok: true, idempotent: true, packaging_status: 'complete', packaging_completed_at: scn.packaging_completed_at }
+  }
+  await conn.query(
+    "UPDATE shipment_control_notes SET packaging_status='complete', packaging_completed_at=NOW() WHERE id=? AND packaging_status='pending'", [scnId])
+  const [[u]] = await conn.query('SELECT packaging_status, packaging_completed_at FROM shipment_control_notes WHERE id=?', [scnId])
+  return { ok: true, idempotent: false, packaging_status: u.packaging_status, packaging_completed_at: u.packaging_completed_at }
 }
 
 router.use((req, res, next) => {
@@ -242,6 +282,13 @@ router.get('/register/:projectId', async (req, res) => {
       conditions.push('s.is_critical_path = 1')
     }
 
+    // Forwarder-delegated packaging filter (D5): ?packaging=pending|complete — drives the
+    // forwarder's "delegated to me, pending packing" view (combined with the forwarder
+    // scoping above) and the expeditor's review filters.
+    if (req.query.packaging === 'pending' || req.query.packaging === 'complete') {
+      conditions.push('s.packaging_status = ?'); params.push(req.query.packaging)
+    }
+
     // Mode + arrival-window filters (moved server-side so they're correct across pages)
     if (mode && mode !== 'all') { conditions.push('s.mode = ?'); params.push(mode) }
     if (arrival_days) {
@@ -283,6 +330,7 @@ router.get('/register/:projectId', async (req, res) => {
          s.etd, s.eta, s.atd, s.ata,
          s.origin_location, s.incoterms,
          s.forwarder_name, s.forwarder_user_id,
+         s.packed_by_type, s.packaging_delegated_to, s.packaging_status,
          s.is_critical_path, s.total_packages, s.total_weight_kg,
          s.bl_number, s.container_ref, s.notes,
          s.forwarder_notified, s.forwarder_notified_at,
@@ -481,6 +529,26 @@ router.get('/scn/:scnId', async (req, res) => {
 })
 
 // ═══════════════════════════════════════════════════════════════
+// REFERENCE — container types (Q4 packaging UI pickers)
+// ═══════════════════════════════════════════════════════════════
+
+// GET /api/logistics/container-types — active ISO container types (display-only dims) for
+// the container-type pickers (wizard + PackagesTab). GET → enforce can_view (forwarders +
+// internal roles with logistics view). Capability-tolerant: empty list if not migrated.
+router.get('/container-types', async (req, res) => {
+  try {
+    const [[col]] = await db.query(
+      `SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='container_types'`)
+    if (!col.n) return res.json([])
+    const [rows] = await db.query(
+      `SELECT id, code, description, outer_length_mm, outer_width_mm, outer_height_mm,
+              inner_length_mm, inner_width_mm, inner_height_mm, tare_weight_kg, capacity_m3, max_payload_kg
+       FROM container_types WHERE is_active = 1 ORDER BY id`)
+    res.json(rows)
+  } catch (e) { dbError(res, e) }
+})
+
+// ═══════════════════════════════════════════════════════════════
 // STATUS UPDATE
 // ═══════════════════════════════════════════════════════════════
 
@@ -672,6 +740,35 @@ router.put('/scn/:scnId/dates', async (req, res) => {
   }
 })
 
+// PUT /api/logistics/scn/:scnId/packaging/complete — hand-back (D4)
+// The delegated forwarder (or an internal role) marks the SCN's packaging complete.
+// NOTE: not a /packages route → not caught by the D2 package carve-out; it flows through
+// the router-level enforce('logistics') (forwarder passes via can_edit), then the SAME
+// D2 ownership predicate is applied inside completePackaging (URL :scnId, never body) so
+// a forwarder can complete ONLY their delegated SCN. Capability-detected for deploy-tolerance.
+router.put('/scn/:scnId/packaging/complete', async (req, res) => {
+  try {
+    const scnId = Number(req.params.scnId)            // ← URL param only
+    const userId = req.user?.id
+    if (!(await scnHasDelegateCol())) {
+      return res.status(409).json({ error: 'Delegated packaging is unavailable until the migration is applied.' })
+    }
+    const result = await completePackaging(db, { scnId, userId, role: req.user?.role })
+    if (!result.ok) return res.status(result.status).json({ error: result.error })
+
+    if (!result.idempotent) {
+      // Light lifecycle audit (not the seal tamper-evidence path) — non-blocking is fine.
+      writeAudit(userId, 'packaging_completed', 'scn', scnId,
+        { packaging_status: 'pending' }, { packaging_status: 'complete' },
+        `/logistics/scn/${scnId}/packaging/complete`)
+    }
+    res.json({ success: true, scn_id: scnId, ...result })
+  } catch (e) {
+    console.error('[logistics:packaging-complete]', e.message)
+    dbError(res, e)
+  }
+})
+
 // ═══════════════════════════════════════════════════════════════
 // PACKAGES
 // ═══════════════════════════════════════════════════════════════
@@ -692,47 +789,81 @@ router.get('/scn/:scnId/packages', async (req, res) => {
 // enforce('logistics')→can_create; a delegated freight_forwarder via the delegation
 // predicate. requireInternalLogistics is intentionally NOT here — the scoped predicate
 // replaces it (see the carve-out near the top of this file).
+// Accepts Q4 fields: container_type_id (typed container), parent_package_id (nesting),
+// container_no (free), seal_no (GOVERNED via setSealNo). Typed-hierarchy validated here
+// (mirrors the create-txn guard, applied to this single add): a container is top-level;
+// a sub-package's parent must be a typed container that is itself top-level (depth-3 cap).
+// Transactional so a governed seal write + the insert commit/rollback together.
 router.post('/scn/:scnId/packages', async (req, res) => {
-  try {
-    const scnId = Number(req.params.scnId)
-    const { description, length_mm, width_mm, height_mm, gross_weight_kg, net_weight_kg,
-            is_dangerous_goods, dg_class, dg_un_number, marks_numbers } = req.body
+  const scnId = Number(req.params.scnId)
+  const { description, length_mm, width_mm, height_mm, gross_weight_kg, net_weight_kg,
+          is_dangerous_goods, dg_class, dg_un_number, marks_numbers,
+          container_type_id, parent_package_id, container_no, seal_no, seal_reason } = req.body
+  const resource = (req.originalUrl || '').split('?')[0].replace(/^\/api(?=\/)/, '')
+  const isContainer = container_type_id != null && container_type_id !== ''
 
+  // Dimensions are required for ordinary packages; a typed container's dims are
+  // display-only (read from container_types) so they're optional here.
+  if (!isContainer) {
     if (length_mm <= 0 || width_mm <= 0 || height_mm <= 0)
       return res.status(400).json({ error: 'Dimensions must be greater than 0' })
     if (gross_weight_kg <= 0)
       return res.status(400).json({ error: 'Gross weight must be greater than 0' })
+  }
 
-    const [[{ maxNum }]] = await db.query(
-      'SELECT COALESCE(MAX(CAST(package_number AS UNSIGNED)),0) AS maxNum FROM scn_packages WHERE scn_id = ?',
-      [scnId]
-    )
+  const conn = await db.getConnection()
+  try {
+    await conn.beginTransaction()
+    // ── Typed-hierarchy validation ──
+    if (isContainer && parent_package_id) {
+      await conn.rollback(); return res.status(422).json({ error: 'A container must be top-level — it cannot be nested inside another package.' })
+    }
+    let parentId = null
+    if (parent_package_id) {
+      const [[parent]] = await conn.query(
+        'SELECT id, container_type_id, parent_package_id FROM scn_packages WHERE id=? AND scn_id=?', [Number(parent_package_id), scnId])
+      if (!parent) { await conn.rollback(); return res.status(422).json({ error: 'Parent package not found on this SCN.' }) }
+      if (parent.container_type_id == null) { await conn.rollback(); return res.status(422).json({ error: 'A sub-package must be nested under a container, not an ordinary package.' }) }
+      if (parent.parent_package_id != null) { await conn.rollback(); return res.status(422).json({ error: 'Exceeds the 3-level limit (container → sub-package → items).' }) }
+      parentId = parent.id
+    }
+
+    const [[{ maxNum }]] = await conn.query(
+      'SELECT COALESCE(MAX(CAST(package_number AS UNSIGNED)),0) AS maxNum FROM scn_packages WHERE scn_id = ?', [scnId])
     const pkgNum = String((parseInt(maxNum) || 0) + 1).padStart(2, '0')
 
-    const [result] = await db.query(
-      `INSERT INTO scn_packages (scn_id, package_number, description, length_mm, width_mm, height_mm,
-        gross_weight_kg, net_weight_kg, is_dangerous_goods, dg_class, dg_un_number, marks_numbers)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [scnId, pkgNum, description || null, length_mm, width_mm, height_mm,
-       gross_weight_kg, net_weight_kg || null,
-       is_dangerous_goods ? 1 : 0, dg_class || null, dg_un_number || null, marks_numbers || null]
-    )
+    // Insert (new columns value-gated for deploy-tolerance; seal_no NOT here — governed below).
+    const cols = ['scn_id', 'package_number', 'description', 'length_mm', 'width_mm', 'height_mm',
+      'gross_weight_kg', 'net_weight_kg', 'is_dangerous_goods', 'dg_class', 'dg_un_number', 'marks_numbers']
+    const vals = [scnId, pkgNum, description || null, length_mm || null, width_mm || null, height_mm || null,
+      gross_weight_kg || null, net_weight_kg || null, is_dangerous_goods ? 1 : 0, dg_class || null, dg_un_number || null, marks_numbers || null]
+    if (isContainer) { cols.push('container_type_id'); vals.push(Number(container_type_id)) }
+    if (parentId != null) { cols.push('parent_package_id'); vals.push(parentId) }
+    if (container_no != null && String(container_no).trim() !== '') { cols.push('container_no'); vals.push(String(container_no).trim()) }
+    const [result] = await conn.query(
+      `INSERT INTO scn_packages (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`, vals)
+    const packageId = result.insertId
 
-    // Update totals on SCN
-    await db.query(
+    // seal_no → governed path (set-once, audited; container-only is enforced inside).
+    if (seal_no != null && String(seal_no).trim() !== '') {
+      const [[scnRow]] = await conn.query('SELECT project_id FROM shipment_control_notes WHERE id=?', [scnId])
+      await setSealNo(conn, { packageId, scnId, newSeal: seal_no, reason: seal_reason, userId: req.user.id, resource, ip: req.ip, projectId: scnRow?.project_id ?? null })
+    }
+
+    await conn.query(
       `UPDATE shipment_control_notes SET
          total_packages = (SELECT COUNT(*) FROM scn_packages WHERE scn_id=?),
-         total_weight_kg = (SELECT SUM(gross_weight_kg) FROM scn_packages WHERE scn_id=?)
-       WHERE id = ?`,
-      [scnId, scnId, scnId]
-    )
-
-    const [[pkg]] = await db.query('SELECT * FROM scn_packages WHERE id = ?', [result.insertId])
+         total_weight_kg = (SELECT COALESCE(SUM(gross_weight_kg),0) FROM scn_packages WHERE scn_id=?)
+       WHERE id = ?`, [scnId, scnId, scnId])
+    await conn.commit()
+    const [[pkg]] = await db.query('SELECT * FROM scn_packages WHERE id = ?', [packageId])
     res.status(201).json(pkg)
   } catch (e) {
+    await conn.rollback()
+    if (e instanceof SealGovernanceError) return res.status(e.status).json({ error: e.message })
     console.error('[logistics:add-package]', e.message)
     dbError(res, e)
-  }
+  } finally { conn.release() }
 })
 
 // PUT /api/logistics/scn/:scnId/packages/:packageId
@@ -936,5 +1067,7 @@ router.put('/scn/:scnId/critical-path', async (req, res) => {
 })
 
 module.exports = router
-// Exported for the D2 authorization proofs (exercise the EXACT predicate, no drift).
+// Exported for the D2/D4 authorization proofs (exercise the EXACT predicate, no drift).
 module.exports.forwarderOwnsScnPackaging = forwarderOwnsScnPackaging
+module.exports.completePackaging = completePackaging          // D4 hand-back
+module.exports.isPackagingDelegate = isPackagingDelegate      // shared predicate
