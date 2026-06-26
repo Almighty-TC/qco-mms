@@ -119,6 +119,20 @@ async function completePackaging(conn, { scnId, userId, role }) {
   if (scn.packaging_status === 'complete') {   // idempotent no-op — preserve original timestamp
     return { ok: true, idempotent: true, packaging_status: 'complete', packaging_completed_at: scn.packaging_completed_at }
   }
+  // D5.1 HARD-BLOCK: every allocatable line must be FULLY packed before hand-back. Same
+  // allocation computation the rest of the system uses (packed = SUM scn_package_lines.qty
+  // per scn_line, vs the line's SCN qty). A line packed below its qty — or nothing packed
+  // at all (packed=0 < qty) — blocks completion. (Reuses the contents B writes; build order
+  // matters: without B's allocation this would lock forwarders out.)
+  const [[{ unpacked, total_lines }]] = await conn.query(
+    `SELECT
+       COUNT(*) AS total_lines,
+       SUM(CASE WHEN sl.qty > COALESCE((SELECT SUM(qty) FROM scn_package_lines WHERE scn_line_id = sl.id), 0) + 1e-9
+                THEN 1 ELSE 0 END) AS unpacked
+     FROM scn_lines sl WHERE sl.scn_id = ?`, [scnId])
+  if (Number(total_lines) === 0 || Number(unpacked) > 0) {
+    return { ok: false, status: 422, error: 'All lines must be fully packed before marking complete.' }
+  }
   await conn.query(
     "UPDATE shipment_control_notes SET packaging_status='complete', packaging_completed_at=NOW() WHERE id=? AND packaging_status='pending'", [scnId])
   const [[u]] = await conn.query('SELECT packaging_status, packaging_completed_at FROM shipment_control_notes WHERE id=?', [scnId])
@@ -891,6 +905,29 @@ router.post('/scn/:scnId/packages', async (req, res) => {
     if (seal_no != null && String(seal_no).trim() !== '') {
       const [[scnRow]] = await conn.query('SELECT project_id FROM shipment_control_notes WHERE id=?', [scnId])
       await setSealNo(conn, { packageId, scnId, newSeal: seal_no, reason: seal_reason, userId: req.user.id, resource, ip: req.ip, projectId: scnRow?.project_id ?? null })
+    }
+
+    // ── D5.1 forwarder packing: persist per-line contents (scn_package_lines), mirroring
+    //    the create-txn shape (expediting.js:1198). Each content references an existing
+    //    scn_lines row on THIS scn; we never over-allocate a line beyond its SCN qty
+    //    (counts already-packed across ALL packages, including rows inserted earlier in
+    //    this same loop — the SUM sees them because each insert precedes the next check). ──
+    const contents = Array.isArray(req.body.contents)
+      ? req.body.contents.filter(c => c && c.scn_line_id != null && Number(c.qty) > 0)
+      : []
+    for (const c of contents) {
+      const scnLineId = Number(c.scn_line_id)
+      const [[sl]] = await conn.query('SELECT id, qty FROM scn_lines WHERE id=? AND scn_id=?', [scnLineId, scnId])
+      if (!sl) { await conn.rollback(); return res.status(422).json({ error: `Package contents reference an unknown line (${scnLineId}) on this SCN.` }) }
+      const [[{ packed }]] = await conn.query(
+        'SELECT COALESCE(SUM(qty),0) AS packed FROM scn_package_lines WHERE scn_line_id = ?', [scnLineId])
+      if (Number(packed) + Number(c.qty) > Number(sl.qty) + 1e-9) {
+        await conn.rollback()
+        return res.status(422).json({ error: `Allocating ${c.qty} exceeds the line's remaining balance (${Number(sl.qty) - Number(packed)} left of ${sl.qty}).` })
+      }
+      await conn.query(
+        'INSERT INTO scn_package_lines (package_id, scn_line_id, qty, uom) VALUES (?,?,?,?)',
+        [packageId, scnLineId, Number(c.qty), c.uom || null])
     }
 
     await conn.query(

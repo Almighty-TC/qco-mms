@@ -1225,39 +1225,62 @@ export const CreateSCNWizard: React.FC<Props> = ({
     const warehouseName = warehouses.find((w: any) => w.id === warehouseId)?.name || '—'
     const modeName = MODES.find(m => m.id === transportMode)?.label || '—'
 
-    // ─── D2 GATE EXPLANATION ──────────────────────────────────
-    // Why "Create SCN" is disabled: list the lines that aren't exactly allocated
-    // (under = needs more packing; over = remove some) so the user knows what to fix.
-    const allocIssues = allocatableLines()
-      .map(l => ({ l, done: allocatedFor(l.ref) }))
-      .filter(({ l, done }) => Math.abs(done - l.scnQty) >= 1e-9)
+    // ─── DISABLE-REASON EXPLANATION (Fix A) ───────────────────
+    // The Confirm screen must ALWAYS explain why Create is disabled — and never give a
+    // FALSE reason. Allocation is required ONLY for 'We pack (internal)', so allocIssues
+    // are scoped to that scenario (vendor/forwarder may create with packaging unfinished).
+    // The other real gates — an untyped container, or a forwarder not yet picked — are
+    // surfaced too (previously only allocation was ever shown, so these blocks looked like
+    // a dead button with no reason).
+    const allocIssues = requiresFullAllocation
+      ? allocatableLines()
+          .map(l => ({ l, done: allocatedFor(l.ref) }))
+          .filter(({ l, done }) => Math.abs(done - l.scnQty) >= 1e-9)
+      : []
+    const containers = packages.filter(p => p.kind === 'container')
+    const untypedContainers = containers
+      .map((p, i) => ({ num: i + 1 }))
+      .filter((_, i) => !containers[i].containerTypeId)
+    const forwarderMissing = packedByType === 'forwarder' && !forwarderUserId
+    const hasBlock = allocIssues.length > 0 || untypedContainers.length > 0 || forwarderMissing
 
     return (
       <div>
         <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>Confirm SCN</div>
         <div style={{ fontSize: 12, color: '#64748b', marginBottom: 16 }}>Review details before creating the shipment control note.</div>
 
-        {/* Disabled-reason banner — explains the D2 gate on the Create button below. */}
-        {allocIssues.length > 0 && (
+        {/* Disabled-reason banner — explains every real gate on the Create button below. */}
+        {hasBlock && (
           <div style={{
             background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 8,
             padding: '10px 14px', marginBottom: 16, fontSize: 12, color: '#92400e',
           }}>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>
-              ⚠ Cannot create — {allocIssues.length} line{allocIssues.length !== 1 ? 's' : ''} not fully allocated into packages
-            </div>
-            {allocIssues.map(({ l, done }) => {
-              const over = done > l.scnQty + 1e-9
-              return (
-                <div key={l.ref} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
-                  <span>{l.label}</span>
-                  <span style={{ fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, color: over ? '#dc2626' : '#b45309' }}>
-                    {done}/{l.scnQty} {l.uom} {over ? '⚠ over' : '— under'}
-                  </span>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>⚠ Cannot create — fix the following:</div>
+            {forwarderMissing && (
+              <div style={{ padding: '2px 0' }}>• Select a freight forwarder to delegate packing to.</div>
+            )}
+            {untypedContainers.map(({ num }) => (
+              <div key={num} style={{ padding: '2px 0' }}>• Container {num} needs an ISO container type selected.</div>
+            ))}
+            {allocIssues.length > 0 && (
+              <>
+                <div style={{ fontWeight: 600, marginTop: (forwarderMissing || untypedContainers.length) ? 6 : 0 }}>
+                  {allocIssues.length} line{allocIssues.length !== 1 ? 's' : ''} not fully allocated into packages:
                 </div>
-              )
-            })}
-            <div style={{ marginTop: 6, color: '#b45309' }}>Go back to <strong>Packages</strong> and use <strong>+ Balance</strong> to finish allocating.</div>
+                {allocIssues.map(({ l, done }) => {
+                  const over = done > l.scnQty + 1e-9
+                  return (
+                    <div key={l.ref} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
+                      <span>{l.label}</span>
+                      <span style={{ fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, color: over ? '#dc2626' : '#b45309' }}>
+                        {done}/{l.scnQty} {l.uom} {over ? '⚠ over' : '— under'}
+                      </span>
+                    </div>
+                  )
+                })}
+                <div style={{ marginTop: 6, color: '#b45309' }}>Go back to <strong>Packages</strong> and use <strong>+ Balance</strong> to finish allocating.</div>
+              </>
+            )}
           </div>
         )}
 

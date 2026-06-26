@@ -965,8 +965,12 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
   const sub    = '#94a3b8'
   const theadBg = dark ? '#162032' : '#f8fafc'
 
+  // B-fix: forwarder leaf packages carry per-line contents (scn_line_id + qty), mirroring
+  // the wizard's container-first contents model. description holds the package TYPE (the
+  // backend maps a package's "type" into the description column — same as the create-txn).
   const emptyForm = { description: '', length_mm: '', width_mm: '', height_mm: '', gross_weight_kg: '', net_weight_kg: '', is_dangerous_goods: false, dg_class: '', dg_un_number: '', marks_numbers: '',
-    container_type_id: '' as number | '', parent_package_id: '' as number | '', container_no: '', seal_no: '', seal_reason: '' }
+    container_type_id: '' as number | '', parent_package_id: '' as number | '', container_no: '', seal_no: '', seal_reason: '',
+    contents: [] as { scn_line_id: number | ''; qty: string }[] }
   const [adding, setAdding] = useState(false)
   // D5.1 container-first: how the add form was opened — 'container' (top-level typed),
   // 'loose' (top-level leaf), or 'sub' (leaf nested into a specific container).
@@ -1035,6 +1039,16 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
     if (!editingId) {   // container type + nesting are set at creation
       if (form.container_type_id) payload.container_type_id = form.container_type_id
       if (form.parent_package_id) payload.parent_package_id = form.parent_package_id
+      // B-fix: leaf packages carry per-line contents → scn_package_lines. Drop empty/zero
+      // rows; attach the line's uom so the packing list reads correctly. Containers never
+      // hold items directly (mirrors the wizard's container-first model).
+      if (!isContainer) {
+        const contents = (form.contents || [])
+          .filter(c => c.scn_line_id !== '' && Number(c.qty) > 0)
+          .map(c => ({ scn_line_id: Number(c.scn_line_id), qty: Number(c.qty),
+            uom: (scn.scn_lines || []).find(s => s.id === Number(c.scn_line_id))?.uom || null }))
+        if (contents.length) payload.contents = contents
+      }
     }
     try {
       if (editingId) {
@@ -1123,7 +1137,7 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
       {adding && (
         <div style={{ marginBottom: 12 }}>
           <PackageFormRow form={form} setForm={setForm} inputSt={inputSt} col={col} sub={sub} bd={bd} dark={dark} error={formError}
-            containerTypes={containerTypes} packages={scn.packages || []} originalSeal={originalSeal} addKind={addKind}
+            containerTypes={containerTypes} packages={scn.packages || []} scnLines={scn.scn_lines || []} originalSeal={originalSeal} addKind={addKind}
             onSave={savePackage} onCancel={closeForm} saving={saving} mode="add" />
         </div>
       )}
@@ -1286,7 +1300,11 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
   )
 }
 
-const PackageFormRow = ({ form, setForm, inputSt, col, sub, bd, dark, error, onSave, onCancel, saving, mode, containerTypes = [], packages = [], originalSeal = '', addKind = 'loose' }: any) => {
+// B-fix: package types mirror the wizard's PKG_TYPES (CreateSCNWizard.tsx) — the chosen
+// type is stored in the package's description column (same mapping the create-txn uses).
+const PKG_TYPES = ['Crate (timber)', 'Crate (steel)', 'Pallet', 'Drum', 'Carton', 'Bundle', 'Skid', 'IBC', 'Loose', 'Bag', 'Others']
+
+const PackageFormRow = ({ form, setForm, inputSt, col, sub, bd, dark, error, onSave, onCancel, saving, mode, containerTypes = [], packages = [], scnLines = [], originalSeal = '', addKind = 'loose' }: any) => {
   const isContainerAdd = mode === 'add' && addKind === 'container'
   const isContainerRow = isContainerAdd || (mode === 'edit' && form.container_type_id != null && form.container_type_id !== '')
   const ct = (containerTypes as any[]).find((c: any) => c.id === Number(form.container_type_id))
@@ -1298,6 +1316,28 @@ const PackageFormRow = ({ form, setForm, inputSt, col, sub, bd, dark, error, onS
   const headerLabel = isContainerAdd ? '📦 New container'
     : addKind === 'sub' ? `↳ Package into container${parent ? ` #${parent.package_number}` : ''}`
     : '📦 New loose package'
+
+  // B-fix: contents (packing list) — only on a leaf package being ADDED (containers hold
+  // sub-packages, not items). Balance-aware, mirroring the wizard: a line's remaining =
+  // SCN qty − already-packed (persisted) − qty in OTHER rows of this same form.
+  const showContents = mode === 'add' && !isContainerAdd
+  const contents: { scn_line_id: number | ''; qty: string }[] = form.contents || []
+  const slLabel = (sl: any) => sl.po_line_id
+    ? `Line ${sl.line_number ?? sl.po_line_id} — ${(sl.po_description || '').trim()}`.replace(/—\s*$/, '').trim()
+    : (sl.ai_description || 'Off-PO item')
+  const lineRemaining = (scnLineId: number, exceptIdx: number) => {
+    const sl = (scnLines as any[]).find((s: any) => s.id === scnLineId)
+    if (!sl) return 0
+    const inOtherRows = contents.reduce((t, c, idx) =>
+      idx !== exceptIdx && Number(c.scn_line_id) === scnLineId ? t + (Number(c.qty) || 0) : t, 0)
+    return Number(sl.qty) - Number(sl.packed_qty || 0) - inOtherRows
+  }
+  const setContents = (next: typeof contents) => setForm((p: any) => ({ ...p, contents: next }))
+  const addContentRow = () => setContents([...contents, { scn_line_id: '', qty: '' }])
+  const updateContentRow = (idx: number, field: 'scn_line_id' | 'qty', val: string) =>
+    setContents(contents.map((c, i) => i === idx ? { ...c, [field]: field === 'scn_line_id' ? (val ? Number(val) : '') : val } : c))
+  const removeContentRow = (idx: number) => setContents(contents.filter((_, i) => i !== idx))
+
   return (
   <div style={{ background: dark ? '#0f172a' : '#f0fdf4', border: `1px solid rgba(34,197,94,0.3)`, borderRadius: 8, padding: '12px 14px' }}>
     {mode === 'add' && (
@@ -1330,8 +1370,18 @@ const PackageFormRow = ({ form, setForm, inputSt, col, sub, bd, dark, error, onS
     )}
     {showDims && (<>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6,1fr)', gap: 8, marginBottom: 8 }}>
-      <div><label style={{ fontSize: 10, color: sub, display: 'block', marginBottom: 2 }}>Description</label>
-        <input value={form.description} onChange={e => setForm((p: any) => ({ ...p, description: e.target.value }))} style={inputSt} /></div>
+      {/* B-fix: package TYPE dropdown (same options as the wizard), stored in description.
+          'Others' reveals a free-text input so a bespoke type can still be named. */}
+      <div><label style={{ fontSize: 10, color: sub, display: 'block', marginBottom: 2 }}>Type</label>
+        <select value={PKG_TYPES.includes(form.description) ? form.description : (form.description ? 'Others' : '')}
+          onChange={e => setForm((p: any) => ({ ...p, description: e.target.value === 'Others' ? '' : e.target.value }))} style={inputSt}>
+          <option value="">— Select type —</option>
+          {PKG_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+        {(!PKG_TYPES.includes(form.description)) && (
+          <input value={form.description} onChange={e => setForm((p: any) => ({ ...p, description: e.target.value }))}
+            placeholder="Specify type" style={{ ...inputSt, marginTop: 4 }} />
+        )}</div>
       <div><label style={{ fontSize: 10, color: sub, display: 'block', marginBottom: 2 }}>Length (mm)*</label>
         <input type="number" value={form.length_mm} onChange={e => setForm((p: any) => ({ ...p, length_mm: e.target.value }))} style={inputSt} /></div>
       <div><label style={{ fontSize: 10, color: sub, display: 'block', marginBottom: 2 }}>Width (mm)*</label>
@@ -1356,6 +1406,48 @@ const PackageFormRow = ({ form, setForm, inputSt, col, sub, bd, dark, error, onS
       </div>
     )}
     </>)}
+    {/* B-fix: per-line contents allocation (packing list) for a leaf package. */}
+    {showContents && (
+      <div style={{ marginTop: 10, borderTop: '1px dashed rgba(148,163,184,0.4)', paddingTop: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: col, marginBottom: 6 }}>Contents (packing list)</div>
+        {(scnLines as any[]).length === 0 && (
+          <div style={{ fontSize: 11, color: sub, fontStyle: 'italic', marginBottom: 6 }}>No allocatable lines on this SCN.</div>
+        )}
+        {contents.map((c, idx) => {
+          const sel = Number(c.scn_line_id)
+          const rem = c.scn_line_id !== '' ? lineRemaining(sel, idx) : 0
+          const thisQty = Number(c.qty) || 0
+          const over = c.scn_line_id !== '' && thisQty > rem + 1e-9
+          return (
+            <div key={idx} style={{ marginBottom: 6 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px 24px', gap: 6, alignItems: 'center' }}>
+                <select value={c.scn_line_id === '' ? '' : String(c.scn_line_id)} onChange={e => updateContentRow(idx, 'scn_line_id', e.target.value)} style={inputSt}>
+                  <option value="">Select line…</option>
+                  {(scnLines as any[]).filter((sl: any) => lineRemaining(sl.id, idx) > 1e-9 || sl.id === sel).map((sl: any) => (
+                    <option key={sl.id} value={sl.id}>{slLabel(sl)} — {Math.max(0, lineRemaining(sl.id, idx))} {sl.uom || ''} to pack</option>
+                  ))}
+                </select>
+                <input type="number" min={0} value={c.qty} placeholder="qty" onChange={e => updateContentRow(idx, 'qty', e.target.value)}
+                  style={{ ...inputSt, borderColor: over ? '#ef4444' : undefined }} />
+                <button onClick={() => removeContentRow(idx)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 15, cursor: 'pointer' }}>×</button>
+              </div>
+              {c.scn_line_id !== '' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, marginLeft: 2 }}>
+                  <button onClick={() => updateContentRow(idx, 'qty', String(Math.max(0, rem)))} disabled={rem <= 0 && !over}
+                    style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontFamily: 'inherit', border: '1px solid #93c5fd',
+                      background: (rem > 0 || over) ? '#eff6ff' : '#f1f5f9', color: (rem > 0 || over) ? '#2563eb' : '#94a3b8', cursor: (rem > 0 || over) ? 'pointer' : 'not-allowed' }}>+ Balance</button>
+                  <span style={{ fontSize: 11, color: over ? '#ef4444' : rem > 0 ? '#d97706' : '#16a34a' }}>
+                    {over ? `Over by ${(thisQty - rem).toFixed(0)}` : `Remaining: ${Math.max(0, rem)}`}
+                  </span>
+                </div>
+              )}
+            </div>
+          )
+        })}
+        <button onClick={addContentRow} disabled={(scnLines as any[]).length === 0}
+          style={{ fontSize: 11, color: '#16a34a', background: 'none', border: '1px dashed rgba(34,197,94,0.5)', borderRadius: 6, padding: '4px 10px', cursor: (scnLines as any[]).length === 0 ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>+ Add line item</button>
+      </div>
+    )}
     {error && <div style={{ color: '#ef4444', fontSize: 12, marginBottom: 8 }}>{error}</div>}
     <div style={{ display: 'flex', gap: 8 }}>
       <button onClick={onCancel} style={{ padding: '5px 14px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
