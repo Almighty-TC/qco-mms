@@ -49,6 +49,7 @@ interface SCNDetail extends SCNRow {
   packed_by_type?: 'internal'|'vendor'|'forwarder' | null
   packaging_delegated_to?: number | null; packaging_status?: 'pending'|'complete' | null
   packaging_completed_at?: string | null; forwarder_user_name?: string | null
+  transport_modes?: string | null; transport_mode_notes?: string | null   // Item 2: multi-modal legs + notes
   po_id?: number | null; vendor_display?: string | null
   lines: POLine[]; additional_items: any[]; packages: Package[]
   scn_lines?: ScnLineAlloc[]   // Stage 4: per-SCN line allocation (qty on SCN + packed)
@@ -120,7 +121,7 @@ const STATUS_BAR_COLOR: Record<string, string> = {
   customs_review: '#f59e0b', pending_delivery: '#8b5cf6', delivered: '#22c55e',
 }
 const RAG_COLOR: Record<string, string> = { red: '#ef4444', amber: '#f59e0b', green: '#22c55e' }
-const MODE_ICON: Record<string, string> = { sea: '🚢', air: '✈', road: '🚛', rail: '🚂', courier: '📦' }
+const MODE_ICON: Record<string, string> = { sea: '🚢', air: '✈', road: '🚛', rail: '🚂', courier: '📦', multi: '🔀' }
 // Full-text expansions shown on hover over the abbreviated column headers.
 const HEAD_TITLE: Record<string, string> = {
   SCN: 'Shipment Control Note', PO: 'Purchase Order', ETD: 'Estimated Time of Departure',
@@ -323,6 +324,7 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
             <option value="road">🚛 Road</option>
             <option value="rail">🚂 Rail</option>
             <option value="courier">📦 Courier</option>
+            <option value="multi">🔀 Multi-modal</option>
           </select>
           <button onClick={() => setCritical(v => !v)}
             style={{ ...inputSt, cursor: 'pointer', color: criticalOnly ? '#E84E0F' : sub, borderColor: criticalOnly ? '#E84E0F' : undefined, width: 'auto' }}>
@@ -707,9 +709,14 @@ const OverviewTab = ({ dark, scn, onRefresh, addToast }: {
     } finally { setSavingDate(false) }
   }
 
+  // Item 2: for multi-modal, show the constituent legs after the icon.
+  const modeDisplay = scn.mode === 'multi'
+    ? `🔀 Multi-modal${scn.transport_modes ? ` (${scn.transport_modes.split(',').join(' → ')})` : ''}`
+    : (scn.mode ? `${MODE_ICON[scn.mode] || ''} ${scn.mode}` : '—')
   const metaLeft = [
     ['Forwarder',    scn.forwarder_name || '—'],
-    ['Mode',         scn.mode ? `${MODE_ICON[scn.mode] || ''} ${scn.mode}` : '—'],
+    ['Mode',         modeDisplay],
+    ...(scn.mode === 'multi' && scn.transport_mode_notes ? [['Leg detail', scn.transport_mode_notes]] : []),
     ['Incoterms',    scn.incoterms || '—'],
     ['Origin',       scn.origin_location || '—'],
     ['Destination',  scn.destination_name ? `${scn.destination_name} (${scn.destination_code})` : '—'],

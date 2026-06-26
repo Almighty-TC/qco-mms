@@ -356,6 +356,9 @@ export const CreateSCNWizard: React.FC<Props> = ({
         etd: etd || null,
         eta: eta || null,
         transport_mode: transportMode || null,
+        // Item 2 (multi-modal): send constituent legs + leg notes when Multi-modal.
+        transport_modes: transportMode === 'multi' ? multiModes : undefined,
+        transport_mode_notes: transportMode === 'multi' ? (multiNotes || null) : undefined,
         forwarder_name: forwarder || null,
         incoterms: incoterms || null,
         // D5: who packs. 'forwarder' → delegate packing to the picked freight forwarder

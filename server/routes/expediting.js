@@ -39,6 +39,18 @@ async function scnDelegationColsLive() {
   return _delegCols
 }
 
+// Did migrate-transport-modes.js run? Cached sticky-true. Lets the create path persist
+// multi-modal legs once live, and degrade gracefully (mode='multi' unsupported) before.
+let _transportCols = false
+async function scnTransportModesLive() {
+  if (_transportCols) return true
+  const [[r]] = await db.query(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'shipment_control_notes' AND column_name = 'transport_modes'`)
+  _transportCols = r.n > 0
+  return _transportCols
+}
+
 // ─── DELEGATION VALIDATION (forwarder-delegated packaging, D3) ─────────────────
 // Pure verdict (uses conn only for the freight_forwarder lookup) — the SCN-create route
 // calls it; exported so the D3 proofs run THIS exact code (no drift).
@@ -917,6 +929,7 @@ router.post('/:projectId/scn', async (req, res) => {
     po_id, selected_lines = [], additional_items = [], variations = [],
     pickup_location, destination_warehouse_id, grid_bay,
     cdd, crd, ccd, etd, eta, transport_mode, forwarder_name, incoterms,
+    transport_modes, transport_mode_notes,   // ── Multi-modal (Pass 2 Item 2) ──
     packages = [], notify_forwarder,
     packed_by_type, packaging_delegated_to,   // ── Forwarder-delegated packaging (D3) ──
     heats = [],   // ── Heat/Lot P1: per-shipment declared heats (additive) ──
@@ -951,12 +964,33 @@ router.post('/:projectId/scn', async (req, res) => {
     if (!deleg.ok) { await conn.rollback(); return res.status(deleg.status).json({ error: deleg.error }) }
     const { packedBy, delegateId, packagingStatus, forwarderUserId } = deleg
 
-    // Insert SCN (delegation columns appended only when live — deploy-tolerant).
+    // Multi-modal (Pass 2 Item 2): mode='multi' is the primary indicator; the constituent
+    // legs go in transport_modes ('sea,road') + free-text in transport_mode_notes. Deploy-
+    // tolerant: if the columns aren't live yet, 'multi' isn't a valid enum value, so degrade
+    // to the first constituent leg (or null) rather than failing the insert.
+    const transportLive = await scnTransportModesLive()
+    const legs = Array.isArray(transport_modes) ? transport_modes.filter(Boolean) : []
+    let modeVal = transport_mode || null
+    let transportModesVal = null, transportModeNotesVal = null
+    if (transport_mode === 'multi') {
+      if (transportLive) {
+        transportModesVal = legs.length ? legs.join(',') : null
+        transportModeNotesVal = (transport_mode_notes || '').trim() || null
+      } else {
+        modeVal = legs[0] || null   // pre-migration: 'multi' enum value unavailable → degrade
+      }
+    }
+
+    // Insert SCN (delegation / multi-modal columns appended only when live — deploy-tolerant).
     const cols = ['scn_ref', 'po_id', 'project_id', 'origin_location', 'destination_warehouse_id',
       'cargo_ready_date', 'cargo_collection_date', 'etd', 'eta', 'mode', 'forwarder_name', 'incoterms', 'status', 'notes', 'created_by']
     const vals = [scnRef, po_id, pid, pickup_location || null, destination_warehouse_id || null,
-      crd || null, ccd || null, etd || null, eta || null, transport_mode || null, forwarder_name || null,
+      crd || null, ccd || null, etd || null, eta || null, modeVal, forwarder_name || null,
       incoterms || null, 'draft', null, req.user.id]
+    if (transportLive) {
+      cols.push('transport_modes', 'transport_mode_notes')
+      vals.push(transportModesVal, transportModeNotesVal)
+    }
     if (await scnDelegationColsLive()) {
       cols.push('forwarder_user_id', 'packed_by_type', 'packaging_delegated_to', 'packaging_status')
       vals.push(forwarderUserId, packedBy, delegateId, packagingStatus)
