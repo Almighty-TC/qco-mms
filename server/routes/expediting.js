@@ -1181,6 +1181,19 @@ router.post('/:projectId/scn', async (req, res) => {
          WHERE id = ?`, [scnId, scnId, scnId])
     }
 
+    // Seed the SCN's Timeline with its creation event: an scn_status_log row matching the
+    // shape the Logistics status route writes (scn_id, from_status, to_status, changed_by,
+    // notes). 'pending_pickup' is the display status of a freshly-created 'draft' SCN — so
+    // the Timeline starts at creation instead of being empty until a later status/date edit.
+    // In-txn (a committed SCN always carries its creation event) but NON-FATAL — a failure
+    // here must not break SCN creation (mirrors the robustness of the create's direct inserts).
+    try {
+      await conn.query(
+        `INSERT INTO scn_status_log (scn_id, from_status, to_status, changed_by, notes)
+         VALUES (?,?,?,?,?)`,
+        [scnId, null, 'pending_pickup', req.user.id, 'SCN created'])
+    } catch (e) { console.error('[scn:create] timeline seed (non-fatal):', e.message) }
+
     // Commit 2: project-scoped audit of the SCN creation + line assignments (in-txn).
     await conn.query(
       `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, after_value, resource, ip)

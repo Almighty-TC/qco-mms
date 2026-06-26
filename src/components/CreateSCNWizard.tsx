@@ -279,10 +279,21 @@ export const CreateSCNWizard: React.FC<Props> = ({
     setHeats(prev => prev.filter((_, idx) => idx !== i))
 
   // ─── NAVIGATION GUARDS ────────────────────────────────────
+  // Step 2 now requires BOTH a transport mode AND a destination warehouse.
   const canNext =
     step === 1 ? countSelected() > 0
-    : step === 2 ? !!transportMode
+    : step === 2 ? (!!transportMode && !!warehouseId)
     : true
+
+  // Packaging-completeness gate (Pass 1): only 'We pack (internal)' must fully allocate
+  // every selected line into packages before creating. 'Vendor' and 'Freight forwarder'
+  // packing may be left UNFINISHED — the expeditor/forwarder enters packages later.
+  const requiresFullAllocation = packedByType === 'internal'
+  const untypedContainerExists = packages.some(p => p.kind === 'container' && !p.containerTypeId)
+  const canCreate = !creating
+    && (!requiresFullAllocation || allFullyAllocated())
+    && !(packedByType === 'forwarder' && !forwarderUserId)
+    && !untypedContainerExists
 
   // ─── SUBMIT ───────────────────────────────────────────────
   // Posts SCN to backend; shows toast and calls parent callback.
@@ -302,10 +313,9 @@ export const CreateSCNWizard: React.FC<Props> = ({
       if (!v.parent_po_line_id) { onToast?.('Each off-PO variation must select a parent PO line.', 'error'); return }
       if (!v.description)       { onToast?.('Each off-PO variation needs a description.', 'error'); return }
     }
-    // D2: every selected line must be fully allocated into packages before creating —
-    // RELAXED for delegated-forwarder packing (D5): when the forwarder will pack, the
-    // expeditor may leave packaging unfinished (the forwarder completes it later).
-    if (packedByType !== 'forwarder' && !allFullyAllocated()) { onToast?.('Allocate every selected line fully into packages before creating the SCN.', 'error'); return }
+    // Pass 1: ONLY 'We pack (internal)' must fully allocate before creating. Vendor and
+    // forwarder packing may be created with packaging unfinished (entered later).
+    if (requiresFullAllocation && !allFullyAllocated()) { onToast?.('Allocate every selected line fully into packages before creating the SCN.', 'error'); return }
     // If delegating, a forwarder must be chosen.
     if (packedByType === 'forwarder' && !forwarderUserId) { onToast?.('Pick the freight forwarder to delegate packing to.', 'error'); return }
     // Q4: every container must declare its ISO container type.
@@ -659,11 +669,11 @@ export const CreateSCNWizard: React.FC<Props> = ({
           )}
         </div>
         <div>
-          <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>Destination warehouse</label>
+          <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>Destination warehouse *</label>
           <select
             value={warehouseId}
             onChange={e => setWarehouseId(Number(e.target.value) || '')}
-            style={{ ...inputStyle, width: '100%' }}
+            style={{ ...inputStyle, width: '100%', borderColor: warehouseId ? undefined : '#f59e0b' }}
           >
             <option value="">— Select warehouse</option>
             {warehouses.map((w: any) => (
@@ -681,12 +691,15 @@ export const CreateSCNWizard: React.FC<Props> = ({
           />
         </div>
         <div>
-          <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>Contract delivery date (CDD) <span style={{ color: '#94a3b8', fontWeight: 400 }}>· from PO line (editable)</span></label>
+          <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>Contract delivery date (CDD) <span style={{ color: '#94a3b8', fontWeight: 400 }}>· from PO line (read-only)</span></label>
+          {/* Pass 1: CDD is inherited from the PO line and NOT editable here. */}
           <input
             type="date"
             value={cdd}
-            onChange={e => setCdd(e.target.value)}
-            style={{ ...inputStyle, width: '100%' }}
+            readOnly
+            disabled
+            title="Inherited from the PO line — not editable on the SCN"
+            style={{ ...inputStyle, width: '100%', background: '#f1f5f9', color: '#64748b', cursor: 'not-allowed' }}
           />
         </div>
         <div>
@@ -1316,11 +1329,15 @@ export const CreateSCNWizard: React.FC<Props> = ({
                     setTransportError('Please select a transport mode to continue')
                     return
                   }
+                  if (step === 2 && !warehouseId) {
+                    setTransportError('Please select a destination warehouse to continue')
+                    return
+                  }
                   setTransportError('')
                   setStep(s => (s + 1) as Step)
                 }}
-                disabled={step === 1 && !canNext}
-                style={{ ...blueBtn, opacity: (step === 1 && !canNext) ? 0.5 : 1, cursor: (step === 1 && !canNext) ? 'not-allowed' : 'pointer' }}
+                disabled={!canNext}
+                style={{ ...blueBtn, opacity: !canNext ? 0.5 : 1, cursor: !canNext ? 'not-allowed' : 'pointer' }}
               >
                 {step === 1
                   ? `Next — ${countSelected()} item${countSelected() !== 1 ? 's' : ''} →`
@@ -1329,9 +1346,14 @@ export const CreateSCNWizard: React.FC<Props> = ({
             ) : (
               <button
                 onClick={handleCreate}
-                disabled={creating || !allFullyAllocated()}
-                title={!allFullyAllocated() ? 'Allocate every selected line fully into packages first' : undefined}
-                style={{ ...greenBtn, opacity: (creating || !allFullyAllocated()) ? 0.5 : 1, cursor: (creating || !allFullyAllocated()) ? 'not-allowed' : 'pointer' }}
+                disabled={!canCreate}
+                title={
+                  requiresFullAllocation && !allFullyAllocated() ? 'Allocate every selected line fully into packages first'
+                  : packedByType === 'forwarder' && !forwarderUserId ? 'Select the freight forwarder to delegate packing to'
+                  : untypedContainerExists ? 'Select an ISO container type for each container'
+                  : undefined
+                }
+                style={{ ...greenBtn, opacity: canCreate ? 1 : 0.5, cursor: canCreate ? 'pointer' : 'not-allowed' }}
               >
                 {creating ? 'Creating…' : '✓ Create SCN'}
               </button>
