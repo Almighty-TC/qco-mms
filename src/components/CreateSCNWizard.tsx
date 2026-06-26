@@ -37,7 +37,7 @@ interface PackageRow {
   containerNo?: string; sealNo?: string   // Q4: optional on a container row at creation (seal routes through governance)
 }
 // Heat/Lot P1: one declared heat for the shipment (heat_number required; grade/cert optional).
-interface HeatRow { heat_number: string; grade: string; cert: string }
+interface HeatRow { heat_number: string; grade: string; cert: string; packageRef?: string }   // 3a: optional package link (client ref)
 
 // ─── CONSTANTS ────────────────────────────────────────────────
 const STEP_LABELS = ['Select lines', 'SCN details', 'Packages', 'Heats', 'Documents', 'Confirm']
@@ -278,7 +278,13 @@ export const CreateSCNWizard: React.FC<Props> = ({
 
   // ─── HEATS (Heat/Lot P1) ──────────────────────────────────
   const addHeat = () =>
-    setHeats(prev => [...prev, { heat_number: '', grade: '', cert: '' }])
+    setHeats(prev => [...prev, { heat_number: '', grade: '', cert: '', packageRef: '' }])
+  // 3a: short label for a package in the heat→package picker.
+  const pkgLabel = (p: PackageRow) => {
+    if (p.kind === 'container') { const ct = ctById(p.containerTypeId); return `📦 Container${ct ? ` ${ct.code}` : ''}` }
+    const parent = p.parentId ? packages.find(x => x.id === p.parentId) : null
+    return parent ? `↳ ${p.type} in ${ctById(parent.containerTypeId)?.code || 'container'}` : `${p.type} (loose)`
+  }
   const updateHeat = (i: number, field: keyof HeatRow, val: string) =>
     setHeats(prev => prev.map((h, idx) => idx === i ? { ...h, [field]: val } : h))
   const removeHeat = (i: number) =>
@@ -400,6 +406,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
             heat_number: h.heat_number.trim(),
             material_grade: h.grade.trim() || null,
             mill_cert_ref: h.cert.trim() || null,
+            package_ref: h.packageRef || undefined,   // 3a: optional heat→package link (resolved server-side)
           })),
         notify_forwarder: notifyForwarder,
       }
@@ -1091,7 +1098,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
             <button onClick={() => removeHeat(i)}
               style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 16, cursor: 'pointer' }}>×</button>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: packages.length ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr', gap: 8 }}>
             <div>
               <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>
                 Heat number <span style={{ color: '#ef4444' }}>*</span>
@@ -1121,6 +1128,16 @@ export const CreateSCNWizard: React.FC<Props> = ({
                 style={{ ...inputStyle, width: '100%' }}
               />
             </div>
+            {/* 3a: optionally link this heat to a package built in step 3. */}
+            {packages.length > 0 && (
+              <div>
+                <label style={{ fontSize: 10, color: '#7c3aed', display: 'block', marginBottom: 3 }}>In package</label>
+                <select value={h.packageRef || ''} onChange={e => updateHeat(i, 'packageRef', e.target.value)} style={{ ...inputStyle, width: '100%' }}>
+                  <option value="">— Not linked</option>
+                  {packages.map(p => <option key={p.id} value={p.id}>{pkgLabel(p)}</option>)}
+                </select>
+              </div>
+            )}
           </div>
         </div>
       ))}

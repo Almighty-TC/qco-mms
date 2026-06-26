@@ -510,6 +510,11 @@ router.get('/scn/:scnId', async (req, res) => {
       [scnId]
     )
 
+    // 3a: declared heats (incl. optional package_id once the migration is live) — drives
+    // the per-package heat display. SELECT * is deploy-safe (returns whatever columns exist).
+    const [heats] = await db.query(
+      'SELECT * FROM scn_heats WHERE scn_id = ? ORDER BY heat_number', [scnId])
+
     res.json({
       ...scn,
       display_status: dbToDisplay(scn.status),
@@ -521,6 +526,7 @@ router.get('/scn/:scnId', async (req, res) => {
       documents,
       status_log,
       date_changes,
+      heats,
     })
   } catch (e) {
     console.error('[logistics:scn-detail]', e.message)
@@ -1006,11 +1012,22 @@ router.delete('/scn/:scnId/packages/:packageId', async (req, res) => {
 // DOCUMENTS
 // ═══════════════════════════════════════════════════════════════
 
+// 3a: does scn_documents have the package_id/heat_id link columns yet? Cached sticky-true.
+let _scnDocLinkCols = false
+async function scnDocLinkColsLive() {
+  if (_scnDocLinkCols) return true
+  const [[r]] = await db.query(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'scn_documents' AND column_name = 'package_id'`)
+  _scnDocLinkCols = r.n > 0
+  return _scnDocLinkCols
+}
+
 // POST /api/logistics/scn/:scnId/documents
 router.post('/scn/:scnId/documents', requireInternalLogistics, upload.single('file'), async (req, res) => {
   try {
     const scnId = Number(req.params.scnId)
-    const { document_type, notes } = req.body
+    const { document_type, notes, package_id, heat_id } = req.body
     const userId = req.user?.id || 1
 
     if (!document_type) return res.status(400).json({ error: 'document_type is required' })
@@ -1018,10 +1035,16 @@ router.post('/scn/:scnId/documents', requireInternalLogistics, upload.single('fi
     const fileName = req.file?.originalname || null
     const filePath = req.file?.path || null
 
+    // 3a: optionally link the doc (e.g. a Mill Test Certificate) to a package and/or heat.
+    // Value-gated + capability-detected so legacy uploads + pre-migration deploys are unaffected.
+    const cols = ['scn_id', 'document_type', 'file_name', 'file_path', 'uploaded_by', 'notes']
+    const vals = [scnId, document_type, fileName, filePath, userId, notes || null]
+    if (await scnDocLinkColsLive()) {
+      cols.push('package_id', 'heat_id')
+      vals.push(package_id ? Number(package_id) : null, heat_id ? Number(heat_id) : null)
+    }
     const [result] = await db.query(
-      `INSERT INTO scn_documents (scn_id, document_type, file_name, file_path, uploaded_by, notes)
-       VALUES (?,?,?,?,?,?)`,
-      [scnId, document_type, fileName, filePath, userId, notes || null]
+      `INSERT INTO scn_documents (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`, vals
     )
     const [[doc]] = await db.query(
       `SELECT d.*, u.full_name AS uploaded_by_name

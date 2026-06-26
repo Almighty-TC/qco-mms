@@ -50,6 +50,7 @@ interface SCNDetail extends SCNRow {
   packaging_delegated_to?: number | null; packaging_status?: 'pending'|'complete' | null
   packaging_completed_at?: string | null; forwarder_user_name?: string | null
   transport_modes?: string | null; transport_mode_notes?: string | null   // Item 2: multi-modal legs + notes
+  heats?: ScnHeat[]   // 3a: declared heats (with optional package_id)
   po_id?: number | null; vendor_display?: string | null
   lines: POLine[]; additional_items: any[]; packages: Package[]
   scn_lines?: ScnLineAlloc[]   // Stage 4: per-SCN line allocation (qty on SCN + packed)
@@ -98,7 +99,9 @@ interface ScnLineAlloc { id: number; po_line_id?: number | null; additional_item
 interface Doc {
   id: number; document_type: string; file_name?: string | null; notes?: string | null
   uploaded_by_name?: string | null; uploaded_at: string
+  package_id?: number | null; heat_id?: number | null   // 3a: optional links
 }
+interface ScnHeat { id: number; heat_number: string; material_grade?: string | null; mill_cert_ref?: string | null; package_id?: number | null }   // 3a
 interface StatusLogEntry {
   id: number; from_status?: string | null; to_status: string
   changed_by_name?: string | null; changed_at: string; notes?: string | null
@@ -1178,6 +1181,18 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
                         {p.seal_no && <span title="Sealed — set-once, audited">🔒 {p.seal_no}</span>}
                       </div>
                     )}
+                    {/* 3a: heats linked to this package + any mill cert linked to it. */}
+                    {(() => {
+                      const hts = (scn.heats || []).filter(h => h.package_id === p.id)
+                      const certs = (scn.documents || []).filter(d => d.document_type === 'Mill Test Certificate' && d.package_id === p.id)
+                      if (!hts.length && !certs.length) return null
+                      return (
+                        <div style={{ fontSize: 10, marginTop: 3, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                          {hts.map(h => <span key={h.id} title={`Heat${h.material_grade ? ` · ${h.material_grade}` : ''}`} style={{ color: '#b45309', background: 'rgba(217,119,6,0.1)', borderRadius: 5, padding: '1px 6px', fontFamily: 'JetBrains Mono, monospace' }}>🔥 {h.heat_number}</span>)}
+                          {certs.map(d => <span key={d.id} title={d.file_name || 'Mill Test Certificate'} style={{ color: '#15803d', background: 'rgba(34,197,94,0.1)', borderRadius: 5, padding: '1px 6px' }}>📄 MTC</span>)}
+                        </div>
+                      )
+                    })()}
                   </td>
                   <td style={{ padding: '7px 8px', color: col, minWidth: 160 }}>
                     {isContainer ? (
@@ -1340,7 +1355,7 @@ const PackageFormRow = ({ form, setForm, inputSt, col, sub, bd, dark, error, onS
 }
 
 // ─── DOCUMENTS TAB ───────────────────────────────────────────
-const DOC_TYPES = ['Commercial Invoice','Packing List','Bill of Lading','Airway Bill','Certificate of Origin','Insurance Certificate','Dangerous Goods Declaration','Customs Entry','Other']
+const DOC_TYPES = ['Commercial Invoice','Packing List','Bill of Lading','Airway Bill','Certificate of Origin','Insurance Certificate','Dangerous Goods Declaration','Customs Entry','Mill Test Certificate','Other']
 
 const DocumentsTab = ({ dark, scn, onRefresh, addToast }: {
   dark: boolean; scn: SCNDetail; onRefresh: () => void
@@ -1361,6 +1376,10 @@ const DocumentsTab = ({ dark, scn, onRefresh, addToast }: {
   const [file, setFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState('')
+  // 3a: a Mill Test Certificate may optionally link to a package and/or heat.
+  const [docPackageId, setDocPackageId] = useState<number | ''>('')
+  const [docHeatId, setDocHeatId] = useState<number | ''>('')
+  const isMTC = docType === 'Mill Test Certificate'
 
   const uploadDoc = async () => {
     if (!file) return setUploadError('Please select a file')
@@ -1370,10 +1389,12 @@ const DocumentsTab = ({ dark, scn, onRefresh, addToast }: {
       fd.append('file', file)
       fd.append('document_type', docType)
       if (docNotes) fd.append('notes', docNotes)
+      if (isMTC && docPackageId) fd.append('package_id', String(docPackageId))
+      if (isMTC && docHeatId) fd.append('heat_id', String(docHeatId))
       await axios.post(`${API}/logistics/scn/${scn.id}/documents`, fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
-      setShowUpload(false); setFile(null); setDocNotes('')
+      setShowUpload(false); setFile(null); setDocNotes(''); setDocPackageId(''); setDocHeatId('')
       addToast('success', 'Document uploaded'); onRefresh()
     } catch (e: any) {
       setUploadError(e.response?.data?.error || 'Upload failed')
@@ -1409,6 +1430,25 @@ const DocumentsTab = ({ dark, scn, onRefresh, addToast }: {
             <label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>File *</label>
             <input type="file" onChange={e => setFile(e.target.files?.[0] || null)} style={{ fontSize: 12, color: col }} />
           </div>
+          {/* 3a: link a Mill Test Certificate to a package and/or heat (optional). */}
+          {isMTC && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10, paddingBottom: 10, borderBottom: `1px dashed ${dark ? '#334155' : '#cbd5e1'}` }}>
+              <div>
+                <label style={{ fontSize: 11, color: '#7c3aed', display: 'block', marginBottom: 4 }}>Link to package (optional)</label>
+                <select value={docPackageId} onChange={e => setDocPackageId(e.target.value ? Number(e.target.value) : '')} style={inputSt}>
+                  <option value="">— Not linked</option>
+                  {(scn.packages || []).map(p => <option key={p.id} value={p.id}>#{p.package_number}{p.description ? ` · ${p.description}` : ''}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: '#7c3aed', display: 'block', marginBottom: 4 }}>Link to heat (optional)</label>
+                <select value={docHeatId} onChange={e => setDocHeatId(e.target.value ? Number(e.target.value) : '')} style={inputSt}>
+                  <option value="">— Not linked</option>
+                  {(scn.heats || []).map(h => <option key={h.id} value={h.id}>{h.heat_number}{h.material_grade ? ` · ${h.material_grade}` : ''}</option>)}
+                </select>
+              </div>
+            </div>
+          )}
           <div style={{ marginBottom: 10 }}>
             <label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>Notes</label>
             <input value={docNotes} onChange={e => setDocNotes(e.target.value)} placeholder="Optional notes" style={inputSt} />

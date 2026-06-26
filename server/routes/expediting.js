@@ -51,6 +51,18 @@ async function scnTransportModesLive() {
   return _transportCols
 }
 
+// Did migrate-heat-package-links.js run? (Pass 3a) — gates the optional heat→package link
+// so the create path degrades gracefully (heat saved without package_id) pre-migration.
+let _heatPkgCol = false
+async function scnHeatPackageColLive() {
+  if (_heatPkgCol) return true
+  const [[r]] = await db.query(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'scn_heats' AND column_name = 'package_id'`)
+  _heatPkgCol = r.n > 0
+  return _heatPkgCol
+}
+
 // ─── DELEGATION VALIDATION (forwarder-delegated packaging, D3) ─────────────────
 // Pure verdict (uses conn only for the freight_forwarder lookup) — the SCN-create route
 // calls it; exported so the D3 proofs run THIS exact code (no drift).
@@ -1108,18 +1120,10 @@ router.post('/:projectId/scn', async (req, res) => {
     // ── Heat/Lot P1: record the shipment's declared heats (additive) ──
     // Optional — an empty list is fine (heats may be unknown at SCN creation).
     // The receipting dropdown (P2) reads these scoped by scn_id. source='declared'.
-    for (const h of heats) {
-      const heatNo = (h.heat_number || '').trim()
-      if (!heatNo) continue
-      await conn.query(
-        `INSERT INTO scn_heats (scn_id, heat_number, material_grade, mill_cert_ref, source, po_line_id, created_by)
-         VALUES (?,?,?,?,'declared',?,?)`,
-        [scnId, heatNo,
-         (h.material_grade || '').trim() || null,
-         (h.mill_cert_ref || '').trim() || null,
-         h.po_line_id || null, req.user.id]
-      )
-    }
+    // NOTE: heats are inserted AFTER the package loop (below) so a heat's optional
+    // package_ref can resolve to a real scn_packages.id at INSERT time. scn_heats is
+    // append-only (qmat_app has no UPDATE grant), so package_id must be set on insert,
+    // never via a later UPDATE.
 
     // ── Persist packages declared in the wizard (one row per physical package) ──
     // Previously the wizard collected packages but the create endpoint dropped them,
@@ -1213,6 +1217,24 @@ router.post('/:projectId/scn', async (req, res) => {
            total_packages  = (SELECT COUNT(*) FROM scn_packages WHERE scn_id=?),
            total_weight_kg = (SELECT COALESCE(SUM(gross_weight_kg),0) FROM scn_packages WHERE scn_id=?)
          WHERE id = ?`, [scnId, scnId, scnId])
+    }
+
+    // ── Heat/Lot P1: record the shipment's declared heats (additive) — INSERTED HERE,
+    //    after packages, so a heat's optional package_ref resolves to a real package id at
+    //    insert time (scn_heats is append-only — no post-insert UPDATE). The receipting
+    //    dropdown (P2) reads these scoped by scn_id; source='declared'. ──
+    const heatPkgColLive = await scnHeatPackageColLive()   // 3a: include package_id only when live
+    for (const h of heats) {
+      const heatNo = (h.heat_number || '').trim()
+      if (!heatNo) continue
+      const hcols = ['scn_id', 'heat_number', 'material_grade', 'mill_cert_ref', 'source', 'po_line_id', 'created_by']
+      const hvals = [scnId, heatNo, (h.material_grade || '').trim() || null, (h.mill_cert_ref || '').trim() || null,
+        'declared', h.po_line_id || null, req.user.id]
+      if (heatPkgColLive && h.package_ref != null && h.package_ref !== '' && refToPkgId[String(h.package_ref)] != null) {
+        hcols.push('package_id'); hvals.push(refToPkgId[String(h.package_ref)])
+      }
+      await conn.query(
+        `INSERT INTO scn_heats (${hcols.join(', ')}) VALUES (${hcols.map(() => '?').join(',')})`, hvals)
     }
 
     // Seed the SCN's Timeline with its creation event: an scn_status_log row matching the
