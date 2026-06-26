@@ -68,6 +68,9 @@ interface Package {
   is_dangerous_goods: number; dg_class?: string | null; dg_un_number?: string | null
   marks_numbers?: string | null
   contents?: PkgContentView[]   // Stage 4: declared packing-list contents for this box
+  // 3b-4: per-package received rollup — what has actually been received FROM this package,
+  // traced via receipt_lines.source_scn_package_id. NULL pre-migration or if nothing received.
+  received?: { receipt_count: number; qty_received: number; heat_count: number } | null
 }
 
 // ─── Q2 PACKAGE TREE ──────────────────────────────────────────
@@ -1193,6 +1196,16 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
                         </div>
                       )
                     })()}
+                    {/* 3b-4: trace-back — what's actually been received FROM this package
+                        (qty + receipt count), traced through the receipt provenance link. */}
+                    {p.received && p.received.receipt_count > 0 && (
+                      <div style={{ fontSize: 10, marginTop: 3 }}>
+                        <span title={`${p.received.receipt_count} receipt line(s)${p.received.heat_count ? ` · ${p.received.heat_count} heat(s)` : ''}`}
+                          style={{ color: '#1d4ed8', background: 'rgba(37,99,235,0.1)', borderRadius: 5, padding: '1px 6px', fontFamily: 'JetBrains Mono, monospace' }}>
+                          📥 received {Number(p.received.qty_received).toLocaleString()}
+                        </span>
+                      </div>
+                    )}
                   </td>
                   <td style={{ padding: '7px 8px', color: col, minWidth: 160 }}>
                     {isContainer ? (

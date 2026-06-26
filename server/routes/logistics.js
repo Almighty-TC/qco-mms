@@ -59,6 +59,18 @@ async function scnHasDelegateCol(conn = db) {
   return _delegateColPresent
 }
 
+// 3b-4: trace-back read — has the receipt-provenance column landed? Gates the per-package
+// "received from this package" rollup on SCN detail (reads only; degrades to none if absent).
+let _recvProvCol = false
+async function recvProvLive() {
+  if (_recvProvCol) return true
+  const [[r]] = await db.query(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'receipt_lines' AND column_name = 'source_scn_package_id'`)
+  _recvProvCol = r.n > 0
+  return _recvProvCol
+}
+
 // THE ownership predicate (shared by D2 package authz + D4 hand-back) — a forwarder is
 // the delegated packer iff the SCN's packaging_delegated_to equals their user id. Kept as
 // a one-liner so the two call sites can NEVER drift.
@@ -467,6 +479,31 @@ router.get('/scn/:scnId', async (req, res) => {
         })
       }
       for (const p of packages) p.contents = byPkg[p.id] || []
+
+      // 3b-4: per-package received rollup — what has actually been received FROM each
+      // package, traced via receipt_lines.source_scn_package_id (append-only provenance).
+      // Capability-detected (degrades to no rollup pre-migration); reads only.
+      if (await recvProvLive()) {
+        const [recv] = await db.query(
+          `SELECT rl.source_scn_package_id AS package_id,
+                  COUNT(*) AS receipt_count,
+                  SUM(rl.received_qty) AS qty_received,
+                  COUNT(DISTINCT rl.scn_heat_id) AS heat_count
+           FROM receipt_lines rl
+           WHERE rl.source_scn_package_id IN (?)
+           GROUP BY rl.source_scn_package_id`,
+          [packages.map(p => p.id)]
+        )
+        const recvByPkg = {}
+        for (const r of recv) recvByPkg[r.package_id] = r
+        for (const p of packages) {
+          const r = recvByPkg[p.id]
+          p.received = r
+            ? { receipt_count: Number(r.receipt_count), qty_received: Number(r.qty_received) || 0,
+                heat_count: Number(r.heat_count) }
+            : null
+        }
+      }
     }
 
     // Per-SCN line allocation (how much of each line is on this SCN + how much packed across boxes).

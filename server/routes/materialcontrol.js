@@ -709,6 +709,21 @@ router.get('/:projectId/stock', async (req, res) => {
       ? `${SAFE_SORT[req.query.sort_col]} ${orderDir}, s.id ${orderDir}`
       : `w.name ${orderDir}, s.location_code ${orderDir}, s.id ${orderDir}`
 
+    // 3b-4: trace-back read — origin package/heat/cert via receipt_line_id (capability-
+    // detected; reads only). LEFT JOINs so unlinked/legacy stock returns NULL gracefully.
+    const provLive = await receiptProvenanceLive()
+    const originSel = provLive
+      ? `, op.package_number AS origin_package_number, op.container_type_id AS origin_container_type_id,
+           oh.heat_number AS origin_heat_number,
+           (SELECT COUNT(*) FROM scn_documents d WHERE d.document_type='Mill Test Certificate'
+              AND (d.heat_id = rl.scn_heat_id OR d.package_id = rl.source_scn_package_id)) AS origin_mill_cert_count`
+      : ''
+    const originJoin = provLive
+      ? ` LEFT JOIN receipt_lines rl ON rl.id = s.receipt_line_id
+          LEFT JOIN scn_packages op ON op.id = rl.source_scn_package_id
+          LEFT JOIN scn_heats oh ON oh.id = rl.scn_heat_id`
+      : ''
+
     // total / rows / stat-cards are independent — run them concurrently.
     const [
       [[{ total }]],
@@ -722,9 +737,9 @@ router.get('/:projectId/stock', async (req, res) => {
         // PO-line stock — additive (s.* already carries additional_item_id + item_code).
         // The UI nests children under the parent sharing the SAME item_code (effectiveItemCode).
         `SELECT s.*, (s.additional_item_id IS NOT NULL) AS is_child,
-                w.name AS warehouse_name, w.code AS warehouse_code
+                w.name AS warehouse_name, w.code AS warehouse_code${originSel}
          FROM warehouse_stock s
-         JOIN warehouses w ON s.warehouse_id = w.id
+         JOIN warehouses w ON s.warehouse_id = w.id${originJoin}
          WHERE ${whereSql}
          ORDER BY ${orderClause}
          LIMIT ? OFFSET ?`,

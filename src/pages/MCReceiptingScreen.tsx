@@ -329,6 +329,15 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
   // keyed by additional_item_id. No splits/heat path (children are simple holdings).
   const [childActuals, setChildActuals] = useState<Record<number, number>>({})
   const [childLoc, setChildLoc]         = useState<Record<number, string>>({})
+  // 3b-4: optional source-package capture (provenance). Per PO line + per child.
+  const [sourcePkg, setSourcePkg]           = useState<Record<number, number | ''>>({})
+  const [childSourcePkg, setChildSourcePkg] = useState<Record<number, number | ''>>({})
+  const [containerTypes, setContainerTypes] = useState<any[]>([])
+  // Readable package label for the source dropdown ("#01 · 📦 40HC" / "#02 · Bundle").
+  const ctCode = (id: number | null | undefined) => containerTypes.find((c: any) => c.id === id)?.code
+  const pkgLabel = (p: any) => `#${p.package_number} · ${p.container_type_id ? `📦 ${ctCode(p.container_type_id) || 'Container'}` : (p.description || 'Package')}`
+  // Map a chosen heat NUMBER → its scn_heats.id (declared heats only; off-list → null).
+  const heatIdFor = (hn?: string | null) => (detail?.heats || []).find((h: any) => h.heat_number === (hn || '').trim())?.id || null
 
   // ─── Resizable wizard tables (per-step, persisted by id) ──
   const rvTable = useResizableTable('mc_receipt_review', RV_W, RV_MIN)   // Step 1
@@ -358,6 +367,8 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
         setChildActuals(cinit)
       })
       .catch(() => setDetail({ packages: [], lines: [] }))
+    // 3b-4: container types for the source-package label (ISO code).
+    axios.get(`${API}/logistics/container-types`).then(r => setContainerTypes(r.data || [])).catch(() => {})
   }, [scn.id, projectId]) // eslint-disable-line
 
   // ─── Live discrepancy reconciliation (Phase 2 — Bug 1) ────────
@@ -418,6 +429,9 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
             heat_off_list_reason: s.heat_off_list ? ((s.heat_off_list_reason || '').trim() || null) : null,
             // Per-heat bin — blank falls back to the receipt default location server-side.
             location_code: (s.grid_location || '').trim() || null,
+            // 3b-4 provenance: subs share the line's source package; heat→id from the declared list.
+            source_scn_package_id: sourcePkg[l.id] || null,
+            scn_heat_id: heatIdFor(s.heat_number),
           }))
         }
         // 1:1 (P2a) path — unchanged.
@@ -441,6 +455,9 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
           heat_off_list_reason: heatOffList[l.id] ? ((heatReason[l.id] || '').trim() || null) : null,
           // Per-line bin — blank falls back to the receipt default location server-side.
           location_code: (lineLoc[l.id] || '').trim() || null,
+          // 3b-4 provenance: optional source package + the chosen heat's id (declared only).
+          source_scn_package_id: sourcePkg[l.id] || null,
+          scn_heat_id: heatIdFor(heat[l.id]),
         }]
       })
       // Q3: off-PO child entries — keyed on additional_item_id, own qty + own bin.
@@ -451,6 +468,8 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
           received_qty: Number(childActuals[c.additional_item_id] ?? c.remaining) || 0,
           uom: c.uom || 'EA',
           location_code: (childLoc[c.additional_item_id] || '').trim() || null,
+          // 3b-4 provenance: optional source package for off-PO child receipts.
+          source_scn_package_id: childSourcePkg[c.additional_item_id] || null,
         }))
         .filter((c: any) => c.received_qty > 0)
       await axios.post(`${API}/mc/${projectId}/receipting/${scn.id}/complete`, {
@@ -845,6 +864,15 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                                     placeholder="Reason (required) *"
                                     style={{ ...inputSt, width: 170, fontSize: 11, borderColor: (heatReason[l.id] || '').trim() ? undefined : '#ef4444' }} />
                                 </div>
+                              )}
+                              {/* 3b-4: optional source package (provenance — where this material came from). */}
+                              {(detail?.packages || []).length > 0 && (
+                                <select value={sourcePkg[l.id] ?? ''} onChange={e => setSourcePkg(p => ({ ...p, [l.id]: e.target.value ? Number(e.target.value) : '' }))}
+                                  title="Source package (optional — for provenance)"
+                                  style={{ ...inputSt, width: 170, padding: '5px 8px', marginTop: 4 }}>
+                                  <option value="">— Source package —</option>
+                                  {(detail?.packages || []).map((p: any) => <option key={p.id} value={p.id}>{pkgLabel(p)}</option>)}
+                                </select>
                               )}
                               {Number(actual) > 0 && (
                                 <button onClick={() => startSplit(l)}

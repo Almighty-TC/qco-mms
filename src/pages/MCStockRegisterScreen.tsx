@@ -46,6 +46,12 @@ interface StockItem {
   heat_number?: string | null
   warehouse_id: number; warehouse_name: string; warehouse_code: string
   is_child?: number; additional_item_id?: number | null   // Q3: off-PO child stock (nests under parent sharing item_code)
+  // 3b-4: trace-back origin — where this holding was received FROM (NULL pre-migration or
+  // when the receipt didn't capture a source package). Followed receipt_line_id → receipt.
+  origin_package_number?: string | number | null
+  origin_container_type_id?: number | null
+  origin_heat_number?: string | null
+  origin_mill_cert_count?: number | null
 }
 
 // Q3: order rows so off-PO children sit directly under the parent sharing their
@@ -657,6 +663,20 @@ const MoveModal = ({ dark, item, projectId, onClose, onSaved, addToast }: {
         <div style={{ marginBottom: 6 }}>
           <label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>Current location</label>
           <div style={{ fontSize: 12, fontFamily: 'JetBrains Mono, monospace', color: sub }}>{item.location_code || '—'} · {item.warehouse_name}</div>
+        </div>
+        {/* 3b-4: trace-back origin — where this holding was received FROM, followed through
+            the receipt. Graceful "—" when the receipt captured no source package (or pre-migration). */}
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>Origin (trace-back)</label>
+          {item.origin_package_number != null ? (
+            <div style={{ fontSize: 12, fontFamily: 'JetBrains Mono, monospace', color: col, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              <span>📦 Package #{item.origin_package_number}</span>
+              {item.origin_heat_number && <span>🔥 heat {item.origin_heat_number}</span>}
+              {Number(item.origin_mill_cert_count) > 0 && <span>📄 mill cert</span>}
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, fontFamily: 'JetBrains Mono, monospace', color: sub }}>—</div>
+          )}
         </div>
         <div style={{ marginBottom: 16 }}>
           <label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>New location *</label>
