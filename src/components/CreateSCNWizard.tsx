@@ -302,10 +302,33 @@ export const CreateSCNWizard: React.FC<Props> = ({
   // packing may be left UNFINISHED — the expeditor/forwarder enters packages later.
   const requiresFullAllocation = packedByType === 'internal'
   const untypedContainerExists = packages.some(p => p.kind === 'container' && !p.containerTypeId)
+  // Fix 3: a sub-package that exceeds its container's inner dims (Pass-2 containerDimViolations,
+  // per-type relaxation — open-top relaxes height, flat-rack carries out-of-gauge) is a real
+  // block. Computed once here so canCreate, the Confirm banner, and the button tooltip all
+  // agree (was: enforced only as a click-time toast, so the banner couldn't explain it). The
+  // returned `num` is the 1-based position among leaf packages, for the user-facing message.
+  const dimViolations = () => {
+    const out: { num: number; msg: string }[] = []
+    let leafNum = 0
+    packages.forEach(p => {
+      if (p.kind !== 'package') return
+      leafNum++
+      if (!p.parentId) return
+      const parent = packages.find(c => c.id === p.parentId)
+      const ct = ctById(parent?.containerTypeId)
+      if (!ct) return
+      const v = containerDimViolations(
+        { length_mm: (Number(p.length) || 0) * 10, width_mm: (Number(p.width) || 0) * 10, height_mm: (Number(p.height) || 0) * 10 },
+        ct as any)
+      if (v) out.push({ num: leafNum, msg: containerDimMessage(v, ct as any) })
+    })
+    return out
+  }
   const canCreate = !creating
     && (!requiresFullAllocation || allFullyAllocated())
     && !(packedByType === 'forwarder' && !forwarderUserId)
     && !untypedContainerExists
+    && dimViolations().length === 0
 
   // ─── SUBMIT ───────────────────────────────────────────────
   // Posts SCN to backend; shows toast and calls parent callback.
@@ -586,12 +609,22 @@ export const CreateSCNWizard: React.FC<Props> = ({
                 const noWbs = parent && !parentWbs
                 return (
                 <div key={i} style={{ marginTop: 8, borderTop: i ? '1px dashed #fde68a' : undefined, paddingTop: i ? 8 : 0 }}>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                {/* Fix 1: flexWrap so the ROS date picker never clips off the modal's right edge. */}
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                   <select
                     value={item.parentLineId}
-                    onChange={e => updateAdditional(i, 'parentLineId', e.target.value)}
+                    onChange={e => {
+                      // Fix 1: pre-fill ROS from the parent line's ROS as an EDITABLE default
+                      // (only when ROS is still blank, so a user override is never clobbered).
+                      const pid = e.target.value
+                      const pl = (po?.po_lines || []).find((l: any) => String(l.id) === String(pid))
+                      const inheritedRos = pl?.ros_date ? String(pl.ros_date).slice(0, 10)
+                        : (po?.ros_date ? String(po.ros_date).slice(0, 10) : '')
+                      setAdditionalItems(prev => prev.map((it, idx) => idx === i
+                        ? { ...it, parentLineId: pid, ros: it.ros || inheritedRos } : it))
+                    }}
                     title="Parent PO line (required)"
-                    style={{ ...inputStyle, width: 200, borderColor: item.parentLineId ? undefined : '#f59e0b' }}
+                    style={{ ...inputStyle, width: 180, borderColor: item.parentLineId ? undefined : '#f59e0b' }}
                   >
                     <option value="">— parent PO line (required) —</option>
                     {(po?.po_lines || []).map((l: any) => (
@@ -623,7 +656,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
                     type="date"
                     value={item.ros}
                     onChange={e => updateAdditional(i, 'ros', e.target.value)}
-                    title="Required-on-site date (user-supplied — not inherited)"
+                    title="Required-on-site date — defaults from the parent line's ROS, editable"
                     style={{ ...inputStyle, width: 140 }}
                   />
                   <button
@@ -821,7 +854,14 @@ export const CreateSCNWizard: React.FC<Props> = ({
               picker). Writes forwarder_name — the field the register/detail display use. */}
           <select
             value={forwarder}
-            onChange={e => setForwarder(e.target.value)}
+            onChange={e => {
+              // Fix 4: keep the Packages-step delegation picker in sync — resolve the chosen
+              // forwarder to its user id so 'Freight forwarder packs' pre-fills (no double-pick).
+              const val = e.target.value
+              setForwarder(val)
+              const m = forwarders.find(f => (f.company ? `${f.full_name} · ${f.company}` : f.full_name) === val)
+              setForwarderUserId(m ? m.id : '')
+            }}
             style={{ ...inputStyle, width: '100%' }}
           >
             <option value="">— Select forwarder</option>
@@ -860,11 +900,13 @@ export const CreateSCNWizard: React.FC<Props> = ({
           )}
         </div>
         <div>
-          <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>{pkg.contents.length > 0 ? 'Qty (itemized)' : 'Qty'}</label>
-          <input type="number" min={1} value={pkg.contents.length > 0 ? '1' : pkg.qty} disabled={pkg.contents.length > 0}
-            title={pkg.contents.length > 0 ? 'Itemized package = one physical box' : undefined}
-            onChange={e => updatePkg(i, 'qty', e.target.value)}
-            style={{ ...inputStyle, width: '100%', background: pkg.contents.length > 0 ? '#f1f5f9' : '#fff', color: pkg.contents.length > 0 ? '#94a3b8' : '#0f172a' }} />
+          {/* Fix 2: a leaf package is an itemized box — qty is locked to 1 and greyed from
+              the START (was: editable then jumped to 1 once contents were added, which looked
+              broken). Bundle-of-N-units is a future redesign (docs/MAP_BUNDLE_QTY_REDESIGN). */}
+          <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Qty (itemized)</label>
+          <input type="number" value="1" disabled
+            title="Itemized package = one physical box (bundle-of-N is a future redesign)"
+            style={{ ...inputStyle, width: '100%', background: '#f1f5f9', color: '#94a3b8' }} />
         </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8, marginBottom: 8 }}>
@@ -958,7 +1000,13 @@ export const CreateSCNWizard: React.FC<Props> = ({
         {packedByType === 'forwarder' && (
           <div style={{ marginTop: 12 }}>
             <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Delegate packing to *</label>
-            <select value={forwarderUserId} onChange={e => setForwarderUserId(e.target.value ? Number(e.target.value) : '')}
+            <select value={forwarderUserId} onChange={e => {
+                // Fix 4: two-way sync — reflect the delegate back onto the SCN-details Forwarder.
+                const id = e.target.value ? Number(e.target.value) : ''
+                setForwarderUserId(id)
+                const f = forwarders.find(x => x.id === id)
+                if (f) setForwarder(f.company ? `${f.full_name} · ${f.company}` : f.full_name)
+              }}
               style={{ ...inputStyle, width: '100%', borderColor: forwarderUserId ? undefined : '#f59e0b' }}>
               <option value="">— Select a freight forwarder —</option>
               {forwarders.map(f => <option key={f.id} value={f.id}>{f.full_name}{f.company ? ` · ${f.company}` : ''}</option>)}
@@ -1242,7 +1290,8 @@ export const CreateSCNWizard: React.FC<Props> = ({
       .map((p, i) => ({ num: i + 1 }))
       .filter((_, i) => !containers[i].containerTypeId)
     const forwarderMissing = packedByType === 'forwarder' && !forwarderUserId
-    const hasBlock = allocIssues.length > 0 || untypedContainers.length > 0 || forwarderMissing
+    const dimIssues = dimViolations()   // Fix 3: package-exceeds-container dimension blocks
+    const hasBlock = allocIssues.length > 0 || untypedContainers.length > 0 || forwarderMissing || dimIssues.length > 0
 
     return (
       <div>
@@ -1261,6 +1310,9 @@ export const CreateSCNWizard: React.FC<Props> = ({
             )}
             {untypedContainers.map(({ num }) => (
               <div key={num} style={{ padding: '2px 0' }}>• Container {num} needs an ISO container type selected.</div>
+            ))}
+            {dimIssues.map(({ num, msg }) => (
+              <div key={`dim-${num}`} style={{ padding: '2px 0' }}>• Package {num} exceeds its container — {msg}</div>
             ))}
             {allocIssues.length > 0 && (
               <>
@@ -1441,6 +1493,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
                   requiresFullAllocation && !allFullyAllocated() ? 'Allocate every selected line fully into packages first'
                   : packedByType === 'forwarder' && !forwarderUserId ? 'Select the freight forwarder to delegate packing to'
                   : untypedContainerExists ? 'Select an ISO container type for each container'
+                  : dimViolations().length > 0 ? 'A package exceeds its container dimensions — use a flat rack / open top, or resize'
                   : undefined
                 }
                 style={{ ...greenBtn, opacity: canCreate ? 1 : 0.5, cursor: canCreate ? 'pointer' : 'not-allowed' }}

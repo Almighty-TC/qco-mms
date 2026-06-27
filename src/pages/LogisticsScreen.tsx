@@ -1409,7 +1409,12 @@ const PackageFormRow = ({ form, setForm, inputSt, col, sub, bd, dark, error, onS
     {/* B-fix: per-line contents allocation (packing list) for a leaf package. */}
     {showContents && (
       <div style={{ marginTop: 10, borderTop: '1px dashed rgba(148,163,184,0.4)', paddingTop: 10 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: col, marginBottom: 6 }}>Contents (packing list)</div>
+        {/* Fix 2: an itemized package is one physical box (qty locked to 1) — consistent with
+            the wizard. Bundle-of-N is a future redesign (docs/MAP_BUNDLE_QTY_REDESIGN). */}
+        <div style={{ fontSize: 11, fontWeight: 700, color: col, marginBottom: 6 }}>
+          Contents (packing list)
+          <span style={{ fontSize: 10, fontWeight: 400, color: sub, marginLeft: 6 }}>· one itemized box (qty 1)</span>
+        </div>
         {(scnLines as any[]).length === 0 && (
           <div style={{ fontSize: 11, color: sub, fontStyle: 'italic', marginBottom: 6 }}>No allocatable lines on this SCN.</div>
         )}
