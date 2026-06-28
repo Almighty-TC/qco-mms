@@ -1,6 +1,7 @@
 # QCO MMS — HANDOVER: NEXT SESSION
-# Updated: 26 June 2026
-# Last commit: 30b5b96 (feat(trace): 3b-4 receipting source-package capture + trace-back read) — feat/three-design-features, NOT pushed (Pass 3 complete; see open-item #13)
+# Updated: 28 June 2026
+# Last commit: e66883f (fix(scn): PO-fully-assigned banner + off-PO ROS single-line) — feat/three-design-features, PUSHED. All Pass-1/2/3 + walk-through fixes + forwarder doc/PoC carrier-auth DONE & pushed.
+# ▶▶ NEXT SESSION = CONSOLIDATION — see the "★ CONSOLIDATION RESUME MARKER" block below (deploy-all + fresh walk-through; QCO_admin rotation FIRST).
 # ⭐ THIS FILE IS THE SINGLE CANONICAL MODULE-STATUS DOC. HANDOVER.md and
 #    CLAUDE_CONTEXT.md point here for status (their own status tables are retired).
 # Read every word before doing anything.
@@ -83,7 +84,18 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
 ## ★ CURRENT STATUS & OPEN ITEMS (20 June 2026) — AUTHORITATIVE
 *(This section supersedes §3a/3b/3c/§4/§5/§6 below, which are point-in-time history.)*
 
-**State:** All Phase-1 modules are **built & live**. HEAD `8ea3eb1`. The app is functionally complete and walked; remaining work is targeted fixes/polish + the deliberately-deferred Phase-2 release gates (see TEST_READINESS.md).
+**State:** All Phase-1 modules are **built & live**. Branch `feat/three-design-features` HEAD `e66883f` (PUSHED). The app is functionally complete and walked; the three-design-features branch carries Pass-1/2/3 + a full walk-through fix sweep, all committed and pushed. Remaining work is the consolidation pass below + the deferred Phase-2 release gates (TEST_READINESS.md).
+
+---
+### ★ CONSOLIDATION RESUME MARKER — NEXT SESSION (do these IN ORDER) ★
+The feature work on `feat/three-design-features` is complete and pushed (last `e66883f`). Next session is a **consolidation / release-readiness pass**, not new features:
+1. **QCO_admin rotation — DELIBERATE FIRST TASK.** Rotate the Azure MySQL `QCO_admin` password before anything else (it has been used repeatedly for supply-and-remove migrations this cycle). Update the app's runtime creds + any CI/secret store. Do this FIRST so the rest of the session runs under the rotated credential. (Phase-2 gate #7 also lists this.)
+2. **Deploy everything + full FRESH walk-through.** Deploy the whole `feat/three-design-features` branch (frontend + API — note `d1133f4` is a backend authz change, no migration; all Pass-2/3 migrations are already applied to Azure but must travel WITH the code). Then walk EVERY module end-to-end with fresh eyes — especially the forwarder flows (packing, doc/PoC upload+delete), receipting source-package capture, multi-modal, and the SCN create wizard. Capture any deviation.
+3. **~12 residual test-SCN cleanup in ZZ project 27.** The ZZ demo project accumulated ~12 throwaway test SCNs during this cycle's adversarial/live proofs (header rows in the ~2212–2235 range, many with no packages/lines). Audit + delete the genuine test residue (keep canonical demo data). Admin DELETE — verify each before removing.
+4. **/status + /dates forwarder-ownership security fix** (open-item below, currently unfixed): `PUT /scn/:scnId/status` and `PUT /scn/:scnId/dates` don't verify SCN ownership — a forwarder who knows an SCN id can write to non-assigned SCNs. Apply the SAME predicate pattern now proven for docs (`forwarderIsCarrier`, URL-keyed) — the carrier predicate is already built + exported in `logistics.js`, so this is a small, well-templated fix. Adversarial cross-SCN proofs as usual.
+5. **Merge `feat/three-design-features` → `main`** (PR), once 1–4 are green and the walk-through is clean.
+---
+
 
 **Scope that grew beyond the original May spec (all built):**
 - **Reports** — curated library + ad-hoc builder + saved views; injection-safe whitelisted-dataset engine; double RBAC gate (`enforce('reports')` + per-dataset source-module `can_view`). Saved-views table migration still pending (admin creds) — route degrades gracefully.
@@ -141,6 +153,13 @@ cd ~/Desktop/qmat && claude --dangerously-skip-permissions
     - **⚠ DEPLOY:** the three Pass-3 migrations are applied on Azure but must travel WITH the Pass-3 code in any prod deploy (same gate logic as Q2 #9); app capability-detects all new columns and degrades gracefully (reads return NULL, writes default NULL).
 
 14. **✅ DONE — Multi-modal transport storage (Pass 2, Item 2) (`feat/three-design-features`).** Shape (a) was chosen and fully built this session — schema + create wiring + detail display, verified live + rolled-back proof. Commit `fcd43be`. Migration applied to Azure: `shipment_control_notes.mode` enum now includes `'multi'`; added `transport_modes` (constituent legs, e.g. `'sea,road'`) + `transport_mode_notes` (leg detail). The SCN wizard's Multi-modal UI (Sea/Air/Road/Rail/Courier checkboxes + leg-notes) now sends the legs; the create route persists `mode='multi'` + `transport_modes` + `transport_mode_notes`; SCN-detail displays the constituent modes + notes. Capability-detected (deploy-tolerant). **⚠ DEPLOY:** migration is on Azure but must travel WITH the code in any prod deploy (same gate logic as Q2 #9); app degrades gracefully if the column/enum value is absent.
+
+15. **✅ DONE — Walk-through fix sweep + forwarder doc/PoC carrier-auth (`feat/three-design-features`, all PUSHED, last `e66883f`).** The post-Pass-3 consolidation of bug fixes + the new external-role authorization. Supersedes the in-item "RESUME MARKER" notes under #12 (Forwarder-Delegated Packaging D1–D5 is COMPLETE — packing UI, contents persistence, mark-complete hard-block all done & proven).
+    - **Forwarder packing fixes** (`9efc027`): Create-button real disable-reason feedback (no false allocation banner for vendor/forwarder); forwarder packing **contents UI + `scn_package_lines` persistence** (mirrors the wizard); **mark-complete allocation hard-block** (every line fully packed; cross-SCN isolation intact). Backend + frontend; adversarial + live proofs.
+    - **Polish pass** (`1490993`): off-PO variation ROS **inherits** the parent line's ROS (editable); qty **lock-from-start** (itemized = 1 box, both wizard + forwarder form); **dimension-violation reason** surfaced in the Create banner; forwarder **inherit SCN-details→Packages** (no double-pick). + map `docs/MAP_BUNDLE_QTY_REDESIGN.local.md` (gitignored) for the deferred bundle-qty redesign (a package = N units, different contents per unit) — NOT built, ready to scope.
+    - **Forwarder doc + PoC authorization** (`d1133f4`) — NEW external-role auth, **backend + UI**: a `freight_forwarder` may **upload** docs + PoC on an SCN where `forwarder_user_id` = their id (the CARRIER relationship — DISTINCT from `packaging_delegated_to`), and **delete only their OWN uploads** on that carrier SCN (both carrier AND `uploaded_by`). `forwarderIsCarrier` + `forwarderMayDeleteDoc` predicates (URL-keyed, exported), `requireDocUploadAuth` / `requireDocDeleteAuth` middleware. Adversarial cross-SCN + body-spoof + own-vs-others proofs all green; live-verified (carrier forwarder sees upload/PoC + own-doc trash; non-carrier 403 + invisible). **⚠ DEPLOY:** backend authz change, **no migration** — API must redeploy with the frontend.
+    - **PO-fully-assigned banner + ROS single-line** (`e66883f`, frontend-only): green "✓ All line items fully assigned to SCNs" banner on the PO drawer when every line's assigned qty meets its total; off-PO variation row laid out on one line (ROS date no longer wraps/clips).
+    - **NEXT for this branch = the CONSOLIDATION pass** (see the ★ resume marker near the top of this section): rotate QCO_admin FIRST → deploy-all + fresh walk-through → ~12 ZZ-27 test-SCN cleanup → /status /dates ownership fix → merge to main.
 
 **Working discipline (in force — carry forward):**
 - **Single channel** — no parallel/spawned tasks.
