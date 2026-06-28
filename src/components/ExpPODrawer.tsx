@@ -286,6 +286,25 @@ export const ExpPODrawer: React.FC<Props> = ({
         <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
           {po && (
             <>
+              {/* FIX 2: PO-level "fully assigned" prompt — when EVERY line's assigned qty meets
+                  its total (computed from the same per-line qty_assigned the rows use). Read-only. */}
+              {(() => {
+                const lines = po.po_lines || []
+                const allAssigned = lines.length > 0 &&
+                  lines.every((l: any) => Number(l.qty_assigned || 0) >= Number(l.qty || 0))
+                return allAssigned ? (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16,
+                    padding: '9px 14px', borderRadius: 8,
+                    background: 'rgba(34,197,94,0.10)', border: '1px solid rgba(34,197,94,0.35)',
+                    color: '#16a34a', fontSize: 12, fontWeight: 600,
+                  }}>
+                    <span style={{ fontSize: 14 }}>✓</span>
+                    All line items fully assigned to SCNs
+                  </div>
+                ) : null
+              })()}
+
               {/* MILESTONES */}
               <div style={{ marginBottom: 20 }}>
                 <div style={{

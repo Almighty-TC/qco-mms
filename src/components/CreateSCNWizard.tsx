@@ -609,8 +609,9 @@ export const CreateSCNWizard: React.FC<Props> = ({
                 const noWbs = parent && !parentWbs
                 return (
                 <div key={i} style={{ marginTop: 8, borderTop: i ? '1px dashed #fde68a' : undefined, paddingTop: i ? 8 : 0 }}>
-                {/* Fix 1: flexWrap so the ROS date picker never clips off the modal's right edge. */}
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                {/* Fix 3: single row — compact field widths (and a shrinkable desc) keep every
+                    field, including the ROS date, on ONE line within the modal (no wrap). */}
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                   <select
                     value={item.parentLineId}
                     onChange={e => {
@@ -624,7 +625,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
                         ? { ...it, parentLineId: pid, ros: it.ros || inheritedRos } : it))
                     }}
                     title="Parent PO line (required)"
-                    style={{ ...inputStyle, width: 180, borderColor: item.parentLineId ? undefined : '#f59e0b' }}
+                    style={{ ...inputStyle, width: 150, borderColor: item.parentLineId ? undefined : '#f59e0b' }}
                   >
                     <option value="">— parent PO line (required) —</option>
                     {(po?.po_lines || []).map((l: any) => (
@@ -635,19 +636,19 @@ export const CreateSCNWizard: React.FC<Props> = ({
                     value={item.desc}
                     onChange={e => updateAdditional(i, 'desc', e.target.value)}
                     placeholder="Off-PO item (e.g. fridge door handle)"
-                    style={{ ...inputStyle, flex: 1 }}
+                    style={{ ...inputStyle, flex: 1, minWidth: 90 }}
                   />
                   <input
                     type="number"
                     value={item.qty}
                     onChange={e => updateAdditional(i, 'qty', e.target.value)}
-                    style={{ ...inputStyle, width: 70 }}
+                    style={{ ...inputStyle, width: 52 }}
                     min={1}
                   />
                   <select
                     value={item.uom}
                     onChange={e => updateAdditional(i, 'uom', e.target.value)}
-                    style={{ ...inputStyle, width: 80 }}
+                    style={{ ...inputStyle, width: 64 }}
                   >
                     {UOM_OPTIONS.map(u => <option key={u}>{u}</option>)}
                   </select>
@@ -657,7 +658,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
                     value={item.ros}
                     onChange={e => updateAdditional(i, 'ros', e.target.value)}
                     title="Required-on-site date — defaults from the parent line's ROS, editable"
-                    style={{ ...inputStyle, width: 140 }}
+                    style={{ ...inputStyle, width: 132, flexShrink: 0 }}
                   />
                   <button
                     onClick={() => removeAdditional(i)}
