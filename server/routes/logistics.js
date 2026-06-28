@@ -92,6 +92,34 @@ async function forwarderOwnsScnPackaging(req, conn = db) {
   return !!scn && isPackagingDelegate(scn.packaging_delegated_to, req.user.id)
 }
 
+// CARRIER ownership predicate — a forwarder is the assigned CARRIER for an SCN iff
+// shipment_control_notes.forwarder_user_id equals their user id. This is the CARRIER
+// relationship (who moves the freight), DISTINCT from packaging delegation
+// (packaging_delegated_to, used by the D2 package carve-out). Doc + PoC upload is CARRIER
+// authority; packing is DELEGATED authority — the two never share a key. scnId is passed by
+// the caller from the URL route param ONLY (never req.body); `conn` is injectable so the
+// adversarial proofs exercise THIS exact predicate with no drift.
+async function forwarderIsCarrier(conn, scnId, userId) {
+  if (!scnId) return false
+  const [[scn]] = await conn.query(
+    'SELECT forwarder_user_id FROM shipment_control_notes WHERE id = ?', [scnId])
+  return !!scn && scn.forwarder_user_id != null && scn.forwarder_user_id === userId
+}
+
+// DELETE-doc predicate — TIGHTER than upload because DELETE is destructive. A forwarder may
+// delete a document ONLY IF BOTH: (a) they are the SCN's assigned carrier (forwarderIsCarrier)
+// AND (b) THEY uploaded that document (scn_documents.uploaded_by = their id). The own-uploads
+// clause is the key difference from upload — a forwarder cannot delete an internal/vendor doc
+// even on their own carrier SCN. scnId + docId come from URL route params ONLY (never req.body);
+// `conn` is injectable so the adversarial proofs exercise THIS exact predicate with no drift.
+async function forwarderMayDeleteDoc(conn, scnId, docId, userId) {
+  if (!scnId || !docId) return false
+  if (!(await forwarderIsCarrier(conn, scnId, userId))) return false        // (a) carrier
+  const [[doc]] = await conn.query(
+    'SELECT uploaded_by FROM scn_documents WHERE id = ? AND scn_id = ?', [docId, scnId])
+  return !!doc && doc.uploaded_by != null && doc.uploaded_by === userId     // (b) own upload
+}
+
 // ─── HAND-BACK LIFECYCLE (D4) ─────────────────────────────────
 // Mark an SCN's delegated packaging complete. Pure unit (operates on the given conn) so
 // the route is a thin wrapper and the proofs exercise THIS exact logic in a rolled-back
@@ -163,6 +191,29 @@ function requireInternalLogistics(req, res, next) {
   const r = req.user?.role
   if (r === 'freight_forwarder') return res.status(403).json({ error: 'Freight forwarders cannot perform this action' })
   next()
+}
+
+// Doc + PoC upload authorization (FIX 1). Internal roles: unchanged (allowed as before). A
+// freight_forwarder: allowed ONLY on an SCN where they are the assigned CARRIER
+// (forwarder_user_id = their id) — the carrier predicate above. scnId comes from the URL
+// route param ONLY (req.params.scnId is URL-derived; req.body is never consulted), so a
+// forged body scnId cannot redirect the check. Replaces requireInternalLogistics on the
+// documents POST (the blunt "forwarders cannot" block).
+function requireDocUploadAuth(req, res, next) {
+  if (req.user?.role !== 'freight_forwarder') return next()   // internal roles unchanged
+  return forwarderIsCarrier(db, Number(req.params.scnId), req.user.id)
+    .then(ok => ok ? next() : res.status(403).json({ error: 'You are not the assigned forwarder for this SCN.' }))
+    .catch(e => { console.error('[doc-authz]', e.message); return res.status(500).json({ error: 'Authorization check failed' }) })
+}
+
+// Doc DELETE authorization (FIX 1 cont.). Internal roles: unchanged (may delete any doc). A
+// freight_forwarder: own-uploads-only on their carrier SCN — forwarderMayDeleteDoc enforces
+// BOTH carrier + own-upload. scnId + docId come from URL route params ONLY, never req.body.
+function requireDocDeleteAuth(req, res, next) {
+  if (req.user?.role !== 'freight_forwarder') return next()   // internal roles unchanged
+  return forwarderMayDeleteDoc(db, Number(req.params.scnId), Number(req.params.docId), req.user.id)
+    .then(ok => ok ? next() : res.status(403).json({ error: 'You can only delete your own uploads on your assigned SCNs.' }))
+    .catch(e => { console.error('[doc-del-authz]', e.message); return res.status(500).json({ error: 'Authorization check failed' }) })
 }
 
 // ─── STATUS HELPERS ───────────────────────────────────────────
@@ -1098,7 +1149,7 @@ async function scnDocLinkColsLive() {
 }
 
 // POST /api/logistics/scn/:scnId/documents
-router.post('/scn/:scnId/documents', requireInternalLogistics, upload.single('file'), async (req, res) => {
+router.post('/scn/:scnId/documents', requireDocUploadAuth, upload.single('file'), async (req, res) => {
   try {
     const scnId = Number(req.params.scnId)
     const { document_type, notes, package_id, heat_id } = req.body
@@ -1135,7 +1186,7 @@ router.post('/scn/:scnId/documents', requireInternalLogistics, upload.single('fi
 })
 
 // DELETE /api/logistics/scn/:scnId/documents/:docId
-router.delete('/scn/:scnId/documents/:docId', async (req, res) => {
+router.delete('/scn/:scnId/documents/:docId', requireDocDeleteAuth, async (req, res) => {
   try {
     const { scnId, docId } = req.params
     const [[doc]] = await db.query(
@@ -1168,3 +1219,5 @@ module.exports = router
 module.exports.forwarderOwnsScnPackaging = forwarderOwnsScnPackaging
 module.exports.completePackaging = completePackaging          // D4 hand-back
 module.exports.isPackagingDelegate = isPackagingDelegate      // shared predicate
+module.exports.forwarderIsCarrier = forwarderIsCarrier        // FIX 1: doc/PoC carrier authz
+module.exports.forwarderMayDeleteDoc = forwarderMayDeleteDoc  // FIX 1: doc-delete own-uploads-only

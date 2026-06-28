@@ -101,7 +101,7 @@ interface PkgContentView { scn_line_id: number; qty: number | string; uom?: stri
 interface ScnLineAlloc { id: number; po_line_id?: number | null; additional_item_id?: number | null; qty: number | string; uom?: string | null; line_number?: string | null; po_description?: string | null; ai_description?: string | null; packed_qty: number | string }
 interface Doc {
   id: number; document_type: string; file_name?: string | null; notes?: string | null
-  uploaded_by_name?: string | null; uploaded_at: string
+  uploaded_by_name?: string | null; uploaded_by?: number | null; uploaded_at: string   // uploaded_by id → own-uploads-only delete
   package_id?: number | null; heat_id?: number | null   // 3a: optional links
 }
 interface ScnHeat { id: number; heat_number: string; material_grade?: string | null; mill_cert_ref?: string | null; package_id?: number | null }   // 3a
@@ -1491,6 +1491,14 @@ const DocumentsTab = ({ dark, scn, onRefresh, addToast }: {
   const [docHeatId, setDocHeatId] = useState<number | ''>('')
   const isMTC = docType === 'Mill Test Certificate'
 
+  // FIX 1: mirror the backend authz. Internal roles upload/delete as before; a forwarder may
+  // upload only on their CARRIER SCN (forwarder_user_id === their id), and delete only their
+  // OWN uploads on that SCN. Others (subcontractor/vendor) see no write controls.
+  const { isForwarder, isExternalUser, user } = useCurrentUser()
+  const isCarrier = !!user && scn.forwarder_user_id != null && scn.forwarder_user_id === user.id
+  const canUpload = !isExternalUser || (isForwarder && isCarrier)
+  const canDeleteDoc = (d: Doc) => !isExternalUser || (isForwarder && isCarrier && d.uploaded_by === user?.id)
+
   const uploadDoc = async () => {
     if (!file) return setUploadError('Please select a file')
     setUploading(true); setUploadError('')
@@ -1522,10 +1530,12 @@ const DocumentsTab = ({ dark, scn, onRefresh, addToast }: {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <span style={{ fontSize: 13, fontWeight: 600, color: col }}>{scn.documents?.length || 0} documents</span>
-        <button onClick={() => setShowUpload(true)}
-          style={{ padding: '5px 14px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
-          + Upload Document
-        </button>
+        {canUpload && (
+          <button onClick={() => setShowUpload(true)}
+            style={{ padding: '5px 14px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+            + Upload Document
+          </button>
+        )}
       </div>
 
       {showUpload && (
@@ -1600,7 +1610,9 @@ const DocumentsTab = ({ dark, scn, onRefresh, addToast }: {
                 <td style={{ padding: '7px 10px', color: sub, whiteSpace: 'nowrap' }}>{fmtFull(d.uploaded_at)}</td>
                 <td style={{ padding: '7px 10px', color: sub }}>{d.notes || '—'}</td>
                 <td style={{ padding: '7px 10px' }}>
-                  <button onClick={() => deleteDoc(d.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 14 }}>🗑</button>
+                  {canDeleteDoc(d)
+                    ? <button onClick={() => deleteDoc(d.id)} title="Delete" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 14 }}>🗑</button>
+                    : <span style={{ color: sub }}>—</span>}
                 </td>
               </tr>
             ))}
@@ -1626,7 +1638,12 @@ const PocTab = ({ dark, scn, projectId, onRefresh, addToast }: {
   const bd  = `1px solid ${dark ? '#334155' : '#dde3ed'}`
   const sub = '#94a3b8'
   const theadBg = dark ? '#162032' : '#f8fafc'
-  const { isExternalUser } = useCurrentUser()
+  // FIX 1: carrier forwarders may upload PoC on their SCN (and delete only their OWN PoC);
+  // internal unchanged. Other external users keep read/download only.
+  const { isExternalUser, isForwarder, user } = useCurrentUser()
+  const isCarrier = !!user && scn.forwarder_user_id != null && scn.forwarder_user_id === user.id
+  const canUpload = !isExternalUser || (isForwarder && isCarrier)
+  const canDeletePoc = (d: Doc) => !isExternalUser || (isForwarder && isCarrier && d.uploaded_by === user?.id)
 
   const [file, setFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -1685,8 +1702,8 @@ const PocTab = ({ dark, scn, projectId, onRefresh, addToast }: {
         </button>
       </div>
 
-      {/* Upload the signed copy — internal only */}
-      {!isExternalUser && (
+      {/* Upload the signed copy — internal roles + the assigned carrier forwarder */}
+      {canUpload && (
         <div style={{ background: dark ? '#162032' : '#f0f9ff', border: `1px solid rgba(37,99,235,0.3)`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: col, marginBottom: 10 }}>2 · Upload the signed copy</div>
           <input type="file" onChange={e => setFile(e.target.files?.[0] || null)} style={{ fontSize: 12, color: col, display: 'block', marginBottom: 10 }} />
@@ -1725,7 +1742,7 @@ const PocTab = ({ dark, scn, projectId, onRefresh, addToast }: {
                 <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
                   <button onClick={() => downloadDoc(d.id, d.file_name)} title="Download"
                     style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 14, marginRight: 6 }}>⬇</button>
-                  {!isExternalUser && (
+                  {canDeletePoc(d) && (
                     <button onClick={() => deleteDoc(d.id)} title="Delete"
                       style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 14 }}>🗑</button>
                   )}
