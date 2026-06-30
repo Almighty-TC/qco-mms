@@ -1613,7 +1613,7 @@ const DocumentsTab = ({ dark, scn, projectId, onRefresh, addToast }: {
                 <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
                   {/* Authed Download + View (blob-aware dual-read resolver). Never window.open(apiURL). */}
                   {d.file_name && (() => { const url = `${API}/documents/${projectId}/download/logistics:${d.id}`; return (<>
-                    <button onClick={() => viewFile(url).catch(() => addToast('error', 'Failed to open document'))} title="View"
+                    <button onClick={() => viewFile(url, d.file_name || undefined).catch(() => addToast('error', 'Failed to open document'))} title="View"
                       style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 14, marginRight: 8 }}>👁</button>
                     <button onClick={() => downloadFile(url, d.file_name || undefined).catch(() => addToast('error', 'Failed to download document'))} title="Download"
                       style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#16a34a', fontSize: 14, marginRight: 8 }}>↓</button>
@@ -1749,7 +1749,7 @@ const PocTab = ({ dark, scn, projectId, onRefresh, addToast }: {
                 <td style={{ padding: '7px 10px', color: sub, whiteSpace: 'nowrap' }}>{fmtFull(d.uploaded_at)}</td>
                 <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
                   {/* Consistency: in-browser View alongside the existing Download (both authed). */}
-                  <button onClick={() => viewFile(`${API}/documents/${projectId}/download/logistics:${d.id}`).catch(() => addToast('error', 'Failed to open document'))} title="View"
+                  <button onClick={() => viewFile(`${API}/documents/${projectId}/download/logistics:${d.id}`, d.file_name || undefined).catch(() => addToast('error', 'Failed to open document'))} title="View"
                     style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 14, marginRight: 8 }}>👁</button>
                   <button onClick={() => downloadDoc(d.id, d.file_name)} title="Download"
                     style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#16a34a', fontSize: 14, marginRight: 8 }}>↓</button>

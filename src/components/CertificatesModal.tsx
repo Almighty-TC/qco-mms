@@ -133,7 +133,7 @@ const CertRow = ({ cert, dark, onDelete }: { cert: CertEntry; dark: boolean; onD
   const fileUrl = `${API}/foundational/${cert.project_id}/certificates/${cert.id}/download`
   const niceName = (cert.filename || 'certificate').replace(/^.*\//, '').replace(/^\d+-/, '')
   const download = () => { downloadFile(fileUrl, niceName).catch(() => alert('Failed to download certificate')) }
-  const view = () => { viewFile(fileUrl).catch(() => alert('Failed to open certificate')) }
+  const view = () => { viewFile(fileUrl, niceName).catch(() => alert('Failed to open certificate')) }
 
   const doDelete = async () => {
     if (!confirm('Delete this certificate?')) return

@@ -177,7 +177,7 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
             <div style={{ display: 'flex', gap: 6 }}>
               <button title="Details" onClick={() => setPreview(r)} style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>ⓘ</button>
               {r.downloadable && (
-                <button title={`View ${r.file_name || r.file_label}`} onClick={() => viewFile(`${API}/documents/${projectId}/download/${encodeURIComponent(r.doc_id)}`).catch(() => addToast('error', 'Failed to open document'))} style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 11 }}>👁 View</button>
+                <button title={`View ${r.file_name || r.file_label}`} onClick={() => viewFile(`${API}/documents/${projectId}/download/${encodeURIComponent(r.doc_id)}`, r.file_name || r.file_label).catch(() => addToast('error', 'Failed to open document'))} style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 11 }}>👁 View</button>
               )}
               {r.downloadable ? (
                 <button title={`Download ${r.file_name || r.file_label}`} onClick={() => download(r)} style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: '#16a34a', cursor: 'pointer', fontSize: 11 }}>↓ Download</button>
