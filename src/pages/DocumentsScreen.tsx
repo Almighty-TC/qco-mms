@@ -14,6 +14,7 @@ import { HelpButton } from '../components/HelpDrawer'
 import { DOCUMENT_INBOX_HELP } from '../helpContent'
 
 import { API } from '../lib/api'
+import { viewFile } from '../lib/fileAccess'   // authed in-browser View (real file, not the mock preview)
 import { StatusLegend } from '../components/StatusLegend'
 
 type GroupBy = 'none' | 'module' | 'source' | 'type' | 'uploader'
@@ -174,7 +175,10 @@ const DocumentsInner = ({ dark, projectId, projectName, onBack }: {
             <button onClick={() => setShowUpload(true)} style={{ padding: '4px 10px', borderRadius: 5, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>↑ Upload</button>
           ) : (
             <div style={{ display: 'flex', gap: 6 }}>
-              <button title="Preview" onClick={() => setPreview(r)} style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>👁</button>
+              <button title="Details" onClick={() => setPreview(r)} style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11 }}>ⓘ</button>
+              {r.downloadable && (
+                <button title={`View ${r.file_name || r.file_label}`} onClick={() => viewFile(`${API}/documents/${projectId}/download/${encodeURIComponent(r.doc_id)}`).catch(() => addToast('error', 'Failed to open document'))} style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 11 }}>👁 View</button>
+              )}
               {r.downloadable ? (
                 <button title={`Download ${r.file_name || r.file_label}`} onClick={() => download(r)} style={{ padding: '4px 8px', borderRadius: 5, border: bd, background: 'none', color: '#16a34a', cursor: 'pointer', fontSize: 11 }}>↓ Download</button>
               ) : (

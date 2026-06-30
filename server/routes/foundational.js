@@ -1059,6 +1059,29 @@ router.delete('/:projectId/equipment/:id', async (req, res) => {
 // CERTIFICATES ENDPOINTS (shared by commodity + equipment)
 // ═══════════════════════════════════════════════════════════════
 
+// GET /api/foundational/:projectId/certificates/:id/download
+// ⚠ MUST be registered BEFORE the /:entityType/:entityId route below — otherwise that
+// generic route shadows this one ('209/download' → entityId='download' → NaN → 500). Express
+// matches in registration order, so the literal-'download' route has to come first.
+router.get('/:projectId/certificates/:id/download', async (req, res) => {
+  try {
+    const [[cert]] = await db.query('SELECT * FROM foundational_certificates WHERE id=?', [Number(req.params.id)])
+    if (!cert?.filename) return res.status(404).json({ error: 'File not found' })
+    const niceName = path.basename(cert.filename).replace(/^\d+-/, '')
+    // DUAL-READ FALLBACK (blob migration): blob first, then existing disk read.
+    const blobStream = await blobStore.getFile(blobStore.keyFor('foundational', cert.filename))
+    if (blobStream) {
+      res.setHeader('Content-Disposition', `attachment; filename="${niceName.replace(/[\r\n"]/g, '')}"`)
+      return blobStream.pipe(res)
+    }
+    const fp = path.join(__dirname, '../uploads/certificates', cert.filename)
+    if (!fs.existsSync(fp)) return res.status(404).json({ error: 'File not on disk' })
+    res.download(fp, niceName)
+  } catch (e) {
+    dbError(res, e)
+  }
+})
+
 // GET /api/foundational/:projectId/certificates/:entityType/:entityId
 router.get('/:projectId/certificates/:entityType/:entityId', async (req, res) => {
   try {
@@ -1145,25 +1168,6 @@ router.delete('/:projectId/certificates/:id', certGate, async (req, res) => {
 })
 
 // GET /api/foundational/:projectId/certificates/:id/download
-router.get('/:projectId/certificates/:id/download', async (req, res) => {
-  try {
-    const [[cert]] = await db.query('SELECT * FROM foundational_certificates WHERE id=?', [Number(req.params.id)])
-    if (!cert?.filename) return res.status(404).json({ error: 'File not found' })
-    const niceName = path.basename(cert.filename).replace(/^\d+-/, '')
-    // DUAL-READ FALLBACK (blob migration): blob first, then existing disk read.
-    const blobStream = await blobStore.getFile(blobStore.keyFor('foundational', cert.filename))
-    if (blobStream) {
-      res.setHeader('Content-Disposition', `attachment; filename="${niceName.replace(/[\r\n"]/g, '')}"`)
-      return blobStream.pipe(res)
-    }
-    const fp = path.join(__dirname, '../uploads/certificates', cert.filename)
-    if (!fs.existsSync(fp)) return res.status(404).json({ error: 'File not on disk' })
-    res.download(fp, niceName)
-  } catch (e) {
-    dbError(res, e)
-  }
-})
-
 // ═══════════════════════════════════════════════════════════════
 // COMMODITY VALIDATE + IMPORT
 // ═══════════════════════════════════════════════════════════════

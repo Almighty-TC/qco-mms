@@ -26,6 +26,7 @@ import { usePagedList } from '../hooks/usePagedList'
 
 // ─── API BASE ────────────────────────────────────────────────────────────────
 import { API } from '../lib/api'
+import { downloadFile, viewFile } from '../lib/fileAccess'   // authed Download/View of the stored revision file
 
 // ─── TYPES ───────────────────────────────────────────────────────────────────
 interface MTORegister {
@@ -576,7 +577,7 @@ const VersionHistoryTab = ({
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
           <tr>
-            {['Revision','Uploaded By','Date','Notes','Lines'].map((h, i) => <th key={i} style={thS}>{h}</th>)}
+            {['Revision','Uploaded By','Date','Notes','Lines','File'].map((h, i) => <th key={i} style={thS}>{h}</th>)}
           </tr>
         </thead>
         <tbody>
@@ -594,6 +595,14 @@ const VersionHistoryTab = ({
                 <td style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }}>{fmtDate(r.created_at)}</td>
                 <td style={{ ...tdS, color: sub }}>{r.notes ?? '—'}</td>
                 <td style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace' }}>{r.line_count}</td>
+                {/* Authed View/Download of the stored revision file via the blob-aware unified
+                    resolver (mto:<revisionId>). Toasts gracefully if a revision has no file. */}
+                <td style={{ ...tdS, whiteSpace: 'nowrap' }}>
+                  <button title="View" onClick={() => viewFile(`${API}/documents/${projectId}/download/mto:${r.id}`).catch(() => addToast('error', 'No file stored for this revision'))}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 13, marginRight: 8 }}>👁</button>
+                  <button title="Download" onClick={() => downloadFile(`${API}/documents/${projectId}/download/mto:${r.id}`).catch(() => addToast('error', 'No file stored for this revision'))}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#16a34a', fontSize: 13 }}>↓</button>
+                </td>
               </tr>
             )
           })}

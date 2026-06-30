@@ -6,6 +6,7 @@ import { createPortal } from 'react-dom'
 import axios from 'axios'
 
 import { API } from '../lib/api'
+import { downloadFile, viewFile } from '../lib/fileAccess'   // authed Download/View (replaces window.open 401)
 
 // ─── TYPES ──────────────────────────────────────────────────
 export interface CertEntry {
@@ -128,9 +129,11 @@ const CertRow = ({ cert, dark, onDelete }: { cert: CertEntry; dark: boolean; onD
   const col = dark ? '#f1f5f9' : '#0f172a'
   const { bg, text } = STATUS_STYLES[cert.status] ?? STATUS_STYLES['Pending QA']
 
-  const download = () => {
-    window.open(`${API}/foundational/${cert.project_id}/certificates/${cert.id}/download`, '_blank')
-  }
+  // Authed Download + View (was window.open(apiURL) → 401; the route is JWT-gated).
+  const fileUrl = `${API}/foundational/${cert.project_id}/certificates/${cert.id}/download`
+  const niceName = (cert.filename || 'certificate').replace(/^.*\//, '').replace(/^\d+-/, '')
+  const download = () => { downloadFile(fileUrl, niceName).catch(() => alert('Failed to download certificate')) }
+  const view = () => { viewFile(fileUrl).catch(() => alert('Failed to open certificate')) }
 
   const doDelete = async () => {
     if (!confirm('Delete this certificate?')) return
@@ -158,9 +161,10 @@ const CertRow = ({ cert, dark, onDelete }: { cert: CertEntry; dark: boolean; onD
         </div>
       </div>
       <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-        {cert.filename && (
-          <button onClick={download} title="Download" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 12, padding: '2px 6px', borderRadius: 4, fontFamily: 'inherit' }}>↓</button>
-        )}
+        {cert.filename && (<>
+          <button onClick={view} title="View" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 12, padding: '2px 6px', borderRadius: 4, fontFamily: 'inherit' }}>👁</button>
+          <button onClick={download} title="Download" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#16a34a', fontSize: 12, padding: '2px 6px', borderRadius: 4, fontFamily: 'inherit' }}>↓</button>
+        </>)}
         <button onClick={doDelete} disabled={deleting} title="Delete" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 12, padding: '2px 6px', borderRadius: 4, fontFamily: 'inherit', opacity: deleting ? 0.5 : 1 }}>×</button>
       </div>
     </div>

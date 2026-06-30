@@ -18,6 +18,7 @@ const POL_W   = [60, 240, 70, 60, 90, 90, 100, 110, 100, 100, 100, 110, 60]
 const POL_MIN = [50, 120, 50, 50, 70, 70, 80, 80, 70, 80, 80, 80, 50]
 
 import { API } from '../lib/api'
+import { viewFile } from '../lib/fileAccess'   // authed in-browser View (consistency)
 import { StatusLegend } from '../components/StatusLegend'
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
@@ -788,6 +789,7 @@ const DocumentsTab = ({ po, dark }: { po: PO; dark: boolean }) => {
               <span style={{ flex: 1, fontSize: 13, color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={doc.file_name}>{doc.file_name}</span>
               <span style={{ fontSize: 11, color: '#94a3b8', whiteSpace: 'nowrap' }}>v{doc.version} · {formatBytes(doc.file_size_bytes)} · {doc.uploaded_by_name}</span>
               <span style={{ fontSize: 11, color: '#94a3b8', whiteSpace: 'nowrap' }}>{fmtDate(doc.uploaded_at)}</span>
+              <button onClick={() => viewFile(`${API}/procurement/pos/${po.id}/documents/${doc.id}/download`).catch(() => addToast('error', 'Failed to open document'))} style={{ padding: '4px 10px', borderRadius: 5, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: col, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>👁 View</button>
               <button onClick={() => download(doc)} style={{ padding: '4px 10px', borderRadius: 5, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: col, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>↓ Download</button>
               {doc.is_current ? <span style={{ fontSize: 10, fontWeight: 700, color: '#15803d' }}>CURRENT</span> : <span style={{ fontSize: 10, color: '#94a3b8' }}>v{doc.version}</span>}
             </div>

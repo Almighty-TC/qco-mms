@@ -13,6 +13,7 @@ import { ScopeBanner } from '../components/ScopeBanner'
 import { Pager } from '../components/Pager'
 import { useResizableTable, ResetColumnsButton } from '../components/colResize'
 import { HelpButton } from '../components/HelpDrawer'
+import { downloadFile, viewFile } from '../lib/fileAccess'   // authed Download/View (blob-aware)
 import { LOGISTICS_HELP } from '../helpContent'
 
 // Resizable column defaults — SCN register (13 cols), seeded from the prior fixed widths.
@@ -645,7 +646,7 @@ export const SCNDetailModal = ({ dark, scn, onClose, onRefresh, addToast, projec
         <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
           {tab === 'overview' && <OverviewTab dark={dark} scn={scn} onRefresh={onRefresh} addToast={addToast} />}
           {tab === 'packages' && <PackagesTab dark={dark} scn={scn} onRefresh={onRefresh} addToast={addToast} readOnly={readOnlyManagement} />}
-          {tab === 'documents' && <DocumentsTab dark={dark} scn={scn} onRefresh={onRefresh} addToast={addToast} />}
+          {tab === 'documents' && <DocumentsTab dark={dark} scn={scn} projectId={projectId} onRefresh={onRefresh} addToast={addToast} />}
           {tab === 'timeline' && <TimelineTab dark={dark} scn={scn} />}
           {tab === 'poc' && <PocTab dark={dark} scn={scn} projectId={projectId} onRefresh={onRefresh} addToast={addToast} />}
         </div>
@@ -1467,8 +1468,8 @@ const PackageFormRow = ({ form, setForm, inputSt, col, sub, bd, dark, error, onS
 // ─── DOCUMENTS TAB ───────────────────────────────────────────
 const DOC_TYPES = ['Commercial Invoice','Packing List','Bill of Lading','Airway Bill','Certificate of Origin','Insurance Certificate','Dangerous Goods Declaration','Customs Entry','Mill Test Certificate','Other']
 
-const DocumentsTab = ({ dark, scn, onRefresh, addToast }: {
-  dark: boolean; scn: SCNDetail; onRefresh: () => void
+const DocumentsTab = ({ dark, scn, projectId, onRefresh, addToast }: {
+  dark: boolean; scn: SCNDetail; projectId: number; onRefresh: () => void
   addToast: (t: 'success'|'error', m: string) => void
 }) => {
   const col = dark ? '#f1f5f9' : '#0f172a'
@@ -1609,10 +1610,17 @@ const DocumentsTab = ({ dark, scn, onRefresh, addToast }: {
                 <td style={{ padding: '7px 10px', color: sub }}>{d.uploaded_by_name || '—'}</td>
                 <td style={{ padding: '7px 10px', color: sub, whiteSpace: 'nowrap' }}>{fmtFull(d.uploaded_at)}</td>
                 <td style={{ padding: '7px 10px', color: sub }}>{d.notes || '—'}</td>
-                <td style={{ padding: '7px 10px' }}>
+                <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
+                  {/* Authed Download + View (blob-aware dual-read resolver). Never window.open(apiURL). */}
+                  {d.file_name && (() => { const url = `${API}/documents/${projectId}/download/logistics:${d.id}`; return (<>
+                    <button onClick={() => viewFile(url).catch(() => addToast('error', 'Failed to open document'))} title="View"
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 14, marginRight: 8 }}>👁</button>
+                    <button onClick={() => downloadFile(url, d.file_name || undefined).catch(() => addToast('error', 'Failed to download document'))} title="Download"
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#16a34a', fontSize: 14, marginRight: 8 }}>↓</button>
+                  </>) })()}
                   {canDeleteDoc(d)
                     ? <button onClick={() => deleteDoc(d.id)} title="Delete" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 14 }}>🗑</button>
-                    : <span style={{ color: sub }}>—</span>}
+                    : (!d.file_name && <span style={{ color: sub }}>—</span>)}
                 </td>
               </tr>
             ))}
@@ -1740,8 +1748,11 @@ const PocTab = ({ dark, scn, projectId, onRefresh, addToast }: {
                 <td style={{ padding: '7px 10px', color: sub }}>{d.uploaded_by_name || '—'}</td>
                 <td style={{ padding: '7px 10px', color: sub, whiteSpace: 'nowrap' }}>{fmtFull(d.uploaded_at)}</td>
                 <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
+                  {/* Consistency: in-browser View alongside the existing Download (both authed). */}
+                  <button onClick={() => viewFile(`${API}/documents/${projectId}/download/logistics:${d.id}`).catch(() => addToast('error', 'Failed to open document'))} title="View"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 14, marginRight: 8 }}>👁</button>
                   <button onClick={() => downloadDoc(d.id, d.file_name)} title="Download"
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 14, marginRight: 6 }}>⬇</button>
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#16a34a', fontSize: 14, marginRight: 8 }}>↓</button>
                   {canDeletePoc(d) && (
                     <button onClick={() => deleteDoc(d.id)} title="Delete"
                       style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 14 }}>🗑</button>
