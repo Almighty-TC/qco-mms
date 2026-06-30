@@ -21,11 +21,9 @@ const upLoc = s => { const v = (s ?? '').trim().toUpperCase(); return v || null 
 const pocDir = path.join(__dirname, '../uploads/fmr-poc')
 fs.mkdirSync(pocDir, { recursive: true })
 const { fileFilter } = require('../utils/upload')
+const blobStore = require('../lib/blobStore')   // blob migration: memoryStorage → blobStore.persist
 const pocUpload = multer({
-  storage: multer.diskStorage({
-    destination: (_q, _f, cb) => cb(null, pocDir),
-    filename: (_q, file, cb) => cb(null, `poc_${Date.now()}_${Math.round(Math.random() * 1e6)}${path.extname(file.originalname) || ''}`),
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: fileFilter('image'),
 })
@@ -1501,12 +1499,18 @@ router.post('/:projectId/fmr/pickup/:pickupId/signature', pocUpload.single('file
     const pickupId = Number(req.params.pickupId)
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
     const [[pk]] = await db.query('SELECT id FROM fmr_pickups WHERE id=?', [pickupId])
-    if (!pk) { fs.unlink(req.file.path, () => {}); return res.status(404).json({ error: 'Pickup not found' }) }
+    if (!pk) { return res.status(404).json({ error: 'Pickup not found' }) }   // memoryStorage: nothing on disk to clean up
+    // Blob migration: persist to blob (key) or disk (legacy BARE filename — unchanged).
+    const storedName = `poc_${Date.now()}_${Math.round(Math.random() * 1e6)}${path.extname(req.file.originalname) || ''}`
+    const { value: sigValue } = await blobStore.persist({
+      key: blobStore.keyFor('fmr-poc', storedName),
+      diskAbsPath: path.join(pocDir, storedName), buffer: req.file.buffer, contentType: req.file.mimetype,
+      diskValue: storedName,   // legacy shape = bare filename
+    })
     await db.query('UPDATE fmr_pickups SET signature_file=?, signature_mime=? WHERE id=?',
-      [path.basename(req.file.path), req.file.mimetype, pickupId])
-    res.json({ success: true, signature_file: path.basename(req.file.path) })
+      [sigValue, req.file.mimetype, pickupId])
+    res.json({ success: true, signature_file: sigValue })
   } catch (e) {
-    if (req.file) fs.unlink(req.file.path, () => {})
     console.error('[mc:fmr-poc-upload]', e.message)
     dbError(res, e)
   }
@@ -1517,6 +1521,12 @@ router.get('/:projectId/fmr/pickup/:pickupId/signature', async (req, res) => {
   try {
     const [[pk]] = await db.query('SELECT signature_file, signature_mime FROM fmr_pickups WHERE id=?', [Number(req.params.pickupId)])
     if (!pk || !pk.signature_file) return res.status(404).json({ error: 'No signature on file' })
+    // DUAL-READ FALLBACK (blob migration): blob first, then existing disk read.
+    const blobStream = await blobStore.getFile(blobStore.keyFor('fmr-poc', pk.signature_file))
+    if (blobStream) {
+      if (pk.signature_mime) res.type(pk.signature_mime)
+      return blobStream.pipe(res)
+    }
     const fp = path.join(pocDir, pk.signature_file)
     if (!fs.existsSync(fp)) return res.status(404).json({ error: 'File missing' })
     if (pk.signature_mime) res.type(pk.signature_mime)

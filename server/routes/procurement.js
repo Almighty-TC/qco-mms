@@ -62,23 +62,14 @@ const multer  = require('multer')
 const uploadDir = path.join(__dirname, '..', 'uploads', 'po_documents')
 fs.mkdirSync(uploadDir, { recursive: true })
 
-const poDocStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const dir = path.join(uploadDir, String(req.params.id || 'tmp'))
-    fs.mkdirSync(dir, { recursive: true })
-    cb(null, dir)
-  },
-  filename: (req, file, cb) => {
-    // Prefix with timestamp to avoid collisions
-    const ts   = Date.now()
-    const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')
-    cb(null, `${ts}_${safe}`)
-  },
-})
+// Blob migration: memoryStorage (buffer) → blobStore.persist in the handler (which keeps
+// the per-poId subdir + timestamped-name shape for the disk-fallback path). No disk file is
+// written until AFTER the role + PO-exists checks, so rejections need no file cleanup.
+const blobStore = require('../lib/blobStore')
 const { fileFilter } = require('../utils/upload')
 const { fileNotEmpty } = require('../utils/validate')
 const uploadPoDoc = multer({
-  storage: poDocStorage,
+  storage: multer.memoryStorage(),
   limits:  { fileSize: 50 * 1024 * 1024 },   // 50 MB
   fileFilter: fileFilter('document'),
 })
@@ -956,15 +947,14 @@ router.patch('/pos/:id/reject', async (req, res) => {
 router.post('/pos/:id/documents', uploadPoDoc.single('file'), async (req, res) => {
   try {
     const id = Number(req.params.id)
+    // memoryStorage: no disk file exists yet on these rejection paths — nothing to clean up.
     if (!DOC_UPLOAD_ROLES.has(req.user.role)) {
-      if (req.file) fs.unlinkSync(req.file.path)
       return res.status(403).json({ error: 'Your role cannot upload PO documents' })
     }
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
 
     const [[po]] = await db.query('SELECT id, po_number FROM purchase_orders WHERE id=?', [id])
     if (!po) {
-      fs.unlinkSync(req.file.path)
       return res.status(404).json({ error: 'PO not found' })
     }
 
@@ -981,11 +971,15 @@ router.post('/pos/:id/documents', uploadPoDoc.single('file'), async (req, res) =
       [id]
     )
 
-    // Insert new document record
-    const relativePath = path.relative(
-      path.join(__dirname, '..'),
-      req.file.path
-    )
+    // Blob migration: persist to blob (key) or disk (legacy relative shape under the per-poId
+    // subdir). storedName + diskAbsPath replicate the old diskStorage destination/filename.
+    const storedName = `${Date.now()}_${req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+    const diskAbsPath = path.join(uploadDir, String(id), storedName)
+    const { value: relativePath } = await blobStore.persist({
+      key: blobStore.keyFor('procurement', storedName),   // module key matches documents.js RESOLVERS
+      diskAbsPath, buffer: req.file.buffer, contentType: req.file.mimetype,
+      diskValue: path.relative(path.join(__dirname, '..'), diskAbsPath),
+    })
     await db.query(`
       INSERT INTO po_documents
         (po_id, doc_type, file_name, file_path, file_size_bytes, mime_type,
@@ -1016,6 +1010,16 @@ router.get('/pos/:id/documents/:docId/download', async (req, res) => {
       [docId, poId]
     )
     if (!doc) return res.status(404).json({ error: 'Document not found' })
+
+    // DUAL-READ FALLBACK (blob migration): blob first, then existing disk read.
+    const blobStream = await blobStore.getFile(blobStore.keyFor('procurement', doc.file_path))
+    if (blobStream) {
+      audit(req, 'signed_po_downloaded', `purchase_orders/${poId}/documents/${docId}`,
+        null, { file: doc.file_name, version: doc.version })
+      res.setHeader('Content-Disposition', `attachment; filename="${doc.file_name}"`)
+      res.setHeader('Content-Type', doc.mime_type)
+      return blobStream.pipe(res)
+    }
 
     // Resolve absolute path — never expose file_path in response
     const absPath = path.join(__dirname, '..', doc.file_path)

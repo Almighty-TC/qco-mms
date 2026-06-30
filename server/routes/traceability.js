@@ -20,15 +20,9 @@ router.param('projectId', require('../middleware/permissions').requireProjectSco
 // Cert files land in uploads/traceability. 25 MB cap matches the
 // foundational cert uploader.
 const uploadDir = path.join(__dirname, '../uploads/traceability')
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => {
-    fs.mkdirSync(uploadDir, { recursive: true })
-    cb(null, uploadDir)
-  },
-  filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9.\-]+/g, '_')}`),
-})
+const blobStore = require('../lib/blobStore')   // blob migration
 const { fileFilter } = require('../utils/upload')
-const upload = multer({ storage, limits: { fileSize: 25 * 1024 * 1024 }, fileFilter: fileFilter('document') })
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 }, fileFilter: fileFilter('document') })
 
 // ─── AUDIT HELPER ─────────────────────────────────────────────
 // Mirrors the writeAudit used across the other route files.
@@ -170,9 +164,14 @@ router.post('/:projectId/cert', upload.single('file'), async (req, res) => {
 
     const fileName = req.file.originalname
     const fileSize = req.file.size
-    // Record WHERE the (already disk-saved) file lives so it can be streamed from
-    // the Document Inbox. Stored relative to the server root; never an abs path.
-    const filePath = path.relative(path.join(__dirname, '..'), req.file.path)
+    // Blob migration: persist to blob (key) or disk (legacy relative shape — unchanged).
+    const traceStoredName = `${Date.now()}-${req.file.originalname.replace(/[^a-zA-Z0-9.\-]+/g, '_')}`
+    const traceDiskAbs = path.join(uploadDir, traceStoredName)
+    const { value: filePath } = await blobStore.persist({
+      key: blobStore.keyFor('traceability', traceStoredName),
+      diskAbsPath: traceDiskAbs, buffer: req.file.buffer, contentType: req.file.mimetype,
+      diskValue: path.relative(path.join(__dirname, '..'), traceDiskAbs),
+    })
     const mimeType = req.file.mimetype
     const reqId = document_requirement_id && Number(document_requirement_id)
 
@@ -363,8 +362,14 @@ router.get('/cert/:certId/file', require('../middleware/permissions').requirePer
     const [[cert]] = await db.query('SELECT * FROM traceability_certs WHERE id=?', [certId])
     if (!cert) return res.status(404).json({ error: 'Certificate not found' })
     const fname = (cert.file_name || `cert-${certId}.pdf`).replace(/["\r\n]/g, '')
-    // Real uploaded file on disk → stream it
+    // Real uploaded file → DUAL-READ FALLBACK (blob migration): blob first, then disk.
     if (cert.file_path) {
+      const blobStream = await blobStore.getFile(blobStore.keyFor('traceability', cert.file_path))
+      if (blobStream) {
+        res.setHeader('Content-Type', cert.mime_type || 'application/octet-stream')
+        res.setHeader('Content-Disposition', `inline; filename="${fname}"`)
+        return blobStream.pipe(res)
+      }
       const abs = path.join(__dirname, '..', cert.file_path)
       if (fs.existsSync(abs)) {
         res.setHeader('Content-Type', cert.mime_type || 'application/octet-stream')

@@ -300,15 +300,15 @@ async function writeAudit(userId, action, entityType, entityId, before, after, r
 }
 
 // ─── FILE UPLOAD SETUP ────────────────────────────────────────
+// Blob migration: memoryStorage (buffer in req.file.buffer) → blobStore.persist (blob, or
+// disk fallback when the connection string is absent). The naming the diskStorage `filename`
+// used is replicated in the handler so the disk-fallback path is byte-identical to today.
 const uploadDir = path.join(__dirname, '../uploads/scn-documents')
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true })
-const storage = multer.diskStorage({
-  destination: uploadDir,
-  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`),
-})
+const blobStore = require('../lib/blobStore')
 const { fileFilter } = require('../utils/upload')
 const { dateOrder } = require('../utils/validate')
-const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 }, fileFilter: fileFilter('document') })
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 }, fileFilter: fileFilter('document') })
 
 // ═══════════════════════════════════════════════════════════════
 // REGISTER
@@ -1157,8 +1157,20 @@ router.post('/scn/:scnId/documents', requireDocUploadAuth, upload.single('file')
 
     if (!document_type) return res.status(400).json({ error: 'document_type is required' })
 
+    // Blob migration: persist the buffer to blob (key stored) or disk (legacy ABSOLUTE shape
+    // — what this route stored before). Authz already ran (requireDocUploadAuth) BEFORE this.
     const fileName = req.file?.originalname || null
-    const filePath = req.file?.path || null
+    let filePath = null
+    if (req.file) {
+      const storedName = `${Date.now()}-${req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+      const diskAbsPath = path.join(uploadDir, storedName)
+      const { value } = await blobStore.persist({
+        key: blobStore.keyFor('logistics', storedName),
+        diskAbsPath, buffer: req.file.buffer, contentType: req.file.mimetype,
+        diskValue: diskAbsPath,   // legacy shape for this route = absolute req.file.path
+      })
+      filePath = value
+    }
 
     // 3a: optionally link the doc (e.g. a Mill Test Certificate) to a package and/or heat.
     // Value-gated + capability-detected so legacy uploads + pre-migration deploys are unaffected.

@@ -801,11 +801,9 @@ router.put('/:projectId/vdrl/documents/:docId', async (req, res) => {
 const fsVdrl   = require('fs')
 const pathVdrl = require('path')
 const vdrlFileDir = pathVdrl.join(__dirname, '../uploads/vdrl-documents')
+const blobStoreVdrl = require('../lib/blobStore')   // blob migration
 const uploadVdrlFile = require('multer')({
-  storage: require('multer').diskStorage({
-    destination: (_req, _file, cb) => { fsVdrl.mkdirSync(vdrlFileDir, { recursive: true }); cb(null, vdrlFileDir) },
-    filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]+/g, '_')}`),
-  }),
+  storage: require('multer').memoryStorage(),   // buffer → blobStore.persist (blob or disk fallback)
   limits: { fileSize: 25 * 1024 * 1024 },
   fileFilter: fileFilter('document'),
 })
@@ -819,16 +817,22 @@ router.post('/:projectId/vdrl/documents/:docId/file', uploadVdrlFile.single('fil
     const [[doc]] = await db.query(
       `SELECT d.id FROM vdrl_documents d JOIN vdrl_packages p ON p.id = d.package_id
        WHERE d.id=? AND p.project_id=?`, [docId, pid])
-    if (!doc) { fsVdrl.unlinkSync(req.file.path); return res.status(404).json({ error: 'VDRL document not found in this project' }) }
+    if (!doc) { return res.status(404).json({ error: 'VDRL document not found in this project' }) }   // memoryStorage: nothing on disk to clean up
 
     // Storage columns arrive via migrate-document-files.js — fail honestly (not a
     // 500) and discard the upload if the migration hasn't been applied yet.
     if (!(await require('../lib/schemaColumns').fileColumnsReady('vdrl_documents'))) {
-      fsVdrl.unlinkSync(req.file.path)
       return res.status(503).json({ error: 'Document storage is not yet provisioned (pending DB migration)' })
     }
 
-    const relPath = pathVdrl.relative(pathVdrl.join(__dirname, '..'), req.file.path)  // uploads/vdrl-documents/<stored>
+    // Blob migration: persist to blob (key) or disk (legacy relative shape — unchanged).
+    const vdrlStoredName = `${Date.now()}-${req.file.originalname.replace(/[^a-zA-Z0-9._-]+/g, '_')}`
+    const vdrlDiskAbs = pathVdrl.join(vdrlFileDir, vdrlStoredName)
+    const { value: relPath } = await blobStoreVdrl.persist({
+      key: blobStoreVdrl.keyFor('vdrl', vdrlStoredName),   // module key matches documents.js RESOLVERS
+      diskAbsPath: vdrlDiskAbs, buffer: req.file.buffer, contentType: req.file.mimetype,
+      diskValue: pathVdrl.relative(pathVdrl.join(__dirname, '..'), vdrlDiskAbs),  // uploads/vdrl-documents/<stored>
+    })
     await db.query(
       `UPDATE vdrl_documents
          SET file_name=?, file_path=?, file_size=?, mime_type=?,
