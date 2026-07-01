@@ -1509,6 +1509,12 @@ router.post('/:projectId/fmr/pickup/:pickupId/signature', pocUpload.single('file
     })
     await db.query('UPDATE fmr_pickups SET signature_file=?, signature_mime=? WHERE id=?',
       [sigValue, req.file.mimetype, pickupId])
+    // Audit-gap fix: record the PoC signature upload (materialcontrol's non-blocking writeAudit —
+    // entity is the table string, id the pickup; projectId passed so project_id is set. No delete
+    // counterpart exists for FMR PoC, so this is the only audit call. Never affects the response.
+    await writeAudit(req.user?.id || 1, 'poc_signature_uploaded', 'fmr_pickups', pickupId, {},
+      { signature_file: sigValue, uploaded_by: req.user?.id || 1 },
+      `/materialcontrol/${req.params.projectId}/fmr/pickup/${pickupId}/signature`, Number(req.params.projectId))
     res.json({ success: true, signature_file: sigValue })
   } catch (e) {
     console.error('[mc:fmr-poc-upload]', e.message)
