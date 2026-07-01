@@ -1190,6 +1190,11 @@ router.post('/scn/:scnId/documents', requireDocUploadAuth, upload.single('file')
        WHERE d.id = ?`,
       [result.insertId]
     )
+    // Audit-gap fix: record the document upload (non-blocking — writeAudit swallows its own
+    // errors, so this never affects the 201 response or rolls anything back).
+    await writeAudit(userId, 'document_uploaded', 'scn', scnId, {},
+      { document_id: result.insertId, document_type, file_name: fileName, uploaded_by: userId },
+      `/logistics/scn/${scnId}/documents`)
     res.status(201).json(doc)
   } catch (e) {
     console.error('[logistics:upload-doc]', e.message)
@@ -1201,8 +1206,9 @@ router.post('/scn/:scnId/documents', requireDocUploadAuth, upload.single('file')
 router.delete('/scn/:scnId/documents/:docId', requireDocDeleteAuth, async (req, res) => {
   try {
     const { scnId, docId } = req.params
+    // Capture the before-state (document_type + file_name) for the audit entry BEFORE deleting.
     const [[doc]] = await db.query(
-      'SELECT file_path FROM scn_documents WHERE id=? AND scn_id=?', [docId, scnId]
+      'SELECT id, file_path, document_type, file_name FROM scn_documents WHERE id=? AND scn_id=?', [docId, scnId]
     )
     if (!doc) return res.status(404).json({ error: 'Document not found' })
 
@@ -1211,6 +1217,10 @@ router.delete('/scn/:scnId/documents/:docId', requireDocDeleteAuth, async (req, 
     if (doc.file_path && fs.existsSync(doc.file_path)) {
       try { fs.unlinkSync(doc.file_path) } catch (_) {}
     }
+    // Audit-gap fix: record the document deletion (non-blocking; matches this file's pattern).
+    await writeAudit(req.user?.id || 1, 'document_deleted', 'scn', Number(scnId),
+      { document_id: doc.id, document_type: doc.document_type, file_name: doc.file_name }, {},
+      `/logistics/scn/${scnId}/documents/${docId}`)
     res.json({ success: true })
   } catch (e) { dbError(res, e) }
 })
