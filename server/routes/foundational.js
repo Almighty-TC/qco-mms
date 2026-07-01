@@ -1132,6 +1132,10 @@ router.post('/:projectId/certificates/:entityType/:entityId', uploadCert.single(
       `SELECT fc.*, u.full_name AS uploaded_by_name FROM foundational_certificates fc
        LEFT JOIN users u ON u.id=fc.uploaded_by WHERE fc.id=?`, [r.insertId]
     )
+    // Audit-gap fix: record the cert upload (foundational's fire-and-forget audit — mirrors
+    // the commodity_created shape: before {}, after {…}; non-blocking, never affects the response).
+    audit(req, 'certificate_uploaded', `foundational_certificates/${r.insertId}`, {},
+      { entity_type: entityType, entity_id: Number(entityId), cert_type, ref_number: ref_number || null, filename, uploaded_by: req.user.id })
     res.status(201).json(created)
   } catch (e) {
     console.error('[foundational:certs:create]', e.message)
@@ -1161,6 +1165,9 @@ router.delete('/:projectId/certificates/:id', certGate, async (req, res) => {
       fs.unlink(fp, () => {})
     }
     await db.query('DELETE FROM foundational_certificates WHERE id=?', [id])
+    // Audit-gap fix: record the cert deletion (mirrors commodity_deleted: before=row, after={};
+    // `cert` was SELECTed above BEFORE the delete). Fire-and-forget, non-blocking.
+    audit(req, 'certificate_deleted', `foundational_certificates/${id}`, cert, {})
     res.json({ ok: true })
   } catch (e) {
     dbError(res, e)
