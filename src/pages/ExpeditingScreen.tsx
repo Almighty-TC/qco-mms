@@ -24,6 +24,7 @@ import { CreateSCNWizard } from '../components/CreateSCNWizard'
 import { ToastProvider, useToast } from '../hooks/useToast'
 
 import { API } from '../lib/api'
+import { downloadFile } from '../lib/fileAccess'   // authed blob access (never window.open on a JWT-gated route → 401)
 
 // ─── TYPES ────────────────────────────────────────────────────
 interface Milestone {
@@ -343,7 +344,7 @@ const VDRLUploadModal: React.FC<{dark:boolean;projectId:number;onClose:()=>void;
             </div>
             {parseError && <div style={{color:'#dc2626',fontSize:12,marginBottom:12}}>{parseError}</div>}
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <a href="#" onClick={e=>{e.preventDefault();window.open(`${API}/expediting/${projectId}/vdrl/template`)}} style={{fontSize:12,color:'#2563eb',textDecoration:'none'}}>↓ Download template</a>
+              <a href="#" onClick={e=>{e.preventDefault();downloadFile(`${API}/expediting/${projectId}/vdrl/template`,'QCO_VDRL_Template.xlsx')}} style={{fontSize:12,color:'#2563eb',textDecoration:'none'}}>↓ Download template</a>
               <div style={{display:'flex',gap:8}}>
                 <button onClick={onClose} style={{padding:'7px 14px',borderRadius:6,border:bd,background:'none',color:sub,fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>Cancel</button>
                 <button onClick={handleDryRun} disabled={!file||importing} style={{padding:'7px 16px',borderRadius:6,border:'none',background:'#2563eb',color:'#fff',fontSize:12,cursor:'pointer',opacity:!file||importing?0.5:1,fontFamily:'inherit'}}>

@@ -32,6 +32,7 @@ const ColResizeHandle = ({ onMouseDown, dark }: { onMouseDown: (e: React.MouseEv
 }
 
 import { API } from '../lib/api'
+import { downloadFile } from '../lib/fileAccess'   // authed blob fetch → anchor (never window.open on a JWT-gated route → 401)
 
 // ─── TYPES ──────────────────────────────────────────────────
 interface WBSNode {
@@ -1627,7 +1628,11 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
 
   const exportSelected = () => {
     const ids = [...selectedNodes].join(',')
-    window.open(`${API}/foundational/${projectId}/wbs/export?ids=${ids}`, '_blank')
+    // Authed blob download — the export route is JWT-gated, so a raw window.open(apiURL)
+    // would 401 (no Authorization header). downloadFile fetches via axios (JWT attached)
+    // then saves. XLSX → download, not view. Mirrors the foundational-fix pattern.
+    downloadFile(`${API}/foundational/${projectId}/wbs/export?ids=${ids}`, 'WBS_Export.xlsx')
+      .catch(() => showToast('❌ Export failed'))
   }
 
   const deleteSelected = async () => {
