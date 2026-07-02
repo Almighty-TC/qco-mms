@@ -216,6 +216,19 @@ function requireDocDeleteAuth(req, res, next) {
     .catch(e => { console.error('[doc-del-authz]', e.message); return res.status(500).json({ error: 'Authorization check failed' }) })
 }
 
+// Status + Dates write authorization (forwarder-scoping fix). Same shape as
+// requireDocUploadAuth: internal roles unchanged; a freight_forwarder may PUT status/dates
+// ONLY on an SCN where they are the assigned CARRIER (forwarder_user_id = their id). Closes
+// the gap where forwarder scoping was list-only — these write routes fell through to
+// enforce('logistics') (forwarder can_edit=1) with NO ownership check. scnId from the URL
+// route param ONLY (req.params.scnId), never req.body.
+function requireStatusDateAuth(req, res, next) {
+  if (req.user?.role !== 'freight_forwarder') return next()   // internal roles unchanged
+  return forwarderIsCarrier(db, Number(req.params.scnId), req.user.id)
+    .then(ok => ok ? next() : res.status(403).json({ error: 'You are not the assigned forwarder for this SCN.' }))
+    .catch(e => { console.error('[status-date-authz]', e.message); return res.status(500).json({ error: 'Authorization check failed' }) })
+}
+
 // ─── STATUS HELPERS ───────────────────────────────────────────
 // Map DB enum values → logical display status used in the pipeline.
 // DB: draft, pending, in-transit, customs_review, arrived, received, closed
@@ -661,7 +674,7 @@ router.get('/container-types', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 
 // PUT /api/logistics/scn/:scnId/status
-router.put('/scn/:scnId/status', async (req, res) => {
+router.put('/scn/:scnId/status', requireStatusDateAuth, async (req, res) => {
   try {
     const scnId = Number(req.params.scnId)
     const { status: newDisplayStatus, notes, proof_of_custody, customs_cleared } = req.body
@@ -747,7 +760,7 @@ router.put('/scn/:scnId/status', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 
 // PUT /api/logistics/scn/:scnId/dates
-router.put('/scn/:scnId/dates', async (req, res) => {
+router.put('/scn/:scnId/dates', requireStatusDateAuth, async (req, res) => {
   try {
     const scnId = Number(req.params.scnId)
     const { etd, eta, crd, ccd, reason } = req.body
