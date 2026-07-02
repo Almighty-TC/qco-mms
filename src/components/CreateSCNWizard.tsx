@@ -9,6 +9,7 @@ import axios from 'axios'
 
 import { API } from '../lib/api'
 import { containerDimViolations, containerDimMessage } from '../lib/packaging'
+import { dateOrder } from '../lib/dateOrder'
 
 // ─── TYPES ────────────────────────────────────────────────────
 interface Props {
@@ -324,11 +325,17 @@ export const CreateSCNWizard: React.FC<Props> = ({
     })
     return out
   }
+  // Date-ordering block (frontend feedback; backend dateOrder stays authoritative).
+  // Same rule/order as the create route: CRD ≤ CCD ≤ ETD ≤ ETA over whatever subset
+  // is present. Surfaced inline at the fields, in the Confirm banner, and gated below —
+  // so illogical dates disable Create with a reason instead of a post-submit toast.
+  const dateOrderError = dateOrder([['CRD', crd], ['CCD', ccd], ['ETD', etd], ['ETA', eta]])
   const canCreate = !creating
     && (!requiresFullAllocation || allFullyAllocated())
     && !(packedByType === 'forwarder' && !forwarderUserId)
     && !untypedContainerExists
     && dimViolations().length === 0
+    && !dateOrderError
 
   // ─── SUBMIT ───────────────────────────────────────────────
   // Posts SCN to backend; shows toast and calls parent callback.
@@ -795,10 +802,21 @@ export const CreateSCNWizard: React.FC<Props> = ({
             type="date"
             value={eta}
             onChange={e => setEta(e.target.value)}
-            style={{ ...inputStyle, width: '100%' }}
+            style={{ ...inputStyle, width: '100%', ...(dateOrderError ? { borderColor: '#dc2626' } : {}) }}
           />
         </div>
       </div>
+
+      {/* Date-ordering feedback — earliest, in-place (mirrors backend dateOrder;
+          also gates Create + shown in the Confirm banner). CRD ≤ CCD ≤ ETD ≤ ETA. */}
+      {dateOrderError && (
+        <div style={{
+          background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6,
+          padding: '8px 12px', marginBottom: 14, fontSize: 12, color: '#b91c1c',
+        }}>
+          ⚠ {dateOrderError}
+        </div>
+      )}
 
       {/* Transport mode cards */}
       <div style={{ marginBottom: 14 }}>
@@ -1292,7 +1310,9 @@ export const CreateSCNWizard: React.FC<Props> = ({
       .filter((_, i) => !containers[i].containerTypeId)
     const forwarderMissing = packedByType === 'forwarder' && !forwarderUserId
     const dimIssues = dimViolations()   // Fix 3: package-exceeds-container dimension blocks
-    const hasBlock = allocIssues.length > 0 || untypedContainers.length > 0 || forwarderMissing || dimIssues.length > 0
+    // Item #16: date-ordering block, surfaced here alongside the other gates (mirrors
+    // backend dateOrder; also shown inline on the SCN-details step + gates canCreate).
+    const hasBlock = allocIssues.length > 0 || untypedContainers.length > 0 || forwarderMissing || dimIssues.length > 0 || !!dateOrderError
 
     return (
       <div>
@@ -1315,6 +1335,9 @@ export const CreateSCNWizard: React.FC<Props> = ({
             {dimIssues.map(({ num, msg }) => (
               <div key={`dim-${num}`} style={{ padding: '2px 0' }}>• Package {num} exceeds its container — {msg}</div>
             ))}
+            {dateOrderError && (
+              <div style={{ padding: '2px 0' }}>• {dateOrderError} <span style={{ color: '#b45309' }}>(fix on the <strong>SCN details</strong> step)</span></div>
+            )}
             {allocIssues.length > 0 && (
               <>
                 <div style={{ fontWeight: 600, marginTop: (forwarderMissing || untypedContainers.length) ? 6 : 0 }}>
