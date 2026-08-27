@@ -48,6 +48,16 @@ const SAFE_SORT   = {
   discipline: 'discipline', estimated_value: 'estimated_value',
   created_at: 'created_at', updated_at: 'updated_at',
 }
+// Prequalification round_status (chk_prequal_round). 'pending' is create-only; a
+// DECISION may only be one of the three terminal outcomes (see the decide route).
+const ROUND_STATUSES  = ['pending', 'qualified', 'conditional', 'not_qualified']
+const ROUND_DECISIONS = ['qualified', 'conditional', 'not_qualified']
+// Prequal list sort whitelist (fully-qualified — the list JOINs suppliers).
+const PREQUAL_SORT = {
+  category: 'p.category', discipline: 'p.discipline', round_status: 'p.round_status',
+  valid_to: 'p.valid_to', created_at: 'p.created_at', updated_at: 'p.updated_at',
+  supplier_name: 's.name',
+}
 
 // Returns null if value is an allowed member, else a clean error string.
 const badEnum = (label, val, allowed) =>
@@ -196,6 +206,109 @@ router.patch('/:projectId/tenders/:id', requireLivePermission('pre_award', 'can_
     res.json(after)
   } catch (e) {
     console.error('[preaward:update]', e.message); dbError(res, e)
+  }
+})
+
+// ═══ PREQUALIFICATION (Phase 2.2) ══════════════════════════════════════════════
+// Supplier×category qualification registry — project-scoped, NOT tender-specific
+// (UNIQUE(project_id, supplier_id, category)). AVL standing (suppliers.avl_status)
+// is read live via JOIN, never duplicated onto the prequal row. round_status is the
+// per-round OUTCOME, separate from avl_status.
+
+// ─── LIST: prequalifications for a project ────────────────────────────────────
+// GET /:projectId/prequalifications — filter category/discipline/round_status/supplier_id.
+router.get('/:projectId/prequalifications', requireLivePermission('pre_award', 'can_view'), async (req, res) => {
+  try {
+    const pid    = Number(req.params.projectId)
+    const page   = Math.max(1, parseInt(req.query.page  || '1', 10))
+    const limit  = Math.min(1000, Math.max(1, parseInt(req.query.limit || '50', 10)))
+    const offset = (page - 1) * limit
+
+    const where = ['p.project_id = ?']; const params = [pid]
+    if (req.query.category)     { where.push('p.category = ?');     params.push(req.query.category) }
+    if (req.query.discipline)   { where.push('p.discipline = ?');   params.push(req.query.discipline) }
+    if (req.query.round_status) { where.push('p.round_status = ?'); params.push(req.query.round_status) }
+    if (req.query.supplier_id)  { where.push('p.supplier_id = ?');  params.push(Number(req.query.supplier_id)) }
+    const whereSql = where.join(' AND ')
+
+    const orderBy  = PREQUAL_SORT[req.query.sort_col] || 'p.created_at'
+    const orderDir = String(req.query.sort_dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'
+
+    const [[{ total }]] = await db.query(`SELECT COUNT(*) AS total FROM tender_prequalifications p WHERE ${whereSql}`, params)
+    const [rows] = await db.query(
+      `SELECT p.id, p.project_id, p.supplier_id, s.name AS supplier_name, s.code AS supplier_code,
+              s.avl_status, p.category, p.discipline, p.round_status, p.valid_from, p.valid_to,
+              p.notes, p.created_by, p.created_at, p.updated_at
+         FROM tender_prequalifications p
+         JOIN suppliers s ON s.id = p.supplier_id
+        WHERE ${whereSql}
+        ORDER BY ${orderBy} ${orderDir}, p.id ${orderDir}
+        LIMIT ? OFFSET ?`, [...params, limit, offset])
+
+    res.json({ rows, total, page, limit })
+  } catch (e) {
+    console.error('[preaward:prequal:list]', e.message); dbError(res, e)
+  }
+})
+
+// ─── SUBMIT: register a supplier for a category ───────────────────────────────
+// POST /:projectId/prequalifications — required: supplier_id, category.
+// round_status is NOT client-settable: forced to 'pending'. A decision can only be
+// made through the can_approve /:id (decide) route — closing the create-time bypass
+// where a can_create-only role could otherwise insert an already-'qualified' row.
+router.post('/:projectId/prequalifications', requireLivePermission('pre_award', 'can_create'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId)
+    const { supplier_id, category, discipline = null, valid_from = null, valid_to = null, notes = null } = req.body || {}
+
+    if (!supplier_id)                        return res.status(400).json({ error: 'supplier_id is required' })
+    if (!category || !String(category).trim()) return res.status(400).json({ error: 'category is required' })
+    if (discipline != null) { const bad = badEnum('discipline', discipline, DISCIPLINES); if (bad) return res.status(400).json({ error: bad }) }
+
+    const [result] = await db.query(
+      `INSERT INTO tender_prequalifications
+         (project_id, supplier_id, category, discipline, round_status, valid_from, valid_to, notes, created_by)
+       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+      [pid, Number(supplier_id), String(category).trim(), discipline, valid_from, valid_to, notes, req.user.id])
+
+    const id = result.insertId
+    audit(req, 'prequalification_submitted', 'tender_prequalification', id, null,
+      { supplier_id: Number(supplier_id), category: String(category).trim(), round_status: 'pending' })
+    const [[row]] = await db.query('SELECT * FROM tender_prequalifications WHERE id = ?', [id])
+    res.status(201).json(row)
+  } catch (e) {
+    console.error('[preaward:prequal:submit]', e.message); dbError(res, e)
+  }
+})
+
+// ─── DECIDE: transition round_status (authority action) ───────────────────────
+// PATCH /:projectId/prequalifications/:id — can_approve (NOT can_edit): deciding a
+// vendor's qualification gates who may bid. Terminal-value-only: accepts one of the
+// three decision outcomes; 'pending' (and any other value) is rejected route-side.
+router.patch('/:projectId/prequalifications/:id', requireLivePermission('pre_award', 'can_approve'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId); const id = Number(req.params.id)
+    const { round_status, valid_from, valid_to, notes } = req.body || {}
+
+    // terminal-value-only decision — 'pending' is create-only and is rejected here
+    if (!ROUND_DECISIONS.includes(round_status)) {
+      return res.status(400).json({ error: `Invalid decision — round_status must be one of: ${ROUND_DECISIONS.join(', ')}` })
+    }
+
+    const [[before]] = await db.query('SELECT * FROM tender_prequalifications WHERE id = ? AND project_id = ?', [id, pid])
+    if (!before) return res.status(404).json({ error: 'Prequalification not found' })
+
+    const sets = ['round_status = ?']; const params = [round_status]
+    if (valid_from !== undefined) { sets.push('valid_from = ?'); params.push(valid_from) }
+    if (valid_to   !== undefined) { sets.push('valid_to = ?');   params.push(valid_to) }
+    if (notes      !== undefined) { sets.push('notes = ?');      params.push(notes) }
+
+    await db.query(`UPDATE tender_prequalifications SET ${sets.join(', ')} WHERE id = ? AND project_id = ?`, [...params, id, pid])
+    const [[after]] = await db.query('SELECT * FROM tender_prequalifications WHERE id = ?', [id])
+    audit(req, 'prequalification_decided', 'tender_prequalification', id, before, after)
+    res.json(after)
+  } catch (e) {
+    console.error('[preaward:prequal:decide]', e.message); dbError(res, e)
   }
 })
 
