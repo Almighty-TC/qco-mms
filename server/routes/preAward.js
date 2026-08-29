@@ -412,4 +412,225 @@ router.post('/:projectId/tenders/:id/lock-criteria', requireLivePermission('pre_
   }
 })
 
+// ═══ INVITATION: DOCUMENTS + CLARIFICATIONS + BIDS (Phase 2.4) ═════════════════
+// Guardrail-safe mechanics ONLY — no scoring / pass-threshold / ranking. The prelim
+// check is a MECHANICAL checklist over objective binary submission facts on the bid
+// row itself (never reads tender_criteria). Unseal reveals data; it does not evaluate.
+
+const DOC_STATUSES  = ['pending', 'uploaded', 'waived']
+const CLAR_STATUSES = ['open', 'answered']
+// Narrower than can_edit — the anti-bias keystone: only these roles may reveal a sealed
+// commercial envelope (procurement_officer has can_edit but is deliberately NOT here).
+const UNSEAL_AUTHORIZED_ROLES = ['procurement_manager', 'admin']
+
+// ─── DOCUMENTS ────────────────────────────────────────────────────────────────
+router.get('/:projectId/tenders/:id/documents', requireLivePermission('pre_award', 'can_view'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+    const [[tender]] = await db.query('SELECT id FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    const [rows] = await db.query(
+      `SELECT id, tender_id, doc_key, label, required, status, file_path, uploaded_by, uploaded_at, created_at, updated_at
+         FROM tender_documents WHERE tender_id = ? ORDER BY doc_key`, [tid])
+    res.json({ documents: rows })
+  } catch (e) { console.error('[preaward:doc:list]', e.message); dbError(res, e) }
+})
+
+router.put('/:projectId/tenders/:id/documents/:doc_key', requireLivePermission('pre_award', 'can_edit'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId); const tid = Number(req.params.id); const key = String(req.params.doc_key)
+    const [[tender]] = await db.query('SELECT id FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    const { label, required = 0, status = 'pending', file_path = null } = req.body || {}
+    if (!label || !String(label).trim()) return res.status(400).json({ error: 'label is required' })
+    if (!DOC_STATUSES.includes(status)) return res.status(400).json({ error: `status must be one of: ${DOC_STATUSES.join(', ')}` })
+    const uploaded = status === 'uploaded'
+    await db.query(
+      `INSERT INTO tender_documents (tender_id, doc_key, label, required, status, file_path, uploaded_by, uploaded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE label=VALUES(label), required=VALUES(required), status=VALUES(status),
+                               file_path=VALUES(file_path), uploaded_by=VALUES(uploaded_by), uploaded_at=VALUES(uploaded_at)`,
+      [tid, key, String(label).trim(), required ? 1 : 0, status, file_path, uploaded ? req.user.id : null, uploaded ? new Date() : null])
+    audit(req, 'tender_document_upserted', 'tender_document', tid, null, { doc_key: key, status })
+    const [[row]] = await db.query('SELECT * FROM tender_documents WHERE tender_id = ? AND doc_key = ?', [tid, key])
+    res.json(row)
+  } catch (e) { console.error('[preaward:doc:upsert]', e.message); dbError(res, e) }
+})
+
+// ─── CLARIFICATIONS ───────────────────────────────────────────────────────────
+router.get('/:projectId/tenders/:id/clarifications', requireLivePermission('pre_award', 'can_view'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+    const [[tender]] = await db.query('SELECT id FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    const [rows] = await db.query(
+      `SELECT c.id, c.tender_id, c.ref, c.supplier_id, s.name AS supplier_name, c.question, c.response,
+              c.addendum, c.status, c.created_by, c.responded_by, c.responded_at, c.created_at, c.updated_at
+         FROM tender_clarifications c LEFT JOIN suppliers s ON s.id = c.supplier_id
+        WHERE c.tender_id = ? ORDER BY c.ref`, [tid])
+    res.json({ clarifications: rows })
+  } catch (e) { console.error('[preaward:clar:list]', e.message); dbError(res, e) }
+})
+
+router.post('/:projectId/tenders/:id/clarifications', requireLivePermission('pre_award', 'can_create'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+    const [[tender]] = await db.query('SELECT id FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    const { ref, supplier_id = null, question } = req.body || {}
+    if (!ref || !String(ref).trim())         return res.status(400).json({ error: 'ref is required' })
+    if (!question || !String(question).trim()) return res.status(400).json({ error: 'question is required' })
+    const [r] = await db.query(
+      `INSERT INTO tender_clarifications (tender_id, ref, supplier_id, question, status, created_by)
+       VALUES (?, ?, ?, ?, 'open', ?)`,
+      [tid, String(ref).trim(), supplier_id, String(question).trim(), req.user.id])
+    audit(req, 'clarification_raised', 'tender_clarification', r.insertId, null, { ref: String(ref).trim() })
+    const [[row]] = await db.query('SELECT * FROM tender_clarifications WHERE id = ?', [r.insertId])
+    res.status(201).json(row)
+  } catch (e) { console.error('[preaward:clar:raise]', e.message); dbError(res, e) }
+})
+
+router.patch('/:projectId/tenders/:id/clarifications/:clarId', requireLivePermission('pre_award', 'can_edit'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId); const tid = Number(req.params.id); const cid = Number(req.params.clarId)
+    const [[clar]] = await db.query(
+      `SELECT c.id, c.status FROM tender_clarifications c JOIN tender_packages t ON t.id = c.tender_id
+        WHERE c.id = ? AND c.tender_id = ? AND t.project_id = ?`, [cid, tid, pid])
+    if (!clar) return res.status(404).json({ error: 'Clarification not found' })
+    const { response, addendum = null } = req.body || {}
+    if (!response || !String(response).trim()) return res.status(400).json({ error: 'response is required' })
+    await db.query(
+      `UPDATE tender_clarifications SET response = ?, addendum = ?, status = 'answered', responded_by = ?, responded_at = NOW()
+        WHERE id = ?`, [String(response).trim(), addendum, req.user.id, cid])
+    audit(req, 'clarification_answered', 'tender_clarification', cid, { status: clar.status }, { status: 'answered' })
+    const [[row]] = await db.query('SELECT * FROM tender_clarifications WHERE id = ?', [cid])
+    res.json(row)
+  } catch (e) { console.error('[preaward:clar:respond]', e.message); dbError(res, e) }
+})
+
+// ─── BIDS ─────────────────────────────────────────────────────────────────────
+// Sealed-envelope read rule: commercial_value is returned ONLY when unsealed_at IS
+// NOT NULL — can_view can never see a sealed price.
+router.get('/:projectId/tenders/:id/bids', requireLivePermission('pre_award', 'can_view'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+    const [[tender]] = await db.query('SELECT id FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    const [rows] = await db.query(
+      `SELECT b.id, b.tender_id, b.supplier_id, s.name AS supplier_name, b.round, b.submitted_at, b.currency,
+              b.tech_doc_count, b.comm_doc_count, b.bid_bond_provided, b.prelim_status, b.prelim_reason, b.status,
+              CASE WHEN c.unsealed_at IS NOT NULL THEN 'unsealed' ELSE 'sealed' END AS envelope,
+              CASE WHEN c.unsealed_at IS NOT NULL THEN c.commercial_value ELSE NULL END AS commercial_value,
+              c.unsealed_at, c.unsealed_by
+         FROM tender_bids b
+         JOIN suppliers s ON s.id = b.supplier_id
+         LEFT JOIN tender_bid_commercial c ON c.bid_id = b.id
+        WHERE b.tender_id = ? ORDER BY b.round, b.id`, [tid])
+    res.json({ bids: rows })
+  } catch (e) { console.error('[preaward:bids:list]', e.message); dbError(res, e) }
+})
+
+router.get('/:projectId/tenders/:id/bids/:bidId', requireLivePermission('pre_award', 'can_view'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId); const tid = Number(req.params.id); const bidId = Number(req.params.bidId)
+    const [[bid]] = await db.query(
+      `SELECT b.id, b.tender_id, b.supplier_id, s.name AS supplier_name, b.round, b.submitted_at, b.currency,
+              b.tech_doc_count, b.comm_doc_count, b.bid_bond_provided, b.prelim_status, b.prelim_reason, b.status,
+              CASE WHEN c.unsealed_at IS NOT NULL THEN 'unsealed' ELSE 'sealed' END AS envelope,
+              CASE WHEN c.unsealed_at IS NOT NULL THEN c.commercial_value ELSE NULL END AS commercial_value,
+              c.unsealed_at, c.unsealed_by
+         FROM tender_bids b
+         JOIN suppliers s ON s.id = b.supplier_id
+         LEFT JOIN tender_bid_commercial c ON c.bid_id = b.id
+        WHERE b.id = ? AND b.tender_id = ? AND EXISTS (SELECT 1 FROM tender_packages t WHERE t.id = b.tender_id AND t.project_id = ?)`,
+      [bidId, tid, pid])
+    if (!bid) return res.status(404).json({ error: 'Bid not found' })
+    res.json(bid)
+  } catch (e) { console.error('[preaward:bids:detail]', e.message); dbError(res, e) }
+})
+
+// SUBMIT — creates the technical bid row + the SEALED commercial row in one transaction.
+router.post('/:projectId/tenders/:id/bids', requireLivePermission('pre_award', 'can_create'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+    const { supplier_id, round = 1, submitted_at = null, currency = 'AUD',
+            tech_doc_count = 0, comm_doc_count = 0, bid_bond_provided = 0, commercial_value } = req.body || {}
+    if (!supplier_id) return res.status(400).json({ error: 'supplier_id is required' })
+    if (commercial_value == null || isNaN(Number(commercial_value)) || Number(commercial_value) < 0)
+      return res.status(400).json({ error: 'commercial_value is required and must be a non-negative number' })
+    const [[tender]] = await db.query('SELECT id FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+
+    const conn = await db.getConnection()
+    let bidId
+    try {
+      await conn.beginTransaction()
+      const [r] = await conn.query(
+        `INSERT INTO tender_bids
+           (tender_id, supplier_id, round, submitted_at, currency, tech_doc_count, comm_doc_count, bid_bond_provided, status, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'submitted', ?)`,
+        [tid, Number(supplier_id), Number(round) || 1, submitted_at, currency || 'AUD',
+         Number(tech_doc_count) || 0, Number(comm_doc_count) || 0, bid_bond_provided ? 1 : 0, req.user.id])
+      bidId = r.insertId
+      await conn.query('INSERT INTO tender_bid_commercial (bid_id, commercial_value) VALUES (?, ?)', [bidId, Number(commercial_value)])
+      await conn.commit()
+    } catch (te) { await conn.rollback(); throw te } finally { conn.release() }
+
+    audit(req, 'bid_submitted', 'tender_bid', bidId, null, { supplier_id: Number(supplier_id), round: Number(round) || 1, sealed: true })
+    const [[bid]] = await db.query('SELECT * FROM tender_bids WHERE id = ?', [bidId])
+    res.status(201).json({ ...bid, envelope: 'sealed' })
+  } catch (e) { console.error('[preaward:bid:submit]', e.message); dbError(res, e) }
+})
+
+// PRELIM CHECK — MECHANICAL checklist over objective binary submission facts on the
+// bid row (tech_doc_count / comm_doc_count / bid_bond_provided). Reads NOTHING from
+// tender_criteria. Sets prelim_status + prelim_reason.
+router.post('/:projectId/tenders/:id/bids/:bidId/prelim-check', requireLivePermission('pre_award', 'can_edit'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId); const tid = Number(req.params.id); const bidId = Number(req.params.bidId)
+    const [[bid]] = await db.query(
+      `SELECT b.id, b.tech_doc_count, b.comm_doc_count, b.bid_bond_provided
+         FROM tender_bids b JOIN tender_packages t ON t.id = b.tender_id
+        WHERE b.id = ? AND b.tender_id = ? AND t.project_id = ?`, [bidId, tid, pid])
+    if (!bid) return res.status(404).json({ error: 'Bid not found' })
+
+    const reasons = []
+    if (!(bid.tech_doc_count > 0)) reasons.push('No technical documents submitted')
+    if (!(bid.comm_doc_count > 0)) reasons.push('No commercial documents submitted')
+    if (!bid.bid_bond_provided)    reasons.push('Bid bond not provided')
+    const pass = reasons.length === 0
+    const prelim_status = pass ? 'pass' : 'fail'
+    const prelim_reason = pass ? null : reasons.join('; ')
+
+    await db.query('UPDATE tender_bids SET prelim_status = ?, prelim_reason = ? WHERE id = ?', [prelim_status, prelim_reason, bidId])
+    audit(req, 'bid_prelim_checked', 'tender_bid', bidId, null, { prelim_status, prelim_reason })
+    res.json({ id: bidId, prelim_status, prelim_reason,
+      checks: { tech_docs: bid.tech_doc_count > 0, comm_docs: bid.comm_doc_count > 0, bid_bond: !!bid.bid_bond_provided } })
+  } catch (e) { console.error('[preaward:bid:prelim]', e.message); dbError(res, e) }
+})
+
+// UNSEAL — mechanical: reveal the commercial envelope. Requires can_edit AND membership
+// in UNSEAL_AUTHORIZED_ROLES. Sets unsealed_at/unsealed_by (matching the Phase 1.3
+// pattern). NO scoring/evaluation triggered.
+router.post('/:projectId/tenders/:id/bids/:bidId/unseal', requireLivePermission('pre_award', 'can_edit'), async (req, res) => {
+  try {
+    if (!UNSEAL_AUTHORIZED_ROLES.includes(req.user.role))
+      return res.status(403).json({ error: 'Your role is not authorized to unseal commercial envelopes' })
+    const pid = Number(req.params.projectId); const tid = Number(req.params.id); const bidId = Number(req.params.bidId)
+    const [[bid]] = await db.query(
+      `SELECT b.id FROM tender_bids b JOIN tender_packages t ON t.id = b.tender_id
+        WHERE b.id = ? AND b.tender_id = ? AND t.project_id = ?`, [bidId, tid, pid])
+    if (!bid) return res.status(404).json({ error: 'Bid not found' })
+    const [[comm]] = await db.query('SELECT id, unsealed_at FROM tender_bid_commercial WHERE bid_id = ?', [bidId])
+    if (!comm) return res.status(404).json({ error: 'Commercial envelope not found' })
+    if (comm.unsealed_at != null) return res.status(409).json({ error: 'Commercial envelope already unsealed' })
+
+    await db.query('UPDATE tender_bid_commercial SET unsealed_at = NOW(), unsealed_by = ? WHERE bid_id = ?', [req.user.id, bidId])
+    audit(req, 'bid_commercial_unsealed', 'tender_bid', bidId, null, { unsealed_by: req.user.id })
+    const [[after]] = await db.query('SELECT commercial_value, unsealed_at, unsealed_by FROM tender_bid_commercial WHERE bid_id = ?', [bidId])
+    res.json({ id: bidId, envelope: 'unsealed',
+      commercial_value: after.commercial_value, unsealed_at: after.unsealed_at, unsealed_by: after.unsealed_by })
+  } catch (e) { console.error('[preaward:bid:unseal]', e.message); dbError(res, e) }
+})
+
 module.exports = router
