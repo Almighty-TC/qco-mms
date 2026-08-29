@@ -312,4 +312,104 @@ router.patch('/:projectId/prequalifications/:id', requireLivePermission('pre_awa
   }
 })
 
+// ═══ CRITERIA (Phase 2.3) ══════════════════════════════════════════════════════
+// Weighted evaluation criteria per tender. Per-row writes (as sliders move) enforce
+// only the 5-60 guardrail; the SUM(weight)=100 invariant is validated EXACTLY (no
+// tolerance) at the dedicated lock action, never per-row. "Locked" is first-class
+// state: criteria_locked_at IS NOT NULL. All criteria writes are rejected (409) once
+// locked. DELETE of a criterion row is can_edit (composing the scheme), NOT can_delete.
+
+// ─── LIST criteria + lock state ───────────────────────────────────────────────
+router.get('/:projectId/tenders/:id/criteria', requireLivePermission('pre_award', 'can_view'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+    const [[tender]] = await db.query(
+      'SELECT id, criteria_locked_at, criteria_locked_by FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    const [rows] = await db.query(
+      `SELECT id, tender_id, criterion_key, label, weight, mandatory, min_score, display_order, created_at, updated_at
+         FROM tender_criteria WHERE tender_id = ? ORDER BY display_order, id`, [tid])
+    const weight_sum = rows.reduce((s, c) => s + Number(c.weight), 0)
+    res.json({ criteria: rows, weight_sum,
+      locked: tender.criteria_locked_at != null,
+      criteria_locked_at: tender.criteria_locked_at, criteria_locked_by: tender.criteria_locked_by })
+  } catch (e) {
+    console.error('[preaward:criteria:list]', e.message); dbError(res, e)
+  }
+})
+
+// ─── UPSERT one criterion (per-row, as sliders move) ──────────────────────────
+// PUT /:projectId/tenders/:id/criteria/:key — can_edit. 409 if criteria locked.
+// weight 5-60 (route-validated before the DB CHECK); min_score 0-100.
+router.put('/:projectId/tenders/:id/criteria/:key', requireLivePermission('pre_award', 'can_edit'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId); const tid = Number(req.params.id); const key = String(req.params.key)
+    const [[tender]] = await db.query('SELECT id, criteria_locked_at FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    if (tender.criteria_locked_at != null) return res.status(409).json({ error: 'Criteria are locked for this tender and cannot be modified' })
+
+    const { label, weight, mandatory = 0, min_score = null, display_order = 0 } = req.body || {}
+    if (!label || !String(label).trim()) return res.status(400).json({ error: 'label is required' })
+    const w = Number(weight)
+    if (!Number.isInteger(w) || w < 5 || w > 60) return res.status(400).json({ error: 'weight must be an integer between 5 and 60' })
+    if (min_score != null && (isNaN(Number(min_score)) || Number(min_score) < 0 || Number(min_score) > 100))
+      return res.status(400).json({ error: 'min_score must be between 0 and 100' })
+
+    await db.query(
+      `INSERT INTO tender_criteria (tender_id, criterion_key, label, weight, mandatory, min_score, display_order)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE label=VALUES(label), weight=VALUES(weight), mandatory=VALUES(mandatory),
+                               min_score=VALUES(min_score), display_order=VALUES(display_order)`,
+      [tid, key, String(label).trim(), w, mandatory ? 1 : 0, min_score, Number(display_order) || 0])
+    audit(req, 'criterion_upserted', 'tender_criterion', tid, null, { criterion_key: key, weight: w })
+    const [[row]] = await db.query('SELECT * FROM tender_criteria WHERE tender_id = ? AND criterion_key = ?', [tid, key])
+    res.json(row)
+  } catch (e) {
+    console.error('[preaward:criteria:upsert]', e.message); dbError(res, e)
+  }
+})
+
+// ─── DELETE one criterion ─────────────────────────────────────────────────────
+// can_edit (composing the scheme — NOT can_delete). 409 if criteria locked.
+router.delete('/:projectId/tenders/:id/criteria/:key', requireLivePermission('pre_award', 'can_edit'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId); const tid = Number(req.params.id); const key = String(req.params.key)
+    const [[tender]] = await db.query('SELECT id, criteria_locked_at FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    if (tender.criteria_locked_at != null) return res.status(409).json({ error: 'Criteria are locked for this tender and cannot be modified' })
+    const [[before]] = await db.query('SELECT * FROM tender_criteria WHERE tender_id = ? AND criterion_key = ?', [tid, key])
+    if (!before) return res.status(404).json({ error: 'Criterion not found' })
+    await db.query('DELETE FROM tender_criteria WHERE tender_id = ? AND criterion_key = ?', [tid, key])
+    audit(req, 'criterion_deleted', 'tender_criterion', tid, before, null)
+    res.json({ ok: true, deleted: key })
+  } catch (e) {
+    console.error('[preaward:criteria:delete]', e.message); dbError(res, e)
+  }
+})
+
+// ─── LOCK criteria (finalize) — can_approve, exact SUM(weight)=100 gate ────────
+// POST /:projectId/tenders/:id/lock-criteria. Validates SUM===100 exactly (no
+// tolerance — proven necessary/achievable), sets criteria_locked_at/by. 409 if
+// already locked; 400 if 0 criteria or sum!=100 (message states the actual sum).
+router.post('/:projectId/tenders/:id/lock-criteria', requireLivePermission('pre_award', 'can_approve'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+    const [[tender]] = await db.query('SELECT id, criteria_locked_at FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    if (tender.criteria_locked_at != null) return res.status(409).json({ error: 'Criteria are already locked for this tender' })
+
+    const [rows] = await db.query('SELECT weight FROM tender_criteria WHERE tender_id = ?', [tid])
+    if (rows.length === 0) return res.status(400).json({ error: 'No criteria to lock — add criteria first' })
+    const sum = rows.reduce((s, c) => s + Number(c.weight), 0)
+    if (sum !== 100) return res.status(400).json({ error: `Criteria weights sum to ${sum}, must equal exactly 100` })
+
+    await db.query('UPDATE tender_packages SET criteria_locked_at = NOW(), criteria_locked_by = ? WHERE id = ?', [req.user.id, tid])
+    audit(req, 'criteria_locked', 'tender', tid, null, { criteria_count: rows.length, weight_sum: sum })
+    const [[after]] = await db.query('SELECT id, criteria_locked_at, criteria_locked_by FROM tender_packages WHERE id = ?', [tid])
+    res.json({ ok: true, ...after })
+  } catch (e) {
+    console.error('[preaward:criteria:lock]', e.message); dbError(res, e)
+  }
+})
+
 module.exports = router
