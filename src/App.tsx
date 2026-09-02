@@ -13,6 +13,7 @@ import { PODetailScreen } from './pages/PODetailScreen'
 import { FoundWBSScreen } from './pages/FoundWBSScreen'
 import { FoundCommodityScreen } from './pages/FoundCommodityScreen'
 import { FoundEquipmentScreen } from './pages/FoundEquipmentScreen'
+import { PreAwardTendersScreen } from './pages/PreAwardTendersScreen'
 import { ExpeditingScreen } from './pages/ExpeditingScreen'
 import { ExpPODetailScreen } from './pages/ExpPODetailScreen'
 import { MTOListScreen } from './pages/MTOListScreen'
@@ -39,7 +40,7 @@ import './App.css'
 // 'admin' enforces role === 'admin'; 'procurement' is project-scoped.
 // ─── ROUTING — state-based, no router library ─────────────────────────────────
 // 'po-detail' is Phase 3 PO Detail Screen — full dedicated screen.
-type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers' | 'traceability' | 'documents' | 'pending-changes' | 'audit' | 'rfi-meeting' | 'reports'
+type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'pre-award-tenders' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers' | 'traceability' | 'documents' | 'pending-changes' | 'audit' | 'rfi-meeting' | 'reports'
 
 // ─── DEEP-LINK PARSING ───────────────────────────────────────
 // Maps a URL path segment (/project/:id/<segment>) to an internal Page,
@@ -47,7 +48,7 @@ type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-
 // hard load / refresh of a deep link resolves the right screen AND the
 // active project (the :id in the same path — see parseDeepLink).
 const PAGE_SEGMENTS: Record<string, Page> = {
-  procurement: 'procurement', 'po-detail': 'po-detail',
+  procurement: 'procurement', 'po-detail': 'po-detail', 'pre-award-tenders': 'pre-award-tenders',
   expediting: 'expediting', 'expediting-po-detail': 'expediting-po-detail',
   'mto-list': 'mto-list', 'mto-detail': 'mto-detail',
   logistics: 'logistics', traceability: 'traceability', documents: 'documents', reports: 'reports',
@@ -57,6 +58,7 @@ const PAGE_SEGMENTS: Record<string, Page> = {
   'material-control/receipting': 'mc-receipting', 'material-control/fmr': 'mc-fmr',
   'material-control/stock': 'mc-stock', 'material-control/transfers': 'mc-transfers',
   'foundational/wbs': 'foundational-wbs', 'foundational/commodities': 'foundational-commodities', 'foundational/equipment': 'foundational-equipment',
+  'pre-award/tenders': 'pre-award-tenders',
 }
 // Reads /project/:projectId/:segment from the current URL so a hard load
 // hydrates both the active project and the page in one pass.
@@ -298,8 +300,9 @@ const REPORTS_VIEW_ROLES = new Set(['admin', 'auditor', 'ceo', 'director', 'engi
 // Project-scoped pages also get the project segment (added by the builder). Global
 // pages (dashboard/admin/audit) are handled directly in the builder.
 const CRUMB: Record<string, { module: { label: string; page: Page }; leaf?: string }> = {
-  procurement:            { module: { label: 'Procurement', page: 'procurement' } },
-  'po-detail':            { module: { label: 'Procurement', page: 'procurement' }, leaf: 'PO Detail' },
+  procurement:            { module: { label: 'Procurement — Post-Award', page: 'procurement' } },
+  'po-detail':            { module: { label: 'Procurement — Post-Award', page: 'procurement' }, leaf: 'PO Detail' },
+  'pre-award-tenders':    { module: { label: 'Procurement — Pre-Award', page: 'pre-award-tenders' } },
   expediting:             { module: { label: 'Expediting', page: 'expediting' } },
   'expediting-po-detail': { module: { label: 'Expediting', page: 'expediting' }, leaf: 'PO Detail' },
   'mto-list':             { module: { label: 'MTO Register', page: 'mto-list' } },
@@ -334,6 +337,7 @@ const Nav = ({
   const isReadOnly = READ_ONLY_ROLES.has(userRole)
   const isAdmin    = userRole === 'admin'
   const [foundOpen, setFoundOpen] = useState(true)   // default expanded so WBS/Commodity/Equipment show without a click (user can still collapse)
+  const [procOpen,  setProcOpen]  = useState(true)   // Procurement group (Post-Award / Pre-Award) — default expanded, mirrors Foundational
 
   const navItem = (label: string, icon: string, page?: Page, badge?: number) => {
     const active = page != null && page === activePage
@@ -468,7 +472,67 @@ const Nav = ({
             QCO team: full nav */}
         {userRole !== 'subcontractor' && userRole !== 'freight_forwarder' && <>
           {navItem('MTO Register', '📋', 'mto-list')}
-          {navItem('Procurement', '🧾', 'procurement')}
+
+          {/* ─── Procurement — collapsible group ──────────────────────────────
+              Parent is a pure expand/collapse toggle (not itself navigable,
+              mirroring Foundational). Post-Award routes to the existing,
+              unchanged Procurement screen ('procurement'); it stays highlighted
+              across the register AND its po-detail drill-down. Pre-Award is the
+              new module; its child appears only when a project is selected. */}
+          <div style={{ marginBottom: 1 }}>
+            {/* ── Parent toggle ────────────────────────────────────────────── */}
+            <div
+              onClick={() => collapsed ? null : setProcOpen(o => !o)}
+              title={collapsed ? 'Procurement' : undefined}
+              style={{
+                display: 'flex', alignItems: 'center', gap: collapsed ? 0 : 9,
+                padding: collapsed ? '6px 0' : '6px 8px',
+                justifyContent: collapsed ? 'center' : 'flex-start',
+                borderRadius: 6, fontSize: 13, userSelect: 'none', cursor: 'pointer',
+                background: 'transparent', color: '#94a3b8', transition: 'all 150ms ease',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = '#e2e8f0' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#94a3b8' }}>
+              <span style={{ width: collapsed ? 20 : 15, textAlign: 'center', fontSize: collapsed ? 16 : 12, opacity: 0.65, flexShrink: 0 }}>🧾</span>
+              {!collapsed && <span style={{ flex: 1 }}>Procurement</span>}
+              {!collapsed && <span style={{ fontSize: 10, opacity: 0.5, transition: 'transform 200ms', display: 'inline-block', transform: procOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>}
+            </div>
+            {/* ── Child items ──────────────────────────────────────────────── */}
+            {(procOpen || collapsed) && (
+              <div style={{ paddingLeft: collapsed ? 0 : 22 }}>
+                {[
+                  ...(selectedProjectId ? [{ label: 'Pre-Award', icon: '📑', page: 'pre-award-tenders' as Page, activePages: ['pre-award-tenders'] as Page[] }] : []),
+                  { label: 'Post-Award', icon: '🧾', page: 'procurement' as Page, activePages: ['procurement', 'po-detail'] as Page[] },
+                ].map(item => {
+                  const active = item.activePages.includes(activePage)
+                  return (
+                  <div
+                    key={item.label}
+                    onClick={() => onNavigate(item.page)}
+                    title={collapsed ? item.label : undefined}
+                    style={{
+                      display: 'flex', alignItems: 'center',
+                      gap: collapsed ? 0 : 9,
+                      padding: collapsed ? '5px 0' : '5px 8px',
+                      justifyContent: collapsed ? 'center' : 'flex-start',
+                      borderRadius: 6, fontSize: 12, marginBottom: 1, userSelect: 'none',
+                      cursor: 'pointer',
+                      color: active ? '#E84E0F' : '#64748b',
+                      background: active ? 'rgba(232,78,15,0.10)' : 'transparent',
+                      border: `1px solid ${active ? 'rgba(232,78,15,0.25)' : 'transparent'}`,
+                      ...(!collapsed ? { borderLeft: active ? undefined : '1px solid rgba(255,255,255,0.08)', marginLeft: 4, paddingLeft: 12 } : {}),
+                      transition: 'all 150ms',
+                    }}
+                    onMouseEnter={e => { if (!active) { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = '#e2e8f0' } }}
+                    onMouseLeave={e => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#64748b' } }}>
+                    <span style={{ fontSize: collapsed ? 16 : 11, flexShrink: 0 }}>{item.icon}</span>
+                    {!collapsed && <span>{item.label}</span>}
+                  </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
           <div
             key="expediting"
             onClick={() => onNavigate('expediting')}
@@ -1330,6 +1394,11 @@ function App() {
           )}
           {page === 'foundational-equipment' && selectedProjectId && (
             <FoundEquipmentScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
+              onBack={() => setPage('dashboard')} />
+          )}
+
+          {page === 'pre-award-tenders' && selectedProjectId && (
+            <PreAwardTendersScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
               onBack={() => setPage('dashboard')} />
           )}
 
