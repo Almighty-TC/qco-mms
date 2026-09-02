@@ -633,4 +633,123 @@ router.post('/:projectId/tenders/:id/bids/:bidId/unseal', requireLivePermission(
   } catch (e) { console.error('[preaward:bid:unseal]', e.message); dbError(res, e) }
 })
 
+// ═══ APPROVAL CHAIN (Phase 2.7) ════════════════════════════════════════════════
+// Mirrors po_approvals' real threshold-gated, sequential level-1-before-level-2
+// logic. tender_approvals rows are the AUTHORITATIVE per-level state (approval_level
+// set at the moment of each actual approval); tender_packages.approval_status is a
+// coarse denormalized summary (pending → approved/rejected) — it stays 'pending'
+// mid-chain. Value gated on estimated_value vs projects.approval_threshold_1/2.
+
+const TENDER_L1_BANDA_ROLES = ['admin', 'procurement_manager', 'procurement_officer'] // single-level (V <= threshold1)
+const TENDER_L1_MULTI_ROLES = ['admin', 'procurement_manager']                        // multi-level level-1
+const TENDER_L2_ROLES       = ['admin', 'project_director']                           // level-2 (director)
+
+async function getTenderThresholds(projectId) {
+  const [[p]] = await db.query('SELECT approval_threshold_1, approval_threshold_2 FROM projects WHERE id = ?', [projectId])
+  return { threshold1: p?.approval_threshold_1 ?? null, threshold2: p?.approval_threshold_2 ?? null }
+}
+
+// ─── APPROVE ──────────────────────────────────────────────────────────────────
+router.post('/:projectId/tenders/:id/approve', requireLivePermission('pre_award', 'can_approve'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+    const role = req.user.role
+    const { comment = null, level: reqLevel } = req.body || {}
+
+    const [[tender]] = await db.query('SELECT id, estimated_value, approval_status FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    if (tender.approval_status === 'approved') return res.status(409).json({ error: 'Tender is already approved' })
+    if (tender.approval_status === 'rejected') return res.status(409).json({ error: 'Cannot approve: tender was rejected' })
+
+    const { threshold1, threshold2 } = await getTenderThresholds(pid)
+    const V = Number(tender.estimated_value) || 0
+    const needsManagerOnly = !threshold1 || V <= Number(threshold1)
+    const needsDirector    = threshold2 != null && V > Number(threshold2)
+
+    // ── Admin bypass — one action completes the chain (mirrors po_approvals) ──
+    if (role === 'admin') {
+      await db.query("INSERT INTO tender_approvals (tender_id, approver_id, approval_level, status, actioned_at, comments) VALUES (?,?,1,'approved',NOW(),?)", [tid, req.user.id, comment || 'Admin approval'])
+      await db.query("UPDATE tender_packages SET approval_status='approved', stage='award', status='awarded' WHERE id = ?", [tid])
+      audit(req, 'tender_approved', 'tender', tid, { approval_status: tender.approval_status }, { approval_status: 'approved', level: 1, via: 'admin' })
+      return res.json({ ok: true, approval_status: 'approved', level_completed: 1, via: 'admin' })
+    }
+
+    const [approved] = await db.query("SELECT approval_level FROM tender_approvals WHERE tender_id = ? AND status = 'approved'", [tid])
+    const level1Done = approved.some(r => Number(r.approval_level) === 1)
+    const level2Done = approved.some(r => Number(r.approval_level) === 2)
+
+    if (!level1Done) {
+      // ── this call processes LEVEL 1 ──
+      if (reqLevel != null && Number(reqLevel) === 2)
+        return res.status(409).json({ error: 'Cannot approve level 2 before level 1 is approved' })
+      const allowed = (needsManagerOnly && !needsDirector) ? TENDER_L1_BANDA_ROLES : TENDER_L1_MULTI_ROLES
+      if (!allowed.includes(role))
+        return res.status(403).json({ error: `Your role cannot approve level 1 for this tender (allowed: ${allowed.join(', ')})` })
+
+      await db.query("INSERT INTO tender_approvals (tender_id, approver_id, approval_level, status, actioned_at, comments) VALUES (?,?,1,'approved',NOW(),?)", [tid, req.user.id, comment])
+
+      if (needsDirector) {
+        // level 1 done, level 2 required → approval_status STAYS 'pending'; notify directors
+        const [dirs] = await db.query("SELECT id FROM users WHERE role IN ('project_director','admin') AND is_active = 1")
+        for (const d of dirs) {
+          await db.query("INSERT INTO notifications (user_id, type, message, related_entity_type, related_entity_id) VALUES (?,?,?,?,?)",
+            [d.id, 'tender_director_approval_needed', `Tender #${tid} requires director approval`, 'tender', tid]).catch(() => {})
+        }
+        audit(req, 'tender_approved_level1', 'tender', tid, null, { level: 1, approval_status: 'pending' })
+        return res.json({ ok: true, approval_status: 'pending', level_completed: 1, next: 'level 2 (director)' })
+      }
+      // single-level / manager-only → chain complete
+      await db.query("UPDATE tender_packages SET approval_status='approved', stage='award', status='awarded' WHERE id = ?", [tid])
+      audit(req, 'tender_approved', 'tender', tid, null, { level: 1, approval_status: 'approved' })
+      return res.json({ ok: true, approval_status: 'approved', level_completed: 1 })
+    }
+
+    // ── level 1 done: if a director level is required and not yet done, this call processes LEVEL 2 ──
+    if (needsDirector && !level2Done) {
+      if (!TENDER_L2_ROLES.includes(role))
+        return res.status(403).json({ error: `Your role cannot approve level 2 (allowed: ${TENDER_L2_ROLES.join(', ')})` })
+      await db.query("INSERT INTO tender_approvals (tender_id, approver_id, approval_level, status, actioned_at, comments) VALUES (?,?,2,'approved',NOW(),?)", [tid, req.user.id, comment])
+      await db.query("UPDATE tender_packages SET approval_status='approved', stage='award', status='awarded' WHERE id = ?", [tid])
+      audit(req, 'tender_approved_director', 'tender', tid, null, { level: 2, approval_status: 'approved' })
+      return res.json({ ok: true, approval_status: 'approved', level_completed: 2 })
+    }
+
+    return res.status(409).json({ error: 'Approval chain already complete for this tender' })
+  } catch (e) { console.error('[preaward:tender:approve]', e.message); dbError(res, e) }
+})
+
+// ─── REJECT ───────────────────────────────────────────────────────────────────
+router.post('/:projectId/tenders/:id/reject', requireLivePermission('pre_award', 'can_approve'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+    const { comment = null } = req.body || {}
+    const [[tender]] = await db.query('SELECT id, approval_status FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    if (tender.approval_status === 'approved') return res.status(409).json({ error: 'Tender is already approved; cannot reject' })
+    if (tender.approval_status === 'rejected') return res.status(409).json({ error: 'Tender is already rejected' })
+
+    const [approved] = await db.query("SELECT approval_level FROM tender_approvals WHERE tender_id = ? AND status = 'approved'", [tid])
+    const level = approved.some(r => Number(r.approval_level) === 1) ? 2 : 1
+    await db.query("INSERT INTO tender_approvals (tender_id, approver_id, approval_level, status, actioned_at, comments) VALUES (?,?,?,'rejected',NOW(),?)", [tid, req.user.id, level, comment])
+    await db.query("UPDATE tender_packages SET approval_status='rejected' WHERE id = ?", [tid])
+    audit(req, 'tender_rejected', 'tender', tid, { approval_status: tender.approval_status }, { approval_status: 'rejected', level })
+    res.json({ ok: true, approval_status: 'rejected', level })
+  } catch (e) { console.error('[preaward:tender:reject]', e.message); dbError(res, e) }
+})
+
+// ─── LIST approval chain ──────────────────────────────────────────────────────
+router.get('/:projectId/tenders/:id/approvals', requireLivePermission('pre_award', 'can_view'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+    const [[tender]] = await db.query('SELECT id, approval_status, estimated_value FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    const [rows] = await db.query(
+      `SELECT a.id, a.tender_id, a.approver_id, u.full_name AS approver_name, a.approval_level, a.status,
+              a.comments, a.actioned_at, a.created_at
+         FROM tender_approvals a LEFT JOIN users u ON u.id = a.approver_id
+        WHERE a.tender_id = ? ORDER BY a.approval_level, a.id`, [tid])
+    res.json({ approval_status: tender.approval_status, estimated_value: tender.estimated_value, approvals: rows })
+  } catch (e) { console.error('[preaward:tender:approvals]', e.message); dbError(res, e) }
+})
+
 module.exports = router
