@@ -14,6 +14,7 @@ import { API } from '../lib/api'
 
 const CAN_EDIT    = ['admin', 'procurement_manager', 'procurement_officer', 'project_manager']  // can_edit
 const CAN_APPROVE = ['admin', 'procurement_manager', 'procurement_officer', 'project_director']  // can_approve
+const CAN_CREATE  = ['admin', 'procurement_manager', 'procurement_officer', 'project_manager']  // can_create
 const CMIN = 5, CMAX = 60
 
 interface Crit { key: string; label: string; weight: number; mandatory: boolean; min_score: number | null }
@@ -60,9 +61,7 @@ export function PreAwardInvitationTab({ dark, projectId, tenderId, userRole, use
   dark: boolean; projectId: number; tenderId: number; userRole: string; userId: number
 }) {
   const [sub, setSub] = useState<'criteria' | 'documents' | 'clarifications'>('criteria')
-  const col = dark ? '#f1f5f9' : '#0f172a'
   const sub2 = '#94a3b8'
-  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
 
   return (
     <div>
@@ -83,12 +82,7 @@ export function PreAwardInvitationTab({ dark, projectId, tenderId, userRole, use
         ? <CriteriaSection dark={dark} projectId={projectId} tenderId={tenderId} userRole={userRole} userId={userId} />
         : sub === 'documents'
         ? <DocumentsSection dark={dark} projectId={projectId} tenderId={tenderId} userRole={userRole} userId={userId} />
-        : (
-          <div style={{ padding: '32px 18px', border: bd, borderRadius: 8, background: dark ? '#0f172a' : '#fff', color: sub2, fontSize: 13, textAlign: 'center' }}>
-            <div style={{ fontWeight: 600, color: col, marginBottom: 6 }}>Clarifications</div>
-            This section is built in an upcoming sub-step (3.1c-3).
-          </div>
-        )}
+        : <ClarificationsSection dark={dark} projectId={projectId} tenderId={tenderId} userRole={userRole} userId={userId} />}
     </div>
   )
 }
@@ -432,6 +426,198 @@ function DocEditModal({ dark, projectId, tenderId, doc, existingKeys, onClose, o
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
           <button disabled={saving} onClick={onClose} style={{ padding: '8px 14px', borderRadius: 6, border: bd, background: 'none', color: sub, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
           <button disabled={saving || !label.trim()} onClick={save} style={{ padding: '8px 14px', borderRadius: 6, border: 'none', background: label.trim() ? '#2563eb' : '#94a3b8', color: '#fff', fontSize: 13, fontWeight: 600, cursor: label.trim() ? 'pointer' : 'default', fontFamily: 'inherit' }}>{saving ? 'Saving…' : 'Save'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── CLARIFICATIONS (Q&A log) ───────────────────────────────
+// GET /clarifications (can_view) + POST (can_create, raise) + PATCH /:clarId
+// (can_edit, answer). Answered entries are read-only here. No delete endpoint exists.
+interface Clar {
+  id: number; ref: string; supplier_id: number | null; supplier_name: string | null
+  question: string; response: string | null; addendum: string | null; status: string
+  created_by: number | null; responded_by: number | null; responded_at: string | null; created_at: string
+}
+interface Sup { id: number; name: string; code: string }
+
+function ClarificationsSection({ dark, projectId, tenderId, userRole, userId }: {
+  dark: boolean; projectId: number; tenderId: number; userRole: string; userId: number
+}) {
+  const [rows, setRows] = useState<Clar[]>([])
+  const [loading, setLoading] = useState(true)
+  const [err, setErr] = useState('')
+  const [raise, setRaise] = useState(false)
+  const [answer, setAnswer] = useState<Clar | null>(null)
+
+  const canCreate = CAN_CREATE.includes(userRole)
+  const canEdit = CAN_EDIT.includes(userRole)
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const sub = '#94a3b8'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const cardBg = dark ? '#0f172a' : '#fff'
+  const who = (id: number | null) => id == null ? 'unknown' : id === userId ? 'you' : `user #${id}`
+
+  const load = useCallback(async () => {
+    setLoading(true); setErr('')
+    try {
+      const { data } = await axios.get(`${API}/pre-award/${projectId}/tenders/${tenderId}/clarifications`)
+      setRows(data.clarifications ?? [])
+    } catch { setErr('Could not load clarifications.') } finally { setLoading(false) }
+  }, [projectId, tenderId])
+  useEffect(() => { load() }, [load])
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 13, color: sub }}>{loading ? 'Loading…' : `${rows.length} clarification${rows.length !== 1 ? 's' : ''}`}</div>
+        {canCreate && <button onClick={() => setRaise(true)} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>+ Raise clarification</button>}
+      </div>
+
+      {err && <div style={{ color: '#b91c1c', fontSize: 13, marginBottom: 12 }}>{err} <button onClick={load} style={{ background: 'none', border: 'none', color: '#E84E0F', cursor: 'pointer', fontWeight: 600, fontFamily: 'inherit' }}>Retry</button></div>}
+
+      {loading ? (
+        <div style={{ padding: '24px', color: sub, fontSize: 13 }}>Loading…</div>
+      ) : rows.length === 0 ? (
+        <div style={{ padding: '28px 18px', border: bd, borderRadius: 8, background: cardBg, color: sub, fontSize: 13, textAlign: 'center' }}>No clarifications raised yet.</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {rows.map(c => {
+            const answered = c.status === 'answered'
+            return (
+              <div key={c.id} style={{ border: bd, borderRadius: 8, background: cardBg, overflow: 'hidden' }}>
+                {/* header */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: bd, flexWrap: 'wrap' }}>
+                  <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, fontWeight: 600, color: '#E84E0F' }}>{c.ref}</span>
+                  <span style={{ background: answered ? 'rgba(34,197,94,0.14)' : 'rgba(245,158,11,0.14)', color: answered ? '#15803d' : '#b45309', fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 9999 }}>{answered ? 'Answered' : 'Open'}</span>
+                  {c.supplier_name && <span style={{ fontSize: 12, color: sub }}>· {c.supplier_name}</span>}
+                  <span style={{ marginLeft: 'auto', fontSize: 11.5, color: sub }}>raised by {who(c.created_by)} · {String(c.created_at).slice(0, 10)}</span>
+                </div>
+                {/* question */}
+                <div style={{ padding: '12px 14px' }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 4 }}>Question</div>
+                  <div style={{ fontSize: 13, color: col, whiteSpace: 'pre-wrap' }}>{c.question}</div>
+                </div>
+                {/* answer / action */}
+                {answered ? (
+                  <div style={{ padding: '12px 14px', borderTop: bd, background: dark ? 'rgba(148,163,184,0.05)' : '#f8fafc' }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 4 }}>Response</div>
+                    <div style={{ fontSize: 13, color: col, whiteSpace: 'pre-wrap' }}>{c.response}</div>
+                    <div style={{ display: 'flex', gap: 12, marginTop: 8, fontSize: 11.5, color: sub, flexWrap: 'wrap' }}>
+                      {c.addendum && <span>Addendum: <strong style={{ color: col, fontFamily: 'JetBrains Mono, monospace' }}>{c.addendum}</strong></span>}
+                      <span>answered by {who(c.responded_by)}{c.responded_at ? ` · ${String(c.responded_at).slice(0, 10)}` : ''}</span>
+                    </div>
+                  </div>
+                ) : canEdit ? (
+                  <div style={{ padding: '10px 14px', borderTop: bd }}>
+                    <button onClick={() => setAnswer(c)} style={{ padding: '6px 12px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Answer</button>
+                  </div>
+                ) : (
+                  <div style={{ padding: '10px 14px', borderTop: bd, fontSize: 12, color: sub }}>Awaiting response.</div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {raise && <RaiseModal dark={dark} projectId={projectId} tenderId={tenderId} onClose={() => setRaise(false)} onSaved={() => { setRaise(false); load() }} />}
+      {answer && <AnswerModal dark={dark} projectId={projectId} tenderId={tenderId} clar={answer} onClose={() => setAnswer(null)} onSaved={() => { setAnswer(null); load() }} />}
+    </div>
+  )
+}
+
+function RaiseModal({ dark, projectId, tenderId, onClose, onSaved }: {
+  dark: boolean; projectId: number; tenderId: number; onClose: () => void; onSaved: () => void
+}) {
+  const [suppliers, setSuppliers] = useState<Sup[]>([])
+  const [ref, setRef] = useState('')
+  const [supplierId, setSupplierId] = useState('')
+  const [question, setQuestion] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const sub = '#94a3b8'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const cardBg = dark ? '#0f172a' : '#fff'
+  const inp: React.CSSProperties = { height: 34, padding: '0 10px', borderRadius: 6, width: '100%', border: bd, background: dark ? '#0b1220' : '#f8fafc', color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }
+  const lbl = (t: string) => <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 4, marginTop: 12 }}>{t}</div>
+
+  useEffect(() => { axios.get(`${API}/admin/suppliers`).then(r => setSuppliers(Array.isArray(r.data) ? r.data : (r.data.rows ?? []))).catch(() => {}) }, [])
+
+  const valid = ref.trim() && question.trim()
+  const save = async () => {
+    setSaving(true); setErr('')
+    try {
+      await axios.post(`${API}/pre-award/${projectId}/tenders/${tenderId}/clarifications`,
+        { ref: ref.trim(), supplier_id: supplierId ? Number(supplierId) : null, question: question.trim() })
+      onSaved()
+    } catch (e) { setErr(axios.isAxiosError(e) ? (e.response?.data?.error ?? 'Could not raise.') : 'Could not raise.'); setSaving(false) }
+  }
+
+  return (
+    <div onClick={() => !saving && onClose()} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: cardBg, borderRadius: 12, padding: 24, width: 480, maxWidth: '94vw', border: bd, maxHeight: '90vh', overflowY: 'auto' }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: col }}>Raise a clarification</div>
+        {lbl('Reference')}
+        <input value={ref} onChange={e => setRef(e.target.value)} placeholder="e.g. CL-001" style={inp} />
+        {lbl('Supplier (optional)')}
+        <select value={supplierId} onChange={e => setSupplierId(e.target.value)} style={inp}>
+          <option value="">— None (general) —</option>
+          {suppliers.map(s => <option key={s.id} value={s.id}>{s.name} ({s.code})</option>)}
+        </select>
+        {lbl('Question')}
+        <textarea value={question} onChange={e => setQuestion(e.target.value)} rows={3} placeholder="The clarification question…" style={{ ...inp, height: 'auto', padding: '8px 10px' }} />
+        {err && <div style={{ color: '#b91c1c', fontSize: 12.5, marginTop: 10 }}>{err}</div>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+          <button disabled={saving} onClick={onClose} style={{ padding: '8px 14px', borderRadius: 6, border: bd, background: 'none', color: sub, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+          <button disabled={!valid || saving} onClick={save} style={{ padding: '8px 14px', borderRadius: 6, border: 'none', background: valid ? '#2563eb' : '#94a3b8', color: '#fff', fontSize: 13, fontWeight: 600, cursor: valid ? 'pointer' : 'default', fontFamily: 'inherit' }}>{saving ? 'Raising…' : 'Raise'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AnswerModal({ dark, projectId, tenderId, clar, onClose, onSaved }: {
+  dark: boolean; projectId: number; tenderId: number; clar: Clar; onClose: () => void; onSaved: () => void
+}) {
+  const [response, setResponse] = useState('')
+  const [addendum, setAddendum] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const sub = '#94a3b8'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const cardBg = dark ? '#0f172a' : '#fff'
+  const inp: React.CSSProperties = { height: 34, padding: '0 10px', borderRadius: 6, width: '100%', border: bd, background: dark ? '#0b1220' : '#f8fafc', color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }
+  const lbl = (t: string) => <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 4, marginTop: 12 }}>{t}</div>
+
+  const save = async () => {
+    if (!response.trim()) { setErr('Response is required'); return }
+    setSaving(true); setErr('')
+    try {
+      await axios.patch(`${API}/pre-award/${projectId}/tenders/${tenderId}/clarifications/${clar.id}`,
+        { response: response.trim(), addendum: addendum.trim() || null })
+      onSaved()
+    } catch (e) { setErr(axios.isAxiosError(e) ? (e.response?.data?.error ?? 'Could not answer.') : 'Could not answer.'); setSaving(false) }
+  }
+
+  return (
+    <div onClick={() => !saving && onClose()} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: cardBg, borderRadius: 12, padding: 24, width: 480, maxWidth: '94vw', border: bd, maxHeight: '90vh', overflowY: 'auto' }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: col }}>Answer clarification {clar.ref}</div>
+        <div style={{ fontSize: 12.5, color: sub, marginTop: 6, whiteSpace: 'pre-wrap' }}>{clar.question}</div>
+        {lbl('Response')}
+        <textarea value={response} onChange={e => setResponse(e.target.value)} rows={3} placeholder="The official response…" style={{ ...inp, height: 'auto', padding: '8px 10px' }} />
+        {lbl('Addendum reference (optional)')}
+        <input value={addendum} onChange={e => setAddendum(e.target.value)} placeholder="e.g. ADD-01" style={inp} />
+        {err && <div style={{ color: '#b91c1c', fontSize: 12.5, marginTop: 10 }}>{err}</div>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+          <button disabled={saving} onClick={onClose} style={{ padding: '8px 14px', borderRadius: 6, border: bd, background: 'none', color: sub, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+          <button disabled={saving || !response.trim()} onClick={save} style={{ padding: '8px 14px', borderRadius: 6, border: 'none', background: response.trim() ? '#E84E0F' : '#94a3b8', color: '#fff', fontSize: 13, fontWeight: 600, cursor: response.trim() ? 'pointer' : 'default', fontFamily: 'inherit' }}>{saving ? 'Saving…' : 'Submit answer'}</button>
         </div>
       </div>
     </div>
