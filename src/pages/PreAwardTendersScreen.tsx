@@ -59,8 +59,9 @@ const fmtValue = (v: string | number | null, currency: string | null) => {
   return `${currency || 'AUD'} ${n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
 }
 
-export function PreAwardTendersScreen({ dark, projectId, projectName, onBack }: {
+export function PreAwardTendersScreen({ dark, projectId, projectName, onBack, onOpenTender }: {
   dark: boolean; projectId: number; projectName: string; onBack: () => void
+  onOpenTender?: (id: number) => void
 }) {
   const [rows,    setRows]    = useState<TenderRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -163,7 +164,12 @@ export function PreAwardTendersScreen({ dark, projectId, projectName, onBack }: 
                 ) : shown.map(r => {
                   const st = STATUS_STYLE[r.status] ?? { bg: 'rgba(148,163,184,0.15)', text: '#64748b' }
                   return (
-                    <tr key={r.id}>
+                    <tr
+                      key={r.id}
+                      onClick={() => onOpenTender?.(r.id)}
+                      style={{ cursor: onOpenTender ? 'pointer' : 'default' }}
+                      onMouseEnter={e => { if (onOpenTender) e.currentTarget.style.background = dark ? 'rgba(255,255,255,0.04)' : '#f8fafc' }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>
                       <td style={{ ...tdStyle(), fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }}>{r.ref}</td>
                       <td style={{ ...tdStyle(), whiteSpace: 'normal', maxWidth: 280 }}>{r.title}</td>
                       <td style={{ ...tdStyle(), color: sub }}>{humanise(r.discipline)}</td>

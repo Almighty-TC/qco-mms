@@ -14,6 +14,7 @@ import { FoundWBSScreen } from './pages/FoundWBSScreen'
 import { FoundCommodityScreen } from './pages/FoundCommodityScreen'
 import { FoundEquipmentScreen } from './pages/FoundEquipmentScreen'
 import { PreAwardTendersScreen } from './pages/PreAwardTendersScreen'
+import { PreAwardDetailScreen } from './pages/PreAwardDetailScreen'
 import { ExpeditingScreen } from './pages/ExpeditingScreen'
 import { ExpPODetailScreen } from './pages/ExpPODetailScreen'
 import { MTOListScreen } from './pages/MTOListScreen'
@@ -40,7 +41,7 @@ import './App.css'
 // 'admin' enforces role === 'admin'; 'procurement' is project-scoped.
 // ─── ROUTING — state-based, no router library ─────────────────────────────────
 // 'po-detail' is Phase 3 PO Detail Screen — full dedicated screen.
-type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'pre-award-tenders' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers' | 'traceability' | 'documents' | 'pending-changes' | 'audit' | 'rfi-meeting' | 'reports'
+type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'pre-award-tenders' | 'pre-award-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers' | 'traceability' | 'documents' | 'pending-changes' | 'audit' | 'rfi-meeting' | 'reports'
 
 // ─── DEEP-LINK PARSING ───────────────────────────────────────
 // Maps a URL path segment (/project/:id/<segment>) to an internal Page,
@@ -48,7 +49,7 @@ type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'pre-award-ten
 // hard load / refresh of a deep link resolves the right screen AND the
 // active project (the :id in the same path — see parseDeepLink).
 const PAGE_SEGMENTS: Record<string, Page> = {
-  procurement: 'procurement', 'po-detail': 'po-detail', 'pre-award-tenders': 'pre-award-tenders',
+  procurement: 'procurement', 'po-detail': 'po-detail', 'pre-award-tenders': 'pre-award-tenders', 'pre-award-detail': 'pre-award-detail',
   expediting: 'expediting', 'expediting-po-detail': 'expediting-po-detail',
   'mto-list': 'mto-list', 'mto-detail': 'mto-detail',
   logistics: 'logistics', traceability: 'traceability', documents: 'documents', reports: 'reports',
@@ -303,6 +304,7 @@ const CRUMB: Record<string, { module: { label: string; page: Page }; leaf?: stri
   procurement:            { module: { label: 'Procurement — Post-Award', page: 'procurement' } },
   'po-detail':            { module: { label: 'Procurement — Post-Award', page: 'procurement' }, leaf: 'PO Detail' },
   'pre-award-tenders':    { module: { label: 'Procurement — Pre-Award', page: 'pre-award-tenders' } },
+  'pre-award-detail':     { module: { label: 'Procurement — Pre-Award', page: 'pre-award-tenders' }, leaf: 'Tender' },
   expediting:             { module: { label: 'Expediting', page: 'expediting' } },
   'expediting-po-detail': { module: { label: 'Expediting', page: 'expediting' }, leaf: 'PO Detail' },
   'mto-list':             { module: { label: 'MTO Register', page: 'mto-list' } },
@@ -501,7 +503,7 @@ const Nav = ({
             {(procOpen || collapsed) && (
               <div style={{ paddingLeft: collapsed ? 0 : 22 }}>
                 {[
-                  ...(selectedProjectId ? [{ label: 'Pre-Award', icon: '📑', page: 'pre-award-tenders' as Page, activePages: ['pre-award-tenders'] as Page[] }] : []),
+                  ...(selectedProjectId ? [{ label: 'Pre-Award', icon: '📑', page: 'pre-award-tenders' as Page, activePages: ['pre-award-tenders', 'pre-award-detail'] as Page[] }] : []),
                   { label: 'Post-Award', icon: '🧾', page: 'procurement' as Page, activePages: ['procurement', 'po-detail'] as Page[] },
                 ].map(item => {
                   const active = item.activePages.includes(activePage)
@@ -923,6 +925,7 @@ function App() {
   // ─── PO Detail Screen (Phase 3) ─────────────────────────────────────────
   // selectedPOId tracks which PO the user navigated to in Phase 3.
   const [selectedPOId,    setSelectedPOId]    = useState<number | null>(null)
+  const [selectedTenderId, setSelectedTenderId] = useState<number | null>(null)  // Pre-Award tender detail drill-down
   const [selectedMTOId,   setSelectedMTOId]   = useState<number | null>(null)
   const [selectedExpPOId, setSelectedExpPOId] = useState<number | null>(null)
   // Breadcrumb leaf — the current detail entity's ref (e.g. a PO/MTO ref). Detail
@@ -1399,7 +1402,13 @@ function App() {
 
           {page === 'pre-award-tenders' && selectedProjectId && (
             <PreAwardTendersScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
-              onBack={() => setPage('dashboard')} />
+              onBack={() => setPage('dashboard')}
+              onOpenTender={(id: number) => { setSelectedTenderId(id); setPage('pre-award-detail') }} />
+          )}
+
+          {page === 'pre-award-detail' && selectedProjectId && selectedTenderId && (
+            <PreAwardDetailScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
+              tenderId={selectedTenderId} onBack={() => setPage('pre-award-tenders')} onLeaf={setCrumbLeaf} />
           )}
 
           {/* ─── EXPEDITING (includes VDRL Register tab) ────────
