@@ -81,10 +81,12 @@ export function PreAwardInvitationTab({ dark, projectId, tenderId, userRole, use
 
       {sub === 'criteria'
         ? <CriteriaSection dark={dark} projectId={projectId} tenderId={tenderId} userRole={userRole} userId={userId} />
+        : sub === 'documents'
+        ? <DocumentsSection dark={dark} projectId={projectId} tenderId={tenderId} userRole={userRole} userId={userId} />
         : (
           <div style={{ padding: '32px 18px', border: bd, borderRadius: 8, background: dark ? '#0f172a' : '#fff', color: sub2, fontSize: 13, textAlign: 'center' }}>
-            <div style={{ fontWeight: 600, color: col, marginBottom: 6 }}>{sub === 'documents' ? 'Documents' : 'Clarifications'}</div>
-            This section is built in an upcoming sub-step ({sub === 'documents' ? '3.1c-2' : '3.1c-3'}).
+            <div style={{ fontWeight: 600, color: col, marginBottom: 6 }}>Clarifications</div>
+            This section is built in an upcoming sub-step (3.1c-3).
           </div>
         )}
     </div>
@@ -271,6 +273,166 @@ function CriteriaSection({ dark, projectId, tenderId, userRole, userId }: {
             <span style={{ fontSize: 11.5, color: sub }}>Dragging a weight auto-rebalances the others to keep the total at 100.</span>
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ─── DOCUMENTS (compliance checklist) ───────────────────────
+// GET /documents (can_view) + PUT /documents/:doc_key (can_edit). No file
+// upload/download exists in the Pre-Award backend — this tracks each document's
+// requirement + status only. file_path is used purely as an optional free-text note.
+const DOC_STATUS: Record<string, { bg: string; text: string; label: string }> = {
+  pending:  { bg: 'rgba(148,163,184,0.15)', text: '#64748b', label: 'Pending' },
+  uploaded: { bg: 'rgba(34,197,94,0.14)',   text: '#15803d', label: 'Uploaded' },
+  waived:   { bg: 'rgba(245,158,11,0.14)',  text: '#b45309', label: 'Waived' },
+}
+const DOC_STATUS_VALUES = ['pending', 'uploaded', 'waived'] as const
+
+interface Doc { id: number; doc_key: string; label: string; required: boolean; status: string; note: string | null; uploaded_by: number | null; uploaded_at: string | null }
+
+function DocumentsSection({ dark, projectId, tenderId, userRole, userId }: {
+  dark: boolean; projectId: number; tenderId: number; userRole: string; userId: number
+}) {
+  const [docs, setDocs] = useState<Doc[]>([])
+  const [loading, setLoading] = useState(true)
+  const [err, setErr] = useState('')
+  const [edit, setEdit] = useState<Doc | 'new' | null>(null)
+
+  const canEdit = CAN_EDIT.includes(userRole)
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const sub = '#94a3b8'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const rowBd = `1px solid ${dark ? '#1e293b' : '#eef2f7'}`
+  const cardBg = dark ? '#0f172a' : '#fff'
+
+  const load = useCallback(async () => {
+    setLoading(true); setErr('')
+    try {
+      const { data } = await axios.get(`${API}/pre-award/${projectId}/tenders/${tenderId}/documents`)
+      setDocs((data.documents ?? []).map((d: { id: number; doc_key: string; label: string; required: number; status: string; file_path: string | null; uploaded_by: number | null; uploaded_at: string | null }) => ({
+        id: d.id, doc_key: d.doc_key, label: d.label, required: !!d.required, status: d.status, note: d.file_path, uploaded_by: d.uploaded_by, uploaded_at: d.uploaded_at,
+      })))
+    } catch { setErr('Could not load the document checklist.') } finally { setLoading(false) }
+  }, [projectId, tenderId])
+  useEffect(() => { load() }, [load])
+
+  const th: React.CSSProperties = { padding: '8px 10px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.06em', textTransform: 'uppercase', borderBottom: bd, textAlign: 'left', whiteSpace: 'nowrap' }
+  const td: React.CSSProperties = { padding: '9px 10px', fontSize: 13, color: col, borderBottom: rowBd, verticalAlign: 'middle' }
+
+  return (
+    <div>
+      {/* Honest indicator — checklist only, no file storage */}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '11px 14px', borderRadius: 8,
+        border: bd, background: dark ? 'rgba(148,163,184,0.08)' : '#f8fafc', color: sub, fontSize: 12.5, marginBottom: 14 }}>
+        <span style={{ fontSize: 15, lineHeight: 1 }}>📋</span>
+        <span>Compliance checklist — Pre-Award tracks each document's <strong>requirement</strong> and <strong>status</strong> only. Files themselves are not stored or uploaded here.</span>
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 13, color: sub }}>{loading ? 'Loading…' : `${docs.length} checklist item${docs.length !== 1 ? 's' : ''}`}</div>
+        {canEdit && <button onClick={() => setEdit('new')} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>+ Add checklist item</button>}
+      </div>
+
+      {err && <div style={{ color: '#b91c1c', fontSize: 13, marginBottom: 12 }}>{err} <button onClick={load} style={{ background: 'none', border: 'none', color: '#E84E0F', cursor: 'pointer', fontWeight: 600, fontFamily: 'inherit' }}>Retry</button></div>}
+
+      <div style={{ border: bd, borderRadius: 8, overflow: 'hidden', background: cardBg }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={th}>Document</th><th style={th}>Requirement</th><th style={th}>Status</th><th style={th}>Note</th><th style={th}>Marked</th>{canEdit && <th style={th}></th>}
+            </tr></thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={canEdit ? 6 : 5} style={{ padding: '24px', textAlign: 'center', color: sub, fontSize: 13 }}>Loading…</td></tr>
+              ) : docs.length === 0 ? (
+                <tr><td colSpan={canEdit ? 6 : 5} style={{ padding: '24px', textAlign: 'center', color: sub, fontSize: 13 }}>No checklist items yet.</td></tr>
+              ) : docs.map(d => {
+                const st = DOC_STATUS[d.status] ?? DOC_STATUS.pending
+                return (
+                  <tr key={d.id}>
+                    <td style={td}>{d.label}</td>
+                    <td style={td}>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: d.required ? '#b45309' : '#64748b' }}>{d.required ? 'Required' : 'Optional'}</span>
+                    </td>
+                    <td style={td}><span style={{ background: st.bg, color: st.text, fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 9999 }}>{st.label}</span></td>
+                    <td style={{ ...td, color: sub, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.note ?? ''}>{d.note || '—'}</td>
+                    <td style={{ ...td, color: sub, fontSize: 12 }}>{d.status === 'uploaded' && d.uploaded_at ? `${d.uploaded_by === userId ? 'you' : `user #${d.uploaded_by}`} · ${String(d.uploaded_at).slice(0, 10)}` : '—'}</td>
+                    {canEdit && <td style={{ ...td, textAlign: 'right' }}><button onClick={() => setEdit(d)} style={{ background: 'none', border: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}>Edit</button></td>}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {edit && <DocEditModal dark={dark} projectId={projectId} tenderId={tenderId} doc={edit === 'new' ? null : edit} existingKeys={new Set(docs.map(d => d.doc_key))} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); load() }} />}
+    </div>
+  )
+}
+
+function DocEditModal({ dark, projectId, tenderId, doc, existingKeys, onClose, onSaved }: {
+  dark: boolean; projectId: number; tenderId: number; doc: Doc | null; existingKeys: Set<string>; onClose: () => void; onSaved: () => void
+}) {
+  const isNew = !doc
+  const [label, setLabel] = useState(doc?.label ?? '')
+  const [required, setRequired] = useState(doc?.required ?? false)
+  const [status, setStatus] = useState(doc?.status ?? 'pending')
+  const [note, setNote] = useState(doc?.note ?? '')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const sub = '#94a3b8'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const cardBg = dark ? '#0f172a' : '#fff'
+  const inp: React.CSSProperties = { height: 34, padding: '0 10px', borderRadius: 6, width: '100%', border: bd, background: dark ? '#0b1220' : '#f8fafc', color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }
+  const lbl = (t: string) => <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 4, marginTop: 12 }}>{t}</div>
+
+  const save = async () => {
+    if (!label.trim()) { setErr('Label is required'); return }
+    setSaving(true); setErr('')
+    const key = doc?.doc_key ?? slugKey(label, existingKeys)
+    try {
+      await axios.put(`${API}/pre-award/${projectId}/tenders/${tenderId}/documents/${key}`,
+        { label: label.trim(), required: required ? 1 : 0, status, file_path: note.trim() || null })
+      onSaved()
+    } catch (e) {
+      setErr(axios.isAxiosError(e) ? (e.response?.data?.error ?? 'Could not save.') : 'Could not save.')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div onClick={() => !saving && onClose()} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: cardBg, borderRadius: 12, padding: 24, width: 460, maxWidth: '94vw', border: bd }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: col }}>{isNew ? 'Add checklist item' : 'Update document status'}</div>
+
+        {lbl('Document')}
+        <input value={label} onChange={e => setLabel(e.target.value)} disabled={!isNew} placeholder="e.g. Signed NDA"
+          style={{ ...inp, opacity: isNew ? 1 : 0.7, cursor: isNew ? 'text' : 'not-allowed' }} />
+
+        {lbl('Requirement')}
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, color: col, cursor: 'pointer' }}>
+          <input type="checkbox" checked={required} onChange={e => setRequired(e.target.checked)} style={{ accentColor: '#2563eb' }} /> Required
+        </label>
+
+        {lbl('Status')}
+        <select value={status} onChange={e => setStatus(e.target.value)} style={inp}>
+          {DOC_STATUS_VALUES.map(s => <option key={s} value={s}>{DOC_STATUS[s].label}</option>)}
+        </select>
+
+        {lbl('Note (optional)')}
+        <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} placeholder="Optional note — e.g. where the file is held, or why waived"
+          style={{ ...inp, height: 'auto', padding: '8px 10px' }} />
+
+        {err && <div style={{ color: '#b91c1c', fontSize: 12.5, marginTop: 10 }}>{err}</div>}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+          <button disabled={saving} onClick={onClose} style={{ padding: '8px 14px', borderRadius: 6, border: bd, background: 'none', color: sub, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+          <button disabled={saving || !label.trim()} onClick={save} style={{ padding: '8px 14px', borderRadius: 6, border: 'none', background: label.trim() ? '#2563eb' : '#94a3b8', color: '#fff', fontSize: 13, fontWeight: 600, cursor: label.trim() ? 'pointer' : 'default', fontFamily: 'inherit' }}>{saving ? 'Saving…' : 'Save'}</button>
+        </div>
       </div>
     </div>
   )
