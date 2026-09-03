@@ -12,6 +12,7 @@ import { useEffect, useState, useCallback } from 'react'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { PreAwardPrequalTab } from './PreAwardPrequalTab'
+import { PreAwardInvitationTab } from './PreAwardInvitationTab'
 import { API } from '../lib/api'
 
 interface Tender {
@@ -58,8 +59,8 @@ const fmtValue = (v: string | number | null, currency: string | null) => {
 const TABS = ['Prequalification', 'Invitation', 'Bids', 'Evaluation', 'Recommendation / Award'] as const
 type Tab = typeof TABS[number]
 
-export function PreAwardDetailScreen({ dark, projectId, projectName, tenderId, userRole, onBack, onLeaf }: {
-  dark: boolean; projectId: number; projectName: string; tenderId: number; userRole: string
+export function PreAwardDetailScreen({ dark, projectId, projectName, tenderId, userRole, userId, onBack, onLeaf }: {
+  dark: boolean; projectId: number; projectName: string; tenderId: number; userRole: string; userId: number
   onBack: () => void; onLeaf?: (ref: string | null) => void
 }) {
   const [tender,  setTender]  = useState<Tender | null>(null)
@@ -160,6 +161,8 @@ export function PreAwardDetailScreen({ dark, projectId, projectName, tenderId, u
           {/* Tab content */}
           {tab === 'Prequalification' ? (
             <PreAwardPrequalTab dark={dark} projectId={projectId} discipline={tender.discipline} userRole={userRole} />
+          ) : tab === 'Invitation' ? (
+            <PreAwardInvitationTab dark={dark} projectId={projectId} tenderId={tender.id} userRole={userRole} userId={userId} />
           ) : (
             <div style={{ padding: '32px 18px', border: bd, borderRadius: 8, background: cardBg, color: sub, fontSize: 13, textAlign: 'center' }}>
               <div style={{ fontWeight: 600, color: col, marginBottom: 6 }}>{tab}</div>
