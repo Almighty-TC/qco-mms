@@ -1408,7 +1408,7 @@ function App() {
 
           {page === 'pre-award-detail' && selectedProjectId && selectedTenderId && (
             <PreAwardDetailScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
-              tenderId={selectedTenderId} onBack={() => setPage('pre-award-tenders')} onLeaf={setCrumbLeaf} />
+              tenderId={selectedTenderId} userRole={user?.role ?? ''} onBack={() => setPage('pre-award-tenders')} onLeaf={setCrumbLeaf} />
           )}
 
           {/* ─── EXPEDITING (includes VDRL Register tab) ────────

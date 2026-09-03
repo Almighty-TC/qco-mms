@@ -11,6 +11,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
+import { PreAwardPrequalTab } from './PreAwardPrequalTab'
 import { API } from '../lib/api'
 
 interface Tender {
@@ -57,8 +58,8 @@ const fmtValue = (v: string | number | null, currency: string | null) => {
 const TABS = ['Prequalification', 'Invitation', 'Bids', 'Evaluation', 'Recommendation / Award'] as const
 type Tab = typeof TABS[number]
 
-export function PreAwardDetailScreen({ dark, projectId, projectName, tenderId, onBack, onLeaf }: {
-  dark: boolean; projectId: number; projectName: string; tenderId: number
+export function PreAwardDetailScreen({ dark, projectId, projectName, tenderId, userRole, onBack, onLeaf }: {
+  dark: boolean; projectId: number; projectName: string; tenderId: number; userRole: string
   onBack: () => void; onLeaf?: (ref: string | null) => void
 }) {
   const [tender,  setTender]  = useState<Tender | null>(null)
@@ -156,13 +157,17 @@ export function PreAwardDetailScreen({ dark, projectId, projectName, tenderId, o
             })}
           </div>
 
-          {/* Placeholder panel */}
-          <div style={{ padding: '32px 18px', border: bd, borderRadius: 8, background: cardBg, color: sub, fontSize: 13, textAlign: 'center' }}>
-            <div style={{ fontWeight: 600, color: col, marginBottom: 6 }}>{tab}</div>
-            {tab === 'Evaluation'
-              ? 'This tab is part of the planned sequence; its backend (scoring) is not yet built.'
-              : 'This tab will be built in an upcoming sub-step.'}
-          </div>
+          {/* Tab content */}
+          {tab === 'Prequalification' ? (
+            <PreAwardPrequalTab dark={dark} projectId={projectId} discipline={tender.discipline} userRole={userRole} />
+          ) : (
+            <div style={{ padding: '32px 18px', border: bd, borderRadius: 8, background: cardBg, color: sub, fontSize: 13, textAlign: 'center' }}>
+              <div style={{ fontWeight: 600, color: col, marginBottom: 6 }}>{tab}</div>
+              {tab === 'Evaluation'
+                ? 'This tab is part of the planned sequence; its backend (scoring) is not yet built.'
+                : 'This tab will be built in an upcoming sub-step.'}
+            </div>
+          )}
         </>
       )}
     </div>
