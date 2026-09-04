@@ -13,6 +13,7 @@ import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { PreAwardPrequalTab } from './PreAwardPrequalTab'
 import { PreAwardInvitationTab } from './PreAwardInvitationTab'
+import { PreAwardBidsTab } from './PreAwardBidsTab'
 import { API } from '../lib/api'
 
 interface Tender {
@@ -163,6 +164,8 @@ export function PreAwardDetailScreen({ dark, projectId, projectName, tenderId, u
             <PreAwardPrequalTab dark={dark} projectId={projectId} discipline={tender.discipline} userRole={userRole} />
           ) : tab === 'Invitation' ? (
             <PreAwardInvitationTab dark={dark} projectId={projectId} tenderId={tender.id} userRole={userRole} userId={userId} />
+          ) : tab === 'Bids' ? (
+            <PreAwardBidsTab dark={dark} projectId={projectId} tenderId={tender.id} userRole={userRole} userId={userId} />
           ) : (
             <div style={{ padding: '32px 18px', border: bd, borderRadius: 8, background: cardBg, color: sub, fontSize: 13, textAlign: 'center' }}>
               <div style={{ fontWeight: 600, color: col, marginBottom: 6 }}>{tab}</div>
