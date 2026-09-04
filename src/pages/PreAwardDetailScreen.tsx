@@ -61,6 +61,15 @@ const fmtValue = (v: string | number | null, currency: string | null) => {
 const TABS = ['Prequalification', 'Invitation', 'Bids', 'Evaluation', 'Recommendation / Award'] as const
 type Tab = typeof TABS[number]
 
+const CAN_EDIT = ['admin', 'procurement_manager', 'procurement_officer', 'project_manager']  // can_edit
+const PROC_MODES_EDIT = [
+  { v: 'private_negotiated',  label: 'Private — Negotiated' },
+  { v: 'private_competitive', label: 'Private — Competitive' },
+  { v: 'mdb_funded',          label: 'MDB Funded' },
+]
+const DISCIPLINES_EDIT = ['mechanical', 'electrical', 'instrumentation', 'civil', 'piping', 'structural']
+const STAGES_EDIT = ['planning', 'prequalification', 'invitation', 'clarifications', 'tendering', 'evaluation', 'recommendation', 'award']
+
 export function PreAwardDetailScreen({ dark, projectId, projectName, tenderId, userRole, userId, onBack, onLeaf }: {
   dark: boolean; projectId: number; projectName: string; tenderId: number; userRole: string; userId: number
   onBack: () => void; onLeaf?: (ref: string | null) => void
@@ -69,6 +78,8 @@ export function PreAwardDetailScreen({ dark, projectId, projectName, tenderId, u
   const [loading, setLoading] = useState(true)
   const [err,     setErr]     = useState('')
   const [tab,     setTab]     = useState<Tab>('Prequalification')
+  const [showEdit, setShowEdit] = useState(false)
+  const canEdit = CAN_EDIT.includes(userRole)
 
   const col  = dark ? '#f1f5f9' : '#0f172a'
   const sub  = '#94a3b8'
@@ -123,13 +134,19 @@ export function PreAwardDetailScreen({ dark, projectId, projectName, tenderId, u
       {tender && !err && (
         <>
           {/* Header */}
-          <div style={{ marginBottom: 18 }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 13, fontFamily: 'JetBrains Mono, monospace', color: '#E84E0F', fontWeight: 600 }}>{tender.ref}</span>
-              {st && <span style={{ background: st.bg, color: st.text, fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 9999 }}>{humanise(tender.status)}</span>}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 18 }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 13, fontFamily: 'JetBrains Mono, monospace', color: '#E84E0F', fontWeight: 600 }}>{tender.ref}</span>
+                {st && <span style={{ background: st.bg, color: st.text, fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 9999 }}>{humanise(tender.status)}</span>}
+              </div>
+              <h2 style={{ margin: '4px 0 0', fontSize: 22, fontWeight: 700, color: col, letterSpacing: '-0.02em' }}>{tender.title}</h2>
+              <div style={{ fontSize: 13, color: sub, marginTop: 3 }}>{projectName || 'Project'}</div>
             </div>
-            <h2 style={{ margin: '4px 0 0', fontSize: 22, fontWeight: 700, color: col, letterSpacing: '-0.02em' }}>{tender.title}</h2>
-            <div style={{ fontSize: 13, color: sub, marginTop: 3 }}>{projectName || 'Project'}</div>
+            {canEdit && (
+              <button onClick={() => setShowEdit(true)}
+                style={{ flexShrink: 0, height: 34, padding: '0 14px', borderRadius: 6, border: bd, background: 'none', color: col, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Edit tender</button>
+            )}
           </div>
 
           {/* Core fields */}
@@ -177,8 +194,130 @@ export function PreAwardDetailScreen({ dark, projectId, projectName, tenderId, u
                 : 'This tab will be built in an upcoming sub-step.'}
             </div>
           )}
+
+          {showEdit && (
+            <EditTenderModal dark={dark} projectId={projectId} tender={tender}
+              onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load() }} />
+          )}
         </>
       )}
+    </div>
+  )
+}
+
+// ─── EDIT TENDER MODAL ──────────────────────────────────────
+// Pre-populated PATCH of an existing tender. Sends only CHANGED fields. Mirrors the
+// create form's enum-constrained dropdowns. procurement_mode/discipline are disabled
+// when the tender is committed (criteria locked or awarded) — a UX courtesy over the
+// real server guard; the exact server 409 message is shown inline and stays the
+// authoritative backstop.
+function EditTenderModal({ dark, projectId, tender, onClose, onSaved }: {
+  dark: boolean; projectId: number; tender: Tender; onClose: () => void; onSaved: () => void
+}) {
+  const [title, setTitle] = useState(tender.title)
+  const [mode, setMode] = useState(tender.procurement_mode)
+  const [discipline, setDiscipline] = useState(tender.discipline ?? '')
+  const [stage, setStage] = useState(tender.stage)
+  const [value, setValue] = useState(tender.estimated_value == null ? '' : String(tender.estimated_value))
+  const [currency, setCurrency] = useState(tender.currency ?? 'AUD')
+  const [locked, setLocked] = useState<boolean | null>(null)  // null = still loading criteria state
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const sub = '#94a3b8'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const cardBg = dark ? '#0f172a' : '#fff'
+  const inp: React.CSSProperties = { height: 34, padding: '0 10px', borderRadius: 6, width: '100%', border: bd, background: dark ? '#0b1220' : '#f8fafc', color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }
+  const lbl = (t: string) => <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 4, marginTop: 12 }}>{t}</div>
+
+  // criteria_locked_at isn't in the tender header payload — read it from the criteria endpoint.
+  useEffect(() => {
+    axios.get(`${API}/pre-award/${projectId}/tenders/${tender.id}/criteria`)
+      .then(r => setLocked(!!r.data?.locked)).catch(() => setLocked(false))
+  }, [projectId, tender.id])
+
+  // Frozen structural fields — matches the server guard's two triggers, with its exact message.
+  const awarded = tender.stage === 'award'
+  const frozen = awarded || locked === true
+  const frozenMsg = locked === true
+    ? 'criteria are locked for this tender'
+    : awarded ? 'the tender has been awarded' : ''
+
+  const save = async () => {
+    if (!title.trim()) { setErr('Title cannot be empty'); return }
+    // Build a patch of ONLY changed fields.
+    const patch: Record<string, unknown> = {}
+    if (title.trim() !== tender.title) patch.title = title.trim()
+    if (mode !== tender.procurement_mode) patch.procurement_mode = mode
+    const discNorm = discipline || null
+    if (discNorm !== (tender.discipline ?? null)) patch.discipline = discNorm
+    if (stage !== tender.stage) patch.stage = stage
+    const valNorm = value === '' ? null : Number(value)
+    if (valNorm !== (tender.estimated_value == null ? null : Number(tender.estimated_value))) patch.estimated_value = valNorm
+    if ((currency.trim() || 'AUD') !== (tender.currency ?? 'AUD')) patch.currency = currency.trim() || 'AUD'
+    if (Object.keys(patch).length === 0) { onClose(); return }
+
+    setSaving(true); setErr('')
+    try {
+      await axios.patch(`${API}/pre-award/${projectId}/tenders/${tender.id}`, patch)
+      onSaved()
+    } catch (e) {
+      setErr(axios.isAxiosError(e) ? (e.response?.data?.error ?? 'Could not save the tender.') : 'Could not save the tender.')
+      setSaving(false)
+    }
+  }
+
+  const frozenSelect: React.CSSProperties = { ...inp, opacity: 0.6, cursor: 'not-allowed' }
+
+  return (
+    <div onClick={() => !saving && onClose()} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: cardBg, borderRadius: 12, padding: 24, width: 500, maxWidth: '94vw', border: bd, maxHeight: '92vh', overflowY: 'auto' }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: col }}>Edit tender</div>
+        <div style={{ fontSize: 12, color: sub, marginTop: 3, fontFamily: 'JetBrains Mono, monospace' }}>{tender.ref}</div>
+
+        {lbl('Title')}
+        <input value={title} onChange={e => setTitle(e.target.value)} style={inp} />
+
+        {lbl('Procurement mode')}
+        <select value={mode} onChange={e => setMode(e.target.value)} disabled={frozen} style={frozen ? frozenSelect : inp}>
+          {PROC_MODES_EDIT.map(m => <option key={m.v} value={m.v}>{m.label}</option>)}
+        </select>
+
+        <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ flex: 1 }}>
+            {lbl('Discipline')}
+            <select value={discipline} onChange={e => setDiscipline(e.target.value)} disabled={frozen} style={frozen ? frozenSelect : inp}>
+              <option value="">— None —</option>
+              {DISCIPLINES_EDIT.map(d => <option key={d} value={d}>{humanise(d)}</option>)}
+            </select>
+          </div>
+          <div style={{ flex: 1 }}>
+            {lbl('Stage')}
+            <select value={stage} onChange={e => setStage(e.target.value)} style={inp}>
+              {STAGES_EDIT.map(s => <option key={s} value={s}>{humanise(s)}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {frozen && (
+          <div style={{ fontSize: 12, color: sub, marginTop: 8, padding: '8px 10px', borderRadius: 6, border: bd, background: dark ? 'rgba(148,163,184,0.06)' : '#f8fafc' }}>
+            Procurement mode and discipline can’t be changed: {frozenMsg}.
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ flex: 1 }}>{lbl('Estimated value')}<input type="number" min={0} value={value} onChange={e => setValue(e.target.value)} style={inp} /></div>
+          <div style={{ width: 100 }}>{lbl('Currency')}<input value={currency} onChange={e => setCurrency(e.target.value)} style={inp} /></div>
+        </div>
+
+        {err && <div style={{ color: '#b91c1c', fontSize: 12.5, marginTop: 12 }}>{err}</div>}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+          <button disabled={saving} onClick={onClose} style={{ padding: '8px 14px', borderRadius: 6, border: bd, background: 'none', color: sub, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+          <button disabled={saving || !title.trim()} onClick={save} style={{ padding: '8px 14px', borderRadius: 6, border: 'none', background: title.trim() ? '#2563eb' : '#94a3b8', color: '#fff', fontSize: 13, fontWeight: 600, cursor: title.trim() ? 'pointer' : 'default', fontFamily: 'inherit' }}>{saving ? 'Saving…' : 'Save changes'}</button>
+        </div>
+      </div>
     </div>
   )
 }
