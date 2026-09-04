@@ -9,11 +9,112 @@ const { dbError } = require('../utils/dbError')
 const { authenticateToken } = require('../middleware/auth')
 const { fileFilter } = require('../utils/upload')
 const { dateOrder } = require('../utils/validate')
+const { setSealNo, setContainerNo, SealGovernanceError } = require('../lib/sealGovernance') // Q4.3 shared seal governance
+
+// ─── Q3 CHILD-STOCK CAPABILITY DETECT ─────────────────────────
+// Did migrate-child-stock.js run? Cached sticky-true (re-checked only while false →
+// self-heals after the migration without a restart). Lets the create path degrade
+// gracefully when the inheritance columns aren't live yet (child created as before,
+// no inherit/block) instead of erroring on a missing column.
+let _childStockCols = false
+async function childStockColsLive() {
+  if (_childStockCols) return true
+  const [[r]] = await db.query(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'scn_additional_items' AND column_name = 'wbs_code_snapshot'`)
+  _childStockCols = r.n > 0
+  return _childStockCols
+}
+
+// Did migrate-delegated-packaging.js run? Cached sticky-true (D3 deploy-tolerance). Lets
+// the SCN-create path degrade gracefully when the delegation columns aren't live yet
+// (SCN created without delegation fields) instead of erroring on a missing column.
+let _delegCols = false
+async function scnDelegationColsLive() {
+  if (_delegCols) return true
+  const [[r]] = await db.query(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'shipment_control_notes' AND column_name = 'packaging_delegated_to'`)
+  _delegCols = r.n > 0
+  return _delegCols
+}
+
+// Did migrate-transport-modes.js run? Cached sticky-true. Lets the create path persist
+// multi-modal legs once live, and degrade gracefully (mode='multi' unsupported) before.
+let _transportCols = false
+async function scnTransportModesLive() {
+  if (_transportCols) return true
+  const [[r]] = await db.query(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'shipment_control_notes' AND column_name = 'transport_modes'`)
+  _transportCols = r.n > 0
+  return _transportCols
+}
+
+// Did migrate-heat-package-links.js run? (Pass 3a) — gates the optional heat→package link
+// so the create path degrades gracefully (heat saved without package_id) pre-migration.
+let _heatPkgCol = false
+async function scnHeatPackageColLive() {
+  if (_heatPkgCol) return true
+  const [[r]] = await db.query(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'scn_heats' AND column_name = 'package_id'`)
+  _heatPkgCol = r.n > 0
+  return _heatPkgCol
+}
+
+// ─── DELEGATION VALIDATION (forwarder-delegated packaging, D3) ─────────────────
+// Pure verdict (uses conn only for the freight_forwarder lookup) — the SCN-create route
+// calls it; exported so the D3 proofs run THIS exact code (no drift).
+//   packed_by_type='forwarder' → packaging_delegated_to MUST be an ACTIVE freight_forwarder
+//     user; on success forwarder_user_id is set to the delegate (visibility scoping) and
+//     packaging_status starts 'pending' (hand-back lifecycle, D4).
+//   packed_by_type='internal'|'vendor' → packaging_delegated_to MUST be empty (NULL) —
+//     no external write access (vendor packages are entered by the expeditor).
+// Returns { ok:true, packedBy, delegateId, packagingStatus, forwarderUserId }
+//      or { ok:false, status, error } (caller maps !ok → status).
+async function resolveDelegation(packed_by_type, packaging_delegated_to, conn) {
+  const PACKED_TYPES = new Set(['internal', 'vendor', 'forwarder'])
+  const packedBy = packed_by_type || 'internal'
+  if (!PACKED_TYPES.has(packedBy)) {
+    return { ok: false, status: 422, error: "packed_by_type must be 'internal', 'vendor', or 'forwarder'." }
+  }
+  if (packedBy === 'forwarder') {
+    const delegateId = Number(packaging_delegated_to) || null
+    if (!delegateId) {
+      return { ok: false, status: 422, error: 'packed_by_type=forwarder requires packaging_delegated_to (an active freight forwarder).' }
+    }
+    const [[ff]] = await conn.query(
+      "SELECT id FROM users WHERE id = ? AND role = 'freight_forwarder' AND is_active = 1", [delegateId])
+    if (!ff) {
+      return { ok: false, status: 422, error: 'packaging_delegated_to must be an active freight_forwarder user.' }
+    }
+    // forwarder_user_id = the delegate → existing forwarder visibility scoping surfaces it.
+    return { ok: true, packedBy, delegateId, packagingStatus: 'pending', forwarderUserId: delegateId }
+  }
+  // internal / vendor → must NOT name a delegate (no external write access).
+  if (packaging_delegated_to != null && packaging_delegated_to !== '') {
+    return { ok: false, status: 422, error: 'packaging_delegated_to must be empty unless packed_by_type=forwarder.' }
+  }
+  return { ok: true, packedBy, delegateId: null, packagingStatus: null, forwarderUserId: null }
+}
 
 router.use(authenticateToken)
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
 router.use(require('../middleware/permissions').enforce(p => p.includes('/vdrl') ? 'vdrl' : 'expediting')) // C-b2: vdrl routes→vdrl, else expediting
 router.param('projectId', require('../middleware/permissions').requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects
+
+// GET /api/expediting/forwarders — active freight_forwarder users for the delegation
+// picker (D5). GET → enforce('expediting') can_view (expeditors have it). Read-only,
+// no project param (forwarders aren't project-scoped). Returns id + name + company.
+router.get('/forwarders', async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT id, full_name, company, email FROM users
+       WHERE role = 'freight_forwarder' AND is_active = 1 ORDER BY full_name`)
+    res.json(rows)
+  } catch (e) { dbError(res, e) }
+})
 
 // ─── ACCESS CONTROL ───────────────────────────────────────────
 // Roles that can see all POs; others see only their assigned ones.
@@ -700,11 +801,9 @@ router.put('/:projectId/vdrl/documents/:docId', async (req, res) => {
 const fsVdrl   = require('fs')
 const pathVdrl = require('path')
 const vdrlFileDir = pathVdrl.join(__dirname, '../uploads/vdrl-documents')
+const blobStoreVdrl = require('../lib/blobStore')   // blob migration
 const uploadVdrlFile = require('multer')({
-  storage: require('multer').diskStorage({
-    destination: (_req, _file, cb) => { fsVdrl.mkdirSync(vdrlFileDir, { recursive: true }); cb(null, vdrlFileDir) },
-    filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]+/g, '_')}`),
-  }),
+  storage: require('multer').memoryStorage(),   // buffer → blobStore.persist (blob or disk fallback)
   limits: { fileSize: 25 * 1024 * 1024 },
   fileFilter: fileFilter('document'),
 })
@@ -718,16 +817,22 @@ router.post('/:projectId/vdrl/documents/:docId/file', uploadVdrlFile.single('fil
     const [[doc]] = await db.query(
       `SELECT d.id FROM vdrl_documents d JOIN vdrl_packages p ON p.id = d.package_id
        WHERE d.id=? AND p.project_id=?`, [docId, pid])
-    if (!doc) { fsVdrl.unlinkSync(req.file.path); return res.status(404).json({ error: 'VDRL document not found in this project' }) }
+    if (!doc) { return res.status(404).json({ error: 'VDRL document not found in this project' }) }   // memoryStorage: nothing on disk to clean up
 
     // Storage columns arrive via migrate-document-files.js — fail honestly (not a
     // 500) and discard the upload if the migration hasn't been applied yet.
     if (!(await require('../lib/schemaColumns').fileColumnsReady('vdrl_documents'))) {
-      fsVdrl.unlinkSync(req.file.path)
       return res.status(503).json({ error: 'Document storage is not yet provisioned (pending DB migration)' })
     }
 
-    const relPath = pathVdrl.relative(pathVdrl.join(__dirname, '..'), req.file.path)  // uploads/vdrl-documents/<stored>
+    // Blob migration: persist to blob (key) or disk (legacy relative shape — unchanged).
+    const vdrlStoredName = `${Date.now()}-${req.file.originalname.replace(/[^a-zA-Z0-9._-]+/g, '_')}`
+    const vdrlDiskAbs = pathVdrl.join(vdrlFileDir, vdrlStoredName)
+    const { value: relPath } = await blobStoreVdrl.persist({
+      key: blobStoreVdrl.keyFor('vdrl', vdrlStoredName),   // module key matches documents.js RESOLVERS
+      diskAbsPath: vdrlDiskAbs, buffer: req.file.buffer, contentType: req.file.mimetype,
+      diskValue: pathVdrl.relative(pathVdrl.join(__dirname, '..'), vdrlDiskAbs),  // uploads/vdrl-documents/<stored>
+    })
     await db.query(
       `UPDATE vdrl_documents
          SET file_name=?, file_path=?, file_size=?, mime_type=?,
@@ -840,7 +945,9 @@ router.post('/:projectId/scn', async (req, res) => {
     po_id, selected_lines = [], additional_items = [], variations = [],
     pickup_location, destination_warehouse_id, grid_bay,
     cdd, crd, ccd, etd, eta, transport_mode, forwarder_name, incoterms,
+    transport_modes, transport_mode_notes,   // ── Multi-modal (Pass 2 Item 2) ──
     packages = [], notify_forwarder,
+    packed_by_type, packaging_delegated_to,   // ── Forwarder-delegated packaging (D3) ──
     heats = [],   // ── Heat/Lot P1: per-shipment declared heats (additive) ──
   } = req.body
 
@@ -864,16 +971,51 @@ router.post('/:projectId/scn', async (req, res) => {
     const [[{ n }]] = await conn.query('SELECT COUNT(*) AS n FROM shipment_control_notes')
     const scnRef = `SCN-${new Date().getFullYear()}-${String(n + 1).padStart(4, '0')}`
 
-    // Insert SCN
+    // ── Forwarder-delegated packaging (D3): validate packed_by_type + delegate ──
+    // Verdict computed by the pure resolveDelegation() (defined + exported below, so the
+    // D3 proofs exercise THIS exact code). 'forwarder' delegates packing to a freight
+    // forwarder (who gets scoped write access via the D2 carve-out) and needs a valid
+    // ACTIVE freight_forwarder; 'vendor'/'internal' must NOT name a delegate.
+    const deleg = await resolveDelegation(packed_by_type, packaging_delegated_to, conn)
+    if (!deleg.ok) { await conn.rollback(); return res.status(deleg.status).json({ error: deleg.error }) }
+    const { packedBy, delegateId, packagingStatus, forwarderUserId } = deleg
+
+    // Multi-modal (Pass 2 Item 2): mode='multi' is the primary indicator; the constituent
+    // legs go in transport_modes ('sea,road') + free-text in transport_mode_notes. Deploy-
+    // tolerant: if the columns aren't live yet, 'multi' isn't a valid enum value, so degrade
+    // to the first constituent leg (or null) rather than failing the insert.
+    const transportLive = await scnTransportModesLive()
+    const legs = Array.isArray(transport_modes) ? transport_modes.filter(Boolean) : []
+    let modeVal = transport_mode || null
+    let transportModesVal = null, transportModeNotesVal = null
+    if (transport_mode === 'multi') {
+      if (transportLive) {
+        transportModesVal = legs.length ? legs.join(',') : null
+        transportModeNotesVal = (transport_mode_notes || '').trim() || null
+      } else {
+        modeVal = legs[0] || null   // pre-migration: 'multi' enum value unavailable → degrade
+      }
+    }
+
+    // Insert SCN (delegation / multi-modal columns appended only when live — deploy-tolerant).
+    const cols = ['scn_ref', 'po_id', 'project_id', 'origin_location', 'destination_warehouse_id',
+      'cargo_ready_date', 'cargo_collection_date', 'etd', 'eta', 'mode', 'forwarder_name', 'incoterms', 'status', 'notes', 'created_by']
+    const vals = [scnRef, po_id, pid, pickup_location || null, destination_warehouse_id || null,
+      crd || null, ccd || null, etd || null, eta || null, modeVal, forwarder_name || null,
+      incoterms || null, 'draft', null, req.user.id]
+    if (transportLive) {
+      cols.push('transport_modes', 'transport_mode_notes')
+      vals.push(transportModesVal, transportModeNotesVal)
+    }
+    if (await scnDelegationColsLive()) {
+      cols.push('forwarder_user_id', 'packed_by_type', 'packaging_delegated_to', 'packaging_status')
+      vals.push(forwarderUserId, packedBy, delegateId, packagingStatus)
+    } else if (packedBy === 'forwarder') {
+      // Can't delegate without the columns live — fail clearly rather than silently dropping it.
+      await conn.rollback(); return res.status(409).json({ error: 'Delegated packaging is unavailable until the delegation migration is applied.' })
+    }
     const [r] = await conn.query(
-      `INSERT INTO shipment_control_notes
-        (scn_ref, po_id, project_id, origin_location, destination_warehouse_id,
-         cargo_ready_date, cargo_collection_date, etd, eta, mode, forwarder_name, incoterms, status, notes, created_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?)`,
-      [scnRef, po_id, pid, pickup_location || null, destination_warehouse_id || null,
-       crd || null, ccd || null, etd || null, eta || null, transport_mode || null, forwarder_name || null,
-       incoterms || null, null, req.user.id]
-    )
+      `INSERT INTO shipment_control_notes (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`, vals)
     const scnId = r.insertId
 
     // Update po_lines qty_assigned for each selected line.
@@ -918,22 +1060,51 @@ router.post('/:projectId/scn', async (req, res) => {
     // ── Off-PO variations (now in the SAME txn — retires the old 2-phase POST) ──
     // Each is a NEW item tied to a parent PO line (is_variation=1), then gets its own
     // scn_lines row so it's allocatable into packages. Validated against this project.
+    // Q3: a child inherits its parent PO line's identity (commodity/tag) + WBS snapshot
+    // at write (immutable). Blocked if the parent is unlinked or has no WBS. Gated on the
+    // child-stock columns being live (pre-migration → old behaviour, no inherit/block).
+    const childCols = await childStockColsLive()
     for (const v of variations) {
       const desc = (v.description || '').trim()
       const parentId = Number(v.parent_po_line_id) || null
       if (!desc) { await conn.rollback(); return res.status(422).json({ error: 'Each off-PO variation needs a description.' }) }
       if (!parentId) { await conn.rollback(); return res.status(422).json({ error: 'Each off-PO variation must name its parent PO line.' }) }
+      // Fetch the parent line's identity + WBS snapshot (for the block guard + inheritance).
       const [[pl]] = await conn.query(
-        'SELECT pl.id FROM po_lines pl JOIN purchase_orders p ON p.id=pl.po_id WHERE pl.id=? AND p.project_id=?',
+        'SELECT pl.id, pl.line_number, pl.commodity_id, pl.equipment_tag, pl.tag_number, pl.wbs_code_snapshot FROM po_lines pl JOIN purchase_orders p ON p.id=pl.po_id WHERE pl.id=? AND p.project_id=?',
         [parentId, pid]
       )
       if (!pl) { await conn.rollback(); return res.status(404).json({ error: `Parent PO line ${parentId} not found in this project` }) }
+
+      // ── BLOCK-ON-UNLINKED (Q3, only when child-stock is live) ──
+      // A child must inherit a real identity + WBS to become tracked stock, so the
+      // parent must be linked (commodity/tag) AND have a WBS. Name the missing field.
+      if (childCols) {
+        const linked = pl.commodity_id != null || (pl.equipment_tag || '').trim() || (pl.tag_number || '').trim()
+        if (!linked) {
+          await conn.rollback()
+          return res.status(422).json({ error: `Cannot add off-PO item under line ${pl.line_number}: that line has no commodity/tag link — link a commodity or equipment tag to it first.` })
+        }
+        if (!(pl.wbs_code_snapshot || '').trim()) {
+          await conn.rollback()
+          return res.status(422).json({ error: `Cannot add off-PO item under line ${pl.line_number}: that line has no WBS — set its WBS first.` })
+        }
+      }
+
       const vqty = Number(v.qty) || 0
-      const [ai] = await conn.query(
-        `INSERT INTO scn_additional_items (scn_id, parent_po_line_id, is_variation, description, qty, uom, notes, created_by)
-         VALUES (?,?,1,?,?,?,?,?)`,
-        [scnId, parentId, desc, vqty || null, v.uom || 'EA', v.notes || null, req.user.id]
-      )
+      const rosDate = (v.ros_date || '').trim() || null   // user-supplied, NOT inherited
+      const [ai] = childCols
+        ? await conn.query(
+            `INSERT INTO scn_additional_items
+               (scn_id, parent_po_line_id, is_variation, description, qty, uom, notes, created_by,
+                commodity_id, equipment_tag, tag_number, wbs_code_snapshot, ros_date)
+             VALUES (?,?,1,?,?,?,?,?,?,?,?,?,?)`,
+            [scnId, parentId, desc, vqty || null, v.uom || 'EA', v.notes || null, req.user.id,
+             pl.commodity_id ?? null, pl.equipment_tag ?? null, pl.tag_number ?? null, pl.wbs_code_snapshot ?? null, rosDate])
+        : await conn.query(
+            `INSERT INTO scn_additional_items (scn_id, parent_po_line_id, is_variation, description, qty, uom, notes, created_by)
+             VALUES (?,?,1,?,?,?,?,?)`,
+            [scnId, parentId, desc, vqty || null, v.uom || 'EA', v.notes || null, req.user.id])
       const [sl] = await conn.query(
         'INSERT INTO scn_lines (scn_id, additional_item_id, qty, uom) VALUES (?,?,?,?)',
         [scnId, ai.insertId, vqty, v.uom || 'EA']
@@ -953,18 +1124,10 @@ router.post('/:projectId/scn', async (req, res) => {
     // ── Heat/Lot P1: record the shipment's declared heats (additive) ──
     // Optional — an empty list is fine (heats may be unknown at SCN creation).
     // The receipting dropdown (P2) reads these scoped by scn_id. source='declared'.
-    for (const h of heats) {
-      const heatNo = (h.heat_number || '').trim()
-      if (!heatNo) continue
-      await conn.query(
-        `INSERT INTO scn_heats (scn_id, heat_number, material_grade, mill_cert_ref, source, po_line_id, created_by)
-         VALUES (?,?,?,?,'declared',?,?)`,
-        [scnId, heatNo,
-         (h.material_grade || '').trim() || null,
-         (h.mill_cert_ref || '').trim() || null,
-         h.po_line_id || null, req.user.id]
-      )
-    }
+    // NOTE: heats are inserted AFTER the package loop (below) so a heat's optional
+    // package_ref can resolve to a real scn_packages.id at INSERT time. scn_heats is
+    // append-only (qmat_app has no UPDATE grant), so package_id must be set on insert,
+    // never via a later UPDATE.
 
     // ── Persist packages declared in the wizard (one row per physical package) ──
     // Previously the wizard collected packages but the create endpoint dropped them,
@@ -973,20 +1136,59 @@ router.post('/:projectId/scn', async (req, res) => {
     const num = v => (v == null || v === '') ? null : Number(v)
     let pkgNum = 0, contentRows = 0
     const allocated = {}   // line_ref → running total packed across all packages (D3 cap)
-    const insertPkg = async (p, n) => {
+    // Q2 hierarchy: a package may carry a client `ref` and a `parent_ref` (the ref of
+    // its container). parent_package_id is persisted ONLY when parent_ref is present —
+    // so flat payloads never touch the new column (deploy-safe pre-migration).
+    const insertPkg = async (p, n, parentId) => {
+      const cols = ['scn_id', 'package_number', 'description', 'length_mm', 'width_mm', 'height_mm', 'gross_weight_kg', 'is_dangerous_goods']
+      const vals = [scnId, String(n).padStart(2, '0'), (p.type || '').trim() || null,
+        num(p.length), num(p.width), num(p.height), num(p.weight), p.is_dg ? 1 : 0]
+      if (parentId != null) { cols.push('parent_package_id'); vals.push(parentId) }   // ⚠ needs the migration applied
+      // Q4: persist the container type when declared. Value-gated like parent_package_id
+      // so flat/Q2 payloads never touch the new column (deploy-safe pre migrate-containers).
+      if (p.container_type_id != null && p.container_type_id !== '') { cols.push('container_type_id'); vals.push(Number(p.container_type_id)) }
+      // D5.1: optional container_no at creation (plain, value-gated).
+      if (p.container_no != null && String(p.container_no).trim() !== '') { cols.push('container_no'); vals.push(String(p.container_no).trim()) }
       const [pr] = await conn.query(
-        `INSERT INTO scn_packages (scn_id, package_number, description, length_mm, width_mm, height_mm, gross_weight_kg, is_dangerous_goods)
-         VALUES (?,?,?,?,?,?,?,?)`,
-        [scnId, String(n).padStart(2, '0'), (p.type || '').trim() || null,
-         num(p.length), num(p.width), num(p.height), num(p.weight), p.is_dg ? 1 : 0])
-      return pr.insertId
+        `INSERT INTO scn_packages (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`, vals)
+      const packageId = pr.insertId
+      // D5.1: optional seal_no at creation → routes through the SAME governance as the
+      // post-creation paths (setSealNo: set-once, reasoned, atomic audit; container-only
+      // enforced inside). In-txn → a seal/audit failure rolls back the whole SCN create.
+      if (p.seal_no != null && String(p.seal_no).trim() !== '') {
+        await setSealNo(conn, { packageId, scnId, newSeal: p.seal_no, reason: p.seal_reason,
+          userId: req.user.id, resource: (req.originalUrl || '').split('?')[0].replace(/^\/api(?=\/)/, ''), ip: req.ip, projectId: pid })
+      }
+      return packageId
     }
+
+    // ── HIERARCHY RULES (Q2 leaf-only EXTENDED to Q4 three-level typed) — payload-level,
+    //    the create txn is the ONLY write path into scn_packages/scn_package_lines
+    //    (census-confirmed), so this is complete. The verdict is computed by the pure
+    //    validatePackageHierarchy() (defined + exported below); a reject rolls back BEFORE
+    //    any insert, so the reject path never touches parent_package_id/container_type_id. ──
+    const hierarchyVerdict = validatePackageHierarchy(packages)
+    if (!hierarchyVerdict.ok) {
+      await conn.rollback()
+      return res.status(422).json({ error: hierarchyVerdict.error })
+    }
+
+    // ── Persist packages. Contract: parents appear BEFORE their children in the payload
+    //    (so parent ids resolve single-pass); the wizard guarantees this ordering. ──
+    const refToPkgId = {}   // client ref → inserted scn_packages.id
     for (const p of (packages || [])) {
+      const parentRef = (p.parent_ref != null && p.parent_ref !== '') ? String(p.parent_ref) : null
+      if (parentRef && refToPkgId[parentRef] === undefined) {
+        await conn.rollback()
+        return res.status(422).json({ error: `Package parent "${parentRef}" must be listed before its sub-packages.` })
+      }
+      const parentId = parentRef ? refToPkgId[parentRef] : null
       const contents = (p.contents || []).filter(c => c && c.line_ref && Number(c.qty) > 0)
       if (contents.length) {
-        // Itemized package = ONE physical box (qty forced to 1); record its contents.
+        // Itemized package (a leaf) = ONE physical box; record its contents.
         pkgNum++
-        const packageId = await insertPkg(p, pkgNum)
+        const packageId = await insertPkg(p, pkgNum, parentId)
+        if (p.ref != null) refToPkgId[String(p.ref)] = packageId
         for (const c of contents) {
           const ref = c.line_ref
           const scnLineId = refToScnLineId[ref]
@@ -1002,10 +1204,15 @@ router.post('/:projectId/scn', async (req, res) => {
             [packageId, scnLineId, q, c.uom || null])
           contentRows++
         }
+      } else if (p.ref != null || parentId != null) {
+        // A container or an empty leaf that participates in the hierarchy → ONE row.
+        pkgNum++
+        const id = await insertPkg(p, pkgNum, parentId)
+        if (p.ref != null) refToPkgId[String(p.ref)] = id
       } else {
-        // Non-itemized: a "qty N" row expands into N numbered package rows (legacy behaviour).
+        // Non-itemized flat package: a "qty N" row expands into N numbered rows (legacy).
         const count = Math.min(500, Math.max(1, Math.floor(Number(p.qty) || 1)))
-        for (let k = 0; k < count; k++) { pkgNum++; await insertPkg(p, pkgNum) }
+        for (let k = 0; k < count; k++) { pkgNum++; await insertPkg(p, pkgNum, null) }
       }
     }
     if (pkgNum > 0) {
@@ -1015,6 +1222,37 @@ router.post('/:projectId/scn', async (req, res) => {
            total_weight_kg = (SELECT COALESCE(SUM(gross_weight_kg),0) FROM scn_packages WHERE scn_id=?)
          WHERE id = ?`, [scnId, scnId, scnId])
     }
+
+    // ── Heat/Lot P1: record the shipment's declared heats (additive) — INSERTED HERE,
+    //    after packages, so a heat's optional package_ref resolves to a real package id at
+    //    insert time (scn_heats is append-only — no post-insert UPDATE). The receipting
+    //    dropdown (P2) reads these scoped by scn_id; source='declared'. ──
+    const heatPkgColLive = await scnHeatPackageColLive()   // 3a: include package_id only when live
+    for (const h of heats) {
+      const heatNo = (h.heat_number || '').trim()
+      if (!heatNo) continue
+      const hcols = ['scn_id', 'heat_number', 'material_grade', 'mill_cert_ref', 'source', 'po_line_id', 'created_by']
+      const hvals = [scnId, heatNo, (h.material_grade || '').trim() || null, (h.mill_cert_ref || '').trim() || null,
+        'declared', h.po_line_id || null, req.user.id]
+      if (heatPkgColLive && h.package_ref != null && h.package_ref !== '' && refToPkgId[String(h.package_ref)] != null) {
+        hcols.push('package_id'); hvals.push(refToPkgId[String(h.package_ref)])
+      }
+      await conn.query(
+        `INSERT INTO scn_heats (${hcols.join(', ')}) VALUES (${hcols.map(() => '?').join(',')})`, hvals)
+    }
+
+    // Seed the SCN's Timeline with its creation event: an scn_status_log row matching the
+    // shape the Logistics status route writes (scn_id, from_status, to_status, changed_by,
+    // notes). 'pending_pickup' is the display status of a freshly-created 'draft' SCN — so
+    // the Timeline starts at creation instead of being empty until a later status/date edit.
+    // In-txn (a committed SCN always carries its creation event) but NON-FATAL — a failure
+    // here must not break SCN creation (mirrors the robustness of the create's direct inserts).
+    try {
+      await conn.query(
+        `INSERT INTO scn_status_log (scn_id, from_status, to_status, changed_by, notes)
+         VALUES (?,?,?,?,?)`,
+        [scnId, null, 'pending_pickup', req.user.id, 'SCN created'])
+    } catch (e) { console.error('[scn:create] timeline seed (non-fatal):', e.message) }
 
     // Commit 2: project-scoped audit of the SCN creation + line assignments (in-txn).
     await conn.query(
@@ -1029,6 +1267,7 @@ router.post('/:projectId/scn', async (req, res) => {
     res.status(201).json({ id: scnId, scn_ref: scnRef, status: 'draft' })
   } catch (e) {
     await conn.rollback()
+    if (e instanceof SealGovernanceError) return res.status(e.status).json({ error: e.message })   // D5.1: governed seal reject → clean 4xx
     console.error('[scn:create]', e.message)
     dbError(res, e)
   } finally {
@@ -1073,6 +1312,46 @@ router.post('/:projectId/scn/:scnId/variation', async (req, res) => {
     console.error('[scn:variation]', e.message)
     dbError(res, e)
   }
+})
+
+// ─── EDIT CONTAINER IDENTIFIERS (container_no / seal_no) — Q4.3 ────────────────
+// Both Expediting and Logistics can set a container's number/seal. seal_no is GOVERNED
+// (set-once + reasoned, audited re-seal — atomic) via the SHARED lib/sealGovernance so
+// the two modules cannot drift; container_no is free-edit. The whole edit runs in ONE
+// transaction so the seal change and its audit row commit/rollback together.
+// Body: { container_no?, seal_no?, seal_reason? }. seal_reason is required only when
+// CHANGING an existing seal (enforced inside setSealNo).
+router.put('/:projectId/scn/:scnId/packages/:packageId/identifiers', async (req, res) => {
+  const pid = Number(req.params.projectId)
+  const scnId = Number(req.params.scnId)
+  const packageId = Number(req.params.packageId)
+  const { container_no, seal_no, seal_reason } = req.body
+  const resource = (req.originalUrl || '').split('?')[0].replace(/^\/api(?=\/)/, '')
+  const conn = await db.getConnection()
+  try {
+    await conn.beginTransaction()
+    // Package must belong to an SCN in THIS project (project-scope check the shared lib
+    // can't do). The container-only rule is enforced inside setSealNo/setContainerNo
+    // (the single governance point), so it isn't duplicated here.
+    const [[pkg]] = await conn.query(
+      `SELECT sp.id FROM scn_packages sp
+       JOIN shipment_control_notes s ON s.id = sp.scn_id
+       WHERE sp.id=? AND sp.scn_id=? AND s.project_id=?`, [packageId, scnId, pid])
+    if (!pkg) { await conn.rollback(); return res.status(404).json({ error: 'Container not found on this SCN in this project.' }) }
+
+    const out = {}
+    if (container_no !== undefined) out.container_no = await setContainerNo(conn, { packageId, scnId, newContainerNo: container_no, userId: req.user.id, resource, ip: req.ip, projectId: pid })
+    if (seal_no !== undefined)      out.seal_no      = await setSealNo(conn,      { packageId, scnId, newSeal: seal_no, reason: seal_reason, userId: req.user.id, resource, ip: req.ip, projectId: pid })
+
+    await conn.commit()
+    const [[fresh]] = await db.query('SELECT id, container_no, seal_no FROM scn_packages WHERE id=?', [packageId])
+    res.json({ ...fresh, result: out })
+  } catch (e) {
+    await conn.rollback()
+    if (e instanceof SealGovernanceError) return res.status(e.status).json({ error: e.message })
+    console.error('[scn:identifiers]', e.message)
+    dbError(res, e)
+  } finally { conn.release() }
 })
 
 // ─── VDRL PO LIST ─────────────────────────────────────────────
@@ -1584,4 +1863,48 @@ router.put('/:projectId/po/:poId/lines/:lineId/heat-number', async (req, res) =>
   }
 })
 
+// ─── PACKAGE HIERARCHY GUARD (Q2 leaf-only EXTENDED to Q4 three-level typed) ───
+// Pure verdict function (no DB/no res) — the SCN-create txn calls it before any insert,
+// so a reject never touches parent_package_id/container_type_id (provable pre-migration).
+// Exported so the Q4.2 proof harness exercises THIS exact code (no drifting copy).
+//   Model: container (typed: container_type_id set) → sub-package → items.
+//     • A container MUST be top-level (no parent_ref) and hold NO items; it only parents sub-packages.
+//     • A nested package's parent must exist, be top-level, and be a container — enforcing the
+//       depth-3 cap (no container-in-container; no sub-package under a sub-package).
+//     • A loose top-level package (untyped, no parent) may hold items directly (mixed shipment).
+// Returns { ok:true } or { ok:false, error } (caller maps !ok → 422).
+function validatePackageHierarchy (packages) {
+  const list = packages || []
+  const isTypedContainer = q => q && q.container_type_id != null && q.container_type_id !== ''
+  const hasParentRef     = q => q && q.parent_ref != null && q.parent_ref !== ''
+  const byRef = new Map()
+  list.forEach(p => { if (p.ref != null && p.ref !== '') byRef.set(String(p.ref), p) })
+  const containerRefs = new Set()
+  list.forEach(p => { if (hasParentRef(p)) containerRefs.add(String(p.parent_ref)) })
+  for (const p of list) {
+    const myRef = p.ref != null ? String(p.ref) : ''
+    const isReferencedAsParent = myRef !== '' && containerRefs.has(myRef)
+    const hasContents = (p.contents || []).some(c => c && c.line_ref && Number(c.qty) > 0)
+
+    // (Q4) A typed container is top-level and items-free; it only parents sub-packages.
+    if (isTypedContainer(p)) {
+      if (hasParentRef(p)) return { ok: false, error: `Package "${(p.type || myRef)}" is a container and must be top-level — a container cannot be nested inside another package.` }
+      if (hasContents)     return { ok: false, error: `Package "${(p.type || myRef)}" is a container and cannot hold items directly — allocate items to its sub-packages.` }
+    }
+    // (Q2, retained) A package that parents others must not also hold items directly.
+    if (isReferencedAsParent && hasContents) return { ok: false, error: `Package "${(p.type || myRef)}" holds sub-packages and cannot hold items directly — allocate items to its sub-packages.` }
+    // (Q4) A nested package's parent must exist, be top-level, and be a container.
+    //      Parent-with-a-parent ⇒ depth-4 (reject); parent-not-a-container ⇒ invalid nest.
+    if (hasParentRef(p)) {
+      const parent = byRef.get(String(p.parent_ref))
+      if (!parent || parent === p) return { ok: false, error: `Package parent_ref "${p.parent_ref}" does not match any package in this shipment.` }
+      if (hasParentRef(parent))    return { ok: false, error: `Package "${(p.type || myRef)}" exceeds the 3-level limit (container → sub-package → items) — sub-packages cannot be nested under other sub-packages.` }
+      if (!isTypedContainer(parent)) return { ok: false, error: `Package "${(p.type || myRef)}" must be nested under a container — its parent "${p.parent_ref}" is not a container.` }
+    }
+  }
+  return { ok: true }
+}
+
 module.exports = router
+module.exports.validatePackageHierarchy = validatePackageHierarchy
+module.exports.resolveDelegation = resolveDelegation   // D3 proofs
