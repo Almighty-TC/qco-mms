@@ -1402,6 +1402,7 @@ function App() {
 
           {page === 'pre-award-tenders' && selectedProjectId && (
             <PreAwardTendersScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
+              userRole={user?.role ?? ''}
               onBack={() => setPage('dashboard')}
               onOpenTender={(id: number) => { setSelectedTenderId(id); setPage('pre-award-detail') }} />
           )}

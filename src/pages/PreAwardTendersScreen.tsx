@@ -59,14 +59,25 @@ const fmtValue = (v: string | number | null, currency: string | null) => {
   return `${currency || 'AUD'} ${n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
 }
 
-export function PreAwardTendersScreen({ dark, projectId, projectName, onBack, onOpenTender }: {
-  dark: boolean; projectId: number; projectName: string; onBack: () => void
+const CAN_CREATE = ['admin', 'procurement_manager', 'procurement_officer', 'project_manager']  // can_create
+const PROC_MODES = [
+  { v: 'private_negotiated',  label: 'Private — Negotiated' },
+  { v: 'private_competitive', label: 'Private — Competitive' },
+  { v: 'mdb_funded',          label: 'MDB Funded' },
+]
+const DISCIPLINES = ['mechanical', 'electrical', 'instrumentation', 'civil', 'piping', 'structural']
+const STAGES = ['planning', 'prequalification', 'invitation', 'clarifications', 'tendering', 'evaluation', 'recommendation', 'award']
+
+export function PreAwardTendersScreen({ dark, projectId, projectName, userRole, onBack, onOpenTender }: {
+  dark: boolean; projectId: number; projectName: string; userRole: string; onBack: () => void
   onOpenTender?: (id: number) => void
 }) {
   const [rows,    setRows]    = useState<TenderRow[]>([])
   const [loading, setLoading] = useState(true)
   const [err,     setErr]     = useState('')
   const [q,       setQ]       = useState('')
+  const [showNew, setShowNew] = useState(false)
+  const canCreate = CAN_CREATE.includes(userRole)
 
   const col  = dark ? '#f1f5f9' : '#0f172a'
   const sub  = '#94a3b8'
@@ -132,12 +143,18 @@ export function PreAwardTendersScreen({ dark, projectId, projectName, onBack, on
             {projectName || 'Project'} · {loading ? 'Loading…' : `${rows.length} tender${rows.length !== 1 ? 's' : ''}`}
           </div>
         </div>
-        <input
-          value={q}
-          onChange={e => setQ(e.target.value)}
-          placeholder="Search ref or title…"
-          style={{ height: 34, padding: '0 12px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none', minWidth: 220 }}
-        />
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            value={q}
+            onChange={e => setQ(e.target.value)}
+            placeholder="Search ref or title…"
+            style={{ height: 34, padding: '0 12px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc', color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none', minWidth: 220 }}
+          />
+          {canCreate && (
+            <button onClick={() => setShowNew(true)}
+              style={{ height: 34, padding: '0 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>+ New Tender</button>
+          )}
+        </div>
       </div>
 
       {/* States */}
@@ -188,6 +205,103 @@ export function PreAwardTendersScreen({ dark, projectId, projectName, onBack, on
           </div>
         </div>
       )}
+
+      {showNew && (
+        <NewTenderModal dark={dark} projectId={projectId}
+          onClose={() => setShowNew(false)}
+          onCreated={(id) => { setShowNew(false); onOpenTender ? onOpenTender(id) : load() }} />
+      )}
+    </div>
+  )
+}
+
+// ─── NEW TENDER MODAL ───────────────────────────────────────
+// Mirrors POST /:projectId/tenders exactly: ref + title + procurement_mode required;
+// discipline/stage constrained to the real enums; estimated_value non-negative.
+// On 201 the caller navigates into the new tender's detail via the returned id.
+function NewTenderModal({ dark, projectId, onClose, onCreated }: {
+  dark: boolean; projectId: number; onClose: () => void; onCreated: (id: number) => void
+}) {
+  const [ref, setRef] = useState('')
+  const [title, setTitle] = useState('')
+  const [mode, setMode] = useState('')
+  const [discipline, setDiscipline] = useState('')
+  const [stage, setStage] = useState('planning')
+  const [value, setValue] = useState('')
+  const [currency, setCurrency] = useState('AUD')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const sub = '#94a3b8'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const cardBg = dark ? '#0f172a' : '#fff'
+  const inp: React.CSSProperties = { height: 34, padding: '0 10px', borderRadius: 6, width: '100%', border: bd, background: dark ? '#0b1220' : '#f8fafc', color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }
+  const lbl = (t: string) => <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 4, marginTop: 12 }}>{t}</div>
+
+  const valid = ref.trim() && title.trim() && mode
+  const save = async () => {
+    setSaving(true); setErr('')
+    try {
+      const { data } = await axios.post(`${API}/pre-award/${projectId}/tenders`, {
+        ref: ref.trim(), title: title.trim(), procurement_mode: mode,
+        discipline: discipline || null, stage,
+        estimated_value: value === '' ? null : Number(value),
+        currency: currency.trim() || 'AUD',
+      })
+      onCreated(data.id)
+    } catch (e) {
+      // Surface the server's real message (e.g. the 409 duplicate-ref message).
+      setErr(axios.isAxiosError(e) ? (e.response?.data?.error ?? 'Could not create the tender.') : 'Could not create the tender.')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div onClick={() => !saving && onClose()} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: cardBg, borderRadius: 12, padding: 24, width: 500, maxWidth: '94vw', border: bd, maxHeight: '92vh', overflowY: 'auto' }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: col }}>New tender</div>
+
+        {lbl('Reference')}
+        <input value={ref} onChange={e => setRef(e.target.value)} placeholder="e.g. IRM-TND-011" style={inp} />
+
+        {lbl('Title')}
+        <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Cooling Water Pump Station" style={inp} />
+
+        {lbl('Procurement mode')}
+        <select value={mode} onChange={e => setMode(e.target.value)} style={inp}>
+          <option value="">Select a mode…</option>
+          {PROC_MODES.map(m => <option key={m.v} value={m.v}>{m.label}</option>)}
+        </select>
+
+        <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ flex: 1 }}>
+            {lbl('Discipline (optional)')}
+            <select value={discipline} onChange={e => setDiscipline(e.target.value)} style={inp}>
+              <option value="">— None —</option>
+              {DISCIPLINES.map(d => <option key={d} value={d}>{humanise(d)}</option>)}
+            </select>
+          </div>
+          <div style={{ flex: 1 }}>
+            {lbl('Stage')}
+            <select value={stage} onChange={e => setStage(e.target.value)} style={inp}>
+              {STAGES.map(s => <option key={s} value={s}>{humanise(s)}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ flex: 1 }}>{lbl('Estimated value (optional)')}<input type="number" min={0} value={value} onChange={e => setValue(e.target.value)} placeholder="e.g. 3200000" style={inp} /></div>
+          <div style={{ width: 100 }}>{lbl('Currency')}<input value={currency} onChange={e => setCurrency(e.target.value)} style={inp} /></div>
+        </div>
+
+        {err && <div style={{ color: '#b91c1c', fontSize: 12.5, marginTop: 12 }}>{err}</div>}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+          <button disabled={saving} onClick={onClose} style={{ padding: '8px 14px', borderRadius: 6, border: bd, background: 'none', color: sub, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+          <button disabled={!valid || saving} onClick={save} style={{ padding: '8px 14px', borderRadius: 6, border: 'none', background: valid ? '#2563eb' : '#94a3b8', color: '#fff', fontSize: 13, fontWeight: 600, cursor: valid ? 'pointer' : 'default', fontFamily: 'inherit' }}>{saving ? 'Creating…' : 'Create tender'}</button>
+        </div>
+      </div>
     </div>
   )
 }
