@@ -172,6 +172,23 @@ router.patch('/:projectId/tenders/:id', requireLivePermission('pre_award', 'can_
     if (!before) return res.status(404).json({ error: 'Tender not found' })
 
     const b = req.body || {}
+
+    // ── STRUCTURAL-FIELD GUARD ───────────────────────────────────────────────
+    // procurement_mode and discipline are frozen once the tender is COMMITTED —
+    // either its criteria are locked (the evaluation scheme was finalized under the
+    // current mode) or it has been awarded (stage='award'). Only an actual CHANGE is
+    // blocked; other fields (title, estimated_value, …) stay editable. Distinct 409
+    // message per reason (criteria-lock vs award).
+    const changingMode = b.procurement_mode !== undefined && b.procurement_mode !== before.procurement_mode
+    const changingDisc = b.discipline       !== undefined && b.discipline       !== before.discipline
+    if (changingMode || changingDisc) {
+      const field = changingMode ? 'procurement_mode' : 'discipline'
+      if (before.criteria_locked_at != null)
+        return res.status(409).json({ error: `Cannot change ${field}: criteria are locked for this tender` })
+      if (before.stage === 'award')
+        return res.status(409).json({ error: `Cannot change ${field}: the tender has been awarded` })
+    }
+
     const sets = []; const params = []
     const put = (col, val) => { sets.push(`${col} = ?`); params.push(val) }
 
