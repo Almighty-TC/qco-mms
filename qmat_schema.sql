@@ -2163,6 +2163,32 @@ CREATE TABLE `tender_documents` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
+-- Table structure for table `tender_evaluation_scores`
+--
+
+DROP TABLE IF EXISTS `tender_evaluation_scores`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `tender_evaluation_scores` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `bid_id` int NOT NULL,
+  `criterion_id` int NOT NULL,
+  `score` int NOT NULL,
+  `scored_by` int NOT NULL,
+  `scored_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_evalscore_bid_criterion` (`bid_id`,`criterion_id`),
+  KEY `idx_evalscore_criterion` (`criterion_id`),
+  KEY `fk_evalscore_scored_by` (`scored_by`),
+  CONSTRAINT `fk_evalscore_bid` FOREIGN KEY (`bid_id`) REFERENCES `tender_bids` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_evalscore_criterion` FOREIGN KEY (`criterion_id`) REFERENCES `tender_criteria` (`id`) ON DELETE RESTRICT,
+  CONSTRAINT `fk_evalscore_scored_by` FOREIGN KEY (`scored_by`) REFERENCES `users` (`id`),
+  CONSTRAINT `chk_evalscore_range` CHECK ((`score` between 0 and 100))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table `tender_evaluations`
 --
 
