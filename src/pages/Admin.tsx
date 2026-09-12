@@ -35,7 +35,7 @@ const ALL_ROLES = [
 type Role = typeof ALL_ROLES[number]
 
 const ALL_MODULES = [
-  'dashboard', 'procurement', 'expediting', 'vdrl', 'logistics',
+  'dashboard', 'procurement', 'pre_award', 'expediting', 'vdrl', 'logistics',
   'material_control', 'traceability', 'document_inbox', 'audit', 'admin',
 ] as const
 type Module = typeof ALL_MODULES[number]

@@ -81,6 +81,11 @@ app.use('/api/projects', authMiddleware, require('./routes/projects'))
 // additionally enforces role === 'admin' on every endpoint.
 app.use('/api/admin', authMiddleware, require('./routes/admin'))
 
+// ─── PRE-AWARD PROCUREMENT ROUTES ────────────────────────────
+// Upstream of Procurement: tenders → prequal → bids → evaluation → award.
+// Auth is applied inside the router (authenticateToken + requireLivePermission).
+app.use('/api/pre-award', require('./routes/preAward'))
+
 // ─── PROCUREMENT ROUTES ──────────────────────────────────────
 // Project-scoped PO management: list, create, approve, line items.
 app.use('/api/procurement', authMiddleware, require('./routes/procurement'))

@@ -325,6 +325,19 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
   const [cargoCondition, setCargo] = useState('')
   const [notes, setNotes]       = useState('')
   const [saving, setSaving]     = useState(false)
+  // Q3 — off-PO child lines receive in a simple parallel sub-table (own qty + own bin),
+  // keyed by additional_item_id. No splits/heat path (children are simple holdings).
+  const [childActuals, setChildActuals] = useState<Record<number, number>>({})
+  const [childLoc, setChildLoc]         = useState<Record<number, string>>({})
+  // 3b-4: optional source-package capture (provenance). Per PO line + per child.
+  const [sourcePkg, setSourcePkg]           = useState<Record<number, number | ''>>({})
+  const [childSourcePkg, setChildSourcePkg] = useState<Record<number, number | ''>>({})
+  const [containerTypes, setContainerTypes] = useState<any[]>([])
+  // Readable package label for the source dropdown ("#01 · 📦 40HC" / "#02 · Bundle").
+  const ctCode = (id: number | null | undefined) => containerTypes.find((c: any) => c.id === id)?.code
+  const pkgLabel = (p: any) => `#${p.package_number} · ${p.container_type_id ? `📦 ${ctCode(p.container_type_id) || 'Container'}` : (p.description || 'Package')}`
+  // Map a chosen heat NUMBER → its scn_heats.id (declared heats only; off-list → null).
+  const heatIdFor = (hn?: string | null) => (detail?.heats || []).find((h: any) => h.heat_number === (hn || '').trim())?.id || null
 
   // ─── Resizable wizard tables (per-step, persisted by id) ──
   const rvTable = useResizableTable('mc_receipt_review', RV_W, RV_MIN)   // Step 1
@@ -348,8 +361,14 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
         const init: Record<number, number> = {}
         ;(r.data.lines || []).forEach((l: any) => { init[l.id] = lineExpected(l) })
         setActuals(init)
+        // Q3: default child actual = its remaining (own per-SCN allocation).
+        const cinit: Record<number, number> = {}
+        ;(r.data.child_lines || []).forEach((c: any) => { cinit[c.additional_item_id] = Number(c.remaining ?? c.expected_on_scn) || 0 })
+        setChildActuals(cinit)
       })
       .catch(() => setDetail({ packages: [], lines: [] }))
+    // 3b-4: container types for the source-package label (ISO code).
+    axios.get(`${API}/logistics/container-types`).then(r => setContainerTypes(r.data || [])).catch(() => {})
   }, [scn.id, projectId]) // eslint-disable-line
 
   // ─── Live discrepancy reconciliation (Phase 2 — Bug 1) ────────
@@ -410,6 +429,9 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
             heat_off_list_reason: s.heat_off_list ? ((s.heat_off_list_reason || '').trim() || null) : null,
             // Per-heat bin — blank falls back to the receipt default location server-side.
             location_code: (s.grid_location || '').trim() || null,
+            // 3b-4 provenance: subs share the line's source package; heat→id from the declared list.
+            source_scn_package_id: sourcePkg[l.id] || null,
+            scn_heat_id: heatIdFor(s.heat_number),
           }))
         }
         // 1:1 (P2a) path — unchanged.
@@ -433,12 +455,27 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
           heat_off_list_reason: heatOffList[l.id] ? ((heatReason[l.id] || '').trim() || null) : null,
           // Per-line bin — blank falls back to the receipt default location server-side.
           location_code: (lineLoc[l.id] || '').trim() || null,
+          // 3b-4 provenance: optional source package + the chosen heat's id (declared only).
+          source_scn_package_id: sourcePkg[l.id] || null,
+          scn_heat_id: heatIdFor(heat[l.id]),
         }]
       })
+      // Q3: off-PO child entries — keyed on additional_item_id, own qty + own bin.
+      const childRows = (detail?.child_lines || [])
+        .map((c: any) => ({
+          additional_item_id: c.additional_item_id,
+          description: c.description,
+          received_qty: Number(childActuals[c.additional_item_id] ?? c.remaining) || 0,
+          uom: c.uom || 'EA',
+          location_code: (childLoc[c.additional_item_id] || '').trim() || null,
+          // 3b-4 provenance: optional source package for off-PO child receipts.
+          source_scn_package_id: childSourcePkg[c.additional_item_id] || null,
+        }))
+        .filter((c: any) => c.received_qty > 0)
       await axios.post(`${API}/mc/${projectId}/receipting/${scn.id}/complete`, {
         location_code: location.trim(), cargo_condition: cargoCondition, notes,
         actual_packages: Object.values(actuals).length, warehouse_id: scn.destination_warehouse_id,
-        lines,
+        lines: [...lines, ...childRows],
       })
       setStep(5)
     } catch (e: any) {
@@ -538,7 +575,9 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                     <td style={{ padding: '8px 12px', color: col }}>{l.description || 'Line item'}</td>
                     <td style={{ padding: '8px 12px', color: col, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>
                       {lineExpected(l)}
-                      {Number(l.received_to_date) > 0 && <span style={{ color: sub }}> <span title="already received-to-date">(of {Number(l.qty)} ordered)</span></span>}
+                      {l.expected_on_scn != null
+                        ? <span style={{ color: sub }} title="this SCN's allocation · already received on this SCN"> (of {Number(l.expected_on_scn)} for this SCN{Number(l.received_on_scn) > 0 ? ` · ${Number(l.received_on_scn)} in` : ''})</span>
+                        : (Number(l.received_to_date) > 0 && <span style={{ color: sub }} title="already received-to-date"> (of {Number(l.qty)} ordered)</span>)}
                     </td>
                     <td style={{ padding: '8px 12px', color: sub }}>{l.uom || 'EA'}</td>
                   </tr>
@@ -553,16 +592,34 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
               <div style={{ border: bd, borderRadius: 8, marginTop: 12, padding: '10px 14px', background: cardBg }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: sub, textTransform: 'uppercase', marginBottom: 2 }}>Declared package contents (packing list)</div>
                 <div style={{ fontSize: 11, color: sub, fontStyle: 'italic', marginBottom: 8 }}>Reference only — goods are received per line below.</div>
-                {(detail.packages || []).filter((p: any) => p.contents && p.contents.length).map((p: any) => (
-                  <div key={p.id} style={{ marginBottom: 8 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: col }}>Package {p.package_number}{p.description ? ` · ${p.description}` : ''}</div>
-                    {p.contents.map((c: any, ci: number) => (
-                      <div key={ci} style={{ fontSize: 12, color: sub, paddingLeft: 12 }}>
-                        <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#2563eb' }}>{Number(c.qty)}{c.uom ? ` ${c.uom}` : ''}</span> · {c.label}
+                {/* Q2: render container → sub-package → items as a tree (depth-first, indented).
+                    Containers hold no items directly; their sub-packages carry the contents. */}
+                {(() => {
+                  const pkgs = detail.packages || []
+                  const byParent: Record<string, any[]> = {}
+                  pkgs.forEach((p: any) => { const k = p.parent_package_id == null ? 'root' : String(p.parent_package_id); (byParent[k] = byParent[k] || []).push(p) })
+                  const rows: { p: any; depth: number; isContainer: boolean }[] = []
+                  const seen = new Set<number>()
+                  const walk = (k: string, depth: number) => { (byParent[k] || []).forEach((p: any) => { if (seen.has(p.id)) return; seen.add(p.id); rows.push({ p, depth, isContainer: !!byParent[String(p.id)] }); walk(String(p.id), depth + 1) }) }
+                  walk('root', 0)
+                  pkgs.forEach((p: any) => { if (!seen.has(p.id)) rows.push({ p, depth: 0, isContainer: !!byParent[String(p.id)] }) })
+                  return rows.map(({ p, depth, isContainer }) => (
+                    <div key={p.id} style={{ marginBottom: 8, paddingLeft: depth * 16 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: col }}>
+                        {depth > 0 && <span style={{ color: sub }}>└ </span>}
+                        Package {p.package_number}{p.description ? ` · ${p.description}` : ''}
+                        {isContainer && <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, color: '#7c3aed' }}>📦 CONTAINER</span>}
                       </div>
-                    ))}
-                  </div>
-                ))}
+                      {isContainer ? (
+                        <div style={{ fontSize: 11, color: sub, fontStyle: 'italic', paddingLeft: 12 }}>items in sub-packages</div>
+                      ) : (p.contents || []).map((c: any, ci: number) => (
+                        <div key={ci} style={{ fontSize: 12, color: sub, paddingLeft: 12 }}>
+                          <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#2563eb' }}>{Number(c.qty)}{c.uom ? ` ${c.uom}` : ''}</span> · {c.label}
+                        </div>
+                      ))}
+                    </div>
+                  ))
+                })()}
               </div>
             )}
 
@@ -733,21 +790,32 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                         <td style={{ padding: '8px 12px', color: col }}>{l.description || 'Line item'}</td>
                         <td style={{ padding: '8px 12px', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>
                           {expected}
-                          {Number(l.received_to_date) > 0 && <span title="already received-to-date"> (of {Number(l.qty)})</span>}
+                          {/* Q1: remaining is per-SCN-allocation (Guard B). Show the allocation +
+                              what's already in on THIS SCN; legacy lines fall back to PO ordered. */}
+                          {l.expected_on_scn != null
+                            ? <span title="this SCN's allocation · already received on this SCN"> (of {Number(l.expected_on_scn)} for this SCN{Number(l.received_on_scn) > 0 ? ` · ${Number(l.received_on_scn)} in` : ''})</span>
+                            : (Number(l.received_to_date) > 0 && <span title="already received-to-date"> (of {Number(l.qty)} ordered)</span>)}
                         </td>
                         <td style={{ padding: '8px 12px', color: sub }}>{l.uom || 'EA'}</td>
                         <td style={{ padding: '8px 12px' }}>
-                          <input type="number" value={actual} min={0}
+                          {expected === 0 ? (
+                            // Fully received on this SCN → locked (Q1 re-entry: no double-receipt).
+                            <span title="Fully received on this SCN" style={{ fontSize: 11, color: '#16a34a', fontWeight: 600 }}>✓ fully received</span>
+                          ) : (
+                          <input type="number" value={actual} min={0} max={expected}
                             onChange={e => {
-                              const v = Number(e.target.value)
+                              let v = Number(e.target.value)
+                              if (!(v >= 0)) v = 0
+                              if (v > expected) v = expected   // mirror Guard B: never exceed remaining on this SCN
                               setActuals(prev => ({ ...prev, [l.id]: v }))
                               // damaged can't exceed received — clamp if needed (1:1 only)
                               if (!split && dmg > v) setDamaged(prev => ({ ...prev, [l.id]: v }))
                               clearIfClean(l, v, split ? dmg : Math.min(dmg, v))
                             }}
                             style={{ ...inputSt, width: 80, textAlign: 'center', borderColor: actual !== expected ? '#f59e0b' : undefined }} />
+                          )}
                           {/* Split reconcile indicator */}
-                          {split && (
+                          {split && expected !== 0 && (
                             <div style={{ fontSize: 10, marginTop: 3, color: reconciled ? '#22c55e' : '#ef4444', fontFamily: 'JetBrains Mono, monospace' }}
                               title="Σ sub-line received must equal the line total">
                               {reconciled ? `✓ allocated ${allocated}` : `allocated ${allocated} of ${actual}`}
@@ -796,6 +864,15 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                                     placeholder="Reason (required) *"
                                     style={{ ...inputSt, width: 170, fontSize: 11, borderColor: (heatReason[l.id] || '').trim() ? undefined : '#ef4444' }} />
                                 </div>
+                              )}
+                              {/* 3b-4: optional source package (provenance — where this material came from). */}
+                              {(detail?.packages || []).length > 0 && (
+                                <select value={sourcePkg[l.id] ?? ''} onChange={e => setSourcePkg(p => ({ ...p, [l.id]: e.target.value ? Number(e.target.value) : '' }))}
+                                  title="Source package (optional — for provenance)"
+                                  style={{ ...inputSt, width: 170, padding: '5px 8px', marginTop: 4 }}>
+                                  <option value="">— Source package —</option>
+                                  {(detail?.packages || []).map((p: any) => <option key={p.id} value={p.id}>{pkgLabel(p)}</option>)}
+                                </select>
                               )}
                               {Number(actual) > 0 && (
                                 <button onClick={() => startSplit(l)}
@@ -897,6 +974,59 @@ const ReceiptingWizard = ({ dark, scn, projectId, onClose, onComplete, addToast 
                 </tbody>
               </table>
               </div>
+
+              {/* Q3: off-PO child items — receivable in a simple parallel sub-table
+                  (own qty + own bin). Capped at each child's remaining (server enforces). */}
+              {(detail?.child_lines || []).length > 0 && (
+                <div style={{ marginTop: 14, border: bd, borderRadius: 8, overflow: 'hidden' }}>
+                  <div style={{ padding: '8px 12px', background: dark ? '#1a1230' : '#faf5ff', fontSize: 11, fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Off-PO items ({(detail.child_lines).length}) · received as their own stock
+                  </div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, background: cardBg }}>
+                    <thead>
+                      <tr style={{ background: dark ? '#162032' : '#f8fafc', borderBottom: bd }}>
+                        {['ITEM', 'INHERITS', 'REMAINING', 'UOM', 'RECEIVE', 'GRID LOCATION'].map(h => (
+                          <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: sub, textTransform: 'uppercase' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(detail.child_lines).map((c: any) => {
+                        const rem = Number(c.remaining ?? c.expected_on_scn) || 0
+                        const ident = c.tag_number || c.equipment_tag || (c.commodity_id ? `commodity #${c.commodity_id}` : '—')
+                        return (
+                          <tr key={c.additional_item_id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
+                            <td style={{ padding: '7px 10px', color: col }}>{c.description || 'Off-PO item'}</td>
+                            <td style={{ padding: '7px 10px', color: sub, fontSize: 11 }}>
+                              {ident} · WBS <span style={{ fontFamily: 'JetBrains Mono, monospace' }}>{c.wbs_code_snapshot || '—'}</span>
+                            </td>
+                            <td style={{ padding: '7px 10px', color: sub, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{rem}{Number(c.received_on_scn) > 0 ? ` (of ${Number(c.expected_on_scn)})` : ''}</td>
+                            <td style={{ padding: '7px 10px', color: sub }}>{c.uom || 'EA'}</td>
+                            <td style={{ padding: '7px 10px' }}>
+                              {rem === 0 ? (
+                                <span style={{ fontSize: 11, color: '#16a34a', fontWeight: 600 }}>✓ fully received</span>
+                              ) : (
+                                <input type="number" min={0} max={rem}
+                                  value={childActuals[c.additional_item_id] ?? rem}
+                                  onChange={e => { let v = Number(e.target.value); if (!(v >= 0)) v = 0; if (v > rem) v = rem; setChildActuals(p => ({ ...p, [c.additional_item_id]: v })) }}
+                                  style={{ ...inputSt, width: 80, textAlign: 'center' }} />
+                              )}
+                            </td>
+                            <td style={{ padding: '7px 10px' }}>
+                              {rem !== 0 && (
+                                <input value={childLoc[c.additional_item_id] || ''}
+                                  onChange={e => setChildLoc(p => ({ ...p, [c.additional_item_id]: e.target.value }))}
+                                  placeholder="blank → receipt default"
+                                  style={{ ...inputSt, width: 160 }} />
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
 
               {/* Discrepancy notes — shown live whenever any line has an issue */}
               {anyIssue && (
