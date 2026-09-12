@@ -835,4 +835,221 @@ router.get('/:projectId/tenders/:id/approvals', requireLivePermission('pre_award
   } catch (e) { console.error('[preaward:tender:approvals]', e.message); dbError(res, e) }
 })
 
+// ═══ EVALUATION COMPUTATION + RECOMMENDATION (Phase 3.x) ════════════════════════
+// POST compute-recommendation (can_approve): derive commercial scores, apply
+// mandatory/min-score gates, rank survivors, persist the tender_evaluations roll-up.
+// If the tender is already approved/awarded, archive the prior computation into the
+// immutable tender_evaluation_snapshots, void the approval chain (status→'unapproved'),
+// and roll back approval_status/stage/status before writing the new results.
+//
+// GATING RULES (consolidated):
+//  - criteria must be locked (409).
+//  - every eligible bid must be fully scored on every MANUAL criterion (409) — the
+//    anti-bias completeness guard: technical scoring is finished before prices fold in.
+//  - if a 'price' criterion exists, every eligible bid must be UNSEALED (409) — this
+//    endpoint does NOT unseal; unseal stays the separate, narrower-gated action.
+//  - a criterion disqualifies a bid iff it has a min_score AND score < min_score;
+//    the disqualification TYPE is 'mandatory' when that criterion is mandatory, else
+//    'min_score' (a mandatory criterion with no min_score imposes no numeric gate).
+//  - commercial score is computed ONLY for technically-compliant bids (lowest compliant
+//    price = 100), so it can never exceed 100.
+const crypto = require('crypto')
+const round0 = n => Math.round(n)
+const round2 = n => Math.round(n * 100) / 100
+
+router.post('/:projectId/tenders/:id/compute-recommendation', requireLivePermission('pre_award', 'can_approve'), async (req, res) => {
+  const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+  try {
+    const [[tender]] = await db.query(
+      'SELECT id, ref, title, currency, approval_status, stage, status, criteria_locked_at FROM tender_packages WHERE id=? AND project_id=?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    if (tender.criteria_locked_at == null)
+      return res.status(409).json({ error: 'Criteria are not locked — lock the criteria before computing the recommendation' })
+
+    const [criteria] = await db.query(
+      'SELECT id, criterion_key, label, weight, mandatory, min_score, score_source FROM tender_criteria WHERE tender_id=? ORDER BY display_order, id', [tid])
+    if (criteria.length === 0) return res.status(409).json({ error: 'No criteria defined for this tender' })
+    const priceCrit  = criteria.find(c => c.score_source === 'price') || null
+    const manualCrit = criteria.filter(c => c.score_source !== 'price')
+
+    const [bids] = await db.query(
+      `SELECT b.id, b.supplier_id, s.name supplier_name, b.status, b.prelim_status, b.currency,
+              c.commercial_value, c.unsealed_at
+         FROM tender_bids b JOIN suppliers s ON s.id=b.supplier_id
+         LEFT JOIN tender_bid_commercial c ON c.bid_id=b.id
+        WHERE b.tender_id=? AND b.status NOT IN ('withdrawn','rejected') AND b.prelim_status='pass'
+        ORDER BY b.id`, [tid])
+    if (bids.length === 0) return res.status(409).json({ error: 'No eligible bids (need prelim_status=pass and status not withdrawn/rejected)' })
+
+    const bidIds = bids.map(b => b.id)
+    const [scoreRows] = await db.query(
+      `SELECT bid_id, criterion_id, score FROM tender_evaluation_scores WHERE bid_id IN (${bidIds.map(()=>'?').join(',')})`, bidIds)
+    const manualScore = {}
+    for (const r of scoreRows) (manualScore[r.bid_id] ??= {})[r.criterion_id] = Number(r.score)
+
+    // completeness guard (manual criteria)
+    for (const b of bids) for (const c of manualCrit)
+      if (manualScore[b.id]?.[c.id] == null)
+        return res.status(409).json({ error: `Technical scoring incomplete: bid ${b.id} has no score for criterion "${c.label}"` })
+
+    // unseal guard (only if a price criterion exists)
+    if (priceCrit) {
+      const sealed = bids.filter(b => b.unsealed_at == null)
+      if (sealed.length) return res.status(409).json({ error: `Unseal all eligible bids before computing — still sealed: bid(s) ${sealed.map(b=>b.id).join(', ')}` })
+      const noVal = bids.filter(b => b.commercial_value == null)
+      if (noVal.length) return res.status(409).json({ error: `Missing commercial value for bid(s) ${noVal.map(b=>b.id).join(', ')}` })
+    }
+
+    // helper: evaluate a criterion's gate for a score → null (pass) or {type,...}
+    const gateOf = (c, sc) => {
+      if (c.min_score != null && sc < Number(c.min_score))
+        return { type: c.mandatory ? 'mandatory' : 'min_score', criterion_id: c.id, criterion_label: c.label, score: sc, threshold: Number(c.min_score) }
+      return null
+    }
+
+    // 1) technical gates (manual criteria) → technically-compliant set
+    const dq = {}            // bidId → disqualification|null
+    for (const b of bids) {
+      let d = null
+      for (const c of manualCrit) { d = gateOf(c, manualScore[b.id][c.id]); if (d) break }
+      dq[b.id] = d
+    }
+    const techCompliant = bids.filter(b => !dq[b.id])
+
+    // 2) commercial scores for technically-compliant bids (lowest compliant price = 100).
+    //    Pure computation here; the DB writes happen inside the transaction below.
+    const commScore = {}     // bidId → 0-100 | undefined
+    if (priceCrit && techCompliant.length) {
+      const lowest = Math.min(...techCompliant.map(b => Number(b.commercial_value)))
+      for (const b of techCompliant) commScore[b.id] = round0(lowest / Number(b.commercial_value) * 100)
+      // 3) commercial gate (if the price criterion itself is gated)
+      for (const b of techCompliant) { const d = gateOf(priceCrit, commScore[b.id]); if (d) dq[b.id] = d }
+    }
+
+    // 4) combined score + rank for survivors (passed every gate)
+    const perCritScore = (b) => {
+      const m = {}
+      for (const c of manualCrit) m[c.id] = manualScore[b.id][c.id]
+      if (priceCrit && commScore[b.id] != null) m[priceCrit.id] = commScore[b.id]
+      return m
+    }
+    const survivors = bids.filter(b => !dq[b.id])
+    const combinedOf = (b) => {
+      const m = perCritScore(b); let sum = 0
+      for (const c of criteria) if (m[c.id] != null) sum += Number(c.weight) * m[c.id]
+      return round2(sum / 100)
+    }
+    const techScoreOf = (b) => {
+      const wsum = manualCrit.reduce((s,c)=>s+Number(c.weight),0)
+      if (!wsum) return null
+      return round0(manualCrit.reduce((s,c)=>s+Number(c.weight)*manualScore[b.id][c.id],0) / wsum)
+    }
+    survivors.sort((a,b) => combinedOf(b)-combinedOf(a)
+      || Number(a.commercial_value||0)-Number(b.commercial_value||0) || a.id-b.id)
+    const rankOf = {}; survivors.forEach((b,i)=>rankOf[b.id]=i+1)
+
+    // build the per-bid breakdown (stored in scores_json, and reused for the archive)
+    const bidDoc = (b) => {
+      const m = perCritScore(b)
+      return {
+        bid_id: b.id, supplier_id: b.supplier_id, supplier_name: b.supplier_name,
+        status: b.status, prelim_status: b.prelim_status, commercial_value: b.commercial_value,
+        eligible: !dq[b.id], disqualification: dq[b.id] || null,
+        scores: criteria.map(c => ({
+          criterion_id: c.id, label: c.label, weight: c.weight, score: m[c.id] ?? null,
+          reason: (priceCrit && c.id === priceCrit.id) ? 'commercial-computed' : null,
+          weighted: (!dq[b.id] && m[c.id] != null) ? round2(Number(c.weight)*m[c.id]/100) : null,
+        })),
+        tech_score: techScoreOf(b),
+        comm_score: (priceCrit && commScore[b.id] != null) ? commScore[b.id] : null,
+        combined_score: dq[b.id] ? null : combinedOf(b),
+        rank_position: rankOf[b.id] || null,
+      }
+    }
+    const bidsDoc = bids.map(bidDoc)
+    const recommendedBidId = survivors.length ? survivors[0].id : null
+
+    // ── transactional write (+ archive/rollback if already approved) ──
+    const conn = await db.getConnection()
+    try {
+      await conn.beginTransaction()
+
+      const wasApproved = tender.approval_status === 'approved' || tender.stage === 'award' || tender.status === 'awarded'
+      if (wasApproved) {
+        // assemble the archive from the PRIOR computation (current tender_evaluations)
+        const [priorEvals] = await conn.query('SELECT bid_id, tech_score, comm_score, combined_score, rank_position, scores_json, evaluated_by, evaluated_at FROM tender_evaluations WHERE tender_id=?', [tid])
+        const [priorChain] = await conn.query('SELECT id, approver_id, approval_level, status, comments, actioned_at, created_at FROM tender_approvals WHERE tender_id=? ORDER BY approval_level, id', [tid])
+        const batch = crypto.randomUUID()
+        const snapshot = {
+          schema_version: 1,
+          tender: { id: tender.id, ref: tender.ref, title: tender.title, currency: tender.currency },
+          computation: { archived_reason: 'recompute_after_approval', archived_at: new Date().toISOString(),
+            archived_by: req.user.id, prior_approval_status: tender.approval_status, prior_stage: tender.stage, prior_status: tender.status },
+          criteria: criteria.map(c => ({ criterion_id: c.id, key: c.criterion_key, label: c.label, weight: c.weight, mandatory: c.mandatory, min_score: c.min_score, score_source: c.score_source })),
+          approval_chain: priorChain,
+          bids: priorEvals.map(e => ({ bid_id: e.bid_id, tech_score: e.tech_score, comm_score: e.comm_score,
+            combined_score: e.combined_score, rank_position: e.rank_position,
+            breakdown: typeof e.scores_json === 'string' ? JSON.parse(e.scores_json) : e.scores_json })),
+        }
+        await conn.query(
+          `INSERT INTO tender_evaluation_snapshots (tender_id, archive_batch, recommended_bid_id, computed_by, computed_at, snapshot_data)
+           VALUES (?,?,?,?,?,CAST(? AS JSON))`,
+          [tid, batch, null, req.user.id, new Date(), JSON.stringify(snapshot)])
+        // void the approval chain in-place (rows preserved, marked unapproved) + roll back
+        await conn.query("UPDATE tender_approvals SET status='unapproved' WHERE tender_id=? AND status IN ('pending','approved')", [tid])
+        await conn.query("UPDATE tender_packages SET approval_status='pending', stage='recommendation', status='active' WHERE id=?", [tid])
+      }
+
+      // persist commercial scores (upsert; reason + scored_by = triggering user)
+      if (priceCrit) for (const b of techCompliant) if (commScore[b.id] != null) {
+        await conn.query(
+          `INSERT INTO tender_evaluation_scores (bid_id, criterion_id, score, scored_by, reason)
+           VALUES (?,?,?,?, 'commercial-computed')
+           ON DUPLICATE KEY UPDATE score=VALUES(score), scored_by=VALUES(scored_by), reason=VALUES(reason)`,
+          [b.id, priceCrit.id, commScore[b.id], req.user.id])
+      }
+
+      // overwrite the roll-up: clear prior, write fresh
+      await conn.query('DELETE FROM tender_evaluations WHERE tender_id=?', [tid])
+      for (const d of bidsDoc) {
+        await conn.query(
+          `INSERT INTO tender_evaluations (tender_id, bid_id, tech_score, comm_score, combined_score, rank_position, scores_json, evaluated_by, evaluated_at)
+           VALUES (?,?,?,?,?,?,CAST(? AS JSON),?,NOW())`,
+          [tid, d.bid_id, d.tech_score, d.comm_score, d.combined_score, d.rank_position, JSON.stringify(d), req.user.id])
+      }
+      await conn.commit()
+    } catch (te) { await conn.rollback(); throw te } finally { conn.release() }
+
+    audit(req, 'recommendation_computed', 'tender', tid, null,
+      { eligible: bids.length, survivors: survivors.length, recommended_bid_id: recommendedBidId })
+    res.json({ tender_id: tid, recommended_bid_id: recommendedBidId,
+      ranked: bidsDoc.filter(d => d.rank_position != null).sort((a,b)=>a.rank_position-b.rank_position),
+      disqualified: bidsDoc.filter(d => d.disqualification) })
+  } catch (e) { console.error('[preaward:compute-recommendation]', e.message); dbError(res, e) }
+})
+
+// ─── GET recommendation (the stored ranked result for the tab) ──────────────────
+router.get('/:projectId/tenders/:id/recommendation', requireLivePermission('pre_award', 'can_view'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+    const [[tender]] = await db.query('SELECT id FROM tender_packages WHERE id=? AND project_id=?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    const [rows] = await db.query(
+      `SELECT e.bid_id, e.tech_score, e.comm_score, e.combined_score, e.rank_position, e.scores_json,
+              e.evaluated_by, e.evaluated_at, u.full_name evaluated_by_name
+         FROM tender_evaluations e LEFT JOIN users u ON u.id=e.evaluated_by
+        WHERE e.tender_id=? ORDER BY (e.rank_position IS NULL), e.rank_position, e.bid_id`, [tid])
+    if (rows.length === 0) return res.json({ computed: false })
+    const parse = r => (typeof r.scores_json === 'string' ? JSON.parse(r.scores_json) : r.scores_json) || {}
+    const ranked = rows.filter(r => r.rank_position != null).map(r => ({ ...parse(r), rank_position: r.rank_position, combined_score: r.combined_score }))
+    const disqualified = rows.filter(r => r.rank_position == null).map(r => { const d = parse(r); return { bid_id: r.bid_id, supplier_name: d.supplier_name, disqualification: d.disqualification, scores: d.scores } })
+    res.json({
+      computed: true,
+      computed_at: rows[0].evaluated_at, computed_by_name: rows[0].evaluated_by_name,
+      recommended_bid_id: ranked.length ? ranked[0].bid_id : null,
+      ranked, disqualified,
+    })
+  } catch (e) { console.error('[preaward:recommendation:get]', e.message); dbError(res, e) }
+})
+
 module.exports = router
