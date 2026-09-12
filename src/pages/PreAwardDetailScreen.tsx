@@ -14,6 +14,7 @@ import { BackButton } from '../components/BackButton'
 import { PreAwardPrequalTab } from './PreAwardPrequalTab'
 import { PreAwardInvitationTab } from './PreAwardInvitationTab'
 import { PreAwardBidsTab } from './PreAwardBidsTab'
+import { PreAwardEvaluationTab } from './PreAwardEvaluationTab'
 import { PreAwardRecommendationTab } from './PreAwardRecommendationTab'
 import { API } from '../lib/api'
 
@@ -184,14 +185,14 @@ export function PreAwardDetailScreen({ dark, projectId, projectName, tenderId, u
             <PreAwardInvitationTab dark={dark} projectId={projectId} tenderId={tender.id} userRole={userRole} userId={userId} />
           ) : tab === 'Bids' ? (
             <PreAwardBidsTab dark={dark} projectId={projectId} tenderId={tender.id} userRole={userRole} userId={userId} />
+          ) : tab === 'Evaluation' ? (
+            <PreAwardEvaluationTab dark={dark} projectId={projectId} tenderId={tender.id} userRole={userRole} userId={userId} />
           ) : tab === 'Recommendation / Award' ? (
             <PreAwardRecommendationTab dark={dark} projectId={projectId} tenderId={tender.id} userRole={userRole} userId={userId} onChanged={load} />
           ) : (
             <div style={{ padding: '32px 18px', border: bd, borderRadius: 8, background: cardBg, color: sub, fontSize: 13, textAlign: 'center' }}>
               <div style={{ fontWeight: 600, color: col, marginBottom: 6 }}>{tab}</div>
-              {tab === 'Evaluation'
-                ? 'This tab is part of the planned sequence; its backend (scoring) is not yet built.'
-                : 'This tab will be built in an upcoming sub-step.'}
+              This tab will be built in an upcoming sub-step.
             </div>
           )}
 

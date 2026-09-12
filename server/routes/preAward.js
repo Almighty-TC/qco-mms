@@ -344,7 +344,7 @@ router.get('/:projectId/tenders/:id/criteria', requireLivePermission('pre_award'
       'SELECT id, criteria_locked_at, criteria_locked_by FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
     if (!tender) return res.status(404).json({ error: 'Tender not found' })
     const [rows] = await db.query(
-      `SELECT id, tender_id, criterion_key, label, weight, mandatory, min_score, display_order, created_at, updated_at
+      `SELECT id, tender_id, criterion_key, label, weight, mandatory, min_score, display_order, score_source, created_at, updated_at
          FROM tender_criteria WHERE tender_id = ? ORDER BY display_order, id`, [tid])
     const weight_sum = rows.reduce((s, c) => s + Number(c.weight), 0)
     res.json({ criteria: rows, weight_sum,
@@ -681,14 +681,18 @@ router.put('/:projectId/tenders/:id/bids/:bidId/scores', requireLivePermission('
     if (bid.prelim_status !== 'pass')
       return res.status(409).json({ error: `Cannot score a bid that has not passed the preliminary check (prelim_status = '${bid.prelim_status}')` })
 
-    // validate payload: each criterion belongs to this tender, no dupes, score 0-100
-    const [critRows] = await db.query('SELECT id FROM tender_criteria WHERE tender_id = ?', [tid])
+    // validate payload: each criterion belongs to this tender, no dupes, score 0-100,
+    // and is NOT the commercial (price) criterion — that score is computed, never entered.
+    const [critRows] = await db.query('SELECT id, score_source FROM tender_criteria WHERE tender_id = ?', [tid])
     const validCritIds = new Set(critRows.map(r => r.id))
+    const priceCritIds = new Set(critRows.filter(r => r.score_source === 'price').map(r => r.id))
     const seen = new Set()
     for (const s of scores) {
       const cid = Number(s?.criterion_id); const sc = Number(s?.score)
       if (!Number.isInteger(cid) || !validCritIds.has(cid))
         return res.status(400).json({ error: `criterion_id ${s?.criterion_id} is not a criterion of this tender` })
+      if (priceCritIds.has(cid))
+        return res.status(409).json({ error: `criterion_id ${cid} is the commercial (price) criterion — its score is computed on recommendation, not entered` })
       if (seen.has(cid)) return res.status(400).json({ error: `Duplicate criterion_id ${cid} in payload` })
       seen.add(cid)
       if (!Number.isInteger(sc) || sc < 0 || sc > 100)
@@ -714,6 +718,20 @@ router.put('/:projectId/tenders/:id/bids/:bidId/scores', requireLivePermission('
       'SELECT criterion_id, score, scored_by, scored_at, updated_at FROM tender_evaluation_scores WHERE bid_id = ? ORDER BY criterion_id', [bidId])
     res.json({ bid_id: bidId, scores: rows })
   } catch (e) { console.error('[preaward:bid:scores]', e.message); dbError(res, e) }
+})
+
+// READ existing per-criterion scores for all of a tender's bids (pre-fills the grid).
+router.get('/:projectId/tenders/:id/scores', requireLivePermission('pre_award', 'can_view'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+    const [[tender]] = await db.query('SELECT id FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    const [rows] = await db.query(
+      `SELECT s.bid_id, s.criterion_id, s.score, s.reason, s.scored_by, s.scored_at, s.updated_at
+         FROM tender_evaluation_scores s JOIN tender_bids b ON b.id = s.bid_id
+        WHERE b.tender_id = ? ORDER BY s.bid_id, s.criterion_id`, [tid])
+    res.json({ scores: rows })
+  } catch (e) { console.error('[preaward:scores:list]', e.message); dbError(res, e) }
 })
 
 // ═══ APPROVAL CHAIN (Phase 2.7) ════════════════════════════════════════════════
