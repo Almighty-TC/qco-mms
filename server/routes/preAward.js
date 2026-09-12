@@ -650,6 +650,72 @@ router.post('/:projectId/tenders/:id/bids/:bidId/unseal', requireLivePermission(
   } catch (e) { console.error('[preaward:bid:unseal]', e.message); dbError(res, e) }
 })
 
+// ═══ EVALUATION SCORING (Phase 3.x) ════════════════════════════════════════════
+// Bulk per-criterion technical scores for one bid. can_approve — same trust level as
+// the approval chain and criteria-lock (scoring decides the winner). Deliberately NO
+// seal gate: technical scoring is blind to the sealed commercial value (the anti-bias
+// keystone), so it happens WHILE the envelope is still sealed. Gated instead on:
+//   • criteria LOCKED (409 if not) — no scoring against a still-mutable scheme;
+//   • bid scorable (409 if withdrawn/rejected, or prelim_status != 'pass') — a bid
+//     already excluded by the mechanical prelim-check is never scorable;
+//   • every criterion_id must belong to THIS tender (400 otherwise).
+// Bulk upsert on uq_evalscore_bid_criterion — re-submitting updates, never duplicates.
+router.put('/:projectId/tenders/:id/bids/:bidId/scores', requireLivePermission('pre_award', 'can_approve'), async (req, res) => {
+  try {
+    const pid = Number(req.params.projectId); const tid = Number(req.params.id); const bidId = Number(req.params.bidId)
+    const { scores } = req.body || {}
+    if (!Array.isArray(scores) || scores.length === 0)
+      return res.status(400).json({ error: 'scores must be a non-empty array of { criterion_id, score }' })
+
+    // tender in project + criteria-locked gate
+    const [[tender]] = await db.query('SELECT id, criteria_locked_at FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    if (tender.criteria_locked_at == null)
+      return res.status(409).json({ error: 'Criteria are not locked for this tender — lock the criteria before scoring' })
+
+    // bid belongs to tender + scorable-state gate (NOT seal state — see header)
+    const [[bid]] = await db.query('SELECT id, status, prelim_status FROM tender_bids WHERE id = ? AND tender_id = ?', [bidId, tid])
+    if (!bid) return res.status(404).json({ error: 'Bid not found' })
+    if (bid.status === 'withdrawn' || bid.status === 'rejected')
+      return res.status(409).json({ error: `Cannot score a ${bid.status} bid` })
+    if (bid.prelim_status !== 'pass')
+      return res.status(409).json({ error: `Cannot score a bid that has not passed the preliminary check (prelim_status = '${bid.prelim_status}')` })
+
+    // validate payload: each criterion belongs to this tender, no dupes, score 0-100
+    const [critRows] = await db.query('SELECT id FROM tender_criteria WHERE tender_id = ?', [tid])
+    const validCritIds = new Set(critRows.map(r => r.id))
+    const seen = new Set()
+    for (const s of scores) {
+      const cid = Number(s?.criterion_id); const sc = Number(s?.score)
+      if (!Number.isInteger(cid) || !validCritIds.has(cid))
+        return res.status(400).json({ error: `criterion_id ${s?.criterion_id} is not a criterion of this tender` })
+      if (seen.has(cid)) return res.status(400).json({ error: `Duplicate criterion_id ${cid} in payload` })
+      seen.add(cid)
+      if (!Number.isInteger(sc) || sc < 0 || sc > 100)
+        return res.status(400).json({ error: `score for criterion_id ${cid} must be an integer between 0 and 100` })
+    }
+
+    // bulk upsert in one transaction (all-or-nothing)
+    const conn = await db.getConnection()
+    try {
+      await conn.beginTransaction()
+      for (const s of scores) {
+        await conn.query(
+          `INSERT INTO tender_evaluation_scores (bid_id, criterion_id, score, scored_by)
+           VALUES (?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE score = VALUES(score), scored_by = VALUES(scored_by)`,
+          [bidId, Number(s.criterion_id), Number(s.score), req.user.id])
+      }
+      await conn.commit()
+    } catch (te) { await conn.rollback(); throw te } finally { conn.release() }
+
+    audit(req, 'bid_scored', 'tender_bid', bidId, null, { criteria: scores.map(s => Number(s.criterion_id)), count: scores.length })
+    const [rows] = await db.query(
+      'SELECT criterion_id, score, scored_by, scored_at, updated_at FROM tender_evaluation_scores WHERE bid_id = ? ORDER BY criterion_id', [bidId])
+    res.json({ bid_id: bidId, scores: rows })
+  } catch (e) { console.error('[preaward:bid:scores]', e.message); dbError(res, e) }
+})
+
 // ═══ APPROVAL CHAIN (Phase 2.7) ════════════════════════════════════════════════
 // Mirrors po_approvals' real threshold-gated, sequential level-1-before-level-2
 // logic. tender_approvals rows are the AUTHORITATIVE per-level state (approval_level
