@@ -767,9 +767,16 @@ router.post('/:projectId/tenders/:id/approve', requireLivePermission('pre_award'
     const needsManagerOnly = !threshold1 || V <= Number(threshold1)
     const needsDirector    = threshold2 != null && V > Number(threshold2)
 
+    // Option A: capture which bid is the current system recommendation at approval time.
+    // rank_position=1 is the top survivor; disqualified rows have rank_position=NULL, so this
+    // never picks a disqualified bid. NULL when nothing has been computed — approval still proceeds.
+    const [[rec]] = await db.query(
+      "SELECT bid_id FROM tender_evaluations WHERE tender_id = ? AND rank_position = 1 LIMIT 1", [tid])
+    const recommendedBidId = rec ? rec.bid_id : null
+
     // ── Admin bypass — one action completes the chain (mirrors po_approvals) ──
     if (role === 'admin') {
-      await db.query("INSERT INTO tender_approvals (tender_id, approver_id, approval_level, status, actioned_at, comments) VALUES (?,?,1,'approved',NOW(),?)", [tid, req.user.id, comment || 'Admin approval'])
+      await db.query("INSERT INTO tender_approvals (tender_id, approver_id, approval_level, status, actioned_at, comments, recommended_bid_id) VALUES (?,?,1,'approved',NOW(),?,?)", [tid, req.user.id, comment || 'Admin approval', recommendedBidId])
       await db.query("UPDATE tender_packages SET approval_status='approved', stage='award', status='awarded' WHERE id = ?", [tid])
       audit(req, 'tender_approved', 'tender', tid, { approval_status: tender.approval_status }, { approval_status: 'approved', level: 1, via: 'admin' })
       return res.json({ ok: true, approval_status: 'approved', level_completed: 1, via: 'admin' })
@@ -787,7 +794,7 @@ router.post('/:projectId/tenders/:id/approve', requireLivePermission('pre_award'
       if (!allowed.includes(role))
         return res.status(403).json({ error: `Your role cannot approve level 1 for this tender (allowed: ${allowed.join(', ')})` })
 
-      await db.query("INSERT INTO tender_approvals (tender_id, approver_id, approval_level, status, actioned_at, comments) VALUES (?,?,1,'approved',NOW(),?)", [tid, req.user.id, comment])
+      await db.query("INSERT INTO tender_approvals (tender_id, approver_id, approval_level, status, actioned_at, comments, recommended_bid_id) VALUES (?,?,1,'approved',NOW(),?,?)", [tid, req.user.id, comment, recommendedBidId])
 
       if (needsDirector) {
         // level 1 done, level 2 required → approval_status STAYS 'pending'; notify directors
@@ -809,7 +816,7 @@ router.post('/:projectId/tenders/:id/approve', requireLivePermission('pre_award'
     if (needsDirector && !level2Done) {
       if (!TENDER_L2_ROLES.includes(role))
         return res.status(403).json({ error: `Your role cannot approve level 2 (allowed: ${TENDER_L2_ROLES.join(', ')})` })
-      await db.query("INSERT INTO tender_approvals (tender_id, approver_id, approval_level, status, actioned_at, comments) VALUES (?,?,2,'approved',NOW(),?)", [tid, req.user.id, comment])
+      await db.query("INSERT INTO tender_approvals (tender_id, approver_id, approval_level, status, actioned_at, comments, recommended_bid_id) VALUES (?,?,2,'approved',NOW(),?,?)", [tid, req.user.id, comment, recommendedBidId])
       await db.query("UPDATE tender_packages SET approval_status='approved', stage='award', status='awarded' WHERE id = ?", [tid])
       audit(req, 'tender_approved_director', 'tender', tid, null, { level: 2, approval_status: 'approved' })
       return res.json({ ok: true, approval_status: 'approved', level_completed: 2 })
