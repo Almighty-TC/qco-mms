@@ -1143,4 +1143,81 @@ router.get('/:projectId/tenders/:id/recommendation', requireLivePermission('pre_
   } catch (e) { console.error('[preaward:recommendation:get]', e.message); dbError(res, e) }
 })
 
+// ═══ AWARD → PO HANDOFF (Phase 3.x) ════════════════════════════════════════════
+// POST generate-po (can_approve): convert an APPROVED tender's active reservations into a
+// real PO for the winning (recommended) bid's supplier. Atomic: one PO (+ tender_id back-link)
+// + its po_lines (source_mto_line_id set, unit_price NULL — lump-sum bid, total on the header)
+// + each tender_line_items -> 'converted' + each mto_lines -> 'po-raised', all in one txn.
+// 100% of active reservations convert (bids are lump-sum; no per-line bid scope exists — see
+// design memory §3a). po_number is user-provided (globally UNIQUE).
+router.post('/:projectId/tenders/:id/generate-po', requireLivePermission('pre_award', 'can_approve'), async (req, res) => {
+  const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+  try {
+    const po_number = String(req.body?.po_number || '').trim()
+    if (!po_number) return res.status(400).json({ error: 'po_number is required' })
+
+    const [[tender]] = await db.query('SELECT id, approval_status, currency, wbs_code FROM tender_packages WHERE id=? AND project_id=?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    if (tender.approval_status !== 'approved')
+      return res.status(409).json({ error: `Tender is not approved (approval_status='${tender.approval_status}') — cannot generate a PO` })
+
+    // winning bid captured at approval
+    const [[appr]] = await db.query("SELECT recommended_bid_id FROM tender_approvals WHERE tender_id=? AND status='approved' AND recommended_bid_id IS NOT NULL ORDER BY id DESC LIMIT 1", [tid])
+    if (!appr || appr.recommended_bid_id == null)
+      return res.status(409).json({ error: 'No recommended bid was captured at approval — nothing to award' })
+    const [[bid]] = await db.query(
+      `SELECT b.id, b.supplier_id, s.name AS supplier_name, c.commercial_value
+         FROM tender_bids b JOIN suppliers s ON s.id=b.supplier_id
+         LEFT JOIN tender_bid_commercial c ON c.bid_id=b.id WHERE b.id=?`, [appr.recommended_bid_id])
+    if (!bid) return res.status(409).json({ error: 'Recommended bid not found' })
+
+    const conn = await db.getConnection()
+    try {
+      await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+      await conn.beginTransaction()
+
+      // idempotency: a PO already links this tender → don't double-award
+      const [[existingPo]] = await conn.query('SELECT id FROM purchase_orders WHERE tender_id=? LIMIT 1', [tid])
+      if (existingPo) { await conn.rollback(); return res.status(409).json({ error: `Tender already handed off to PO #${existingPo.id}` }) }
+
+      // active reservations (locked), joined to their MTO lines for line detail
+      const [resv] = await conn.query(
+        `SELECT t.id AS tli_id, t.mto_line_id, t.qty_reserved, m.description, m.uom
+           FROM tender_line_items t JOIN mto_lines m ON m.id=t.mto_line_id
+          WHERE t.tender_id=? AND t.status='active' ORDER BY t.mto_line_id FOR UPDATE`, [tid])
+      if (resv.length === 0) { await conn.rollback(); return res.status(409).json({ error: 'No active reservations to convert' }) }
+
+      // create the PO — tender_id back-link; value = lump-sum bid; currency/wbs from tender
+      let poId
+      try {
+        const [po] = await conn.query(
+          `INSERT INTO purchase_orders (project_id, po_number, vendor_name, supplier_id, currency, value, wbs_code, status, tender_id, created_by)
+           VALUES (?,?,?,?,?,?,?,'rfq',?,?)`,
+          [pid, po_number, bid.supplier_name, bid.supplier_id, tender.currency || 'AUD', bid.commercial_value ?? null, tender.wbs_code || null, tid, req.user.id])
+        poId = po.insertId
+      } catch (pe) {
+        if (pe.code === 'ER_DUP_ENTRY') { await conn.rollback(); return res.status(409).json({ error: `PO number "${po_number}" already exists` }) }
+        throw pe
+      }
+
+      // convert every reservation → a real po_line + status flips (all inside the one txn)
+      let n = 0
+      for (const r of resv) {
+        n++
+        await conn.query(
+          `INSERT INTO po_lines (po_id, line_number, description, qty, uom, unit_price, source_mto_line_id)
+           VALUES (?,?,?,?,?,NULL,?)`,
+          [poId, String(n), String(r.description).slice(0, 500), r.qty_reserved, r.uom || 'EA', r.mto_line_id])
+        await conn.query("UPDATE tender_line_items SET status='converted' WHERE id=?", [r.tli_id])
+        await conn.query("UPDATE mto_lines SET status='po-raised', po_ref=? WHERE id=?", [po_number, r.mto_line_id])
+      }
+
+      await conn.commit()
+      audit(req, 'tender_awarded_to_po', 'tender', tid, null, { po_id: poId, po_number, lines: n, supplier_id: bid.supplier_id })
+      const [[newPo]] = await db.query('SELECT id, po_number, supplier_id, vendor_name, value, currency, status, tender_id FROM purchase_orders WHERE id=?', [poId])
+      return res.status(201).json({ po: newPo, converted_lines: n })
+    } catch (te) { await conn.rollback(); throw te } finally { conn.release() }
+  } catch (e) { console.error('[preaward:generate-po]', e.message); dbError(res, e) }
+})
+
 module.exports = router
