@@ -18,6 +18,7 @@ const { dbError } = require('../utils/dbError')
 const { authenticateToken } = require('../middleware/auth')
 const { denyReadOnly, requireProjectScope } = require('../middleware/permissions')
 const { requireLivePermission } = require('../middleware/requireLivePermission')
+const { getAvailableQty } = require('../lib/mtoAvailability')
 
 router.use(authenticateToken)
 router.use(denyReadOnly)                          // floor: viewer/auditor barred from writes
@@ -732,6 +733,71 @@ router.get('/:projectId/tenders/:id/scores', requireLivePermission('pre_award', 
         WHERE b.tender_id = ? ORDER BY s.bid_id, s.criterion_id`, [tid])
     res.json({ scores: rows })
   } catch (e) { console.error('[preaward:scores:list]', e.message); dbError(res, e) }
+})
+
+// ═══ MTO-LINE RESERVATION (Phase 3.x) ══════════════════════════════════════════
+// POST reserve-lines (can_edit): a tender reserves MTO line quantity — composing its
+// scope (same trust tier as the criteria editor). Body { lines:[{mto_line_id, qty_reserved}] }.
+// Atomic (all-or-nothing) across the batch. Race-safe: the txn runs at READ COMMITTED and
+// locks each mto_line row FOR UPDATE, then reads availability via getAvailableQty UNDER that
+// lock — a concurrent request for the same line blocks, then re-reads the committed
+// reservation and 422s (never a stale pre-lock read). 409 if this tender already has a row
+// for a requested line (modifying a reservation is a separate action, out of scope here).
+router.post('/:projectId/tenders/:id/reserve-lines', requireLivePermission('pre_award', 'can_edit'), async (req, res) => {
+  const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+  try {
+    const { lines } = req.body || {}
+    if (!Array.isArray(lines) || lines.length === 0)
+      return res.status(400).json({ error: 'lines must be a non-empty array of { mto_line_id, qty_reserved }' })
+
+    // payload validation + no duplicate mto_line_id in the request
+    const seen = new Set()
+    for (const l of lines) {
+      const mid = Number(l?.mto_line_id); const q = Number(l?.qty_reserved)
+      if (!Number.isInteger(mid)) return res.status(400).json({ error: `invalid mto_line_id ${l?.mto_line_id}` })
+      if (!(q > 0)) return res.status(400).json({ error: `qty_reserved for mto_line_id ${mid} must be > 0` })
+      if (seen.has(mid)) return res.status(400).json({ error: `duplicate mto_line_id ${mid} in request` })
+      seen.add(mid)
+    }
+
+    const [[tender]] = await db.query('SELECT id FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+
+    // scope resolved by the caller (not by getAvailableQty): each mto_line must be in this project
+    const ids = lines.map(l => Number(l.mto_line_id))
+    const [inProj] = await db.query(
+      `SELECT l.id FROM mto_lines l JOIN mto_registers r ON r.id = l.mto_id
+        WHERE r.project_id = ? AND l.is_deleted = 0 AND l.id IN (${ids.map(() => '?').join(',')})`, [pid, ...ids])
+    const okIds = new Set(inProj.map(r => r.id))
+    const bad = ids.filter(i => !okIds.has(i))
+    if (bad.length) return res.status(400).json({ error: `mto_line_id(s) not in this project: ${bad.join(', ')}` })
+
+    const conn = await db.getConnection()
+    try {
+      await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')  // fresh reads for the SUM-based availability
+      await conn.beginTransaction()
+      // stable lock order (sorted by id) so concurrent batches can't deadlock
+      const ordered = [...lines].sort((a, b) => Number(a.mto_line_id) - Number(b.mto_line_id))
+      const created = []
+      for (const l of ordered) {
+        const mid = Number(l.mto_line_id); const q = Number(l.qty_reserved)
+        await conn.query('SELECT id FROM mto_lines WHERE id = ? FOR UPDATE', [mid])   // serialization point
+        const [[dup]] = await conn.query('SELECT id FROM tender_line_items WHERE tender_id = ? AND mto_line_id = ?', [tid, mid])
+        if (dup) { await conn.rollback(); return res.status(409).json({ error: `Tender already has a reservation for mto_line_id ${mid} — modifying a reservation is a separate action` }) }
+        const a = await getAvailableQty(mid, conn)   // computed UNDER the lock, at READ COMMITTED
+        if (q > a.available) {
+          await conn.rollback()
+          return res.status(422).json({ error: `Cannot reserve ${q} on mto_line_id ${mid}: only ${a.available} available (total ${a.total_qty}, PO-consumed ${a.po_assigned}, reserved ${a.reserved}).` })
+        }
+        const [ins] = await conn.query(
+          "INSERT INTO tender_line_items (tender_id, mto_line_id, qty_reserved, status) VALUES (?,?,?,'active')", [tid, mid, q])
+        created.push({ id: ins.insertId, mto_line_id: mid, qty_reserved: q })
+      }
+      await conn.commit()
+      audit(req, 'tender_lines_reserved', 'tender', tid, null, { lines: created })
+      return res.status(201).json({ tender_id: tid, reserved: created })
+    } catch (te) { await conn.rollback(); throw te } finally { conn.release() }
+  } catch (e) { console.error('[preaward:reserve-lines]', e.message); dbError(res, e) }
 })
 
 // ═══ APPROVAL CHAIN (Phase 2.7) ════════════════════════════════════════════════
