@@ -15,6 +15,16 @@ const CAN_APPROVE = ['admin', 'procurement_manager', 'procurement_officer', 'pro
 
 interface Approval { id: number; approver_id: number | null; approver_name: string | null; approval_level: number; status: string; comments: string | null; actioned_at: string | null }
 interface ChainState { approval_status: string; estimated_value: string | number | null; approvals: Approval[] }
+interface ScoreCell { criterion_id: number; label: string; weight: number; score: number | null; reason: string | null; weighted: number | null }
+interface RankedBid { bid_id: number; supplier_name: string; rank_position: number; combined_score: number | string | null; tech_score: number | null; comm_score: number | null; commercial_value: string | number | null; scores: ScoreCell[] }
+interface DisqInfo { type: string; criterion_label: string; score: number; threshold: number }
+interface DisqBid { bid_id: number; supplier_name: string; disqualification: DisqInfo; scores: ScoreCell[] }
+interface Rec { computed: boolean; computed_at?: string | null; computed_by_name?: string | null; recommended_bid_id?: number | null; ranked?: RankedBid[]; disqualified?: DisqBid[] }
+
+const RECOMPUTE_WARNING = 'Recomputing will invalidate the current approval. The existing scores and rank will be archived (not deleted), and this tender will return to pending status, requiring a fresh approval decision.'
+const disqReason = (d: DisqInfo) => d.type === 'mandatory'
+  ? `Failed mandatory criterion ${d.criterion_label} (scored ${d.score}, min ${d.threshold})`
+  : `Below min-score on ${d.criterion_label} (scored ${d.score}, min ${d.threshold})`
 
 const fmtMoney = (v: string | number | null) => {
   if (v == null || v === '') return '—'
@@ -30,6 +40,10 @@ export function PreAwardRecommendationTab({ dark, projectId, tenderId, userRole,
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const [action, setAction] = useState<null | 'approve' | 'reject'>(null)
+  const [rec, setRec] = useState<Rec | null>(null)
+  const [computing, setComputing] = useState(false)
+  const [computeErr, setComputeErr] = useState('')
+  const [showRecomputeWarn, setShowRecomputeWarn] = useState(false)
 
   const canApprove = CAN_APPROVE.includes(userRole)
   const col = dark ? '#f1f5f9' : '#0f172a'
@@ -41,13 +55,15 @@ export function PreAwardRecommendationTab({ dark, projectId, tenderId, userRole,
   const load = useCallback(async () => {
     setLoading(true); setErr('')
     try {
-      const [ch, proj] = await Promise.all([
+      const [ch, proj, rc] = await Promise.all([
         axios.get(`${API}/pre-award/${projectId}/tenders/${tenderId}/approvals`),
         axios.get(`${API}/projects/${projectId}`),
+        axios.get(`${API}/pre-award/${projectId}/tenders/${tenderId}/recommendation`),
       ])
       setChain(ch.data)
       const t2 = proj.data?.approval_threshold_2
       setThreshold2(t2 == null ? null : Number(t2))
+      setRec(rc.data)
     } catch { setErr('Could not load the approval chain.') } finally { setLoading(false) }
   }, [projectId, tenderId])
   useEffect(() => { load() }, [load])
@@ -102,10 +118,105 @@ export function PreAwardRecommendationTab({ dark, projectId, tenderId, userRole,
     </div>
   )
 
+  const runCompute = async () => {
+    setComputing(true); setComputeErr(''); setShowRecomputeWarn(false)
+    try {
+      await axios.post(`${API}/pre-award/${projectId}/tenders/${tenderId}/compute-recommendation`, {})
+      await load()          // reloads recommendation AND the approval chain (which resets to pending on recompute-after-approval)
+      onChanged?.()
+    } catch (e) {
+      const s = axios.isAxiosError(e) ? e.response?.status : undefined
+      setComputeErr(axios.isAxiosError(e) && e.response?.data?.error ? `${e.response.data.error}${s ? ` (${s})` : ''}` : 'Could not compute the recommendation.')
+    } finally { setComputing(false) }
+  }
+  // Recompute on an APPROVED tender shows the three-part warning first; otherwise compute directly.
+  const onComputeClick = () => { if (status === 'approved') setShowRecomputeWarn(true); else runCompute() }
+
+  const scoreLine = (cells: ScoreCell[]) => cells.map(c => `${c.label} ${c.score ?? '—'}×${c.weight}%`).join('  ·  ')
+
+  const recommendationSection = () => {
+    const computed = rec?.computed === true
+    const ranked = rec?.ranked ?? []
+    const disq = rec?.disqualified ?? []
+    return (
+      <div style={{ border: bd, borderRadius: 8, background: cardBg, padding: '16px 16px 18px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: col }}>Recommendation</div>
+          {computed && <div style={{ fontSize: 11.5, color: sub }}>Computed{rec?.computed_by_name ? ` by ${rec.computed_by_name}` : ''}{rec?.computed_at ? ` · ${String(rec.computed_at).slice(0, 10)}` : ''}</div>}
+        </div>
+
+        {!computed ? (
+          <div>
+            <div style={{ fontSize: 12.5, color: sub, marginBottom: canApprove ? 12 : 0 }}>No recommendation has been computed yet. Scoring must be complete and the criteria locked before a recommendation can be generated.</div>
+            {canApprove && (
+              <button disabled={computing} onClick={onComputeClick}
+                style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 13, fontWeight: 600, cursor: computing ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+                {computing ? 'Computing…' : 'Compute Recommendation'}
+              </button>
+            )}
+            {computeErr && <div style={{ color: '#b91c1c', fontSize: 12.5, marginTop: 10 }}>{computeErr}</div>}
+          </div>
+        ) : (
+          <>
+            {/* Ranked survivors */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {ranked.map(b => {
+                const isRec = b.rank_position === 1
+                return (
+                  <div key={b.bid_id} style={{ display: 'flex', gap: 12, padding: '12px 14px', border: `1px solid ${isRec ? '#15803d' : (dark ? '#334155' : '#dde3ed')}`, borderRadius: 8, background: isRec ? (dark ? 'rgba(34,197,94,0.08)' : '#f0fdf4') : cardBg }}>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: isRec ? '#15803d' : sub, width: 26, textAlign: 'center' }}>{b.rank_position}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 13.5, fontWeight: 700, color: col }}>{b.supplier_name}</span>
+                        {isRec && <span style={{ background: 'rgba(34,197,94,0.16)', color: '#15803d', fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: 9999 }}>System recommendation</span>}
+                      </div>
+                      <div style={{ fontSize: 11.5, color: sub, marginTop: 3 }}>{scoreLine(b.scores)}</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 16, fontWeight: 800, color: col }}>{b.combined_score}</div>
+                      <div style={{ fontSize: 10.5, color: sub }}>combined</div>
+                    </div>
+                  </div>
+                )
+              })}
+              {ranked.length === 0 && <div style={{ fontSize: 12.5, color: sub }}>No bid passed every gate — see disqualifications below.</div>}
+            </div>
+
+            {/* Disqualified */}
+            {disq.length > 0 && (
+              <div style={{ marginTop: 14 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 6 }}>Disqualified</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {disq.map(b => (
+                    <div key={b.bid_id} style={{ padding: '10px 14px', border: bd, borderRadius: 8, background: dark ? 'rgba(148,163,184,0.06)' : '#f8fafc' }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: col }}>{b.supplier_name}</span>
+                      <span style={{ fontSize: 12.5, color: '#b91c1c', marginLeft: 8 }}>{b.disqualification ? disqReason(b.disqualification) : 'Disqualified'}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Recompute */}
+            {canApprove && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 16 }}>
+                <button disabled={computing} onClick={onComputeClick}
+                  style={{ padding: '7px 14px', borderRadius: 6, border: bd, background: 'none', color: col, fontSize: 12.5, fontWeight: 600, cursor: computing ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+                  {computing ? 'Recomputing…' : 'Recompute'}
+                </button>
+                {computeErr && <span style={{ color: '#b91c1c', fontSize: 12.5 }}>{computeErr}</span>}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* 1 — Recommendation (out of scope) */}
-      {notice('Recommendation', 'Selecting the recommended supplier and its combined score is part of the Evaluation module, which is not yet built (blocked on the scope-reconciliation gate). This section will show the recommended bid and score once evaluation is available.')}
+      {/* 1 — Recommendation */}
+      {recommendationSection()}
 
       {/* 2 — Approval chain (functional) */}
       <div style={{ border: bd, borderRadius: 8, background: cardBg, padding: '16px 16px 18px' }}>
@@ -151,6 +262,21 @@ export function PreAwardRecommendationTab({ dark, projectId, tenderId, userRole,
       {action && chain && (
         <ActionModal dark={dark} projectId={projectId} tenderId={tenderId} mode={action}
           onClose={() => setAction(null)} onDone={() => { setAction(null); load(); onChanged?.() }} />
+      )}
+
+      {showRecomputeWarn && (
+        <div onClick={() => !computing && setShowRecomputeWarn(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: cardBg, borderRadius: 12, padding: 24, width: 480, maxWidth: '94vw', border: bd }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: col, marginBottom: 10 }}>Recompute recommendation?</div>
+            <div style={{ fontSize: 13, color: dark ? '#fca5a5' : '#b91c1c', background: dark ? 'rgba(127,29,29,0.2)' : '#fef2f2', border: `1px solid ${dark ? '#7f1d1d' : '#fecaca'}`, borderRadius: 8, padding: '12px 14px', lineHeight: 1.5 }}>
+              {RECOMPUTE_WARNING}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+              <button disabled={computing} onClick={() => setShowRecomputeWarn(false)} style={{ padding: '8px 14px', borderRadius: 6, border: bd, background: 'none', color: sub, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+              <button disabled={computing} onClick={runCompute} style={{ padding: '8px 14px', borderRadius: 6, border: 'none', background: '#b91c1c', color: '#fff', fontSize: 13, fontWeight: 600, cursor: computing ? 'default' : 'pointer', fontFamily: 'inherit' }}>{computing ? 'Recomputing…' : 'Recompute & invalidate approval'}</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
