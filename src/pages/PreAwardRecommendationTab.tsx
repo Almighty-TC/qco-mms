@@ -108,16 +108,6 @@ export function PreAwardRecommendationTab({ dark, projectId, tenderId, userRole,
     )
   }
 
-  const notice = (title: string, body: string) => (
-    <div style={{ border: bd, borderRadius: 8, background: dark ? 'rgba(148,163,184,0.06)' : '#f8fafc', padding: '14px 16px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-        <span style={{ fontWeight: 600, color: col, fontSize: 13 }}>{title}</span>
-        <span style={{ background: 'rgba(148,163,184,0.18)', color: '#64748b', fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', padding: '2px 7px', borderRadius: 9999 }}>Not yet available</span>
-      </div>
-      <div style={{ fontSize: 12.5, color: sub }}>{body}</div>
-    </div>
-  )
-
   const runCompute = async () => {
     setComputing(true); setComputeErr(''); setShowRecomputeWarn(false)
     try {
@@ -256,8 +246,8 @@ export function PreAwardRecommendationTab({ dark, projectId, tenderId, userRole,
         )}
       </div>
 
-      {/* 3 — Award → PO (out of scope) */}
-      {notice('Award → Purchase Order', 'Once approved, generating the Purchase Order from this tender (the award→PO handoff into the Procurement module) is not yet wired. This section will create the PO once that handoff is built.')}
+      {/* 3 — Award → PO */}
+      <AwardToPoSection dark={dark} projectId={projectId} tenderId={tenderId} approvalStatus={status} canApprove={canApprove} onChanged={onChanged} />
 
       {action && chain && (
         <ActionModal dark={dark} projectId={projectId} tenderId={tenderId} mode={action}
@@ -324,6 +314,128 @@ function ActionModal({ dark, projectId, tenderId, mode, onClose, onDone }: {
           <button disabled={busy} onClick={go} style={{ padding: '8px 14px', borderRadius: 6, border: 'none', background: isReject ? '#b91c1c' : '#15803d', color: '#fff', fontSize: 13, fontWeight: 600, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit' }}>{busy ? 'Working…' : (isReject ? 'Confirm reject' : 'Confirm approve')}</button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ─── AWARD → PURCHASE ORDER ──────────────────────────────────
+// Generates the PO from the awarded tender (POST generate-po). Converts 100% of the
+// tender's ACTIVE reservations into ONE PO for the recommended supplier — there is no
+// per-reservation selection (bids are lump-sum; no per-line bid scope exists), so this
+// UI offers NO checkboxes / partial-convert control: it shows the lines that WILL convert
+// and says so plainly. Rendered as a real action only when the tender is genuinely approved.
+interface ResvLite { tli_id: number; mto_line_id: number; qty_reserved: string | number; status: string; line_number: string; description: string; uom: string | null; mto_reference: string }
+interface LinkedPo { id: number; po_number: string; supplier_id: number; vendor_name: string | null; value: string | number | null; currency: string | null; status: string }
+
+function AwardToPoSection({ dark, projectId, tenderId, approvalStatus, canApprove, onChanged }: {
+  dark: boolean; projectId: number; tenderId: number; approvalStatus: string; canApprove: boolean; onChanged?: () => void
+}) {
+  const [resv, setResv] = useState<ResvLite[]>([])
+  const [po, setPo] = useState<LinkedPo | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [loadErr, setLoadErr] = useState('')
+  const [poNumber, setPoNumber] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [justCreated, setJustCreated] = useState(false)
+  const [submitErr, setSubmitErr] = useState('')
+
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const sub = '#94a3b8'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const cardBg = dark ? '#0f172a' : '#fff'
+  const inputBg = dark ? '#0b1220' : '#f8fafc'
+  const fmtQty = (v: string | number | null | undefined) => {
+    if (v == null || v === '') return '—'
+    const n = Number(v); return isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 3 }) : '—'
+  }
+
+  const load = useCallback(async () => {
+    setLoading(true); setLoadErr('')
+    try {
+      const { data } = await axios.get(`${API}/pre-award/${projectId}/tenders/${tenderId}/scope`)
+      setResv((data.reservations ?? []).filter((r: ResvLite) => r.status === 'active'))
+      setPo(data.po ?? null)
+    } catch { setLoadErr('Could not load the award status.') } finally { setLoading(false) }
+  }, [projectId, tenderId])
+  useEffect(() => { load() }, [load])
+
+  const generate = async () => {
+    const n = poNumber.trim()
+    if (!n) { setSubmitErr('Enter a PO number.'); return }
+    setBusy(true); setSubmitErr('')
+    try {
+      const { data } = await axios.post(`${API}/pre-award/${projectId}/tenders/${tenderId}/generate-po`, { po_number: n })
+      setPo(data.po ?? null)          // flips the card to the handed-off summary
+      setResv([]); setJustCreated(true); setBusy(false)
+      onChanged?.()
+    } catch (e) {
+      const s = axios.isAxiosError(e) ? e.response?.status : undefined
+      setSubmitErr(axios.isAxiosError(e) && e.response?.data?.error ? `${e.response.data.error}${s ? ` (${s})` : ''}` : 'Could not generate the PO.')
+      setBusy(false)
+    }
+  }
+
+  const header = (
+    <div style={{ fontSize: 14, fontWeight: 700, color: col, marginBottom: 12 }}>Award → Purchase Order</div>
+  )
+
+  const poSummary = (p: LinkedPo, justCreated: boolean) => (
+    <div style={{ border: `1px solid ${dark ? '#166534' : '#bbf7d0'}`, borderRadius: 8, background: dark ? 'rgba(34,197,94,0.08)' : '#f0fdf4', padding: '14px 16px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: '#15803d' }}>{justCreated ? 'Purchase Order created' : 'Handed off to Purchase Order'}</span>
+        <span style={{ background: 'rgba(34,197,94,0.16)', color: '#15803d', fontSize: 10.5, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: 9999 }}>{p.status}</span>
+      </div>
+      <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+        <div><div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase' }}>PO number</div><div style={{ fontSize: 14, fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: col }}>{p.po_number}</div></div>
+        <div><div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase' }}>Supplier</div><div style={{ fontSize: 14, color: col }}>{p.vendor_name || `#${p.supplier_id}`}</div></div>
+        <div><div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase' }}>Value</div><div style={{ fontSize: 14, color: col }}>{fmtMoney(p.value)}</div></div>
+      </div>
+      <div style={{ fontSize: 12, color: sub, marginTop: 10 }}>This Purchase Order now lives in the Procurement module.</div>
+    </div>
+  )
+
+  return (
+    <div style={{ border: bd, borderRadius: 8, background: cardBg, padding: '16px 16px 18px' }}>
+      {header}
+      {loading ? <div style={{ color: sub, fontSize: 13 }}>Loading…</div>
+        : loadErr ? <div style={{ color: '#b91c1c', fontSize: 13 }}>{loadErr} <button onClick={load} style={{ background: 'none', border: 'none', color: '#E84E0F', cursor: 'pointer', fontWeight: 600, fontFamily: 'inherit' }}>Retry</button></div>
+        : po ? poSummary(po, justCreated)
+        : approvalStatus !== 'approved' ? (
+          <div style={{ fontSize: 12.5, color: sub }}>Generating the Purchase Order becomes available once this tender is <strong style={{ color: col }}>approved</strong>. It converts the tender’s reserved MTO lines into a PO for the recommended supplier.</div>
+        ) : resv.length === 0 ? (
+          <div style={{ fontSize: 12.5, color: sub }}>This tender is approved, but <strong style={{ color: col }}>no MTO lines are reserved</strong>. Reserve scope on the <strong style={{ color: col }}>Scope</strong> tab before generating a Purchase Order.</div>
+        ) : (
+          <>
+            <div style={{ fontSize: 12.5, color: sub, marginBottom: 12, lineHeight: 1.5 }}>
+              Generating the PO converts <strong style={{ color: col }}>all {resv.length} reserved line{resv.length > 1 ? 's' : ''}</strong> into a single Purchase Order for the recommended supplier. Every reserved line is included — there is no partial conversion. This cannot be undone.
+            </div>
+
+            {/* Read-only list of lines that WILL convert — no selection control */}
+            <div style={{ border: bd, borderRadius: 8, marginBottom: 14, overflow: 'hidden' }}>
+              {resv.map((r, i) => (
+                <div key={r.tli_id} style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '9px 12px', borderTop: i === 0 ? 'none' : bd, background: dark ? 'rgba(148,163,184,0.04)' : '#f8fafc' }}>
+                  <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, fontWeight: 700, color: col, flexShrink: 0 }}>{r.mto_reference} · {r.line_number}</span>
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: sub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.description}>{r.description}</span>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: col, flexShrink: 0 }}>{fmtQty(r.qty_reserved)} {r.uom || ''}</span>
+                </div>
+              ))}
+            </div>
+
+            {canApprove ? (
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input value={poNumber} onChange={e => setPoNumber(e.target.value)} placeholder="PO number (e.g. PO-2026-0042)" disabled={busy}
+                  style={{ flex: 1, minWidth: 220, padding: '9px 11px', borderRadius: 6, border: bd, background: inputBg, color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none' }} />
+                <button disabled={busy || !poNumber.trim()} onClick={generate}
+                  style={{ padding: '9px 18px', borderRadius: 6, border: 'none', background: !poNumber.trim() ? '#64748b' : '#15803d', color: '#fff', fontSize: 13, fontWeight: 600, cursor: busy || !poNumber.trim() ? 'default' : 'pointer', fontFamily: 'inherit', opacity: !poNumber.trim() ? 0.6 : 1 }}>
+                  {busy ? 'Generating…' : 'Generate PO'}
+                </button>
+              </div>
+            ) : (
+              <div style={{ fontSize: 12.5, color: sub }}>Your role can view this but cannot generate the Purchase Order.</div>
+            )}
+            {submitErr && <div style={{ color: '#b91c1c', fontSize: 12.5, marginTop: 10 }}>{submitErr}</div>}
+          </>
+        )}
     </div>
   )
 }

@@ -800,6 +800,104 @@ router.post('/:projectId/tenders/:id/reserve-lines', requireLivePermission('pre_
   } catch (e) { console.error('[preaward:reserve-lines]', e.message); dbError(res, e) }
 })
 
+// GET scope (can_view): the Scope tab's read model. Returns this tender's OWN reservations
+// (tender_line_items joined to their MTO line), with LIVE availability for the active ones
+// computed by the shared getAvailableQty — the SAME formula the reserve path enforces under
+// lock, so the displayed number and the enforced number can never disagree by design. Also
+// returns the project's active MTO registers so the "add lines" picker can offer a register.
+router.get('/:projectId/tenders/:id/scope', requireLivePermission('pre_award', 'can_view'), async (req, res) => {
+  const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+  try {
+    const [[tender]] = await db.query('SELECT id FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+
+    const [rows] = await db.query(
+      `SELECT t.id AS tli_id, t.mto_line_id, t.qty_reserved, t.status,
+              m.line_number, m.description, m.uom, r.id AS mto_id, r.reference AS mto_reference
+         FROM tender_line_items t
+         JOIN mto_lines m ON m.id = t.mto_line_id
+         JOIN mto_registers r ON r.id = m.mto_id
+        WHERE t.tender_id = ? ORDER BY t.mto_line_id`, [tid])
+
+    // Live availability only for ACTIVE reservations (converted/released rows no longer consume).
+    const reservations = []
+    for (const row of rows) {
+      const availability = row.status === 'active' ? await getAvailableQty(row.mto_line_id) : null
+      reservations.push({ ...row, availability })
+    }
+
+    const [registers] = await db.query(
+      "SELECT id, name, reference, current_revision FROM mto_registers WHERE project_id = ? AND status = 'active' ORDER BY reference", [pid])
+
+    // The PO this tender was handed off to, if any (the award→PO link is 1:1 via tender_id).
+    const [[po]] = await db.query(
+      'SELECT id, po_number, supplier_id, vendor_name, value, currency, status FROM purchase_orders WHERE tender_id = ? ORDER BY id DESC LIMIT 1', [tid])
+
+    res.json({ reservations, registers, po: po || null })
+  } catch (e) { console.error('[preaward:scope]', e.message); dbError(res, e) }
+})
+
+// GET available-lines (can_view): the "add lines" picker's data source — one register's
+// current-revision lines (paginated/searchable, same shape as the MTO detail screen), each
+// annotated with LIVE availability via the shared getAvailableQty (Approach A: one formula,
+// called per line for the current page only — bounded by the page cap, never the whole set)
+// and a flag for lines THIS tender already reserved (the picker disables them; reserve 409s).
+router.get('/:projectId/tenders/:id/available-lines', requireLivePermission('pre_award', 'can_view'), async (req, res) => {
+  const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+  try {
+    const mtoId = Number(req.query.mtoId)
+    if (!Number.isInteger(mtoId)) return res.status(400).json({ error: 'mtoId (query) is required' })
+
+    const [[tender]] = await db.query('SELECT id FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    const [[mto]] = await db.query('SELECT id, current_revision FROM mto_registers WHERE id = ? AND project_id = ?', [mtoId, pid])
+    if (!mto) return res.status(404).json({ error: 'MTO register not found in this project' })
+
+    const page   = Math.max(1, parseInt(req.query.page || '1', 10))
+    const limit  = Math.min(50, Math.max(1, parseInt(req.query.limit || '25', 10)))   // cap 50 — bounds the per-line availability reads
+    const offset = (page - 1) * limit
+
+    const where  = ['mto_id = ?', 'revision = ?', 'is_deleted = 0']
+    const params = [mto.id, mto.current_revision]
+    const search = req.query.search
+    if (search) {
+      const q = `%${search}%`
+      where.push('(line_number LIKE ? OR description LIKE ? OR wbs_code LIKE ?)')
+      params.push(q, q, q)
+    }
+    const whereSql = where.join(' AND ')
+
+    const [[{ total }]] = await db.query(`SELECT COUNT(*) AS total FROM mto_lines WHERE ${whereSql}`, params)
+    const [lines] = await db.query(
+      `SELECT id, line_number, description, quantity, uom, wbs_code, status, inspection_class, vdrl_required
+         FROM mto_lines WHERE ${whereSql} ORDER BY line_number ASC, id ASC LIMIT ? OFFSET ?`,
+      [...params, limit, offset])
+
+    // which of THESE page lines this tender already reserved (active) → picker disables them
+    let mine = new Set()
+    if (lines.length) {
+      const ids = lines.map(l => l.id)
+      const [dups] = await db.query(
+        `SELECT mto_line_id FROM tender_line_items WHERE tender_id = ? AND status = 'active' AND mto_line_id IN (${ids.map(() => '?').join(',')})`,
+        [tid, ...ids])
+      mine = new Set(dups.map(d => d.mto_line_id))
+    }
+
+    // Approach A: reuse getAvailableQty per line (single source of truth), page-bounded.
+    const data = []
+    for (const l of lines) {
+      const a = await getAvailableQty(l.id)
+      data.push({
+        ...l,
+        total_qty: a.total_qty, po_assigned: a.po_assigned, reserved: a.reserved, available: a.available,
+        reserved_by_this_tender: mine.has(l.id),
+      })
+    }
+
+    res.json({ data, total, page, limit })
+  } catch (e) { console.error('[preaward:available-lines]', e.message); dbError(res, e) }
+})
+
 // ═══ APPROVAL CHAIN (Phase 2.7) ════════════════════════════════════════════════
 // Mirrors po_approvals' real threshold-gated, sequential level-1-before-level-2
 // logic. tender_approvals rows are the AUTHORITATIVE per-level state (approval_level

@@ -12,6 +12,7 @@ import { useEffect, useState, useCallback } from 'react'
 import axios from 'axios'
 import { BackButton } from '../components/BackButton'
 import { PreAwardPrequalTab } from './PreAwardPrequalTab'
+import { PreAwardScopeTab } from './PreAwardScopeTab'
 import { PreAwardInvitationTab } from './PreAwardInvitationTab'
 import { PreAwardBidsTab } from './PreAwardBidsTab'
 import { PreAwardEvaluationTab } from './PreAwardEvaluationTab'
@@ -59,7 +60,7 @@ const fmtValue = (v: string | number | null, currency: string | null) => {
 }
 
 // The five real tabs, in pipeline order. BAFO is intentionally not here.
-const TABS = ['Prequalification', 'Invitation', 'Bids', 'Evaluation', 'Recommendation / Award'] as const
+const TABS = ['Prequalification', 'Scope', 'Invitation', 'Bids', 'Evaluation', 'Recommendation / Award'] as const
 type Tab = typeof TABS[number]
 
 const CAN_EDIT = ['admin', 'procurement_manager', 'procurement_officer', 'project_manager']  // can_edit
@@ -181,6 +182,8 @@ export function PreAwardDetailScreen({ dark, projectId, projectName, tenderId, u
           {/* Tab content */}
           {tab === 'Prequalification' ? (
             <PreAwardPrequalTab dark={dark} projectId={projectId} discipline={tender.discipline} userRole={userRole} />
+          ) : tab === 'Scope' ? (
+            <PreAwardScopeTab dark={dark} projectId={projectId} tenderId={tender.id} userRole={userRole} />
           ) : tab === 'Invitation' ? (
             <PreAwardInvitationTab dark={dark} projectId={projectId} tenderId={tender.id} userRole={userRole} userId={userId} />
           ) : tab === 'Bids' ? (
