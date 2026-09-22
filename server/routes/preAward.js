@@ -1254,7 +1254,7 @@ router.post('/:projectId/tenders/:id/generate-po', requireLivePermission('pre_aw
     const po_number = String(req.body?.po_number || '').trim()
     if (!po_number) return res.status(400).json({ error: 'po_number is required' })
 
-    const [[tender]] = await db.query('SELECT id, approval_status, currency, wbs_code FROM tender_packages WHERE id=? AND project_id=?', [tid, pid])
+    const [[tender]] = await db.query('SELECT id, approval_status, currency, wbs_code, discipline FROM tender_packages WHERE id=? AND project_id=?', [tid, pid])
     if (!tender) return res.status(404).json({ error: 'Tender not found' })
     if (tender.approval_status !== 'approved')
       return res.status(409).json({ error: `Tender is not approved (approval_status='${tender.approval_status}') — cannot generate a PO` })
@@ -1298,22 +1298,56 @@ router.post('/:projectId/tenders/:id/generate-po', requireLivePermission('pre_aw
         throw pe
       }
 
-      // convert every reservation → a real po_line + status flips (all inside the one txn)
+      // ── PHASE 1 — convert every active reservation into a real po_line (+ status flips) ──
+      // Record the tender-line → po-line mapping; Phase 2 consumes it (no 1:1 assumption baked in).
+      const converted = []
       let n = 0
       for (const r of resv) {
         n++
-        await conn.query(
+        const [plRes] = await conn.query(
           `INSERT INTO po_lines (po_id, line_number, description, qty, uom, unit_price, source_mto_line_id)
            VALUES (?,?,?,?,?,NULL,?)`,
           [poId, String(n), String(r.description).slice(0, 500), r.qty_reserved, r.uom || 'EA', r.mto_line_id])
+        converted.push({ tli_id: r.tli_id, po_line_id: plRes.insertId, line_number: String(n) })
         await conn.query("UPDATE tender_line_items SET status='converted' WHERE id=?", [r.tli_id])
         await conn.query("UPDATE mto_lines SET status='po-raised', po_ref=? WHERE id=?", [po_number, r.mto_line_id])
       }
 
+      // ── PHASE 2 — VDRL transfer (runs AFTER all Phase-1 conversions, same txn + FOR UPDATE lock) ──
+      // For each converted line that carries tender-defined VDRL requirements, materialise them as
+      // real vdrl_documents rows under the PO's single package, each pointing at the real po_line via
+      // source_po_line_id. A failure ANYWHERE here rolls the WHOLE txn back — the PO, its po_lines,
+      // the reservation→converted flips, the mto_lines→po-raised flips, AND the VDRL rows — together.
+      let vdrlPackageId = null       // created at most once, lazily (only if some line has requirements)
+      let vdrlDocs = 0
+      for (const c of converted) {
+        const [reqs] = await conn.query(
+          'SELECT doc_key, label, doc_type, notes FROM tender_line_documents WHERE tender_line_item_id=?', [c.tli_id])
+        if (reqs.length === 0) continue                       // no requirements on this line → invent nothing
+        if (vdrlPackageId == null) {
+          const [[pk]] = await conn.query('SELECT id FROM vdrl_packages WHERE po_id=? AND project_id=?', [poId, pid])
+          if (pk) vdrlPackageId = pk.id
+          else {
+            const [pkRes] = await conn.query(
+              "INSERT INTO vdrl_packages (project_id, po_id, package_ref, name, status, created_by) VALUES (?,?,?,?,'active',?)",
+              [pid, poId, po_number, `${po_number} VDRL Package`, req.user.id])   // package_ref = po_number (NOT NULL, globally unique)
+            vdrlPackageId = pkRes.insertId
+          }
+        }
+        for (const d of reqs) {
+          await conn.query(
+            `INSERT INTO vdrl_documents (package_id, doc_number, title, doc_type, discipline, status, notes, created_by, source_po_line_id)
+             VALUES (?,?,?,?,?, 'Not submitted', ?,?,?)`,
+            [vdrlPackageId, `${c.line_number}-${d.doc_key}`, d.label, d.doc_type, tender.discipline || null, d.notes || null, req.user.id, c.po_line_id])   // doc_number NOT NULL → line_number-doc_key (unique within the package)
+          vdrlDocs++
+        }
+        await conn.query("UPDATE po_lines SET vdrl_required=1 WHERE id=?", [c.po_line_id])
+      }
+
       await conn.commit()
-      audit(req, 'tender_awarded_to_po', 'tender', tid, null, { po_id: poId, po_number, lines: n, supplier_id: bid.supplier_id })
+      audit(req, 'tender_awarded_to_po', 'tender', tid, null, { po_id: poId, po_number, lines: n, vdrl_documents: vdrlDocs, supplier_id: bid.supplier_id })
       const [[newPo]] = await db.query('SELECT id, po_number, supplier_id, vendor_name, value, currency, status, tender_id FROM purchase_orders WHERE id=?', [poId])
-      return res.status(201).json({ po: newPo, converted_lines: n })
+      return res.status(201).json({ po: newPo, converted_lines: n, vdrl_documents: vdrlDocs })
     } catch (te) { await conn.rollback(); throw te } finally { conn.release() }
   } catch (e) { console.error('[preaward:generate-po]', e.message); dbError(res, e) }
 })
