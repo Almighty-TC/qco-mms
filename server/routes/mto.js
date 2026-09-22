@@ -27,6 +27,7 @@ router.param('projectId', require('../middleware/permissions').requireProjectSco
 // ─── FILE UPLOAD CONFIG ───────────────────────────────────────────────────────
 // New-revision files accepted in memory buffer — parsed then discarded.
 const { fileFilter } = require('../utils/upload')
+const blobStore = require('../lib/blobStore')   // blob migration
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 },
@@ -905,11 +906,14 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
     // file on disk so the revision is downloadable as-submitted from the
     // Document Inbox (previously the buffer was discarded after parsing).
     const mtoDir = path.join(__dirname, '..', 'uploads', 'mto-revisions')
-    fs.mkdirSync(mtoDir, { recursive: true })
     const safeName   = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')
     const storedName = `${Date.now()}_${safeName}`
-    fs.writeFileSync(path.join(mtoDir, storedName), req.file.buffer)
-    const relPath = path.join('uploads', 'mto-revisions', storedName)   // relative to server root
+    // Blob migration: persist to blob (key) or disk (legacy relative shape — unchanged).
+    const { value: relPath } = await blobStore.persist({
+      key: blobStore.keyFor('mto', storedName),   // module key matches documents.js RESOLVERS
+      diskAbsPath: path.join(mtoDir, storedName), buffer: req.file.buffer, contentType: req.file.mimetype,
+      diskValue: path.join('uploads', 'mto-revisions', storedName),
+    })
 
     // ─── Revision record ──────────────────────────────────────────
     // Initial population fills the seeded row in place; a new revision inserts.

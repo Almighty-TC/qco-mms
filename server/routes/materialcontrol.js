@@ -21,11 +21,9 @@ const upLoc = s => { const v = (s ?? '').trim().toUpperCase(); return v || null 
 const pocDir = path.join(__dirname, '../uploads/fmr-poc')
 fs.mkdirSync(pocDir, { recursive: true })
 const { fileFilter } = require('../utils/upload')
+const blobStore = require('../lib/blobStore')   // blob migration: memoryStorage → blobStore.persist
 const pocUpload = multer({
-  storage: multer.diskStorage({
-    destination: (_q, _f, cb) => cb(null, pocDir),
-    filename: (_q, file, cb) => cb(null, `poc_${Date.now()}_${Math.round(Math.random() * 1e6)}${path.extname(file.originalname) || ''}`),
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: fileFilter('image'),
 })
@@ -74,6 +72,46 @@ async function writeAudit(userId, action, entity, id, before, after, resource, p
        resource]
     )
   } catch (e) { console.error('[audit] insert failed:', e.message) }
+}
+
+// ─── Q3 CHILD-STOCK CAPABILITY DETECT ─────────────────────────
+// Did migrate-child-stock.js run? Cached sticky-true (re-checked only while false →
+// self-heals after the migration). Lets the receipting path skip the child branch
+// gracefully when warehouse_stock.additional_item_id isn't live yet.
+let _childStockLive = false
+async function childStockLive() {
+  if (_childStockLive) return true
+  const [[r]] = await db.query(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'warehouse_stock' AND column_name = 'additional_item_id'`)
+  _childStockLive = r.n > 0
+  return _childStockLive
+}
+
+// Did migrate-receipt-provenance.js run? (3b) — gates the receipt→provenance capture +
+// the warehouse_stock.receipt_line_id trace pointer. Cached sticky-true. Checking
+// warehouse_stock.receipt_line_id is sufficient (one migration adds all three columns).
+let _provLive = false
+async function receiptProvenanceLive() {
+  if (_provLive) return true
+  const [[r]] = await db.query(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'warehouse_stock' AND column_name = 'receipt_line_id'`)
+  _provLive = r.n > 0
+  return _provLive
+}
+
+// ─── SHARED item_code COMPUTATION (Q3) ────────────────────────
+// Single source of truth so a parent PO line and its off-PO child land the SAME
+// item_code → they nest (group) in the Stock Register. An explicit tag/identity wins;
+// otherwise generate from the line number. A CHILD passes its PARENT's line number as
+// the fallback so the generated codes match when the parent has no tag.
+// (Replaces the duplicated expressions at materialcontrol.js:406 + MCReceiptingScreen.tsx:391.)
+function effectiveItemCode(explicitTag, scnRef, lineNumberForFallback) {
+  const tag = (explicitTag || '').toString().trim()
+  if (tag) return tag
+  return (lineNumberForFallback != null && lineNumberForFallback !== '')
+    ? `${scnRef}-L${lineNumberForFallback}` : `SCN-${scnRef}`
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -240,40 +278,93 @@ router.get('/:projectId/receipting/:scnId', rejectExternal, async (req, res) => 
     // receipting heat picker, scoped to this shipment.
     const [heats] = await db.query(
       'SELECT id, heat_number, material_grade FROM scn_heats WHERE scn_id = ? ORDER BY heat_number', [scnId])
-    // Phase 4: received-to-date is DERIVED from receipt_lines (single source of
-    // truth — no qty_received/qty_assigned writes). remaining = ordered − received,
-    // clamped ≥ 0 so over-receipt never shows a negative balance.
-    const [lines] = await db.query(
+    // Q1: received/remaining are DERIVED from receipt_lines (no stored qty). The UI
+    // must mirror Guard B, which caps at THIS SCN's allocation (scn_lines) — so we
+    // return both the SCN-scoped figures and the PO-line cumulative (for context),
+    // then compute the binding `remaining` per line:
+    //   allocated line  → remaining = scn_alloc − received_on_scn   (per-SCN cap)
+    //   un-allocated    → remaining = ordered  − received_to_date   (legacy fallback)
+    const [linesRaw] = await db.query(
       `SELECT pl.id, pl.line_number, pl.description, pl.qty, pl.uom, pl.qty_assigned,
               pl.wbs_code_snapshot, pl.tag_number, pl.equipment_tag, pl.commodity_id,
               COALESCE((SELECT SUM(rl.received_qty) FROM receipt_lines rl WHERE rl.po_line_id = pl.id), 0) AS received_to_date,
-              GREATEST(0, pl.qty - COALESCE((SELECT SUM(rl.received_qty) FROM receipt_lines rl WHERE rl.po_line_id = pl.id), 0)) AS remaining
+              COALESCE((SELECT SUM(sl.qty)          FROM scn_lines sl   WHERE sl.scn_id = ? AND sl.po_line_id = pl.id), 0) AS scn_alloc,
+              COALESCE((SELECT SUM(rl.received_qty) FROM receipt_lines rl WHERE rl.scn_id = ? AND rl.po_line_id = pl.id), 0) AS received_on_scn
        FROM po_lines pl WHERE pl.po_id = ?`,
-      [scn.po_id || 0]
+      [scnId, scnId, scn.po_id || 0]
     )
+    const lines = linesRaw.map(l => {
+      const alloc = Number(l.scn_alloc)
+      const remaining = alloc > 1e-9
+        ? Math.max(0, alloc - Number(l.received_on_scn))           // per-SCN allocation cap (binding)
+        : Math.max(0, Number(l.qty) - Number(l.received_to_date))  // legacy: no allocation on this SCN
+      // `expected_on_scn` = the denominator the UI shows ("Y of X for this SCN").
+      return { ...l, remaining, expected_on_scn: alloc > 1e-9 ? alloc : null }
+    })
 
-    res.json({ ...scn, packages, lines, heats })
+    // ── Q3: child / off-PO items as receivable rows — PARALLEL branch keyed on
+    // additional_item_id (the po_line query above is untouched). Each child's
+    // expected = its scn_lines allocation; received = receipt_lines by additional_item_id.
+    // Capability-gated: empty until migrate-child-stock.js is live. ──
+    let child_lines = []
+    if (await childStockLive()) {
+      const [crows] = await db.query(
+        `SELECT ai.id AS additional_item_id, ai.description, ai.uom, ai.parent_po_line_id,
+                ai.commodity_id, ai.equipment_tag, ai.tag_number, ai.wbs_code_snapshot, ai.ros_date,
+                ppl.line_number AS parent_line_number,
+                COALESCE((SELECT SUM(sl.qty)          FROM scn_lines sl   WHERE sl.scn_id = ? AND sl.additional_item_id = ai.id), 0) AS scn_alloc,
+                COALESCE((SELECT SUM(rl.received_qty) FROM receipt_lines rl WHERE rl.scn_id = ? AND rl.additional_item_id = ai.id), 0) AS received_on_scn
+         FROM scn_additional_items ai
+         LEFT JOIN po_lines ppl ON ppl.id = ai.parent_po_line_id
+         WHERE ai.scn_id = ? AND ai.is_variation = 1`,
+        [scnId, scnId, scnId])
+      child_lines = crows.map(c => {
+        const alloc = Number(c.scn_alloc)
+        return { ...c, remaining: Math.max(0, alloc - Number(c.received_on_scn)), expected_on_scn: alloc }
+      })
+    }
+
+    res.json({ ...scn, packages, lines, child_lines, heats })
   } catch (e) { dbError(res, e) }
 })
 
 // POST /api/mc/:projectId/receipting/:scnId/complete — complete receipt (creates stock)
+// Q1 (partial receipting): the whole receipt runs in ONE transaction with per-PO-line
+// FOR UPDATE locking, so an SCN can be received across multiple sessions safely.
+//   Guard A (no double-receipt): re-entry recomputes received-to-date under the row
+//     lock, so a repeat/concurrent submit can never receive the same units twice; a
+//     fully closed SCN is rejected outright.
+//   Guard B (over-receipt cap): cumulative received for a PO line can never exceed the
+//     ordered qty — rejected with a clean 422 and zero mutation (the txn rolls back).
+// Status is DERIVED from remaining: any outstanding qty → 'partially_received', else
+// 'received' (replaces the old wholesale-'received' close).
 router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req, res) => {
+  const scnId = Number(req.params.scnId)
+  const pid   = Number(req.params.projectId)
+  // Phase 1: `lines` carries the per-PO-line received quantities + discrepancy
+  // detail the wizard now sends. `actual_packages` kept for back-compat.
+  const { location_code, cargo_condition, actual_packages, notes, warehouse_id, lines } = req.body
+  const userId = req.user?.id || 1
+
+  if (!location_code) return res.status(400).json({ error: 'Grid location is required' })
+
+  // READ COMMITTED for this txn only (reverts on release): the post-lock
+  // received-to-date recompute must see other sessions' COMMITTED receipts.
+  const conn = await db.getConnection()
   try {
-    const scnId = Number(req.params.scnId)
-    const pid   = Number(req.params.projectId)
-    // Phase 1: `lines` carries the per-PO-line received quantities + discrepancy
-    // detail the wizard now sends. `actual_packages` kept for back-compat.
-    const { location_code, cargo_condition, actual_packages, notes, warehouse_id, lines } = req.body
-    const userId = req.user?.id || 1
+    await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+    await conn.beginTransaction()
 
-    if (!location_code) return res.status(400).json({ error: 'Grid location is required' })
+    // Lock the SCN row so two concurrent completes serialize on it.
+    const [[scn]] = await conn.query('SELECT * FROM shipment_control_notes WHERE id = ? FOR UPDATE', [scnId])
+    if (!scn) { await conn.rollback(); return res.status(404).json({ error: 'SCN not found' }) }
 
-    const [[scn]] = await db.query('SELECT * FROM shipment_control_notes WHERE id = ?', [scnId])
-    if (!scn) return res.status(404).json({ error: 'SCN not found' })
-
-    // Stamp arrival now; the OPEN-vs-CLOSED status is decided AFTER the lines are
-    // persisted, based on received-to-date vs ordered (Phase 4 partial-remainder).
-    await db.query('UPDATE shipment_control_notes SET ata=CURDATE() WHERE id=?', [scnId])
+    // Guard A (SCN level): a fully-closed SCN cannot be received again. A
+    // 'partially_received' (or arrived/in-transit) SCN MAY be re-opened for the balance.
+    if (['received', 'closed', 'delivered'].includes(scn.status)) {
+      await conn.rollback()
+      return res.status(409).json({ error: `SCN ${scn.scn_ref} is already ${scn.status} — it cannot be received again.` })
+    }
 
     const whId = warehouse_id || scn.destination_warehouse_id || 1
     const condition = cargo_condition === 'good' ? 'good'
@@ -283,26 +374,172 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
     let stockCreated = 0
 
     if (Array.isArray(lines) && lines.length > 0) {
-      // ── Phase 1 path: receive against real PO lines ──────────
-      // Persist each line to receipt_lines, then create stock from the
-      // RECEIVED qty (not package weight). All received qty goes to
-      // available stock for now — good/quarantine split is Phase 3.
-      // Server-side validation: damaged units cannot exceed received qty.
+      // ── VALIDATE FIRST (no mutation) — any reject rolls back the whole txn ──
+      // Per-entry sanity: damaged ≤ received, off-list heat needs a reason.
       for (const ln of lines) {
         const rq = Number(ln.received_qty)
         const dq = Number(ln.damaged_qty || 0)
         if (rq >= 0 && dq > rq) {
+          await conn.rollback()
           return res.status(422).json({ error: `Line ${ln.line_number || ln.po_line_id}: damaged qty (${dq}) cannot exceed received qty (${rq})` })
         }
         // Heat/Lot P2a: an off-list heat is allowed but REQUIRES a reason. Heat
         // itself stays optional (a line may be received with no heat at all).
         if (ln.heat_off_list && !(ln.heat_off_list_reason || '').trim()) {
+          await conn.rollback()
           return res.status(422).json({ error: `Line ${ln.line_number || ln.po_line_id}: a reason is required for an off-list heat` })
         }
       }
+
+      // Guard A + B: aggregate requested received per PO line (split lines fan out
+      // into multiple entries sharing a po_line_id), then lock each PO line and
+      // recompute received-to-date so cumulative can never exceed the ordered qty.
+      const reqByLine = new Map()
+      for (const ln of lines) {
+        const rq = Number(ln.received_qty)
+        if (rq > 0 && ln.po_line_id) {
+          const k = Number(ln.po_line_id)
+          reqByLine.set(k, (reqByLine.get(k) || 0) + rq)
+        }
+      }
+      for (const [poLineId, reqQty] of reqByLine) {
+        // Lock the PO line row to serialise concurrent receipts of this line.
+        const [[pl]] = await conn.query(
+          'SELECT line_number, qty FROM po_lines WHERE id = ? AND po_id = ? FOR UPDATE',
+          [poLineId, scn.po_id || 0])
+        if (!pl) { await conn.rollback(); return res.status(404).json({ error: `PO line ${poLineId} not found on this SCN's PO` }) }
+        // Cap denominator = THIS SCN's OWN allocation for the line (scn_lines), so
+        // receiving one SCN can never consume a sibling SCN's allocation (TC-locked).
+        // received-to-date is scoped to this scn_id too. Legacy/unallocated lines
+        // (no scn_lines on this SCN) fall back to the PO ordered qty across all SCNs.
+        const [[alloc]] = await conn.query(
+          'SELECT COALESCE(SUM(qty), 0) AS a FROM scn_lines WHERE scn_id = ? AND po_line_id = ?', [scnId, poLineId])
+        const allocation = Number(alloc.a)
+        let remaining, denomDesc
+        if (allocation > 1e-9) {
+          const [[{ rcv }]] = await conn.query(
+            'SELECT COALESCE(SUM(received_qty), 0) AS rcv FROM receipt_lines WHERE scn_id = ? AND po_line_id = ?', [scnId, poLineId])
+          remaining = allocation - Number(rcv)
+          denomDesc = `SCN allocation ${allocation}, already received on this SCN ${Number(rcv)}`
+        } else {
+          const [[{ rcv }]] = await conn.query(
+            'SELECT COALESCE(SUM(received_qty), 0) AS rcv FROM receipt_lines WHERE po_line_id = ?', [poLineId])
+          remaining = Number(pl.qty) - Number(rcv)
+          denomDesc = `ordered ${Number(pl.qty)}, already received ${Number(rcv)}`
+        }
+        if (reqQty > remaining + 1e-9) {
+          await conn.rollback()
+          return res.status(422).json({
+            error: `Line ${pl.line_number}: cannot receive ${reqQty} — only ${remaining} remaining (${denomDesc}).`,
+          })
+        }
+      }
+
+      // ── Q3: child / off-PO lines — PARALLEL Guard A+B keyed on additional_item_id ──
+      // Same discipline as PO lines: aggregate per child, lock the child row FOR UPDATE,
+      // recompute received-to-date for THIS child, cap at its own SCN allocation. childInfo
+      // caches the locked row (incl parent_line_number for item_code) for the mutation pass.
+      const childCols = await childStockLive()
+      const childInfo = new Map()
+      if (childCols) {
+        const reqByChild = new Map()
+        for (const ln of lines) {
+          const rq = Number(ln.received_qty)
+          if (rq > 0 && ln.additional_item_id) {
+            const k = Number(ln.additional_item_id)
+            reqByChild.set(k, (reqByChild.get(k) || 0) + rq)
+          }
+        }
+        for (const [aiId, reqQty] of reqByChild) {
+          // No FOR UPDATE here: a child belongs to exactly ONE SCN, and the SCN row is
+          // already locked FOR UPDATE above (line ~299), so concurrent receipts of this
+          // child are serialised by that lock. READ COMMITTED makes the received-to-date
+          // recompute below see the prior session's committed child receipts (Guard A).
+          // (Also: qmat_app has no lock-clause privilege on scn_additional_items.)
+          const [[ai]] = await conn.query(
+            `SELECT ai.id, ai.tag_number, ai.equipment_tag, ai.commodity_id, ai.wbs_code_snapshot,
+                    ai.parent_po_line_id, ppl.line_number AS parent_line_number
+             FROM scn_additional_items ai LEFT JOIN po_lines ppl ON ppl.id = ai.parent_po_line_id
+             WHERE ai.id = ? AND ai.scn_id = ?`, [aiId, scnId])
+          if (!ai) { await conn.rollback(); return res.status(404).json({ error: `Off-PO item ${aiId} not found on this SCN` }) }
+          const [[alloc]] = await conn.query(
+            'SELECT COALESCE(SUM(qty), 0) AS a FROM scn_lines WHERE scn_id = ? AND additional_item_id = ?', [scnId, aiId])
+          const [[{ rcv }]] = await conn.query(
+            'SELECT COALESCE(SUM(received_qty), 0) AS rcv FROM receipt_lines WHERE scn_id = ? AND additional_item_id = ?', [scnId, aiId])
+          const allocation = Number(alloc.a)
+          const remaining = allocation - Number(rcv)
+          if (reqQty > remaining + 1e-9) {
+            await conn.rollback()
+            return res.status(422).json({
+              error: `Off-PO item "${ai.tag_number || ai.equipment_tag || aiId}": cannot receive ${reqQty} — only ${remaining} remaining (SCN allocation ${allocation}, already received ${Number(rcv)}).`,
+            })
+          }
+          childInfo.set(aiId, ai)
+        }
+      }
+
+      // ── MUTATE (all validated) ──────────────────────────────
+      // Persist each line to receipt_lines, then create stock from the RECEIVED qty.
+      // 3b: provenance capture — record source package/heat on the (append-only) receipt
+      // line and stamp warehouse_stock.receipt_line_id (the trace-back pointer). Capability-
+      // detected; the column suffixes append AFTER existing columns so the rest of each
+      // INSERT is byte-for-byte unchanged. provLive/suffixes are constant for this txn.
+      const provLive = await receiptProvenanceLive()
+      const rlProvCols = provLive ? ', source_scn_package_id, scn_heat_id' : ''   // appended after received_date
+      const rlProvPh   = provLive ? ', ?, ?' : ''
+      const rlProvVals = (l) => provLive ? [l.source_scn_package_id ? Number(l.source_scn_package_id) : null, l.scn_heat_id ? Number(l.scn_heat_id) : null] : []
+      const wsProvCol = provLive ? ', receipt_line_id' : ''                        // appended after received_by
+      const wsProvPh  = provLive ? ', ?' : ''
       for (const ln of lines) {
         const receivedQty = Number(ln.received_qty)
         if (!(receivedQty >= 0)) continue
+
+        // ── Q3 child branch: off-PO item → receipt_lines + warehouse_stock keyed on
+        // additional_item_id, with the PARENT's effective item_code (so they nest) and
+        // the inherited WBS snapshot. PO-line logic below is untouched. ──
+        if (childCols && ln.additional_item_id) {
+          const aiId = Number(ln.additional_item_id)
+          const ai = childInfo.get(aiId)
+          if (!ai) continue   // received_qty was 0 → not capped/locked; nothing to write
+          const dmg  = Number(ln.damaged_qty || 0)
+          const cuom = ln.uom || 'EA'
+          const cHeatNo      = (ln.heat_number || '').trim() || null
+          const cHeatOffList = ln.heat_off_list ? 1 : 0
+          const cHeatReason  = cHeatOffList ? ((ln.heat_off_list_reason || '').trim() || null) : null
+          const [rlChild] = await conn.query(
+            `INSERT INTO receipt_lines
+               (project_id, scn_id, scn_ref, additional_item_id, heat_number, heat_off_list, heat_off_list_reason,
+                description, expected_qty, received_qty, damaged_qty, uom,
+                discrepancy_type, discrepancy_notes, received_by, received_date${rlProvCols})
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURDATE()${rlProvPh})`,
+            [pid, scnId, scn.scn_ref, aiId, cHeatNo, cHeatOffList, cHeatReason,
+             ln.description || null,
+             ln.expected_qty != null ? Number(ln.expected_qty) : null, receivedQty, dmg, cuom,
+             ln.discrepancy_type || null, ln.discrepancy_notes || null, userId, ...rlProvVals(ln)])
+          const cItemCode = effectiveItemCode(ai.tag_number || ai.equipment_tag, scn.scn_ref, ai.parent_line_number)
+          const cWbs   = ai.wbs_code_snapshot || null
+          const cGood  = receivedQty - dmg
+          const cLoc   = upLoc(ln.location_code) || upLoc(location_code)
+          if (cGood > 0) {
+            await conn.query(
+              `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,additional_item_id,commodity_id,equipment_tag,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by${wsProvCol})
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,CURDATE(),?${wsProvPh})`,
+              [pid, whId, scnId, aiId, ai.commodity_id ?? null, ai.equipment_tag ?? null, cItemCode, ln.description || 'Off-PO item', cWbs,
+               cGood, cGood, cuom, cLoc, (dmg > 0 ? 'good' : condition), scn.vendor_name, cHeatNo, userId, ...(provLive ? [rlChild.insertId] : [])])
+            stockCreated++
+          }
+          if (dmg > 0) {
+            await conn.query(
+              `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,additional_item_id,commodity_id,equipment_tag,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by,notes${wsProvCol})
+               VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,?,1,?,?,CURDATE(),?,?${wsProvPh})`,
+              [pid, whId, scnId, aiId, ai.commodity_id ?? null, ai.equipment_tag ?? null, cItemCode, ln.description || 'Off-PO item', cWbs,
+               dmg, cuom, QUARANTINE_LOCATION, 'quarantine', scn.vendor_name, cHeatNo, userId,
+               `Damaged on receipt — ${ln.discrepancy_notes || 'pending QA review'}`, ...(provLive ? [rlChild.insertId] : [])])
+            stockCreated++
+          }
+          continue
+        }
+
         const expectedQty = ln.expected_qty != null ? Number(ln.expected_qty) : null
         const damagedQty = Number(ln.damaged_qty || 0)
         const uom = ln.uom || 'EA'
@@ -312,21 +549,21 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
         const heatOffList = ln.heat_off_list ? 1 : 0
         const heatReason  = heatOffList ? ((ln.heat_off_list_reason || '').trim() || null) : null
 
-        await db.query(
+        const [rlPo] = await conn.query(
           `INSERT INTO receipt_lines
              (project_id, scn_id, scn_ref, po_line_id, heat_number, heat_off_list, heat_off_list_reason,
               description, expected_qty, received_qty, damaged_qty, uom,
-              discrepancy_type, discrepancy_notes, received_by, received_date)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURDATE())`,
+              discrepancy_type, discrepancy_notes, received_by, received_date${rlProvCols})
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURDATE()${rlProvPh})`,
           [pid, scnId, scn.scn_ref, ln.po_line_id || null, heatNo, heatOffList, heatReason,
            ln.description || null,
            expectedQty, receivedQty, damagedQty, uom,
-           ln.discrepancy_type || null, ln.discrepancy_notes || null, userId])
+           ln.discrepancy_type || null, ln.discrepancy_notes || null, userId, ...rlProvVals(ln)])
 
         // ── Phase 3: split good vs damaged into DISTINCT per-line holdings ──
         // (HEAT-READY: never pooled into a shared row — each split is its own row.)
         const goodQty    = receivedQty - damagedQty
-        const itemCode   = ln.item_code || (ln.po_line_id ? `${scn.scn_ref}-L${ln.line_number || ln.po_line_id}` : `SCN-${scn.scn_ref}`)
+        const itemCode   = effectiveItemCode(ln.item_code, scn.scn_ref, ln.line_number || ln.po_line_id)
         const descr      = ln.description || scn.notes || 'Received goods'
         const wbs        = ln.wbs_code || null
 
@@ -335,31 +572,31 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
         // default. Heat (P2a) travels onto the holding.
         const lineLoc = upLoc(ln.location_code) || upLoc(location_code)
         if (goodQty > 0) {
-          await db.query(
-            `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,CURDATE(),?)`,
+          await conn.query(
+            `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by${wsProvCol})
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,CURDATE(),?${wsProvPh})`,
             [pid, whId, scnId, ln.po_line_id || null, itemCode, descr, wbs,
-             goodQty, goodQty, uom, lineLoc, (damagedQty > 0 ? 'good' : condition), scn.vendor_name, heatNo, userId])
+             goodQty, goodQty, uom, lineLoc, (damagedQty > 0 ? 'good' : condition), scn.vendor_name, heatNo, userId, ...(provLive ? [rlPo.insertId] : [])])
           stockCreated++
         }
 
         // Damaged qty → QUARANTINE location, NOT issuable (qty_available = 0). Same heat travels.
         if (damagedQty > 0) {
-          await db.query(
-            `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by,notes)
-             VALUES (?,?,?,?,?,?,?,?,0,?,?,?,1,?,?,CURDATE(),?,?)`,
+          await conn.query(
+            `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by,notes${wsProvCol})
+             VALUES (?,?,?,?,?,?,?,?,0,?,?,?,1,?,?,CURDATE(),?,?${wsProvPh})`,
             [pid, whId, scnId, ln.po_line_id || null, itemCode, descr, wbs,
              damagedQty, uom, QUARANTINE_LOCATION, 'quarantine', scn.vendor_name, heatNo, userId,
-             `Damaged on receipt — ${ln.discrepancy_notes || 'pending QA review'}`])
+             `Damaged on receipt — ${ln.discrepancy_notes || 'pending QA review'}`, ...(provLive ? [rlPo.insertId] : [])])
           stockCreated++
         }
       }
     } else {
       // ── Fallback (SCN with no linked PO lines): legacy package path ──
       // TODO(phase-later): drop once every SCN receipts against PO lines.
-      const [pkgs] = await db.query('SELECT * FROM scn_packages WHERE scn_id=?', [scnId])
+      const [pkgs] = await conn.query('SELECT * FROM scn_packages WHERE scn_id=?', [scnId])
       for (const pkg of pkgs) {
-        await db.query(
+        await conn.query(
           `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,vendor_name,received_date,received_by)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,CURDATE(),?)`,
           [pid, whId, scnId,
@@ -371,22 +608,42 @@ router.post('/:projectId/receipting/:scnId/complete', rejectExternal, async (req
       }
     }
 
-    // ── An SCN is ONE physical shipment → completing its receipt = delivered ──
-    // It is never "partially delivered": any outstanding PO-line balance is a
-    // PO-line concern (tracked via received_to_date) and arrives on a NEW SCN.
-    // So the SCN closes as 'received' here regardless of the PO line's total.
-    const newStatus = 'received'
-    await db.query('UPDATE shipment_control_notes SET status=? WHERE id=?', [newStatus, scnId])
+    // Stamp arrival.
+    await conn.query('UPDATE shipment_control_notes SET ata=CURDATE() WHERE id=?', [scnId])
 
+    // ── Status DERIVED from remaining (Q1) — PER THIS SCN ───────
+    // An SCN closes when ITS OWN allocation has fully arrived, not when the whole PO
+    // is in (other SCNs carry their own balance — a PO-line concern). Expected = the
+    // SCN's scn_lines allocation; received = receipt_lines booked against this scn_id.
+    // Both computed on read (never stored). Legacy SCNs with no scn_lines can't be
+    // measured → close as 'received'.
+    // NOTE for TC: this interprets the locked "all PO lines received → received" rule
+    // as "all of THIS SCN's lines received", to avoid a multi-SCN PO never closing any
+    // single SCN. Flagged in the HOLD report.
+    let newStatus = 'received'
+    const [[exp]] = await conn.query('SELECT COALESCE(SUM(qty),0) AS expected FROM scn_lines WHERE scn_id = ?', [scnId])
+    const expectedOnScn = Number(exp.expected)
+    if (expectedOnScn > 1e-9) {
+      const [[rcv]] = await conn.query('SELECT COALESCE(SUM(received_qty),0) AS received FROM receipt_lines WHERE scn_id = ?', [scnId])
+      newStatus = Number(rcv.received) + 1e-9 >= expectedOnScn ? 'received' : 'partially_received'
+    }
+    await conn.query('UPDATE shipment_control_notes SET status=? WHERE id=?', [newStatus, scnId])
+
+    await conn.commit()
+
+    // Audit AFTER commit (pool write — kept out of the txn so a rollback leaves no orphan row).
     await writeAudit(userId, 'receipt_complete', 'scn', scnId,
       { status: scn.status },
       { status: newStatus, location_code, cargo_condition, lines: Array.isArray(lines) ? lines.length : 0 },
-      `/mc/${pid}/receipting/${scnId}/complete`, Number(req.params.projectId) || null)
+      `/mc/${pid}/receipting/${scnId}/complete`, pid || null)
 
     res.json({ success: true, stock_created: stockCreated, scn_status: newStatus })
   } catch (e) {
+    try { await conn.rollback() } catch (_) { /* already rolled back */ }
     console.error('[mc:receipt-complete]', e.message)
     dbError(res, e)
+  } finally {
+    conn.release()
   }
 })
 
@@ -414,8 +671,11 @@ router.get('/:projectId/stock', async (req, res) => {
       )
       subWbsCodes = wbsRows.map(r => r.wbs_code).filter(c => c !== 'ALL')
       if (subWbsCodes.length > 0) {
-        const placeholders = subWbsCodes.map(() => 'LIKE ?').join(' OR ')
-        conditions.push(`(s.wbs_code IS NULL OR ${subWbsCodes.map(() => 's.wbs_code LIKE ?').join(' OR ')})`)
+        // Q3: dropped the `s.wbs_code IS NULL OR …` bypass. It let NULL-wbs stock leak to
+        // every subcontractor regardless of scope; with children now inheriting their
+        // parent's WBS snapshot, all stock carries a real WBS (0 NULL-wbs rows exist), so
+        // strict scoping loses nothing and children are correctly visible only within scope.
+        conditions.push(`(${subWbsCodes.map(() => 's.wbs_code LIKE ?').join(' OR ')})`)
         subWbsCodes.forEach(c => params.push(`${c}%`))
       }
     }
@@ -447,6 +707,21 @@ router.get('/:projectId/stock', async (req, res) => {
       ? `${SAFE_SORT[req.query.sort_col]} ${orderDir}, s.id ${orderDir}`
       : `w.name ${orderDir}, s.location_code ${orderDir}, s.id ${orderDir}`
 
+    // 3b-4: trace-back read — origin package/heat/cert via receipt_line_id (capability-
+    // detected; reads only). LEFT JOINs so unlinked/legacy stock returns NULL gracefully.
+    const provLive = await receiptProvenanceLive()
+    const originSel = provLive
+      ? `, op.package_number AS origin_package_number, op.container_type_id AS origin_container_type_id,
+           oh.heat_number AS origin_heat_number,
+           (SELECT COUNT(*) FROM scn_documents d WHERE d.document_type='Mill Test Certificate'
+              AND (d.heat_id = rl.scn_heat_id OR d.package_id = rl.source_scn_package_id)) AS origin_mill_cert_count`
+      : ''
+    const originJoin = provLive
+      ? ` LEFT JOIN receipt_lines rl ON rl.id = s.receipt_line_id
+          LEFT JOIN scn_packages op ON op.id = rl.source_scn_package_id
+          LEFT JOIN scn_heats oh ON oh.id = rl.scn_heat_id`
+      : ''
+
     // total / rows / stat-cards are independent — run them concurrently.
     const [
       [[{ total }]],
@@ -456,9 +731,13 @@ router.get('/:projectId/stock', async (req, res) => {
       // total for the filtered set (conditions are all on s.* — no join needed)
       db.query(`SELECT COUNT(*) AS total FROM warehouse_stock s WHERE ${whereSql}`, params),
       db.query(
-        `SELECT s.*, w.name AS warehouse_name, w.code AS warehouse_code
+        // Q3: `is_child` discriminates off-PO child stock (additional_item_id set) from
+        // PO-line stock — additive (s.* already carries additional_item_id + item_code).
+        // The UI nests children under the parent sharing the SAME item_code (effectiveItemCode).
+        `SELECT s.*, (s.additional_item_id IS NOT NULL) AS is_child,
+                w.name AS warehouse_name, w.code AS warehouse_code${originSel}
          FROM warehouse_stock s
-         JOIN warehouses w ON s.warehouse_id = w.id
+         JOIN warehouses w ON s.warehouse_id = w.id${originJoin}
          WHERE ${whereSql}
          ORDER BY ${orderClause}
          LIMIT ? OFFSET ?`,
@@ -1220,12 +1499,24 @@ router.post('/:projectId/fmr/pickup/:pickupId/signature', pocUpload.single('file
     const pickupId = Number(req.params.pickupId)
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
     const [[pk]] = await db.query('SELECT id FROM fmr_pickups WHERE id=?', [pickupId])
-    if (!pk) { fs.unlink(req.file.path, () => {}); return res.status(404).json({ error: 'Pickup not found' }) }
+    if (!pk) { return res.status(404).json({ error: 'Pickup not found' }) }   // memoryStorage: nothing on disk to clean up
+    // Blob migration: persist to blob (key) or disk (legacy BARE filename — unchanged).
+    const storedName = `poc_${Date.now()}_${Math.round(Math.random() * 1e6)}${path.extname(req.file.originalname) || ''}`
+    const { value: sigValue } = await blobStore.persist({
+      key: blobStore.keyFor('fmr-poc', storedName),
+      diskAbsPath: path.join(pocDir, storedName), buffer: req.file.buffer, contentType: req.file.mimetype,
+      diskValue: storedName,   // legacy shape = bare filename
+    })
     await db.query('UPDATE fmr_pickups SET signature_file=?, signature_mime=? WHERE id=?',
-      [path.basename(req.file.path), req.file.mimetype, pickupId])
-    res.json({ success: true, signature_file: path.basename(req.file.path) })
+      [sigValue, req.file.mimetype, pickupId])
+    // Audit-gap fix: record the PoC signature upload (materialcontrol's non-blocking writeAudit —
+    // entity is the table string, id the pickup; projectId passed so project_id is set. No delete
+    // counterpart exists for FMR PoC, so this is the only audit call. Never affects the response.
+    await writeAudit(req.user?.id || 1, 'poc_signature_uploaded', 'fmr_pickups', pickupId, {},
+      { signature_file: sigValue, uploaded_by: req.user?.id || 1 },
+      `/materialcontrol/${req.params.projectId}/fmr/pickup/${pickupId}/signature`, Number(req.params.projectId))
+    res.json({ success: true, signature_file: sigValue })
   } catch (e) {
-    if (req.file) fs.unlink(req.file.path, () => {})
     console.error('[mc:fmr-poc-upload]', e.message)
     dbError(res, e)
   }
@@ -1236,6 +1527,12 @@ router.get('/:projectId/fmr/pickup/:pickupId/signature', async (req, res) => {
   try {
     const [[pk]] = await db.query('SELECT signature_file, signature_mime FROM fmr_pickups WHERE id=?', [Number(req.params.pickupId)])
     if (!pk || !pk.signature_file) return res.status(404).json({ error: 'No signature on file' })
+    // DUAL-READ FALLBACK (blob migration): blob first, then existing disk read.
+    const blobStream = await blobStore.getFile(blobStore.keyFor('fmr-poc', pk.signature_file))
+    if (blobStream) {
+      if (pk.signature_mime) res.type(pk.signature_mime)
+      return blobStream.pipe(res)
+    }
     const fp = path.join(pocDir, pk.signature_file)
     if (!fs.existsSync(fp)) return res.status(404).json({ error: 'File missing' })
     if (pk.signature_mime) res.type(pk.signature_mime)
@@ -1459,13 +1756,21 @@ router.put('/:projectId/transfers/:transferId/status', rejectExternal, async (re
       if (newQty <= 0) await conn.query('DELETE FROM warehouse_stock WHERE id=?', [src.id])           // whole-holding move → row removed
       else await conn.query('UPDATE warehouse_stock SET qty=?, qty_available=? WHERE id=?', [newQty, newAvail, src.id])
       const destAvail = isQuar ? 0 : Number(tr.qty)
+      // 3b-3: carry the origin-receipt trace pointer forward onto the moved holding —
+      // copied from src exactly like heat_number, so transferred stock still traces back
+      // to the receipt (even when the source row is DELETEd on a whole-holding move).
+      // Capability-detected; the column appends AFTER notes so the rest is byte-for-byte.
+      const provLive = await receiptProvenanceLive()
+      const wsProvCol = provLive ? ', receipt_line_id' : ''
+      const wsProvPh  = provLive ? ', ?' : ''
       await conn.query(
-        `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,commodity_id,equipment_tag,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by,notes)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO warehouse_stock (project_id,warehouse_id,scn_id,po_line_id,commodity_id,equipment_tag,item_code,description,wbs_code,qty,qty_available,uom,location_code,condition_status,trace_hold,vendor_name,heat_number,received_date,received_by,notes${wsProvCol})
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?${wsProvPh})`,
         [pid, tr.to_warehouse_id, src.scn_id, src.po_line_id, src.commodity_id, src.equipment_tag,
          src.item_code, src.description, src.wbs_code, Number(tr.qty), destAvail, src.uom,
          tr.to_location || src.location_code, src.condition_status, src.trace_hold, src.vendor_name,
-         src.heat_number, src.received_date, userId, `Transferred via ${tr.transfer_ref} from ${src.location_code || '—'}`])
+         src.heat_number, src.received_date, userId, `Transferred via ${tr.transfer_ref} from ${src.location_code || '—'}`,
+         ...(provLive ? [src.receipt_line_id ?? null] : [])])
     }
 
     // Flip status (+ lifecycle dates) and stamp stock_moved_at IN THE SAME TX as the move.
