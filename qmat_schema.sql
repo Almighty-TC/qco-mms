@@ -90,7 +90,7 @@ CREATE TABLE `audit_log` (
   KEY `idx_audit_project` (`project_id`),
   CONSTRAINT `fk_audit_log_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),
   CONSTRAINT `fk_audit_project` FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=710 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=719 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!50003 SET @saved_cs_client      = @@character_set_client */ ;
 /*!50003 SET @saved_cs_results     = @@character_set_results */ ;
@@ -1219,7 +1219,7 @@ CREATE TABLE `po_lines` (
   CONSTRAINT `fk_po_lines_uom_id` FOREIGN KEY (`uom_id`) REFERENCES `units_of_measure` (`id`),
   CONSTRAINT `po_lines_ibfk_1` FOREIGN KEY (`po_id`) REFERENCES `purchase_orders` (`id`),
   CONSTRAINT `po_lines_ibfk_2` FOREIGN KEY (`wbs_id`) REFERENCES `wbs_nodes` (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=17920 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=17926 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -1454,7 +1454,7 @@ CREATE TABLE `purchase_orders` (
   CONSTRAINT `fk_po_warehouse_id` FOREIGN KEY (`warehouse_id`) REFERENCES `warehouses` (`id`),
   CONSTRAINT `purchase_orders_ibfk_1` FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`),
   CONSTRAINT `purchase_orders_ibfk_2` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=2312 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=2317 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -1957,7 +1957,7 @@ CREATE TABLE `tender_approvals` (
   CONSTRAINT `fk_ta_approver` FOREIGN KEY (`approver_id`) REFERENCES `users` (`id`),
   CONSTRAINT `fk_ta_recommended_bid` FOREIGN KEY (`recommended_bid_id`) REFERENCES `tender_bids` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_ta_tender` FOREIGN KEY (`tender_id`) REFERENCES `tender_packages` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=15 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Tender approval chain. Mirrors po_approvals — multi-step, threshold-gated (projects.approval_threshold_1/2), records every decision.';
+) ENGINE=InnoDB AUTO_INCREMENT=19 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Tender approval chain. Mirrors po_approvals — multi-step, threshold-gated (projects.approval_threshold_1/2), records every decision.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -2038,7 +2038,7 @@ CREATE TABLE `tender_bid_commercial` (
   CONSTRAINT `fk_commercial_bid` FOREIGN KEY (`bid_id`) REFERENCES `tender_bids` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_commercial_unsealed_by` FOREIGN KEY (`unsealed_by`) REFERENCES `users` (`id`),
   CONSTRAINT `chk_commercial_unseal_pair` CHECK ((((`unsealed_at` is null) and (`unsealed_by` is null)) or ((`unsealed_at` is not null) and (`unsealed_by` is not null))))
-) ENGINE=InnoDB AUTO_INCREMENT=23 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=28 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -2074,7 +2074,7 @@ CREATE TABLE `tender_bids` (
   CONSTRAINT `fk_bids_tender` FOREIGN KEY (`tender_id`) REFERENCES `tender_packages` (`id`) ON DELETE CASCADE,
   CONSTRAINT `chk_bids_prelim` CHECK ((`prelim_status` in (_utf8mb4'pending',_utf8mb4'pass',_utf8mb4'fail'))),
   CONSTRAINT `chk_bids_status` CHECK ((`status` in (_utf8mb4'submitted',_utf8mb4'withdrawn',_utf8mb4'shortlisted',_utf8mb4'rejected')))
-) ENGINE=InnoDB AUTO_INCREMENT=29 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=34 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -2253,6 +2253,33 @@ CREATE TABLE `tender_evaluations` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
+-- Table structure for table `tender_line_documents`
+--
+
+DROP TABLE IF EXISTS `tender_line_documents`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `tender_line_documents` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `tender_line_item_id` int NOT NULL,
+  `doc_key` varchar(30) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `label` varchar(150) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `doc_type` varchar(30) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `required` tinyint(1) NOT NULL DEFAULT '1',
+  `notes` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `created_by` int DEFAULT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_tld_line_key` (`tender_line_item_id`,`doc_key`),
+  KEY `fk_tld_created_by` (`created_by`),
+  CONSTRAINT `fk_tld_created_by` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`),
+  CONSTRAINT `fk_tld_line` FOREIGN KEY (`tender_line_item_id`) REFERENCES `tender_line_items` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `chk_tld_doc_type` CHECK ((`doc_type` in (_utf8mb4'Drawing',_utf8mb4'Datasheet',_utf8mb4'Procedure',_utf8mb4'Certificate',_utf8mb4'Manual',_utf8mb4'Report',_utf8mb4'Calculation',_utf8mb4'Specification')))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table `tender_line_items`
 --
 
@@ -2278,7 +2305,7 @@ CREATE TABLE `tender_line_items` (
   CONSTRAINT `chk_tli_qty_pos` CHECK ((`qty_reserved` > 0)),
   CONSTRAINT `chk_tli_release_coherence` CHECK (((`status` in (_utf8mb4'released',_utf8mb4'partial_released')) = (`released_at` is not null))),
   CONSTRAINT `chk_tli_status` CHECK ((`status` in (_utf8mb4'active',_utf8mb4'converted',_utf8mb4'released',_utf8mb4'partial_released')))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=17 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -2323,7 +2350,7 @@ CREATE TABLE `tender_packages` (
   CONSTRAINT `chk_tenders_status` CHECK ((`status` in (_utf8mb4'active',_utf8mb4'standstill',_utf8mb4'awarded',_utf8mb4'on_hold',_utf8mb4'cancelled'))),
   CONSTRAINT `chk_tp_approval_status` CHECK ((`approval_status` in (_utf8mb4'pending',_utf8mb4'approved',_utf8mb4'rejected'))),
   CONSTRAINT `chk_tp_crit_lock_pair` CHECK ((((`criteria_locked_at` is null) and (`criteria_locked_by` is null)) or ((`criteria_locked_at` is not null) and (`criteria_locked_by` is not null))))
-) ENGINE=InnoDB AUTO_INCREMENT=35 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=45 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -2707,10 +2734,13 @@ CREATE TABLE `vdrl_documents` (
   `file_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `file_size` int DEFAULT NULL,
   `mime_type` varchar(150) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `source_po_line_id` int DEFAULT NULL COMMENT 'Provenance only — set by the award→PO handoff to the specific po_line a tender-defined VDRL requirement was generated for. NULL for manual/upload/legacy rows. NOT a general-purpose po_line reference; the document is owned by package_id.',
   PRIMARY KEY (`id`),
   KEY `package_id` (`package_id`),
   KEY `created_by` (`created_by`),
   KEY `idx_vdrl_status` (`status`),
+  KEY `idx_vdrl_source_po_line` (`source_po_line_id`),
+  CONSTRAINT `fk_vdrl_source_po_line` FOREIGN KEY (`source_po_line_id`) REFERENCES `po_lines` (`id`) ON DELETE RESTRICT,
   CONSTRAINT `vdrl_documents_ibfk_1` FOREIGN KEY (`package_id`) REFERENCES `vdrl_packages` (`id`),
   CONSTRAINT `vdrl_documents_ibfk_2` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=4235 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
