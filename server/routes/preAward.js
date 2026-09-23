@@ -544,7 +544,18 @@ router.get('/:projectId/tenders/:id/bids', requireLivePermission('pre_award', 'c
          JOIN suppliers s ON s.id = b.supplier_id
          LEFT JOIN tender_bid_commercial c ON c.bid_id = b.id
         WHERE b.tender_id = ? ORDER BY b.round, b.id`, [tid])
-    res.json({ bids: rows })
+    // Proposed per-line quantities are TECHNICAL scope (joined to tender_bids, never to the
+    // sealed tender_bid_commercial) → surfaced here ungated, visible before commercial unseal.
+    const byBid = {}
+    if (rows.length) {
+      const ids = rows.map(b => b.id)
+      const [pl] = await db.query(
+        `SELECT bl.bid_id, bl.tender_line_item_id, bl.qty_proposed, t.mto_line_id, t.qty_reserved, t.status AS reservation_status
+           FROM tender_bid_lines bl JOIN tender_line_items t ON t.id = bl.tender_line_item_id
+          WHERE bl.bid_id IN (${ids.map(() => '?').join(',')}) ORDER BY bl.tender_line_item_id`, ids)
+      for (const l of pl) (byBid[l.bid_id] ||= []).push(l)
+    }
+    res.json({ bids: rows.map(b => ({ ...b, proposed_lines: byBid[b.id] || [] })) })
   } catch (e) { console.error('[preaward:bids:list]', e.message); dbError(res, e) }
 })
 
@@ -567,17 +578,44 @@ router.get('/:projectId/tenders/:id/bids/:bidId', requireLivePermission('pre_awa
   } catch (e) { console.error('[preaward:bids:detail]', e.message); dbError(res, e) }
 })
 
-// SUBMIT — creates the technical bid row + the SEALED commercial row in one transaction.
+// SUBMIT — creates the technical bid row + the SEALED commercial row + the per-line proposed
+// quantities (tender_bid_lines), all in one transaction. The bid must state a qty_proposed for
+// EVERY active reserved line (completeness) and none may exceed that line's qty_reserved
+// (ceiling). Proposed quantities are technical scope (visible pre-unseal), not commercial.
 router.post('/:projectId/tenders/:id/bids', requireLivePermission('pre_award', 'can_create'), async (req, res) => {
   try {
     const pid = Number(req.params.projectId); const tid = Number(req.params.id)
     const { supplier_id, round = 1, submitted_at = null, currency = 'AUD',
-            tech_doc_count = 0, comm_doc_count = 0, bid_bond_provided = 0, commercial_value } = req.body || {}
+            tech_doc_count = 0, comm_doc_count = 0, bid_bond_provided = 0, commercial_value, lines } = req.body || {}
     if (!supplier_id) return res.status(400).json({ error: 'supplier_id is required' })
     if (commercial_value == null || isNaN(Number(commercial_value)) || Number(commercial_value) < 0)
       return res.status(400).json({ error: 'commercial_value is required and must be a non-negative number' })
     const [[tender]] = await db.query('SELECT id FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
     if (!tender) return res.status(404).json({ error: 'Tender not found' })
+
+    // Per-line proposed quantities — validate the WHOLE payload BEFORE any write (so a bad bid
+    // inserts nothing). Completeness: exactly the tender's active reserved lines, no gaps/extras.
+    // Ceiling: 0 <= qty_proposed <= that line's qty_reserved.
+    const [activeLines] = await db.query(
+      "SELECT id, mto_line_id, qty_reserved FROM tender_line_items WHERE tender_id = ? AND status = 'active'", [tid])
+    const reservedById = new Map(activeLines.map(l => [l.id, Number(l.qty_reserved)]))
+    const provided = Array.isArray(lines) ? lines : []
+    if (activeLines.length > 0) {
+      const seen = new Set()
+      for (const l of provided) {
+        const tliId = Number(l?.tender_line_item_id); const q = Number(l?.qty_proposed)
+        if (!Number.isInteger(tliId) || !reservedById.has(tliId))
+          return res.status(400).json({ error: `tender_line_item_id ${l?.tender_line_item_id} is not an active reserved line of this tender` })
+        if (seen.has(tliId)) return res.status(400).json({ error: `duplicate tender_line_item_id ${tliId} in lines` })
+        seen.add(tliId)
+        if (isNaN(q) || !(q >= 0)) return res.status(400).json({ error: `qty_proposed for tender_line_item_id ${tliId} must be a number >= 0` })
+        if (q > reservedById.get(tliId)) return res.status(422).json({ error: `qty_proposed ${q} exceeds reserved ${reservedById.get(tliId)} on tender_line_item_id ${tliId}` })
+      }
+      const missing = activeLines.filter(l => !seen.has(l.id)).map(l => l.mto_line_id)
+      if (missing.length) return res.status(400).json({ error: `bid must propose a quantity for every reserved line; missing mto_line_id(s): ${missing.join(', ')}` })
+    } else if (provided.length > 0) {
+      return res.status(400).json({ error: 'this tender has no reserved lines; do not send a lines array' })
+    }
 
     const conn = await db.getConnection()
     let bidId
@@ -591,12 +629,16 @@ router.post('/:projectId/tenders/:id/bids', requireLivePermission('pre_award', '
          Number(tech_doc_count) || 0, Number(comm_doc_count) || 0, bid_bond_provided ? 1 : 0, req.user.id])
       bidId = r.insertId
       await conn.query('INSERT INTO tender_bid_commercial (bid_id, commercial_value) VALUES (?, ?)', [bidId, Number(commercial_value)])
+      for (const l of provided) {
+        await conn.query('INSERT INTO tender_bid_lines (bid_id, tender_line_item_id, qty_proposed) VALUES (?, ?, ?)',
+          [bidId, Number(l.tender_line_item_id), l.qty_proposed])
+      }
       await conn.commit()
     } catch (te) { await conn.rollback(); throw te } finally { conn.release() }
 
-    audit(req, 'bid_submitted', 'tender_bid', bidId, null, { supplier_id: Number(supplier_id), round: Number(round) || 1, sealed: true })
+    audit(req, 'bid_submitted', 'tender_bid', bidId, null, { supplier_id: Number(supplier_id), round: Number(round) || 1, sealed: true, proposed_lines: provided.length })
     const [[bid]] = await db.query('SELECT * FROM tender_bids WHERE id = ?', [bidId])
-    res.status(201).json({ ...bid, envelope: 'sealed' })
+    res.status(201).json({ ...bid, envelope: 'sealed', proposed_lines: provided.length })
   } catch (e) { console.error('[preaward:bid:submit]', e.message); dbError(res, e) }
 })
 
@@ -1285,6 +1327,19 @@ router.post('/:projectId/tenders/:id/generate-po', requireLivePermission('pre_aw
           WHERE t.tender_id=? AND t.status='active' ORDER BY t.mto_line_id FOR UPDATE`, [tid])
       if (resv.length === 0) { await conn.rollback(); return res.status(409).json({ error: 'No active reservations to convert' }) }
 
+      // Winning bid's per-line proposed quantities. ZERO rows = a LEGACY bid (predates this
+      // feature) → full conversion, exactly the original behavior. Rows present → per-line award.
+      const [bidLines] = await conn.query('SELECT tender_line_item_id, qty_proposed FROM tender_bid_lines WHERE bid_id = ?', [bid.id])
+      const legacy = bidLines.length === 0
+      const proposedByTli = new Map(bidLines.map(l => [l.tender_line_item_id, l.qty_proposed]))
+      if (!legacy) {
+        // integrity: a rows-present bid must cover every active reservation (the submit endpoint
+        // guarantees this; a gap here means a reservation was added after submission or data bypassed).
+        const missing = resv.filter(r => !proposedByTli.has(r.tli_id)).map(r => r.mto_line_id)
+        if (missing.length) { await conn.rollback(); return res.status(409).json({ error: `Winning bid has no proposed quantity for reserved mto_line_id(s): ${missing.join(', ')} — cannot award` }) }
+        if (!resv.some(r => Number(proposedByTli.get(r.tli_id)) > 0)) { await conn.rollback(); return res.status(409).json({ error: 'Winning bid proposes zero on every reserved line — nothing to award' }) }
+      }
+
       // create the PO — tender_id back-link; value = lump-sum bid; currency/wbs from tender
       let poId
       try {
@@ -1298,18 +1353,37 @@ router.post('/:projectId/tenders/:id/generate-po', requireLivePermission('pre_aw
         throw pe
       }
 
-      // ── PHASE 1 — convert every active reservation into a real po_line (+ status flips) ──
-      // Record the tender-line → po-line mapping; Phase 2 consumes it (no 1:1 assumption baked in).
+      // ── PHASE 1 — line-granular conversion per the winning bid's proposed quantities ──
+      // full → converted; partial → convert the proposed qty + release the remainder (partial_released);
+      // zero → release the whole line (no po_line). Legacy → full on every line. Records the
+      // tender-line → po-line mapping for Phase 2 (only the lines that actually got a po_line).
       const converted = []
-      let n = 0
+      const outcome = { converted: 0, partial_released: 0, released: 0 }
+      let poLineNo = 0
       for (const r of resv) {
-        n++
+        const reserved = Number(r.qty_reserved)
+        const rawQ = legacy ? r.qty_reserved : proposedByTli.get(r.tli_id)
+        const q = Number(rawQ)
+        if (q === 0) {                                // declined → release the whole line, no po_line
+          await conn.query("UPDATE tender_line_items SET status='released', released_at=NOW(), released_reason=? WHERE id=?",
+            [`Not awarded: 0 of ${r.qty_reserved} reserved proposed; ${r.qty_reserved} released`, r.tli_id])
+          outcome.released++
+          continue
+        }
+        poLineNo++
         const [plRes] = await conn.query(
           `INSERT INTO po_lines (po_id, line_number, description, qty, uom, unit_price, source_mto_line_id)
            VALUES (?,?,?,?,?,NULL,?)`,
-          [poId, String(n), String(r.description).slice(0, 500), r.qty_reserved, r.uom || 'EA', r.mto_line_id])
-        converted.push({ tli_id: r.tli_id, po_line_id: plRes.insertId, line_number: String(n) })
-        await conn.query("UPDATE tender_line_items SET status='converted' WHERE id=?", [r.tli_id])
+          [poId, String(poLineNo), String(r.description).slice(0, 500), rawQ, r.uom || 'EA', r.mto_line_id])
+        converted.push({ tli_id: r.tli_id, po_line_id: plRes.insertId, line_number: String(poLineNo) })
+        if (q === reserved) {                         // full award for this line
+          await conn.query("UPDATE tender_line_items SET status='converted' WHERE id=?", [r.tli_id])
+          outcome.converted++
+        } else {                                      // partial award → convert q, release the remainder
+          await conn.query("UPDATE tender_line_items SET status='partial_released', released_at=NOW(), released_reason=? WHERE id=?",
+            [`Partial award: proposed ${rawQ} of ${r.qty_reserved} reserved; ${reserved - q} released`, r.tli_id])
+          outcome.partial_released++
+        }
         await conn.query("UPDATE mto_lines SET status='po-raised', po_ref=? WHERE id=?", [po_number, r.mto_line_id])
       }
 
@@ -1345,9 +1419,9 @@ router.post('/:projectId/tenders/:id/generate-po', requireLivePermission('pre_aw
       }
 
       await conn.commit()
-      audit(req, 'tender_awarded_to_po', 'tender', tid, null, { po_id: poId, po_number, lines: n, vdrl_documents: vdrlDocs, supplier_id: bid.supplier_id })
+      audit(req, 'tender_awarded_to_po', 'tender', tid, null, { po_id: poId, po_number, po_lines: poLineNo, outcome, legacy, vdrl_documents: vdrlDocs, supplier_id: bid.supplier_id })
       const [[newPo]] = await db.query('SELECT id, po_number, supplier_id, vendor_name, value, currency, status, tender_id FROM purchase_orders WHERE id=?', [poId])
-      return res.status(201).json({ po: newPo, converted_lines: n, vdrl_documents: vdrlDocs })
+      return res.status(201).json({ po: newPo, converted_lines: poLineNo, outcome, legacy, vdrl_documents: vdrlDocs })
     } catch (te) { await conn.rollback(); throw te } finally { conn.release() }
   } catch (e) { console.error('[preaward:generate-po]', e.message); dbError(res, e) }
 })
