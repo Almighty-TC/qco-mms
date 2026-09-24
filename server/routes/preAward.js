@@ -1364,8 +1364,10 @@ router.post('/:projectId/tenders/:id/generate-po', requireLivePermission('pre_aw
         const reserved = Number(r.qty_reserved)
         const rawQ = legacy ? r.qty_reserved : proposedByTli.get(r.tli_id)
         const q = Number(rawQ)
-        if (q === 0) {                                // declined → release the whole line, no po_line
-          await conn.query("UPDATE tender_line_items SET status='released', released_at=NOW(), released_reason=? WHERE id=?",
+        // qty_awarded is written in the SAME statement as each status change — chk_tli_awarded_coherence
+        // checks the row after every statement, so status and qty_awarded must never be split.
+        if (q === 0) {                                // declined → release the whole line, no po_line; awarded 0
+          await conn.query("UPDATE tender_line_items SET status='released', qty_awarded=0, released_at=NOW(), released_reason=? WHERE id=?",
             [`Not awarded: 0 of ${r.qty_reserved} reserved proposed; ${r.qty_reserved} released`, r.tli_id])
           outcome.released++
           continue
@@ -1376,12 +1378,12 @@ router.post('/:projectId/tenders/:id/generate-po', requireLivePermission('pre_aw
            VALUES (?,?,?,?,?,NULL,?)`,
           [poId, String(poLineNo), String(r.description).slice(0, 500), rawQ, r.uom || 'EA', r.mto_line_id])
         converted.push({ tli_id: r.tli_id, po_line_id: plRes.insertId, line_number: String(poLineNo) })
-        if (q === reserved) {                         // full award for this line
-          await conn.query("UPDATE tender_line_items SET status='converted' WHERE id=?", [r.tli_id])
+        if (q === reserved) {                         // full award (incl. legacy) → awarded = the reservation itself
+          await conn.query("UPDATE tender_line_items SET status='converted', qty_awarded=qty_reserved WHERE id=?", [r.tli_id])
           outcome.converted++
         } else {                                      // partial award → convert q, release the remainder
-          await conn.query("UPDATE tender_line_items SET status='partial_released', released_at=NOW(), released_reason=? WHERE id=?",
-            [`Partial award: proposed ${rawQ} of ${r.qty_reserved} reserved; ${reserved - q} released`, r.tli_id])
+          await conn.query("UPDATE tender_line_items SET status='partial_released', qty_awarded=?, released_at=NOW(), released_reason=? WHERE id=?",
+            [rawQ, `Partial award: proposed ${rawQ} of ${r.qty_reserved} reserved; ${(reserved - q).toFixed(3)} released`, r.tli_id])
           outcome.partial_released++
         }
         await conn.query("UPDATE mto_lines SET status='po-raised', po_ref=? WHERE id=?", [po_number, r.mto_line_id])
