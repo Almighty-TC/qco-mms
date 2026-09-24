@@ -165,7 +165,9 @@ router.post('/:projectId/tenders', requireLivePermission('pre_award', 'can_creat
 
 // ─── UPDATE: edit a tender (partial) ──────────────────────────────────────────
 // PATCH /api/pre-award/:projectId/tenders/:id — only provided fields written; any
-// provided enum re-validated. Audited with before/after.
+// provided enum re-validated. Audited with before/after. status 'cancelled' is refused
+// here (400): cancelling goes ONLY through POST .../cancel, which releases the tender's
+// reservations in the same transaction.
 router.patch('/:projectId/tenders/:id', requireLivePermission('pre_award', 'can_edit'), async (req, res) => {
   try {
     const pid = Number(req.params.projectId); const id = Number(req.params.id)
@@ -206,7 +208,12 @@ router.patch('/:projectId/tenders/:id', requireLivePermission('pre_award', 'can_
       put('discipline', b.discipline)
     }
     if (b.stage !== undefined)  { const bad = badEnum('stage',  b.stage,  STAGES);   if (bad) return res.status(400).json({ error: bad }); put('stage',  b.stage) }
-    if (b.status !== undefined) { const bad = badEnum('status', b.status, STATUSES); if (bad) return res.status(400).json({ error: bad }); put('status', b.status) }
+    if (b.status !== undefined) {
+      const bad = badEnum('status', b.status, STATUSES); if (bad) return res.status(400).json({ error: bad })
+      if (b.status === 'cancelled')
+        return res.status(400).json({ error: `status 'cancelled' can't be set here — use POST /api/pre-award/${pid}/tenders/${id}/cancel, which releases the tender's reservations in the same transaction` })
+      put('status', b.status)
+    }
     if (b.estimated_value !== undefined) {
       if (b.estimated_value !== null && (isNaN(Number(b.estimated_value)) || Number(b.estimated_value) < 0))
         return res.status(400).json({ error: 'estimated_value must be a non-negative number' })
