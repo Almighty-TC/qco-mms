@@ -25,7 +25,13 @@ interface Bid {
   unsealed_at: string | null; unsealed_by: number | null
 }
 interface Sup { id: number; name: string; code: string }
+// A tender's active reserved line (from GET /scope) — the completeness set a bid must quote.
+interface Reservation { tli_id: number; mto_line_id: number; qty_reserved: string | number; status: string; line_number: string; description: string; uom: string | null; mto_reference: string }
 
+const fmtQty = (v: string | number | null | undefined) => {
+  if (v == null || v === '') return '—'
+  const n = Number(v); return isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 3 }) : '—'
+}
 const fmtMoney = (v: string | number | null, cur: string | null) => {
   if (v == null || v === '') return '—'
   const n = Number(v); if (!isFinite(n)) return '—'
@@ -156,6 +162,10 @@ function SubmitBidModal({ dark, projectId, tenderId, onClose, onSaved }: {
   const [value, setValue] = useState('')
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
+  const [resv, setResv] = useState<Reservation[]>([])
+  const [qtyById, setQtyById] = useState<Record<number, string>>({})   // tli_id -> input string (empty = not yet entered)
+  const [resvLoading, setResvLoading] = useState(true)
+  const [resvErr, setResvErr] = useState('')
 
   const col = dark ? '#f1f5f9' : '#0f172a'
   const sub = '#94a3b8'
@@ -165,8 +175,30 @@ function SubmitBidModal({ dark, projectId, tenderId, onClose, onSaved }: {
   const lbl = (t: string) => <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 4, marginTop: 12 }}>{t}</div>
 
   useEffect(() => { axios.get(`${API}/admin/suppliers`).then(r => setSuppliers(Array.isArray(r.data) ? r.data : (r.data.rows ?? []))).catch(() => {}) }, [])
+  // The tender's active reserved lines = the completeness set the bid must quote (from GET /scope).
+  const loadResv = useCallback(() => {
+    setResvLoading(true); setResvErr('')
+    axios.get(`${API}/pre-award/${projectId}/tenders/${tenderId}/scope`)
+      .then(r => setResv((r.data?.reservations ?? []).filter((x: Reservation) => x.status === 'active')))
+      .catch(() => setResvErr('Could not load the tender’s reserved lines.'))
+      .finally(() => setResvLoading(false))
+  }, [projectId, tenderId])
+  useEffect(() => { loadResv() }, [loadResv])
 
-  const valid = supplierId && value !== '' && Number(value) >= 0
+  // ── Per-line validation (mirrors the server: completeness + ceiling) ──
+  const rowState = (r: Reservation) => {
+    const raw = qtyById[r.tli_id]
+    const filled = raw != null && raw.trim() !== ''
+    const n = Number(raw); const reserved = Number(r.qty_reserved)
+    const bad = filled && (isNaN(n) || n < 0 || n > reserved)
+    return { filled, n, reserved, over: filled && !isNaN(n) && n > reserved, bad }
+  }
+  const missing = resv.filter(r => !rowState(r).filled)
+  const exceeding = resv.filter(r => rowState(r).over)
+  const anyBad = resv.some(r => rowState(r).bad)
+  const linesReady = resvErr === '' && !resvLoading && missing.length === 0 && !anyBad
+  const valid = !!supplierId && value !== '' && Number(value) >= 0 && linesReady
+
   const save = async () => {
     setSaving(true); setErr('')
     try {
@@ -174,6 +206,7 @@ function SubmitBidModal({ dark, projectId, tenderId, onClose, onSaved }: {
         supplier_id: Number(supplierId), round: Number(round) || 1, submitted_at: submittedAt || null,
         currency: currency || 'AUD', tech_doc_count: Number(tech) || 0, comm_doc_count: Number(comm) || 0,
         bid_bond_provided: bond ? 1 : 0, commercial_value: Number(value),
+        ...(resv.length > 0 ? { lines: resv.map(r => ({ tender_line_item_id: r.tli_id, qty_proposed: Number(qtyById[r.tli_id]) })) } : {}),
       })
       onSaved()
     } catch (e) { setErr(axios.isAxiosError(e) ? (e.response?.data?.error ?? 'Could not submit.') : 'Could not submit.'); setSaving(false) }
@@ -204,6 +237,54 @@ function SubmitBidModal({ dark, projectId, tenderId, onClose, onSaved }: {
             <input type="checkbox" checked={bond} onChange={e => setBond(e.target.checked)} style={{ accentColor: '#2563eb' }} /> Bid bond
           </label>
         </div>
+
+        {/* ── Proposed supply quantities — TECHNICAL scope, visible pre-unseal (NOT the sealed value) ── */}
+        {resvLoading ? (
+          <div style={{ fontSize: 12.5, color: sub, marginTop: 14 }}>Loading reserved lines…</div>
+        ) : resvErr ? (
+          <div style={{ color: '#b91c1c', fontSize: 12.5, marginTop: 14 }}>{resvErr} <button onClick={loadResv} style={{ background: 'none', border: 'none', color: '#E84E0F', cursor: 'pointer', fontWeight: 600, fontFamily: 'inherit' }}>Retry</button></div>
+        ) : resv.length > 0 ? (
+          <>
+            {lbl('Proposed supply quantities')}
+            <div style={{ fontSize: 12, color: sub, marginBottom: 8 }}>How much this bid proposes to supply on <strong>every</strong> reserved line (0 = not supplying that line). This is <strong>technical scope, visible to evaluators</strong> — only the commercial value below is sealed.</div>
+            <div style={{ border: bd, borderRadius: 8, overflow: 'hidden' }}>
+              {resv.map((r, i) => {
+                const st = rowState(r)
+                return (
+                  <div key={r.tli_id} style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '9px 12px', borderTop: i === 0 ? 'none' : bd }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, fontWeight: 700, color: col }}>{r.mto_reference} · {r.line_number}</div>
+                      <div style={{ fontSize: 12, color: sub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.description}>{r.description}</div>
+                    </div>
+                    <div style={{ textAlign: 'right', width: 84, flexShrink: 0 }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 700, color: col }}>{fmtQty(r.qty_reserved)}</div>
+                      <div style={{ fontSize: 10, color: sub }}>reserved {r.uom || ''}</div>
+                    </div>
+                    <div style={{ width: 96, flexShrink: 0 }}>
+                      <input type="number" min={0} step="any" value={qtyById[r.tli_id] ?? ''} onChange={e => setQtyById(q => ({ ...q, [r.tli_id]: e.target.value }))} placeholder="qty"
+                        style={{ ...inp, textAlign: 'right', border: `1px solid ${st.bad ? '#b91c1c' : (dark ? '#334155' : '#dde3ed')}` }} />
+                      {st.over && <div style={{ fontSize: 10, color: '#b91c1c', marginTop: 2, textAlign: 'right' }}>exceeds {fmtQty(r.qty_reserved)}</div>}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+            {/* Pre-submission validation summary — completeness + ceiling, shown BEFORE submit fires */}
+            <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, border: `1px solid ${linesReady ? (dark ? '#166534' : '#bbf7d0') : (dark ? '#7f1d1d' : '#fecaca')}`, background: linesReady ? (dark ? 'rgba(34,197,94,0.08)' : '#f0fdf4') : (dark ? 'rgba(127,29,29,0.15)' : '#fef2f2') }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: linesReady ? '#15803d' : '#b91c1c', marginBottom: linesReady ? 0 : 4 }}>
+                {linesReady ? `✓ Ready — all ${resv.length} line${resv.length > 1 ? 's' : ''} have a proposed quantity, all within reserved` : 'Not ready to submit:'}
+              </div>
+              {!linesReady && (
+                <div style={{ fontSize: 12, color: dark ? '#fca5a5' : '#b91c1c', lineHeight: 1.5 }}>
+                  {missing.length > 0 && <div>· {missing.length} line{missing.length > 1 ? 's still need' : ' still needs'} a quantity: {missing.map(m => `${m.mto_reference}·${m.line_number}`).join(', ')}</div>}
+                  {exceeding.length > 0 && <div>· {exceeding.length} line{exceeding.length > 1 ? 's exceed' : ' exceeds'} reserved: {exceeding.map(m => `${m.mto_reference}·${m.line_number} (${fmtQty(qtyById[m.tli_id])} > ${fmtQty(m.qty_reserved)})`).join(', ')}</div>}
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          <div style={{ fontSize: 12, color: sub, marginTop: 14, fontStyle: 'italic' }}>This tender has no reserved MTO lines — this bid carries no per-line quantities.</div>
+        )}
 
         {lbl('Commercial value (sealed)')}
         <input type="number" min={0} value={value} onChange={e => setValue(e.target.value)} placeholder="e.g. 4500000" style={inp} />
