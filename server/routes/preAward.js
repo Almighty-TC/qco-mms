@@ -1054,23 +1054,81 @@ router.post('/:projectId/tenders/:id/approve', requireLivePermission('pre_award'
   } catch (e) { console.error('[preaward:tender:approve]', e.message); dbError(res, e) }
 })
 
-// ─── REJECT ───────────────────────────────────────────────────────────────────
-router.post('/:projectId/tenders/:id/reject', requireLivePermission('pre_award', 'can_approve'), async (req, res) => {
-  try {
-    const pid = Number(req.params.projectId); const tid = Number(req.params.id)
-    const { comment = null } = req.body || {}
-    const [[tender]] = await db.query('SELECT id, approval_status FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
-    if (!tender) return res.status(404).json({ error: 'Tender not found' })
-    if (tender.approval_status === 'approved') return res.status(409).json({ error: 'Tender is already approved; cannot reject' })
-    if (tender.approval_status === 'rejected') return res.status(409).json({ error: 'Tender is already rejected' })
+// ─── RELEASE a tender's ACTIVE reservations (inside the caller's transaction) ──
+// The caller holds the tender row lock (FOR UPDATE). Reads the active rows, then releases them in
+// one statement; a count mismatch throws so the caller's whole transaction rolls back. qty_awarded
+// stays NULL — released without an award, which chk_tli_awarded_coherence allows.
+async function releaseActiveReservations(conn, tid, reason) {
+  const [rows] = await conn.query(
+    "SELECT id, mto_line_id, qty_reserved FROM tender_line_items WHERE tender_id = ? AND status = 'active' ORDER BY mto_line_id", [tid])
+  if (rows.length === 0) return []
+  const [upd] = await conn.query(
+    "UPDATE tender_line_items SET status='released', released_at=NOW(), released_reason=? WHERE tender_id = ? AND status = 'active'", [reason, tid])
+  if (upd.affectedRows !== rows.length) throw new Error(`Reservation release mismatch: ${upd.affectedRows} released vs ${rows.length} active`)
+  return rows.map(r => ({ tli_id: r.id, mto_line_id: r.mto_line_id, qty_reserved: r.qty_reserved }))
+}
 
-    const [approved] = await db.query("SELECT approval_level FROM tender_approvals WHERE tender_id = ? AND status = 'approved'", [tid])
-    const level = approved.some(r => Number(r.approval_level) === 1) ? 2 : 1
-    await db.query("INSERT INTO tender_approvals (tender_id, approver_id, approval_level, status, actioned_at, comments) VALUES (?,?,?,'rejected',NOW(),?)", [tid, req.user.id, level, comment])
-    await db.query("UPDATE tender_packages SET approval_status='rejected' WHERE id = ?", [tid])
-    audit(req, 'tender_rejected', 'tender', tid, { approval_status: tender.approval_status }, { approval_status: 'rejected', level })
-    res.json({ ok: true, approval_status: 'rejected', level })
+// ─── REJECT ───────────────────────────────────────────────────────────────────
+// Rejection is terminal (approve refuses a rejected tender; recompute does not reset it), so the
+// tender's reservations can never be awarded: its ACTIVE reservations are released in the SAME
+// transaction as the rejection, with released_reason='tender_rejected' (distinct from a cancellation).
+// Tender row locked first; the approval checks read the locked row.
+router.post('/:projectId/tenders/:id/reject', requireLivePermission('pre_award', 'can_approve'), async (req, res) => {
+  const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+  try {
+    const { comment = null } = req.body || {}
+    const conn = await db.getConnection()
+    try {
+      await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+      await conn.beginTransaction()
+      const [[tender]] = await conn.query('SELECT id, approval_status FROM tender_packages WHERE id = ? AND project_id = ? FOR UPDATE', [tid, pid])
+      if (!tender) { await conn.rollback(); return res.status(404).json({ error: 'Tender not found' }) }
+      if (tender.approval_status === 'approved') { await conn.rollback(); return res.status(409).json({ error: 'Tender is already approved; cannot reject' }) }
+      if (tender.approval_status === 'rejected') { await conn.rollback(); return res.status(409).json({ error: 'Tender is already rejected' }) }
+
+      const [approved] = await conn.query("SELECT approval_level FROM tender_approvals WHERE tender_id = ? AND status = 'approved'", [tid])
+      const level = approved.some(r => Number(r.approval_level) === 1) ? 2 : 1
+      await conn.query("INSERT INTO tender_approvals (tender_id, approver_id, approval_level, status, actioned_at, comments) VALUES (?,?,?,'rejected',NOW(),?)", [tid, req.user.id, level, comment])
+      await conn.query("UPDATE tender_packages SET approval_status='rejected' WHERE id = ?", [tid])
+      const released = await releaseActiveReservations(conn, tid, 'tender_rejected')
+      await conn.commit()
+      audit(req, 'tender_rejected', 'tender', tid, { approval_status: tender.approval_status }, { approval_status: 'rejected', level, released_reservations: released })
+      res.json({ ok: true, approval_status: 'rejected', level, released })
+    } catch (te) { await conn.rollback(); throw te } finally { conn.release() }
   } catch (e) { console.error('[preaward:tender:reject]', e.message); dbError(res, e) }
+})
+
+// ─── CANCEL ───────────────────────────────────────────────────────────────────
+// POST /api/pre-award/:projectId/tenders/:id/cancel (can_edit). Sets status='cancelled' and, in the
+// SAME transaction, releases every ACTIVE reservation with released_reason='tender_cancelled'.
+// Allowed at any point BEFORE award; refused (409) once awarded — status 'awarded' or the approval
+// chain complete — or once a PO links the tender (a recompute after handoff resets status to
+// 'active' while the PO still exists), and if already cancelled. Tender row locked first; every
+// check reads the locked row.
+router.post('/:projectId/tenders/:id/cancel', requireLivePermission('pre_award', 'can_edit'), async (req, res) => {
+  const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+  try {
+    const conn = await db.getConnection()
+    try {
+      await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+      await conn.beginTransaction()
+      const [[tender]] = await conn.query('SELECT id, status, approval_status FROM tender_packages WHERE id = ? AND project_id = ? FOR UPDATE', [tid, pid])
+      if (!tender) { await conn.rollback(); return res.status(404).json({ error: 'Tender not found' }) }
+      if (tender.status === 'cancelled') { await conn.rollback(); return res.status(409).json({ error: 'Tender is already cancelled' }) }
+      if (tender.status === 'awarded' || tender.approval_status === 'approved') {
+        await conn.rollback()
+        return res.status(409).json({ error: `Cannot cancel: the tender has been awarded (status '${tender.status}', approval '${tender.approval_status}')` })
+      }
+      const [[po]] = await conn.query('SELECT id, po_number FROM purchase_orders WHERE tender_id = ? LIMIT 1', [tid])
+      if (po) { await conn.rollback(); return res.status(409).json({ error: `Cannot cancel: the tender has been handed off to PO ${po.po_number}` }) }
+
+      await conn.query("UPDATE tender_packages SET status='cancelled' WHERE id = ?", [tid])
+      const released = await releaseActiveReservations(conn, tid, 'tender_cancelled')
+      await conn.commit()
+      audit(req, 'tender_cancelled', 'tender', tid, { status: tender.status }, { status: 'cancelled', released_reservations: released })
+      res.json({ tender_id: tid, status: 'cancelled', released })
+    } catch (te) { await conn.rollback(); throw te } finally { conn.release() }
+  } catch (e) { console.error('[preaward:tender:cancel]', e.message); dbError(res, e) }
 })
 
 // ─── LIST approval chain ──────────────────────────────────────────────────────
