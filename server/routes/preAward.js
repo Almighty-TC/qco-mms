@@ -853,13 +853,35 @@ router.get('/:projectId/tenders/:id/scope', requireLivePermission('pre_award', '
     const [[tender]] = await db.query('SELECT id FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
     if (!tender) return res.status(404).json({ error: 'Tender not found' })
 
+    // The recommended (winning) bid — the EXACT lookup generate-po uses, so the preview below can
+    // never disagree with what the handoff will do. legacy = the bid has no per-line quantities.
+    const [[appr]] = await db.query(
+      "SELECT recommended_bid_id FROM tender_approvals WHERE tender_id=? AND status='approved' AND recommended_bid_id IS NOT NULL ORDER BY id DESC LIMIT 1", [tid])
+    let award = null
+    if (appr) {
+      const [[w]] = await db.query(
+        `SELECT b.id, s.name AS supplier_name, (SELECT COUNT(*) FROM tender_bid_lines bl WHERE bl.bid_id = b.id) AS n_lines
+           FROM tender_bids b JOIN suppliers s ON s.id = b.supplier_id WHERE b.id = ?`, [appr.recommended_bid_id])
+      if (w) award = { recommended_bid_id: w.id, supplier_name: w.supplier_name, legacy: Number(w.n_lines) === 0 }
+    }
+    const hasWinner = award ? 1 : 0, legacy = award && award.legacy ? 1 : 0
+
+    // Per line: reserved / proposed (the winner's) / awarded (stored at award) / released, all in SQL
+    // so decimals stay exact. planned_* is the pre-award preview, using the handoff's own rule:
+    // legacy winner → reserved/0; per-line winner → proposed / reserved − proposed; no row → NULL.
     const [rows] = await db.query(
-      `SELECT t.id AS tli_id, t.mto_line_id, t.qty_reserved, t.status,
+      `SELECT t.id AS tli_id, t.mto_line_id, t.qty_reserved, t.qty_awarded, t.status, t.released_at, t.released_reason,
+              CASE WHEN t.status IN ('converted','partial_released','released') THEN t.qty_reserved - COALESCE(t.qty_awarded, 0) END AS qty_released,
+              bl.qty_proposed,
+              CASE WHEN t.status = 'active' AND ? = 1 THEN (CASE WHEN ? = 1 THEN t.qty_reserved ELSE bl.qty_proposed END) END AS planned_qty_awarded,
+              CASE WHEN t.status = 'active' AND ? = 1 THEN (CASE WHEN ? = 1 THEN CAST(0 AS DECIMAL(15,3)) ELSE t.qty_reserved - bl.qty_proposed END) END AS planned_qty_released,
               m.line_number, m.description, m.uom, r.id AS mto_id, r.reference AS mto_reference
          FROM tender_line_items t
          JOIN mto_lines m ON m.id = t.mto_line_id
          JOIN mto_registers r ON r.id = m.mto_id
-        WHERE t.tender_id = ? ORDER BY t.mto_line_id`, [tid])
+         LEFT JOIN tender_bid_lines bl ON bl.tender_line_item_id = t.id AND bl.bid_id = ?
+        WHERE t.tender_id = ? ORDER BY t.mto_line_id`,
+      [hasWinner, legacy, hasWinner, legacy, award ? award.recommended_bid_id : null, tid])
 
     // Live availability only for ACTIVE reservations (converted/released rows no longer consume).
     const reservations = []
@@ -875,7 +897,7 @@ router.get('/:projectId/tenders/:id/scope', requireLivePermission('pre_award', '
     const [[po]] = await db.query(
       'SELECT id, po_number, supplier_id, vendor_name, value, currency, status FROM purchase_orders WHERE tender_id = ? ORDER BY id DESC LIMIT 1', [tid])
 
-    res.json({ reservations, registers, po: po || null })
+    res.json({ reservations, registers, po: po || null, award })
   } catch (e) { console.error('[preaward:scope]', e.message); dbError(res, e) }
 })
 
