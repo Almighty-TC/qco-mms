@@ -1161,6 +1161,9 @@ router.get('/:projectId/tenders/:id/approvals', requireLivePermission('pre_award
 // and roll back approval_status/stage/status before writing the new results.
 //
 // GATING RULES (consolidated):
+//  - FIRST, before any other logic: a tender that has generated a real PO (a purchase_orders
+//    row links it) is final — 409. Its evaluation is what the PO was awarded on. A PO exists
+//    only after approval, so the approved-tender archive/rollback below never sees such a tender.
 //  - criteria must be locked (409).
 //  - every eligible bid must be fully scored on every MANUAL criterion (409) — the
 //    anti-bias completeness guard: technical scoring is finished before prices fold in.
@@ -1178,6 +1181,10 @@ const round2 = n => Math.round(n * 100) / 100
 router.post('/:projectId/tenders/:id/compute-recommendation', requireLivePermission('pre_award', 'can_approve'), async (req, res) => {
   const pid = Number(req.params.projectId); const tid = Number(req.params.id)
   try {
+    // PO-generated guard — runs before everything else (see GATING RULES)
+    const [[po]] = await db.query('SELECT id, po_number FROM purchase_orders WHERE tender_id=? AND project_id=? LIMIT 1', [tid, pid])
+    if (po) return res.status(409).json({ error: `This tender has already generated Purchase Order ${po.po_number} — its evaluation history is final and cannot be recomputed` })
+
     const [[tender]] = await db.query(
       'SELECT id, ref, title, currency, approval_status, stage, status, criteria_locked_at FROM tender_packages WHERE id=? AND project_id=?', [tid, pid])
     if (!tender) return res.status(404).json({ error: 'Tender not found' })
