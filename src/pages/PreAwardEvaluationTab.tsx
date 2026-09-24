@@ -8,6 +8,11 @@
 // computed on recommendation. It's shown as a greyed, read-only row for context only.
 // Criteria-not-locked and non-scorable-bid states are handled with specific messaging,
 // so the backend 409s never fire from this UI.
+// Proposed scope: each bid's per-line proposed quantities come from the SAME bids GET
+// (`proposed_lines`, technical scope — never gated by unseal). Human-readable line labels
+// come from a separate, non-blocking GET /scope; if it fails, lines fall back to MTO line ids
+// and scoring is unaffected. Nothing here reads envelope/commercial_value or derives anything
+// from price — the block renders identically for sealed and unsealed bids.
 import { useEffect, useState, useCallback } from 'react'
 import axios from 'axios'
 import { API } from '../lib/api'
@@ -15,8 +20,15 @@ import { API } from '../lib/api'
 const CAN_APPROVE = ['admin', 'procurement_manager', 'procurement_officer', 'project_director']
 
 interface Criterion { id: number; label: string; weight: number; mandatory: number; min_score: number | null; score_source: string }
-interface Bid { id: number; supplier_name: string; status: string; prelim_status: string | null }
+interface ProposedLine { tender_line_item_id: number; qty_proposed: string | number; mto_line_id: number; qty_reserved: string | number; reservation_status: string }
+interface Bid { id: number; supplier_name: string; status: string; prelim_status: string | null; proposed_lines?: ProposedLine[] }
 interface ScoreRow { bid_id: number; criterion_id: number; score: number }
+interface LineLabel { mto_reference: string; line_number: string; description: string; uom: string | null }
+
+const fmtQty = (v: string | number | null | undefined) => {
+  if (v == null || v === '') return '—'
+  const n = Number(v); return isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 3 }) : '—'
+}
 
 export function PreAwardEvaluationTab({ dark, projectId, tenderId, userRole }: {
   dark: boolean; projectId: number; tenderId: number; userRole: string; userId: number
@@ -55,6 +67,22 @@ export function PreAwardEvaluationTab({ dark, projectId, tenderId, userRole }: {
   }, [projectId, tenderId])
   useEffect(() => { load() }, [load])
 
+  // Line labels for the proposed-scope block — deliberately separate from load() so a failure
+  // here never blocks scoring. resvCount = the tender's reservations (null = unknown).
+  const [labels, setLabels] = useState<Record<number, LineLabel>>({})
+  const [resvCount, setResvCount] = useState<number | null>(null)
+  const [labelsErr, setLabelsErr] = useState(false)
+  useEffect(() => {
+    axios.get(`${API}/pre-award/${projectId}/tenders/${tenderId}/scope`)
+      .then(r => {
+        const rs = (r.data?.reservations ?? []) as Array<LineLabel & { tli_id: number }>
+        const m: Record<number, LineLabel> = {}
+        for (const x of rs) m[x.tli_id] = { mto_reference: x.mto_reference, line_number: x.line_number, description: x.description, uom: x.uom }
+        setLabels(m); setResvCount(rs.length); setLabelsErr(false)
+      })
+      .catch(() => setLabelsErr(true))
+  }, [projectId, tenderId])
+
   const manualCriteria = criteria.filter(c => c.score_source !== 'price')
   const priceCriterion = criteria.find(c => c.score_source === 'price') || null
   const scorable = (b: Bid) => b.prelim_status === 'pass' && b.status !== 'withdrawn' && b.status !== 'rejected'
@@ -91,6 +119,62 @@ export function PreAwardEvaluationTab({ dark, projectId, tenderId, userRole }: {
     }
   }
 
+  // ── Proposed scope (technical, always visible while scoring). Quantities only — nothing is
+  //    read from or derived from the sealed commercial value. ──
+  const scopeBlock = (b: Bid) => {
+    const lines = b.proposed_lines ?? []
+    const box = { border: bd, borderRadius: 8, background: dark ? 'rgba(148,163,184,0.05)' : '#f8fafc', padding: '10px 12px', marginTop: 12 } as const
+    const head = <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase' }}>Proposed scope</div>
+    if (lines.length === 0) {
+      if (resvCount === 0) return null   // tender has no reserved lines → nothing to show
+      return (
+        <div style={box}>
+          {head}
+          <div style={{ fontSize: 12.5, color: sub, marginTop: 3 }}>
+            {resvCount != null && resvCount > 0
+              ? 'No per-line quantities recorded (submitted before per-line bidding) — on award, this bid converts the full reserved quantity on every line.'
+              : 'No per-line quantities recorded.'}
+          </div>
+        </div>
+      )
+    }
+    const kind = (l: ProposedLine) => { const q = Number(l.qty_proposed), r = Number(l.qty_reserved); return q === 0 ? 'declined' : q >= r ? 'full' : 'partial' }
+    const n = { full: 0, partial: 0, declined: 0 }
+    for (const l of lines) n[kind(l)]++
+    const tag = (l: ProposedLine) => {
+      const k = kind(l)
+      const s = k === 'full' ? { bg: 'rgba(34,197,94,0.14)', fg: '#15803d', t: 'Full' }
+        : k === 'partial' ? { bg: 'rgba(245,158,11,0.16)', fg: '#b45309', t: `Partial · ${fmtQty(l.qty_proposed)} of ${fmtQty(l.qty_reserved)}` }
+        : { bg: 'rgba(148,163,184,0.2)', fg: '#64748b', t: 'Declined' }
+      return <span style={{ background: s.bg, color: s.fg, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 9999, whiteSpace: 'nowrap' }}>{s.t}</span>
+    }
+    return (
+      <div style={box}>
+        {head}
+        <div style={{ fontSize: 12.5, color: col, margin: '3px 0 8px' }}>
+          Proposes full on {n.full} · partial on {n.partial} · declines {n.declined} <span style={{ color: sub }}>(of {lines.length} reserved line{lines.length > 1 ? 's' : ''})</span>
+        </div>
+        {labelsErr && <div style={{ fontSize: 11, color: sub, fontStyle: 'italic', marginBottom: 6 }}>Line labels unavailable — showing MTO line ids.</div>}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+          {lines.map(l => {
+            const lab = labels[l.tender_line_item_id]
+            return (
+              <div key={l.tender_line_item_id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11.5, fontWeight: 700, color: col }}>{lab ? `${lab.mto_reference} · ${lab.line_number}` : `MTO line #${l.mto_line_id}`}</span>
+                  {lab && <span style={{ fontSize: 12, color: sub, marginLeft: 8 }} title={lab.description}>{lab.description.length > 48 ? lab.description.slice(0, 48) + '…' : lab.description}</span>}
+                </div>
+                <div style={{ fontSize: 12, color: sub, whiteSpace: 'nowrap' }}>reserved <strong style={{ color: col }}>{fmtQty(l.qty_reserved)}</strong>{lab?.uom ? ` ${lab.uom}` : ''}</div>
+                <div style={{ fontSize: 12, color: sub, whiteSpace: 'nowrap', width: 92, textAlign: 'right' }}>proposed <strong style={{ color: col }}>{fmtQty(l.qty_proposed)}</strong></div>
+                <div style={{ width: 118, textAlign: 'right' }}>{tag(l)}</div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
   if (loading) return <div style={{ color: sub, fontSize: 13, padding: '8px 0' }}>Loading…</div>
   if (err) return <div style={{ color: '#b91c1c', fontSize: 13 }}>{err} <button onClick={load} style={{ background: 'none', border: 'none', color: '#E84E0F', cursor: 'pointer', fontWeight: 600, fontFamily: 'inherit' }}>Retry</button></div>
 
@@ -116,14 +200,17 @@ export function PreAwardEvaluationTab({ dark, projectId, tenderId, userRole }: {
         const st = saveState[b.id] ?? {}
         return (
           <div key={b.id} style={{ border: bd, borderRadius: 8, background: cardBg, padding: '14px 16px', opacity: ok ? 1 : 0.6 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: ok ? 12 : 0 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: col }}>{b.supplier_name}</div>
               {!ok && <span style={{ fontSize: 12, color: '#b45309', background: 'rgba(245,158,11,0.14)', padding: '3px 10px', borderRadius: 9999 }}>Not scorable — {notScorableReason(b)}</span>}
             </div>
 
+            {/* Proposed scope — inline, always visible, directly above the scoring inputs */}
+            {scopeBlock(b)}
+
             {ok && (
               <>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
                   {manualCriteria.map(c => {
                     const v = valOf(b.id, c.id); const bad = v !== '' && !isValid(v)
                     return (
