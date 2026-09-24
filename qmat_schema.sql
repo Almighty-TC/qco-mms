@@ -90,7 +90,7 @@ CREATE TABLE `audit_log` (
   KEY `idx_audit_project` (`project_id`),
   CONSTRAINT `fk_audit_log_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),
   CONSTRAINT `fk_audit_project` FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=725 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=733 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!50003 SET @saved_cs_client      = @@character_set_client */ ;
 /*!50003 SET @saved_cs_results     = @@character_set_results */ ;
@@ -1219,7 +1219,7 @@ CREATE TABLE `po_lines` (
   CONSTRAINT `fk_po_lines_uom_id` FOREIGN KEY (`uom_id`) REFERENCES `units_of_measure` (`id`),
   CONSTRAINT `po_lines_ibfk_1` FOREIGN KEY (`po_id`) REFERENCES `purchase_orders` (`id`),
   CONSTRAINT `po_lines_ibfk_2` FOREIGN KEY (`wbs_id`) REFERENCES `wbs_nodes` (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=17935 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=17945 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -1454,7 +1454,7 @@ CREATE TABLE `purchase_orders` (
   CONSTRAINT `fk_po_warehouse_id` FOREIGN KEY (`warehouse_id`) REFERENCES `warehouses` (`id`),
   CONSTRAINT `purchase_orders_ibfk_1` FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`),
   CONSTRAINT `purchase_orders_ibfk_2` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=2325 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=2331 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -1957,7 +1957,7 @@ CREATE TABLE `tender_approvals` (
   CONSTRAINT `fk_ta_approver` FOREIGN KEY (`approver_id`) REFERENCES `users` (`id`),
   CONSTRAINT `fk_ta_recommended_bid` FOREIGN KEY (`recommended_bid_id`) REFERENCES `tender_bids` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_ta_tender` FOREIGN KEY (`tender_id`) REFERENCES `tender_packages` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=27 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Tender approval chain. Mirrors po_approvals — multi-step, threshold-gated (projects.approval_threshold_1/2), records every decision.';
+) ENGINE=InnoDB AUTO_INCREMENT=33 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Tender approval chain. Mirrors po_approvals — multi-step, threshold-gated (projects.approval_threshold_1/2), records every decision.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -2038,7 +2038,7 @@ CREATE TABLE `tender_bid_commercial` (
   CONSTRAINT `fk_commercial_bid` FOREIGN KEY (`bid_id`) REFERENCES `tender_bids` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_commercial_unsealed_by` FOREIGN KEY (`unsealed_by`) REFERENCES `users` (`id`),
   CONSTRAINT `chk_commercial_unseal_pair` CHECK ((((`unsealed_at` is null) and (`unsealed_by` is null)) or ((`unsealed_at` is not null) and (`unsealed_by` is not null))))
-) ENGINE=InnoDB AUTO_INCREMENT=36 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=49 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -2061,7 +2061,7 @@ CREATE TABLE `tender_bid_lines` (
   CONSTRAINT `fk_tbl_bid` FOREIGN KEY (`bid_id`) REFERENCES `tender_bids` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_tbl_line` FOREIGN KEY (`tender_line_item_id`) REFERENCES `tender_line_items` (`id`) ON DELETE CASCADE,
   CONSTRAINT `chk_tbl_qty_nonneg` CHECK ((`qty_proposed` >= 0))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=26 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -2097,7 +2097,7 @@ CREATE TABLE `tender_bids` (
   CONSTRAINT `fk_bids_tender` FOREIGN KEY (`tender_id`) REFERENCES `tender_packages` (`id`) ON DELETE CASCADE,
   CONSTRAINT `chk_bids_prelim` CHECK ((`prelim_status` in (_utf8mb4'pending',_utf8mb4'pass',_utf8mb4'fail'))),
   CONSTRAINT `chk_bids_status` CHECK ((`status` in (_utf8mb4'submitted',_utf8mb4'withdrawn',_utf8mb4'shortlisted',_utf8mb4'rejected')))
-) ENGINE=InnoDB AUTO_INCREMENT=42 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=57 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -2161,7 +2161,7 @@ CREATE TABLE `tender_criteria` (
   CONSTRAINT `chk_criteria_min_score` CHECK (((`min_score` is null) or (`min_score` between 0 and 100))),
   CONSTRAINT `chk_criteria_score_source` CHECK ((`score_source` in (_utf8mb4'manual',_utf8mb4'price'))),
   CONSTRAINT `chk_criteria_weight` CHECK ((`weight` between 5 and 60))
-) ENGINE=InnoDB AUTO_INCREMENT=50 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=52 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -2314,6 +2314,7 @@ CREATE TABLE `tender_line_items` (
   `tender_id` int NOT NULL,
   `mto_line_id` int NOT NULL,
   `qty_reserved` decimal(15,3) NOT NULL,
+  `qty_awarded` decimal(15,3) DEFAULT NULL COMMENT 'Quantity actually awarded on this line, written once by the award-to-PO handoff (generate-po). NULL = no award decision (still active, or released without an award); 0 = the award gave this line nothing; = qty_reserved for a full award; between 0 and qty_reserved for a partial award.',
   `status` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',
   `released_at` datetime DEFAULT NULL,
   `released_reason` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
@@ -2325,10 +2326,11 @@ CREATE TABLE `tender_line_items` (
   KEY `idx_tli_status` (`status`),
   CONSTRAINT `fk_tli_mto_line` FOREIGN KEY (`mto_line_id`) REFERENCES `mto_lines` (`id`) ON DELETE RESTRICT,
   CONSTRAINT `fk_tli_tender` FOREIGN KEY (`tender_id`) REFERENCES `tender_packages` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `chk_tli_awarded_coherence` CHECK ((((`status` = _utf8mb4'active') and (`qty_awarded` is null)) or ((`status` = _utf8mb4'converted') and (`qty_awarded` is not null) and (`qty_awarded` = `qty_reserved`)) or ((`status` = _utf8mb4'partial_released') and (`qty_awarded` is not null) and (`qty_awarded` > 0) and (`qty_awarded` < `qty_reserved`)) or ((`status` = _utf8mb4'released') and ((`qty_awarded` is null) or (`qty_awarded` = 0))))),
   CONSTRAINT `chk_tli_qty_pos` CHECK ((`qty_reserved` > 0)),
   CONSTRAINT `chk_tli_release_coherence` CHECK (((`status` in (_utf8mb4'released',_utf8mb4'partial_released')) = (`released_at` is not null))),
   CONSTRAINT `chk_tli_status` CHECK ((`status` in (_utf8mb4'active',_utf8mb4'converted',_utf8mb4'released',_utf8mb4'partial_released')))
-) ENGINE=InnoDB AUTO_INCREMENT=28 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=52 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -2373,7 +2375,7 @@ CREATE TABLE `tender_packages` (
   CONSTRAINT `chk_tenders_status` CHECK ((`status` in (_utf8mb4'active',_utf8mb4'standstill',_utf8mb4'awarded',_utf8mb4'on_hold',_utf8mb4'cancelled'))),
   CONSTRAINT `chk_tp_approval_status` CHECK ((`approval_status` in (_utf8mb4'pending',_utf8mb4'approved',_utf8mb4'rejected'))),
   CONSTRAINT `chk_tp_crit_lock_pair` CHECK ((((`criteria_locked_at` is null) and (`criteria_locked_by` is null)) or ((`criteria_locked_at` is not null) and (`criteria_locked_by` is not null))))
-) ENGINE=InnoDB AUTO_INCREMENT=53 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=64 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
