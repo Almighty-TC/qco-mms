@@ -319,18 +319,27 @@ function ActionModal({ dark, projectId, tenderId, mode, onClose, onDone }: {
 }
 
 // ─── AWARD → PURCHASE ORDER ──────────────────────────────────
-// Generates the PO from the awarded tender (POST generate-po). Converts 100% of the
-// tender's ACTIVE reservations into ONE PO for the recommended supplier — there is no
-// per-reservation selection (bids are lump-sum; no per-line bid scope exists), so this
-// UI offers NO checkboxes / partial-convert control: it shows the lines that WILL convert
-// and says so plainly. Rendered as a real action only when the tender is genuinely approved.
-interface ResvLite { tli_id: number; mto_line_id: number; qty_reserved: string | number; status: string; line_number: string; description: string; uom: string | null; mto_reference: string }
+// Generates the PO from the awarded tender (POST generate-po): ONE PO for the recommended
+// supplier, where each reserved line converts to the quantity the recommended bid proposed
+// (full / partial / zero) and any shortfall is released back to the MTO line's available
+// quantity. A bid with no per-line quantities (legacy) converts every line in full. The
+// preview uses GET /scope's planned_* fields, computed server-side with the handoff's own
+// rule. There is still no selection control — the bid's proposal decides, not this screen.
+// The two cases the handoff refuses (a line with no proposed quantity; zero on every line)
+// are shown up front with Generate disabled. Real action only when the tender is approved.
+interface ResvLite {
+  tli_id: number; mto_line_id: number; qty_reserved: string | number; status: string; line_number: string; description: string; uom: string | null; mto_reference: string
+  qty_proposed: string | number | null; planned_qty_awarded: string | number | null; planned_qty_released: string | number | null
+  qty_awarded: string | number | null
+}
+interface AwardInfo { recommended_bid_id: number; supplier_name: string; legacy: boolean }
 interface LinkedPo { id: number; po_number: string; supplier_id: number; vendor_name: string | null; value: string | number | null; currency: string | null; status: string }
 
 function AwardToPoSection({ dark, projectId, tenderId, approvalStatus, canApprove, onChanged }: {
   dark: boolean; projectId: number; tenderId: number; approvalStatus: string; canApprove: boolean; onChanged?: () => void
 }) {
-  const [resv, setResv] = useState<ResvLite[]>([])
+  const [allResv, setAllResv] = useState<ResvLite[]>([])
+  const [award, setAward] = useState<AwardInfo | null>(null)
   const [po, setPo] = useState<LinkedPo | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadErr, setLoadErr] = useState('')
@@ -353,20 +362,38 @@ function AwardToPoSection({ dark, projectId, tenderId, approvalStatus, canApprov
     setLoading(true); setLoadErr('')
     try {
       const { data } = await axios.get(`${API}/pre-award/${projectId}/tenders/${tenderId}/scope`)
-      setResv((data.reservations ?? []).filter((r: ResvLite) => r.status === 'active'))
+      setAllResv(data.reservations ?? [])
+      setAward(data.award ?? null)
       setPo(data.po ?? null)
     } catch { setLoadErr('Could not load the award status.') } finally { setLoading(false) }
   }, [projectId, tenderId])
   useEffect(() => { load() }, [load])
+
+  // Preview (active lines) and outcome (after hand-off) both come from GET /scope.
+  const resv = allResv.filter(r => r.status === 'active')
+  const done = allResv.filter(r => r.status !== 'active')
+  const supplier = award?.supplier_name || 'the recommended supplier'
+  const missingLines = award && !award.legacy ? resv.filter(r => r.planned_qty_awarded == null) : []
+  const allZero = !!award && !award.legacy && resv.length > 0 && missingLines.length === 0 && resv.every(r => Number(r.planned_qty_awarded) === 0)
+  const kindOf = (awardedQty: string | number | null, reserved: string | number) =>
+    Number(awardedQty) === 0 ? 'released' : Number(awardedQty) >= Number(reserved) ? 'full' : 'partial'
+  const plannedCount = { full: 0, partial: 0, released: 0 }
+  for (const r of resv) if (r.planned_qty_awarded != null) plannedCount[kindOf(r.planned_qty_awarded, r.qty_reserved)]++
+  const blockedReason = !award
+    ? 'No recommended bid was captured when this tender was approved, so there is nothing to award yet.'
+    : missingLines.length
+      ? `${supplier}’s bid has no proposed quantity for ${missingLines.map(r => `${r.mto_reference} · ${r.line_number}`).join(', ')}, so generating the PO would be refused. The bid would need to be resubmitted as a new round with every line quoted.`
+      : allZero ? `${supplier}’s bid proposes zero on every reserved line, so there is nothing to award.` : ''
 
   const generate = async () => {
     const n = poNumber.trim()
     if (!n) { setSubmitErr('Enter a PO number.'); return }
     setBusy(true); setSubmitErr('')
     try {
-      const { data } = await axios.post(`${API}/pre-award/${projectId}/tenders/${tenderId}/generate-po`, { po_number: n })
-      setPo(data.po ?? null)          // flips the card to the handed-off summary
-      setResv([]); setJustCreated(true); setBusy(false)
+      await axios.post(`${API}/pre-award/${projectId}/tenders/${tenderId}/generate-po`, { po_number: n })
+      setJustCreated(true)
+      await load()                     // outcome shown from GET /scope, same as the handed-off view
+      setBusy(false)
       onChanged?.()
     } catch (e) {
       const s = axios.isAxiosError(e) ? e.response?.status : undefined
@@ -390,7 +417,18 @@ function AwardToPoSection({ dark, projectId, tenderId, approvalStatus, canApprov
         <div><div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase' }}>Supplier</div><div style={{ fontSize: 14, color: col }}>{p.vendor_name || `#${p.supplier_id}`}</div></div>
         <div><div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.07em', textTransform: 'uppercase' }}>Value</div><div style={{ fontSize: 14, color: col }}>{fmtMoney(p.value)}</div></div>
       </div>
-      <div style={{ fontSize: 12, color: sub, marginTop: 10 }}>This Purchase Order now lives in the Procurement module.</div>
+      {done.length > 0 && (() => {
+        const nFull = done.filter(r => r.status === 'converted').length
+        const nPart = done.filter(r => r.status === 'partial_released').length
+        const nRel = done.filter(r => r.status === 'released').length
+        return (
+          <div data-award-outcome="" style={{ fontSize: 12.5, color: col, marginTop: 10 }}>
+            Converted in full on {nFull} · partially on {nPart} · released on {nRel} line{done.length === 1 ? '' : 's'}.
+            {award?.legacy ? <span style={{ color: sub }}> (bid had no per-line quantities — all lines converted in full)</span> : null}
+          </div>
+        )
+      })()}
+      <div style={{ fontSize: 12, color: sub, marginTop: 6 }}>This Purchase Order now lives in the Procurement module; the Scope tab shows the per-line outcome.</div>
     </div>
   )
 
@@ -401,32 +439,58 @@ function AwardToPoSection({ dark, projectId, tenderId, approvalStatus, canApprov
         : loadErr ? <div style={{ color: '#b91c1c', fontSize: 13 }}>{loadErr} <button onClick={load} style={{ background: 'none', border: 'none', color: '#E84E0F', cursor: 'pointer', fontWeight: 600, fontFamily: 'inherit' }}>Retry</button></div>
         : po ? poSummary(po, justCreated)
         : approvalStatus !== 'approved' ? (
-          <div style={{ fontSize: 12.5, color: sub }}>Generating the Purchase Order becomes available once this tender is <strong style={{ color: col }}>approved</strong>. It converts the tender’s reserved MTO lines into a PO for the recommended supplier.</div>
+          <div style={{ fontSize: 12.5, color: sub }}>Generating the Purchase Order becomes available once this tender is <strong style={{ color: col }}>approved</strong>. Each reserved line will convert to the quantity the recommended bid proposed.</div>
         ) : resv.length === 0 ? (
           <div style={{ fontSize: 12.5, color: sub }}>This tender is approved, but <strong style={{ color: col }}>no MTO lines are reserved</strong>. Reserve scope on the <strong style={{ color: col }}>Scope</strong> tab before generating a Purchase Order.</div>
         ) : (
           <>
-            <div style={{ fontSize: 12.5, color: sub, marginBottom: 12, lineHeight: 1.5 }}>
-              Generating the PO converts <strong style={{ color: col }}>all {resv.length} reserved line{resv.length > 1 ? 's' : ''}</strong> into a single Purchase Order for the recommended supplier. Every reserved line is included — there is no partial conversion. This cannot be undone.
+            <div data-award-copy="" style={{ fontSize: 12.5, color: sub, marginBottom: 8, lineHeight: 1.5 }}>
+              {award?.legacy
+                ? <>{supplier}’s bid was submitted before per-line quantities existed, so <strong style={{ color: col }}>every reserved line converts in full</strong> into one Purchase Order. This cannot be undone.</>
+                : <>Generating the PO creates one Purchase Order for <strong style={{ color: col }}>{supplier}</strong>. Each reserved line converts to the quantity {supplier}’s bid proposed for it; any shortfall is released back to the MTO line’s available quantity. This cannot be undone.</>}
+            </div>
+            {!blockedReason && (
+              <div style={{ fontSize: 12, color: col, marginBottom: 10 }}>
+                Converts in full: {plannedCount.full} · partially: {plannedCount.partial} · released entirely: {plannedCount.released}
+              </div>
+            )}
+
+            {/* Per-line preview from GET /scope (server-computed with the handoff's rule) — no selection control */}
+            <div style={{ border: bd, borderRadius: 8, marginBottom: 14, overflow: 'hidden' }}>
+              {resv.map((r, i) => {
+                const known = r.planned_qty_awarded != null
+                const k = known ? kindOf(r.planned_qty_awarded, r.qty_reserved) : null
+                const tag = k === 'full' ? { bg: 'rgba(34,197,94,0.14)', fg: '#15803d', t: 'Full' }
+                  : k === 'partial' ? { bg: 'rgba(245,158,11,0.16)', fg: '#b45309', t: 'Partial' }
+                  : k === 'released' ? { bg: 'rgba(148,163,184,0.2)', fg: '#64748b', t: 'Released' }
+                  : { bg: 'rgba(239,68,68,0.12)', fg: '#b91c1c', t: 'No proposed qty' }
+                return (
+                  <div key={r.tli_id} data-preview-line={`${r.mto_reference} · ${r.line_number}`} style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '9px 12px', borderTop: i === 0 ? 'none' : bd, background: k === 'partial' ? (dark ? 'rgba(245,158,11,0.08)' : '#fffbeb') : (dark ? 'rgba(148,163,184,0.04)' : '#f8fafc') }}>
+                    <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, fontWeight: 700, color: col, flexShrink: 0 }}>{r.mto_reference} · {r.line_number}</span>
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: sub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.description}>{r.description}</span>
+                    <span style={{ fontSize: 12, color: sub, flexShrink: 0 }}>
+                      Reserved <strong style={{ color: col }}>{fmtQty(r.qty_reserved)}</strong>
+                      {known ? <> → Awards <strong style={{ color: col }}>{fmtQty(r.planned_qty_awarded)}</strong> · Releases <strong style={{ color: col }}>{fmtQty(r.planned_qty_released)}</strong></> : null}
+                      {r.uom ? ` ${r.uom}` : ''}
+                    </span>
+                    <span style={{ background: tag.bg, color: tag.fg, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 9999, flexShrink: 0 }}>{tag.t}</span>
+                  </div>
+                )
+              })}
             </div>
 
-            {/* Read-only list of lines that WILL convert — no selection control */}
-            <div style={{ border: bd, borderRadius: 8, marginBottom: 14, overflow: 'hidden' }}>
-              {resv.map((r, i) => (
-                <div key={r.tli_id} style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '9px 12px', borderTop: i === 0 ? 'none' : bd, background: dark ? 'rgba(148,163,184,0.04)' : '#f8fafc' }}>
-                  <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, fontWeight: 700, color: col, flexShrink: 0 }}>{r.mto_reference} · {r.line_number}</span>
-                  <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: sub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.description}>{r.description}</span>
-                  <span style={{ fontSize: 12.5, fontWeight: 700, color: col, flexShrink: 0 }}>{fmtQty(r.qty_reserved)} {r.uom || ''}</span>
-                </div>
-              ))}
-            </div>
+            {blockedReason && (
+              <div data-award-blocked="" style={{ fontSize: 12.5, color: dark ? '#fca5a5' : '#b91c1c', background: dark ? 'rgba(127,29,29,0.2)' : '#fef2f2', border: `1px solid ${dark ? '#7f1d1d' : '#fecaca'}`, borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
+                {blockedReason}
+              </div>
+            )}
 
             {canApprove ? (
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                 <input value={poNumber} onChange={e => setPoNumber(e.target.value)} placeholder="PO number (e.g. PO-2026-0042)" disabled={busy}
                   style={{ flex: 1, minWidth: 220, padding: '9px 11px', borderRadius: 6, border: bd, background: inputBg, color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none' }} />
-                <button disabled={busy || !poNumber.trim()} onClick={generate}
-                  style={{ padding: '9px 18px', borderRadius: 6, border: 'none', background: !poNumber.trim() ? '#64748b' : '#15803d', color: '#fff', fontSize: 13, fontWeight: 600, cursor: busy || !poNumber.trim() ? 'default' : 'pointer', fontFamily: 'inherit', opacity: !poNumber.trim() ? 0.6 : 1 }}>
+                <button disabled={busy || !poNumber.trim() || !!blockedReason} onClick={generate}
+                  style={{ padding: '9px 18px', borderRadius: 6, border: 'none', background: !poNumber.trim() || blockedReason ? '#64748b' : '#15803d', color: '#fff', fontSize: 13, fontWeight: 600, cursor: busy || !poNumber.trim() || blockedReason ? 'default' : 'pointer', fontFamily: 'inherit', opacity: !poNumber.trim() || blockedReason ? 0.6 : 1 }}>
                   {busy ? 'Generating…' : 'Generate PO'}
                 </button>
               </div>

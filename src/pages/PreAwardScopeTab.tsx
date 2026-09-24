@@ -1,7 +1,7 @@
 // ─── PRE-AWARD · SCOPE TAB ──────────────────────────────────
 // Phase 3.x — the tender's MTO-line scope: which MTO lines (and how much of each)
 // this tender reserves. Endpoints:
-//   GET  /:projectId/tenders/:id/scope           (can_view)  own reservations + registers
+//   GET  /:projectId/tenders/:id/scope           (can_view)  own reservations (incl. per-line award outcome) + registers + po + award
 //   GET  /:projectId/tenders/:id/available-lines (can_view)  picker: a register's lines + availability
 //   POST /:projectId/tenders/:id/reserve-lines   (can_edit)  reserve { lines:[{mto_line_id, qty_reserved}] }
 //
@@ -22,7 +22,12 @@ interface Reservation {
   tli_id: number; mto_line_id: number; qty_reserved: string | number; status: string
   line_number: string; description: string; uom: string | null; mto_id: number; mto_reference: string
   availability: Availability | null
+  // award outcome (GET /scope): stored at award by generate-po; NULL while active
+  qty_awarded: string | number | null; qty_released: string | number | null
+  released_at: string | null; released_reason: string | null
 }
+interface LinkedPo { id: number; po_number: string; vendor_name: string | null }
+interface Award { recommended_bid_id: number; supplier_name: string; legacy: boolean }
 interface Register { id: number; name: string; reference: string; current_revision: string }
 interface PickerLine {
   id: number; line_number: string; description: string; quantity: string | number | null; uom: string | null
@@ -37,18 +42,23 @@ const fmtQty = (v: string | number | null | undefined) => {
   return n.toLocaleString(undefined, { maximumFractionDigits: 3 })
 }
 
-const STATUS_PILL: Record<string, { bg: string; text: string; label: string }> = {
-  active:            { bg: 'rgba(37,99,235,0.14)',  text: '#1d4ed8', label: 'Active' },
-  converted:         { bg: 'rgba(34,197,94,0.16)',  text: '#15803d', label: 'Converted to PO' },
-  released:          { bg: 'rgba(148,163,184,0.18)', text: '#64748b', label: 'Released' },
-  partial_released:  { bg: 'rgba(148,163,184,0.18)', text: '#64748b', label: 'Partially released' },
-}
+// Outcome tags. Partial awards are AMBER (distinct from a plain release); a released line with
+// qty_awarded 0 was considered and not awarded, with NULL it was released without an award.
+const AMBER = { bg: 'rgba(245,158,11,0.16)', text: '#b45309', edge: '#f59e0b' }
+const tagFor = (r: { status: string; qty_awarded: string | number | null }) =>
+  r.status === 'active'           ? { bg: 'rgba(37,99,235,0.14)',  text: '#1d4ed8', label: 'Active' }
+  : r.status === 'converted'      ? { bg: 'rgba(34,197,94,0.16)',  text: '#15803d', label: 'Awarded in full' }
+  : r.status === 'partial_released' ? { bg: AMBER.bg, text: AMBER.text, label: 'Partially awarded' }
+  : r.status === 'released'       ? { bg: 'rgba(148,163,184,0.18)', text: '#64748b', label: r.qty_awarded != null ? 'Not awarded' : 'Released' }
+  : { bg: 'rgba(148,163,184,0.18)', text: '#64748b', label: r.status }
 
 export function PreAwardScopeTab({ dark, projectId, tenderId, userRole }: {
   dark: boolean; projectId: number; tenderId: number; userRole: string
 }) {
   const [reservations, setReservations] = useState<Reservation[]>([])
   const [registers, setRegisters] = useState<Register[]>([])
+  const [po, setPo] = useState<LinkedPo | null>(null)
+  const [award, setAward] = useState<Award | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const [showAdd, setShowAdd] = useState(false)
@@ -65,14 +75,20 @@ export function PreAwardScopeTab({ dark, projectId, tenderId, userRole }: {
       const { data } = await axios.get(`${API}/pre-award/${projectId}/tenders/${tenderId}/scope`)
       setReservations(data.reservations ?? [])
       setRegisters(data.registers ?? [])
+      setPo(data.po ?? null)
+      setAward(data.award ?? null)
     } catch { setErr('Could not load the tender scope.') } finally { setLoading(false) }
   }, [projectId, tenderId])
   useEffect(() => { load() }, [load])
 
-  const pill = (status: string) => {
-    const s = STATUS_PILL[status] ?? { bg: 'rgba(148,163,184,0.18)', text: '#64748b', label: status }
+  const pill = (r: Reservation) => {
+    const s = tagFor(r)
     return <span style={{ background: s.bg, color: s.text, fontSize: 11, fontWeight: 600, padding: '2px 9px', borderRadius: 9999 }}>{s.label}</span>
   }
+  const awardedRows = reservations.filter(r => r.status !== 'active')
+  const nFull = awardedRows.filter(r => r.status === 'converted').length
+  const nPartial = awardedRows.filter(r => r.status === 'partial_released').length
+  const nNone = awardedRows.filter(r => r.status === 'released').length
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -88,9 +104,23 @@ export function PreAwardScopeTab({ dark, projectId, tenderId, userRole }: {
         </div>
         <div style={{ fontSize: 12.5, color: sub, marginBottom: 14, lineHeight: 1.5 }}>
           The MTO lines and quantities this tender reserves. Reserving holds that quantity so other tenders and POs
-          can’t claim it. Reservations are a permanent record — they can’t be edited or removed here; they convert to a
-          Purchase Order at award, or release automatically if the tender is cancelled or held.
+          can’t claim it. Reservations are a permanent record — they can’t be edited or removed here. At award, each
+          line converts to the quantity the winning bid proposed, and any shortfall is released back to the MTO line’s
+          available quantity.
         </div>
+
+        {/* Award outcome header — once the tender has been handed off to a PO */}
+        {!loading && po && (
+          <div style={{ border: `1px solid ${dark ? '#166534' : '#bbf7d0'}`, background: dark ? 'rgba(34,197,94,0.08)' : '#f0fdf4', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
+            <div style={{ fontSize: 13, color: col }}>
+              Awarded to PO <strong style={{ fontFamily: 'JetBrains Mono, monospace' }}>{po.po_number}</strong>{po.vendor_name ? <> · {po.vendor_name}</> : null}
+            </div>
+            <div style={{ fontSize: 12, color: sub, marginTop: 2 }}>
+              {nFull} line{nFull === 1 ? '' : 's'} awarded in full · {nPartial} partially awarded · {nNone} not awarded
+              {award?.legacy ? ' (the winning bid had no per-line quantities, so every line converted in full)' : ''}
+            </div>
+          </div>
+        )}
 
         {err && <div style={{ color: '#b91c1c', fontSize: 13, marginBottom: 10 }}>{err} <button onClick={load} style={{ background: 'none', border: 'none', color: '#E84E0F', cursor: 'pointer', fontWeight: 600, fontFamily: 'inherit' }}>Retry</button></div>}
 
@@ -101,26 +131,56 @@ export function PreAwardScopeTab({ dark, projectId, tenderId, userRole }: {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {reservations.map(r => (
-                <div key={r.tli_id} style={{ display: 'flex', gap: 12, padding: '12px 14px', border: bd, borderRadius: 8, background: dark ? 'rgba(148,163,184,0.05)' : '#f8fafc' }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12.5, fontWeight: 700, color: '#E84E0F' }}>{r.mto_reference} · {r.line_number}</span>
-                      {pill(r.status)}
+              {reservations.map(r => {
+                const partial = r.status === 'partial_released'
+                const awarded = r.status !== 'active'
+                const fig = (label: string, v: string | number | null, strong?: string) => (
+                  <div style={{ textAlign: 'right', minWidth: 58 }}>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: strong ?? col }}>{fmtQty(v)}</div>
+                    <div style={{ fontSize: 10, color: sub, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+                  </div>
+                )
+                return (
+                  <div key={r.tli_id} data-outcome={r.status} style={{
+                    display: 'flex', gap: 12, padding: '12px 14px', border: bd, borderRadius: 8,
+                    background: partial ? (dark ? 'rgba(245,158,11,0.08)' : '#fffbeb') : (dark ? 'rgba(148,163,184,0.05)' : '#f8fafc'),
+                    borderLeft: partial ? `4px solid ${AMBER.edge}` : undefined,
+                  }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12.5, fontWeight: 700, color: '#E84E0F' }}>{r.mto_reference} · {r.line_number}</span>
+                        {pill(r)}
+                      </div>
+                      <div style={{ fontSize: 13, color: col, marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.description}>{r.description}</div>
+                      {r.status === 'active' && r.availability && (
+                        <div style={{ fontSize: 11.5, color: sub, marginTop: 3 }}>
+                          Line total {fmtQty(r.availability.total_qty)} · {fmtQty(r.availability.available)} still available across all tenders/POs
+                        </div>
+                      )}
+                      {partial && (
+                        <div data-released-callout="" style={{ fontSize: 12, fontWeight: 600, color: AMBER.text, marginTop: 4 }}>
+                          {fmtQty(r.qty_awarded)} of {fmtQty(r.qty_reserved)} awarded · {fmtQty(r.qty_released)}{r.uom ? ` ${r.uom}` : ''} released back to the MTO line’s available quantity
+                        </div>
+                      )}
+                      {awarded && r.released_reason && (
+                        <div style={{ fontSize: 11, color: sub, marginTop: 3, fontStyle: 'italic' }}>{r.released_reason}</div>
+                      )}
                     </div>
-                    <div style={{ fontSize: 13, color: col, marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.description}>{r.description}</div>
-                    {r.status === 'active' && r.availability && (
-                      <div style={{ fontSize: 11.5, color: sub, marginTop: 3 }}>
-                        Line total {fmtQty(r.availability.total_qty)} · {fmtQty(r.availability.available)} still available across all tenders/POs
+                    {awarded ? (
+                      <div style={{ display: 'flex', gap: 14, flexShrink: 0, alignItems: 'flex-start' }}>
+                        {fig('Reserved', r.qty_reserved)}
+                        {fig('Awarded', r.qty_awarded, r.status === 'converted' ? '#15803d' : partial ? AMBER.text : undefined)}
+                        {fig('Released', r.qty_released, Number(r.qty_released) > 0 ? (partial ? AMBER.text : '#64748b') : undefined)}
+                      </div>
+                    ) : (
+                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: col }}>{fmtQty(r.qty_reserved)}</div>
+                        <div style={{ fontSize: 10.5, color: sub }}>{r.uom || 'reserved'}</div>
                       </div>
                     )}
                   </div>
-                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                    <div style={{ fontSize: 16, fontWeight: 800, color: col }}>{fmtQty(r.qty_reserved)}</div>
-                    <div style={{ fontSize: 10.5, color: sub }}>{r.uom || 'reserved'}</div>
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )
         )}
