@@ -1689,14 +1689,24 @@ router.post('/pos/:id/lines', async (req, res) => {
   }
 })
 
+// Both line routes resolve the line against the PO in the URL (404 if it isn't on that PO) —
+// never acting on a line id alone. A line generated from a tender award (source_mto_line_id set)
+// carries the awarded MTO quantity that getAvailableQty counts as consumed: its qty and uom can't
+// change and it can't be deleted (409). Every other field, and every other line, is unaffected.
+const sameQty = (a, b) => (a == null || b == null) ? (a == null && b == null) : Math.round(Number(a) * 1000) === Math.round(Number(b) * 1000)
+
 router.put('/pos/:id/lines/:lineId', async (req, res) => {
   try {
-    const lineId = Number(req.params.lineId)
+    const poId = Number(req.params.id); const lineId = Number(req.params.lineId)
     const { line_number, description, qty, uom, uom_id, unit_price, ros_date, cdd } = req.body
+    const [[existing]] = await db.query('SELECT id, line_number, qty, uom, source_mto_line_id FROM po_lines WHERE id=? AND po_id=?', [lineId, poId])
+    if (!existing) return res.status(404).json({ error: 'PO line not found on this PO' })
+    if (existing.source_mto_line_id != null && (!sameQty(qty || null, existing.qty) || (uom || 'EA') !== existing.uom))
+      return res.status(409).json({ error: `Line ${existing.line_number} was generated from a tender award — its quantity and unit are the awarded MTO quantity and cannot be changed` })
     await db.query(`
       UPDATE po_lines SET line_number=?,description=?,qty=?,uom=?,uom_id=?,unit_price=?,ros_date=?,cdd=?
-      WHERE id=?
-    `, [line_number, description, qty||null, uom||'EA', uom_id||null, unit_price||null, ros_date||null, cdd||null, lineId])
+      WHERE id=? AND po_id=?
+    `, [line_number, description, qty||null, uom||'EA', uom_id||null, unit_price||null, ros_date||null, cdd||null, lineId, poId])
     const [[line]] = await db.query('SELECT * FROM po_lines WHERE id=?', [lineId])
     res.json(line)
   } catch (e) {
@@ -1706,7 +1716,12 @@ router.put('/pos/:id/lines/:lineId', async (req, res) => {
 
 router.delete('/pos/:id/lines/:lineId', async (req, res) => {
   try {
-    await db.query('DELETE FROM po_lines WHERE id=?', [Number(req.params.lineId)])
+    const poId = Number(req.params.id); const lineId = Number(req.params.lineId)
+    const [[existing]] = await db.query('SELECT id, line_number, source_mto_line_id FROM po_lines WHERE id=? AND po_id=?', [lineId, poId])
+    if (!existing) return res.status(404).json({ error: 'PO line not found on this PO' })
+    if (existing.source_mto_line_id != null)
+      return res.status(409).json({ error: `Line ${existing.line_number} was generated from a tender award — it carries the awarded MTO quantity and cannot be deleted` })
+    await db.query('DELETE FROM po_lines WHERE id=? AND po_id=?', [lineId, poId])
     res.json({ ok: true })
   } catch (e) {
     dbError(res, e)
