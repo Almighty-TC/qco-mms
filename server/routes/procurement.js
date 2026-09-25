@@ -1650,11 +1650,18 @@ router.put('/pos/:id', async (req, res) => {
 })
 
 // ─── DELETE PO ────────────────────────────────────────────────────────────────
+// A PO generated from a Pre-Award tender (tender_id set) is refused (409): it is the record of
+// that award, and its po_lines are the MTO quantity the award consumed — deleting them would
+// silently free that quantity (getAvailableQty) while the tender's reservations stay 'converted'.
 router.delete('/pos/:id', async (req, res) => {
   try {
     const id = Number(req.params.id)
-    const [[existing]] = await db.query('SELECT id,po_number,is_locked FROM purchase_orders WHERE id=?', [id])
+    const [[existing]] = await db.query(
+      `SELECT po.id, po.po_number, po.is_locked, po.tender_id, t.ref AS tender_ref
+         FROM purchase_orders po LEFT JOIN tender_packages t ON t.id = po.tender_id WHERE po.id=?`, [id])
     if (!existing) return res.status(404).json({ error: 'PO not found' })
+    if (existing.tender_id != null)
+      return res.status(409).json({ error: `PO ${existing.po_number} was generated from tender ${existing.tender_ref} and cannot be deleted — it is the record of that award. Voiding or cancelling a PO is not currently available in the system.` })
     if (existing.is_locked) return res.status(400).json({ error: 'Locked POs cannot be deleted' })
     await db.query('DELETE FROM po_lines WHERE po_id=?', [id])
     await db.query('DELETE FROM purchase_orders WHERE id=?', [id])
