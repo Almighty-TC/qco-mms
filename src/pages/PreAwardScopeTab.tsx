@@ -4,11 +4,13 @@
 //   GET  /:projectId/tenders/:id/scope           (can_view)  own reservations (incl. per-line award outcome) + registers + po + award
 //   GET  /:projectId/tenders/:id/available-lines (can_view)  picker: a register's lines + availability
 //   POST /:projectId/tenders/:id/reserve-lines   (can_edit)  reserve { lines:[{mto_line_id, qty_reserved}] }
+//   POST /:projectId/tenders/:id/release-reservations (can_edit)  held tender only: release every active reservation
 //
 // HONESTY CONSTRAINTS (no fake affordances):
 // • Existing reservations are READ-ONLY here. There is no edit/remove endpoint —
 //   "modifying a reservation is a separate action" (reserve-lines 409s a re-reserve) —
-//   so this tab shows them but offers no edit/delete control it cannot honour.
+//   so this tab shows them but offers no edit/delete control it cannot honour. The one
+//   exception is the held-tender manual release, offered only while the tender is on hold.
 // • Availability shown is the SAME getAvailableQty the reserve path enforces under lock;
 //   it is advisory only in the sense that the reserve call re-checks it and 422s if it moved.
 import { useEffect, useState, useCallback } from 'react'
@@ -28,6 +30,7 @@ interface Reservation {
 }
 interface LinkedPo { id: number; po_number: string; vendor_name: string | null }
 interface Award { recommended_bid_id: number; supplier_name: string; legacy: boolean }
+interface TenderState { status: string; approval_status: string }
 interface Register { id: number; name: string; reference: string; current_revision: string }
 interface PickerLine {
   id: number; line_number: string; description: string; quantity: string | number | null; uom: string | null
@@ -59,9 +62,13 @@ export function PreAwardScopeTab({ dark, projectId, tenderId, userRole }: {
   const [registers, setRegisters] = useState<Register[]>([])
   const [po, setPo] = useState<LinkedPo | null>(null)
   const [award, setAward] = useState<Award | null>(null)
+  const [tenderState, setTenderState] = useState<TenderState | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const [showAdd, setShowAdd] = useState(false)
+  const [confirmRelease, setConfirmRelease] = useState(false)
+  const [releasing, setReleasing] = useState(false)
+  const [releaseMsg, setReleaseMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
   const canEdit = CAN_EDIT.includes(userRole)
   const col = dark ? '#f1f5f9' : '#0f172a'
@@ -77,9 +84,25 @@ export function PreAwardScopeTab({ dark, projectId, tenderId, userRole }: {
       setRegisters(data.registers ?? [])
       setPo(data.po ?? null)
       setAward(data.award ?? null)
+      setTenderState(data.tender ?? null)
     } catch { setErr('Could not load the tender scope.') } finally { setLoading(false) }
   }, [projectId, tenderId])
   useEffect(() => { load() }, [load])
+
+  // Held tender: manual release of every active reservation (the server re-checks on_hold + can_edit)
+  const activeCount = reservations.filter(r => r.status === 'active').length
+  const showRelease = canEdit && tenderState?.status === 'on_hold' && activeCount > 0
+  const releaseNow = async () => {
+    setReleasing(true); setReleaseMsg(null)
+    try {
+      const { data } = await axios.post(`${API}/pre-award/${projectId}/tenders/${tenderId}/release-reservations`)
+      const n = data.released?.length ?? 0
+      setReleaseMsg({ ok: true, text: `Released ${n} reservation${n === 1 ? '' : 's'} — their quantities are available to other tenders and POs again.` })
+    } catch (e) {
+      const s = axios.isAxiosError(e) ? e.response?.status : undefined
+      setReleaseMsg({ ok: false, text: axios.isAxiosError(e) && e.response?.data?.error ? `${e.response.data.error}${s ? ` (${s})` : ''}` : 'Could not release the reservations.' })
+    } finally { setReleasing(false); setConfirmRelease(false); load() }
+  }
 
   const pill = (r: Reservation) => {
     const s = tagFor(r)
@@ -104,10 +127,46 @@ export function PreAwardScopeTab({ dark, projectId, tenderId, userRole }: {
         </div>
         <div style={{ fontSize: 12.5, color: sub, marginBottom: 14, lineHeight: 1.5 }}>
           The MTO lines and quantities this tender reserves. Reserving holds that quantity so other tenders and POs
-          can’t claim it. Reservations are a permanent record — they can’t be edited or removed here. At award, each
-          line converts to the quantity the winning bid proposed, and any shortfall is released back to the MTO line’s
-          available quantity.
+          can’t claim it. Reservations can’t be edited here. At award, each line converts to the quantity the winning
+          bid proposed, and any shortfall is released back to the MTO line’s available quantity. Cancelling or rejecting
+          the tender releases its active reservations automatically; while a tender is on hold they can be released
+          manually here.
         </div>
+
+        {/* Held tender — manual release (only when on hold, with active reservations, for can_edit roles) */}
+        {!loading && showRelease && (
+          <div data-hold-release="" style={{ border: `1px solid ${dark ? '#475569' : '#cbd5e1'}`, background: dark ? 'rgba(148,163,184,0.08)' : '#f8fafc', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
+            <div style={{ fontSize: 13, color: col }}>
+              This tender is <strong>on hold</strong>. Its {activeCount} active reservation{activeCount === 1 ? '' : 's'} still hold{activeCount === 1 ? 's' : ''} quantity on the MTO lines.
+            </div>
+            {!confirmRelease ? (
+              <button onClick={() => setConfirmRelease(true)}
+                style={{ marginTop: 8, padding: '6px 12px', borderRadius: 6, border: bd, background: 'none', color: col, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                Release reservations
+              </button>
+            ) : (
+              <div data-release-confirm="" style={{ marginTop: 8 }}>
+                <div style={{ fontSize: 12.5, color: dark ? '#fca5a5' : '#b91c1c', lineHeight: 1.5 }}>
+                  Release all {activeCount} reservation{activeCount === 1 ? '' : 's'}? Their quantities return to each MTO line’s available
+                  quantity for other tenders and POs. This can’t be undone — if the tender resumes, these lines can’t be reserved on it again.
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                  <button disabled={releasing} onClick={releaseNow}
+                    style={{ padding: '6px 12px', borderRadius: 6, border: 'none', background: '#b91c1c', color: '#fff', fontSize: 12.5, fontWeight: 600, cursor: releasing ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+                    {releasing ? 'Releasing…' : `Release ${activeCount} reservation${activeCount === 1 ? '' : 's'}`}
+                  </button>
+                  <button disabled={releasing} onClick={() => setConfirmRelease(false)}
+                    style={{ padding: '6px 12px', borderRadius: 6, border: bd, background: 'none', color: sub, fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit' }}>
+                    Keep them
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        {releaseMsg && (
+          <div data-release-msg="" style={{ fontSize: 12.5, color: releaseMsg.ok ? (dark ? '#86efac' : '#15803d') : '#b91c1c', marginBottom: 10 }}>{releaseMsg.text}</div>
+        )}
 
         {/* Award outcome header — once the tender has been handed off to a PO */}
         {!loading && po && (
