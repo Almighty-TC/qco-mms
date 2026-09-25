@@ -50,6 +50,7 @@ interface POLine {
   ros_date: string | null; cdd: string | null; wbs_code: string | null
   heat_number_required: number; status: string; tag_number: string | null
   vdrl_required: number; cert_required: string | null
+  source_mto_line_id?: number | null  // set only on lines generated from a tender award — qty/uom frozen, not deletable
 }
 
 interface POApproval {
@@ -425,13 +426,19 @@ const LineItemsTab = ({ po, dark, onRefresh }: { po: PO; dark: boolean; onRefres
                   }
                 </td>
                 <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>
-                  {editMode
+                  {editMode && l.source_mto_line_id == null
                     ? <input type="number" value={l.qty ?? ''} onChange={e => updateLine(i, 'qty', e.target.value ? Number(e.target.value) : null)} style={{ ...inp(dark), width: 70, textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }} />
-                    : (l.qty ?? '—')
+                    : <>
+                        {l.qty ?? '—'}
+                        {editMode && (
+                          <div data-tender-locked="" title="Awarded tender quantity — quantity and unit cannot be changed"
+                            style={{ fontSize: 9, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.04em', textTransform: 'uppercase' }}>Tender · locked</div>
+                        )}
+                      </>
                   }
                 </td>
                 <td style={tdStyle}>
-                  {editMode
+                  {editMode && l.source_mto_line_id == null
                     ? <select value={l.uom} onChange={e => updateLine(i, 'uom', e.target.value)} style={{ ...inp(dark), width: 70 }}>
                         {['EA','M','M2','M3','KG','T','LT','SET','LOT'].map(u => <option key={u} value={u}>{u}</option>)}
                       </select>
@@ -472,7 +479,7 @@ const LineItemsTab = ({ po, dark, onRefresh }: { po: PO; dark: boolean; onRefres
                 </td>
                 {editMode && (
                   <td style={{ ...tdStyle, textAlign: 'center' }}>
-                    {lines.length > 1 && (
+                    {lines.length > 1 && l.source_mto_line_id == null && (
                       <button onClick={() => deleteLine(l)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 2 }}>×</button>
                     )}
                   </td>
