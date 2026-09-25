@@ -857,7 +857,7 @@ router.post('/:projectId/tenders/:id/reserve-lines', requireLivePermission('pre_
 router.get('/:projectId/tenders/:id/scope', requireLivePermission('pre_award', 'can_view'), async (req, res) => {
   const pid = Number(req.params.projectId); const tid = Number(req.params.id)
   try {
-    const [[tender]] = await db.query('SELECT id FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
+    const [[tender]] = await db.query('SELECT id, status, approval_status FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
     if (!tender) return res.status(404).json({ error: 'Tender not found' })
 
     // The recommended (winning) bid — the EXACT lookup generate-po uses, so the preview below can
@@ -904,7 +904,7 @@ router.get('/:projectId/tenders/:id/scope', requireLivePermission('pre_award', '
     const [[po]] = await db.query(
       'SELECT id, po_number, supplier_id, vendor_name, value, currency, status FROM purchase_orders WHERE tender_id = ? ORDER BY id DESC LIMIT 1', [tid])
 
-    res.json({ reservations, registers, po: po || null, award })
+    res.json({ reservations, registers, po: po || null, award, tender: { status: tender.status, approval_status: tender.approval_status } })
   } catch (e) { console.error('[preaward:scope]', e.message); dbError(res, e) }
 })
 
@@ -1136,6 +1136,34 @@ router.post('/:projectId/tenders/:id/cancel', requireLivePermission('pre_award',
       res.json({ tender_id: tid, status: 'cancelled', released })
     } catch (te) { await conn.rollback(); throw te } finally { conn.release() }
   } catch (e) { console.error('[preaward:tender:cancel]', e.message); dbError(res, e) }
+})
+
+// ─── MANUAL RELEASE (held tender) ─────────────────────────────────────────────
+// POST /api/pre-award/:projectId/tenders/:id/release-reservations (can_edit). A held tender keeps
+// its reservations (the system can't tell a brief pause from an indefinite stall); this is the
+// deliberate, manual release — only while status='on_hold'. It releases through the SAME shared
+// releaseActiveReservations as cancel and reject, with released_reason='manual_release_on_hold'.
+// The tender stays on hold. A released line can't be reserved again by this tender.
+router.post('/:projectId/tenders/:id/release-reservations', requireLivePermission('pre_award', 'can_edit'), async (req, res) => {
+  const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+  try {
+    const conn = await db.getConnection()
+    try {
+      await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+      await conn.beginTransaction()
+      const [[tender]] = await conn.query('SELECT id, status FROM tender_packages WHERE id = ? AND project_id = ? FOR UPDATE', [tid, pid])
+      if (!tender) { await conn.rollback(); return res.status(404).json({ error: 'Tender not found' }) }
+      if (tender.status !== 'on_hold') {
+        await conn.rollback()
+        return res.status(409).json({ error: `Reservations can only be released manually while the tender is on hold (status '${tender.status}')` })
+      }
+      const released = await releaseActiveReservations(conn, tid, 'manual_release_on_hold')
+      if (released.length === 0) { await conn.rollback(); return res.status(409).json({ error: 'No active reservations to release' }) }
+      await conn.commit()
+      audit(req, 'tender_reservations_released', 'tender', tid, null, { reason: 'manual_release_on_hold', released_reservations: released })
+      res.json({ tender_id: tid, released })
+    } catch (te) { await conn.rollback(); throw te } finally { conn.release() }
+  } catch (e) { console.error('[preaward:tender:release-reservations]', e.message); dbError(res, e) }
 })
 
 // ─── LIST approval chain ──────────────────────────────────────────────────────
