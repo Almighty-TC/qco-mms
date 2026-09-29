@@ -341,6 +341,7 @@ function AwardToPoSection({ dark, projectId, tenderId, approvalStatus, canApprov
   const [allResv, setAllResv] = useState<ResvLite[]>([])
   const [award, setAward] = useState<AwardInfo | null>(null)
   const [po, setPo] = useState<LinkedPo | null>(null)
+  const [tenderStatus, setTenderStatus] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadErr, setLoadErr] = useState('')
   const [poNumber, setPoNumber] = useState('')
@@ -365,6 +366,7 @@ function AwardToPoSection({ dark, projectId, tenderId, approvalStatus, canApprov
       setAllResv(data.reservations ?? [])
       setAward(data.award ?? null)
       setPo(data.po ?? null)
+      setTenderStatus(data.tender?.status ?? null)
     } catch { setLoadErr('Could not load the award status.') } finally { setLoading(false) }
   }, [projectId, tenderId])
   useEffect(() => { load() }, [load])
@@ -379,7 +381,9 @@ function AwardToPoSection({ dark, projectId, tenderId, approvalStatus, canApprov
     Number(awardedQty) === 0 ? 'released' : Number(awardedQty) >= Number(reserved) ? 'full' : 'partial'
   const plannedCount = { full: 0, partial: 0, released: 0 }
   for (const r of resv) if (r.planned_qty_awarded != null) plannedCount[kindOf(r.planned_qty_awarded, r.qty_reserved)]++
-  const blockedReason = !award
+  const blockedReason = tenderStatus === 'on_hold'
+    ? 'This tender is on hold — take it off hold before generating a Purchase Order.'
+    : !award
     ? 'No recommended bid was captured when this tender was approved, so there is nothing to award yet.'
     : missingLines.length
       ? `${supplier}’s bid has no proposed quantity for ${missingLines.map(r => `${r.mto_reference} · ${r.line_number}`).join(', ')}, so generating the PO would be refused. The bid would need to be resubmitted as a new round with every line quoted.`
