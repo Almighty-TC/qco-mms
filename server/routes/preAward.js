@@ -992,8 +992,10 @@ router.post('/:projectId/tenders/:id/approve', requireLivePermission('pre_award'
     const role = req.user.role
     const { comment = null, level: reqLevel } = req.body || {}
 
-    const [[tender]] = await db.query('SELECT id, estimated_value, approval_status FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
+    const [[tender]] = await db.query('SELECT id, status, estimated_value, approval_status FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
     if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    // a tender on hold is paused — approving it would silently overwrite the hold (status → 'awarded')
+    if (tender.status === 'on_hold') return res.status(409).json({ error: 'This tender is on hold — take it off hold before approving it' })
     if (tender.approval_status === 'approved') return res.status(409).json({ error: 'Tender is already approved' })
     if (tender.approval_status === 'rejected') return res.status(409).json({ error: 'Cannot approve: tender was rejected' })
 
@@ -1415,11 +1417,14 @@ router.get('/:projectId/tenders/:id/recommendation', requireLivePermission('pre_
 router.post('/:projectId/tenders/:id/generate-po', requireLivePermission('pre_award', 'can_approve'), async (req, res) => {
   const pid = Number(req.params.projectId); const tid = Number(req.params.id)
   try {
+    // hold guard — before everything else: a tender on hold is paused, so it can't be awarded to a PO
+    const [[tender]] = await db.query('SELECT id, status, approval_status, currency, wbs_code, discipline FROM tender_packages WHERE id=? AND project_id=?', [tid, pid])
+    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    if (tender.status === 'on_hold')
+      return res.status(409).json({ error: 'This tender is on hold — take it off hold before generating a Purchase Order' })
+
     const po_number = String(req.body?.po_number || '').trim()
     if (!po_number) return res.status(400).json({ error: 'po_number is required' })
-
-    const [[tender]] = await db.query('SELECT id, approval_status, currency, wbs_code, discipline FROM tender_packages WHERE id=? AND project_id=?', [tid, pid])
-    if (!tender) return res.status(404).json({ error: 'Tender not found' })
     if (tender.approval_status !== 'approved')
       return res.status(409).json({ error: `Tender is not approved (approval_status='${tender.approval_status}') — cannot generate a PO` })
 
