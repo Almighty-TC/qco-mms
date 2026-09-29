@@ -995,17 +995,24 @@ async function getTenderThresholds(projectId) {
 
 // ─── APPROVE ──────────────────────────────────────────────────────────────────
 router.post('/:projectId/tenders/:id/approve', requireLivePermission('pre_award', 'can_approve'), async (req, res) => {
+  const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+  const role = req.user.role
+  const { comment = null, level: reqLevel } = req.body || {}
+  // ONE transaction: the tender row is locked FIRST; every check (hold, approved, rejected, the level
+  // chain) and the recommended-bid capture read under that lock, and the approval row + tender update
+  // commit together. Reject, cancel, recompute and generate-po take the same lock first.
+  let conn = null, open = false
+  const refuse = async (code, error) => { await conn.rollback(); open = false; return res.status(code).json({ error }) }
   try {
-    const pid = Number(req.params.projectId); const tid = Number(req.params.id)
-    const role = req.user.role
-    const { comment = null, level: reqLevel } = req.body || {}
-
-    const [[tender]] = await db.query('SELECT id, status, estimated_value, approval_status FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
-    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    conn = await db.getConnection()
+    await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+    await conn.beginTransaction(); open = true
+    const [[tender]] = await conn.query('SELECT id, status, estimated_value, approval_status FROM tender_packages WHERE id = ? AND project_id = ? FOR UPDATE', [tid, pid])
+    if (!tender) return refuse(404, 'Tender not found')
     // a tender on hold is paused — approving it would silently overwrite the hold (status → 'awarded')
-    if (tender.status === 'on_hold') return res.status(409).json({ error: 'This tender is on hold — take it off hold before approving it' })
-    if (tender.approval_status === 'approved') return res.status(409).json({ error: 'Tender is already approved' })
-    if (tender.approval_status === 'rejected') return res.status(409).json({ error: 'Cannot approve: tender was rejected' })
+    if (tender.status === 'on_hold') return refuse(409, 'This tender is on hold — take it off hold before approving it')
+    if (tender.approval_status === 'approved') return refuse(409, 'Tender is already approved')
+    if (tender.approval_status === 'rejected') return refuse(409, 'Cannot approve: tender was rejected')
 
     const { threshold1, threshold2 } = await getTenderThresholds(pid)
     const V = Number(tender.estimated_value) || 0
@@ -1015,34 +1022,36 @@ router.post('/:projectId/tenders/:id/approve', requireLivePermission('pre_award'
     // Option A: capture which bid is the current system recommendation at approval time.
     // rank_position=1 is the top survivor; disqualified rows have rank_position=NULL, so this
     // never picks a disqualified bid. NULL when nothing has been computed — approval still proceeds.
-    const [[rec]] = await db.query(
+    const [[rec]] = await conn.query(
       "SELECT bid_id FROM tender_evaluations WHERE tender_id = ? AND rank_position = 1 LIMIT 1", [tid])
     const recommendedBidId = rec ? rec.bid_id : null
 
     // ── Admin bypass — one action completes the chain (mirrors po_approvals) ──
     if (role === 'admin') {
-      await db.query("INSERT INTO tender_approvals (tender_id, approver_id, approval_level, status, actioned_at, comments, recommended_bid_id) VALUES (?,?,1,'approved',NOW(),?,?)", [tid, req.user.id, comment || 'Admin approval', recommendedBidId])
-      await db.query("UPDATE tender_packages SET approval_status='approved', stage='award', status='awarded' WHERE id = ?", [tid])
+      await conn.query("INSERT INTO tender_approvals (tender_id, approver_id, approval_level, status, actioned_at, comments, recommended_bid_id) VALUES (?,?,1,'approved',NOW(),?,?)", [tid, req.user.id, comment || 'Admin approval', recommendedBidId])
+      await conn.query("UPDATE tender_packages SET approval_status='approved', stage='award', status='awarded' WHERE id = ?", [tid])
+      await conn.commit(); open = false
       audit(req, 'tender_approved', 'tender', tid, { approval_status: tender.approval_status }, { approval_status: 'approved', level: 1, via: 'admin' })
       return res.json({ ok: true, approval_status: 'approved', level_completed: 1, via: 'admin' })
     }
 
-    const [approved] = await db.query("SELECT approval_level FROM tender_approvals WHERE tender_id = ? AND status = 'approved'", [tid])
+    const [approved] = await conn.query("SELECT approval_level FROM tender_approvals WHERE tender_id = ? AND status = 'approved'", [tid])
     const level1Done = approved.some(r => Number(r.approval_level) === 1)
     const level2Done = approved.some(r => Number(r.approval_level) === 2)
 
     if (!level1Done) {
       // ── this call processes LEVEL 1 ──
       if (reqLevel != null && Number(reqLevel) === 2)
-        return res.status(409).json({ error: 'Cannot approve level 2 before level 1 is approved' })
+        return refuse(409, 'Cannot approve level 2 before level 1 is approved')
       const allowed = (needsManagerOnly && !needsDirector) ? TENDER_L1_BANDA_ROLES : TENDER_L1_MULTI_ROLES
       if (!allowed.includes(role))
-        return res.status(403).json({ error: `Your role cannot approve level 1 for this tender (allowed: ${allowed.join(', ')})` })
+        return refuse(403, `Your role cannot approve level 1 for this tender (allowed: ${allowed.join(', ')})`)
 
-      await db.query("INSERT INTO tender_approvals (tender_id, approver_id, approval_level, status, actioned_at, comments, recommended_bid_id) VALUES (?,?,1,'approved',NOW(),?,?)", [tid, req.user.id, comment, recommendedBidId])
+      await conn.query("INSERT INTO tender_approvals (tender_id, approver_id, approval_level, status, actioned_at, comments, recommended_bid_id) VALUES (?,?,1,'approved',NOW(),?,?)", [tid, req.user.id, comment, recommendedBidId])
 
       if (needsDirector) {
         // level 1 done, level 2 required → approval_status STAYS 'pending'; notify directors
+        await conn.commit(); open = false
         const [dirs] = await db.query("SELECT id FROM users WHERE role IN ('project_director','admin') AND is_active = 1")
         for (const d of dirs) {
           await db.query("INSERT INTO notifications (user_id, type, message, related_entity_type, related_entity_id) VALUES (?,?,?,?,?)",
@@ -1052,7 +1061,8 @@ router.post('/:projectId/tenders/:id/approve', requireLivePermission('pre_award'
         return res.json({ ok: true, approval_status: 'pending', level_completed: 1, next: 'level 2 (director)' })
       }
       // single-level / manager-only → chain complete
-      await db.query("UPDATE tender_packages SET approval_status='approved', stage='award', status='awarded' WHERE id = ?", [tid])
+      await conn.query("UPDATE tender_packages SET approval_status='approved', stage='award', status='awarded' WHERE id = ?", [tid])
+      await conn.commit(); open = false
       audit(req, 'tender_approved', 'tender', tid, null, { level: 1, approval_status: 'approved' })
       return res.json({ ok: true, approval_status: 'approved', level_completed: 1 })
     }
@@ -1060,15 +1070,19 @@ router.post('/:projectId/tenders/:id/approve', requireLivePermission('pre_award'
     // ── level 1 done: if a director level is required and not yet done, this call processes LEVEL 2 ──
     if (needsDirector && !level2Done) {
       if (!TENDER_L2_ROLES.includes(role))
-        return res.status(403).json({ error: `Your role cannot approve level 2 (allowed: ${TENDER_L2_ROLES.join(', ')})` })
-      await db.query("INSERT INTO tender_approvals (tender_id, approver_id, approval_level, status, actioned_at, comments, recommended_bid_id) VALUES (?,?,2,'approved',NOW(),?,?)", [tid, req.user.id, comment, recommendedBidId])
-      await db.query("UPDATE tender_packages SET approval_status='approved', stage='award', status='awarded' WHERE id = ?", [tid])
+        return refuse(403, `Your role cannot approve level 2 (allowed: ${TENDER_L2_ROLES.join(', ')})`)
+      await conn.query("INSERT INTO tender_approvals (tender_id, approver_id, approval_level, status, actioned_at, comments, recommended_bid_id) VALUES (?,?,2,'approved',NOW(),?,?)", [tid, req.user.id, comment, recommendedBidId])
+      await conn.query("UPDATE tender_packages SET approval_status='approved', stage='award', status='awarded' WHERE id = ?", [tid])
+      await conn.commit(); open = false
       audit(req, 'tender_approved_director', 'tender', tid, null, { level: 2, approval_status: 'approved' })
       return res.json({ ok: true, approval_status: 'approved', level_completed: 2 })
     }
 
-    return res.status(409).json({ error: 'Approval chain already complete for this tender' })
-  } catch (e) { console.error('[preaward:tender:approve]', e.message); dbError(res, e) }
+    return refuse(409, 'Approval chain already complete for this tender')
+  } catch (e) {
+    if (open) await conn.rollback().catch(() => {})
+    console.error('[preaward:tender:approve]', e.message); dbError(res, e)
+  } finally { if (conn) conn.release() }
 })
 
 // ─── RELEASE a tender's ACTIVE reservations (inside the caller's transaction) ──
@@ -1218,34 +1232,43 @@ const round2 = n => Math.round(n * 100) / 100
 
 router.post('/:projectId/tenders/:id/compute-recommendation', requireLivePermission('pre_award', 'can_approve'), async (req, res) => {
   const pid = Number(req.params.projectId); const tid = Number(req.params.id)
+  // ONE transaction for the whole recompute: the tender row is locked FIRST and every gate below —
+  // the PO guard first — reads the locked state. generate-po, approve, reject and cancel take the same
+  // lock first, so a recompute can never interleave with them (lock order: tender row, then the rest).
+  let conn = null, open = false
+  const refuse = async (code, error) => { await conn.rollback(); open = false; return res.status(code).json({ error }) }
   try {
-    // PO-generated guard — runs before everything else (see GATING RULES)
-    const [[po]] = await db.query('SELECT id, po_number FROM purchase_orders WHERE tender_id=? AND project_id=? LIMIT 1', [tid, pid])
-    if (po) return res.status(409).json({ error: `This tender has already generated Purchase Order ${po.po_number} — its evaluation history is final and cannot be recomputed` })
+    conn = await db.getConnection()
+    await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+    await conn.beginTransaction(); open = true
+    const [[tender]] = await conn.query(
+      'SELECT id, ref, title, currency, approval_status, stage, status, criteria_locked_at FROM tender_packages WHERE id=? AND project_id=? FOR UPDATE', [tid, pid])
+    if (!tender) return refuse(404, 'Tender not found')
 
-    const [[tender]] = await db.query(
-      'SELECT id, ref, title, currency, approval_status, stage, status, criteria_locked_at FROM tender_packages WHERE id=? AND project_id=?', [tid, pid])
-    if (!tender) return res.status(404).json({ error: 'Tender not found' })
+    // PO-generated guard — the first gate (see GATING RULES), read under the tender lock
+    const [[po]] = await conn.query('SELECT id, po_number FROM purchase_orders WHERE tender_id=? AND project_id=? LIMIT 1', [tid, pid])
+    if (po) return refuse(409, `This tender has already generated Purchase Order ${po.po_number} — its evaluation history is final and cannot be recomputed`)
+
     if (tender.criteria_locked_at == null)
-      return res.status(409).json({ error: 'Criteria are not locked — lock the criteria before computing the recommendation' })
+      return refuse(409, 'Criteria are not locked — lock the criteria before computing the recommendation')
 
-    const [criteria] = await db.query(
+    const [criteria] = await conn.query(
       'SELECT id, criterion_key, label, weight, mandatory, min_score, score_source FROM tender_criteria WHERE tender_id=? ORDER BY display_order, id', [tid])
-    if (criteria.length === 0) return res.status(409).json({ error: 'No criteria defined for this tender' })
+    if (criteria.length === 0) return refuse(409, 'No criteria defined for this tender')
     const priceCrit  = criteria.find(c => c.score_source === 'price') || null
     const manualCrit = criteria.filter(c => c.score_source !== 'price')
 
-    const [bids] = await db.query(
+    const [bids] = await conn.query(
       `SELECT b.id, b.supplier_id, s.name supplier_name, b.status, b.prelim_status, b.currency,
               c.commercial_value, c.unsealed_at
          FROM tender_bids b JOIN suppliers s ON s.id=b.supplier_id
          LEFT JOIN tender_bid_commercial c ON c.bid_id=b.id
         WHERE b.tender_id=? AND b.status NOT IN ('withdrawn','rejected') AND b.prelim_status='pass'
         ORDER BY b.id`, [tid])
-    if (bids.length === 0) return res.status(409).json({ error: 'No eligible bids (need prelim_status=pass and status not withdrawn/rejected)' })
+    if (bids.length === 0) return refuse(409, 'No eligible bids (need prelim_status=pass and status not withdrawn/rejected)')
 
     const bidIds = bids.map(b => b.id)
-    const [scoreRows] = await db.query(
+    const [scoreRows] = await conn.query(
       `SELECT bid_id, criterion_id, score FROM tender_evaluation_scores WHERE bid_id IN (${bidIds.map(()=>'?').join(',')})`, bidIds)
     const manualScore = {}
     for (const r of scoreRows) (manualScore[r.bid_id] ??= {})[r.criterion_id] = Number(r.score)
@@ -1253,14 +1276,14 @@ router.post('/:projectId/tenders/:id/compute-recommendation', requireLivePermiss
     // completeness guard (manual criteria)
     for (const b of bids) for (const c of manualCrit)
       if (manualScore[b.id]?.[c.id] == null)
-        return res.status(409).json({ error: `Technical scoring incomplete: bid ${b.id} has no score for criterion "${c.label}"` })
+        return refuse(409, `Technical scoring incomplete: bid ${b.id} has no score for criterion "${c.label}"`)
 
     // unseal guard (only if a price criterion exists)
     if (priceCrit) {
       const sealed = bids.filter(b => b.unsealed_at == null)
-      if (sealed.length) return res.status(409).json({ error: `Unseal all eligible bids before computing — still sealed: bid(s) ${sealed.map(b=>b.id).join(', ')}` })
+      if (sealed.length) return refuse(409, `Unseal all eligible bids before computing — still sealed: bid(s) ${sealed.map(b=>b.id).join(', ')}`)
       const noVal = bids.filter(b => b.commercial_value == null)
-      if (noVal.length) return res.status(409).json({ error: `Missing commercial value for bid(s) ${noVal.map(b=>b.id).join(', ')}` })
+      if (noVal.length) return refuse(409, `Missing commercial value for bid(s) ${noVal.map(b=>b.id).join(', ')}`)
     }
 
     // helper: evaluate a criterion's gate for a score → null (pass) or {type,...}
@@ -1332,11 +1355,8 @@ router.post('/:projectId/tenders/:id/compute-recommendation', requireLivePermiss
     const bidsDoc = bids.map(bidDoc)
     const recommendedBidId = survivors.length ? survivors[0].id : null
 
-    // ── transactional write (+ archive/rollback if already approved) ──
-    const conn = await db.getConnection()
-    try {
-      await conn.beginTransaction()
-
+    // ── write phase (+ archive/rollback if already approved) — same transaction, tender row still locked ──
+    {
       const wasApproved = tender.approval_status === 'approved' || tender.stage === 'award' || tender.status === 'awarded'
       if (wasApproved) {
         // assemble the archive from the PRIOR computation (current tender_evaluations)
@@ -1380,15 +1400,18 @@ router.post('/:projectId/tenders/:id/compute-recommendation', requireLivePermiss
            VALUES (?,?,?,?,?,?,CAST(? AS JSON),?,NOW())`,
           [tid, d.bid_id, d.tech_score, d.comm_score, d.combined_score, d.rank_position, JSON.stringify(d), req.user.id])
       }
-      await conn.commit()
-    } catch (te) { await conn.rollback(); throw te } finally { conn.release() }
+      await conn.commit(); open = false
+    }
 
     audit(req, 'recommendation_computed', 'tender', tid, null,
       { eligible: bids.length, survivors: survivors.length, recommended_bid_id: recommendedBidId })
     res.json({ tender_id: tid, recommended_bid_id: recommendedBidId,
       ranked: bidsDoc.filter(d => d.rank_position != null).sort((a,b)=>a.rank_position-b.rank_position),
       disqualified: bidsDoc.filter(d => d.disqualification) })
-  } catch (e) { console.error('[preaward:compute-recommendation]', e.message); dbError(res, e) }
+  } catch (e) {
+    if (open) await conn.rollback().catch(() => {})
+    console.error('[preaward:compute-recommendation]', e.message); dbError(res, e)
+  } finally { if (conn) conn.release() }
 })
 
 // ─── GET recommendation (the stored ranked result for the tab) ──────────────────
@@ -1425,31 +1448,30 @@ router.get('/:projectId/tenders/:id/recommendation', requireLivePermission('pre_
 router.post('/:projectId/tenders/:id/generate-po', requireLivePermission('pre_award', 'can_approve'), async (req, res) => {
   const pid = Number(req.params.projectId); const tid = Number(req.params.id)
   try {
-    // hold guard — before everything else: a tender on hold is paused, so it can't be awarded to a PO
-    const [[tender]] = await db.query('SELECT id, status, approval_status, currency, wbs_code, discipline FROM tender_packages WHERE id=? AND project_id=?', [tid, pid])
-    if (!tender) return res.status(404).json({ error: 'Tender not found' })
-    if (tender.status === 'on_hold')
-      return res.status(409).json({ error: 'This tender is on hold — take it off hold before generating a Purchase Order' })
-
     const po_number = String(req.body?.po_number || '').trim()
-    if (!po_number) return res.status(400).json({ error: 'po_number is required' })
-    if (tender.approval_status !== 'approved')
-      return res.status(409).json({ error: `Tender is not approved (approval_status='${tender.approval_status}') — cannot generate a PO` })
-
-    // winning bid captured at approval
-    const [[appr]] = await db.query("SELECT recommended_bid_id FROM tender_approvals WHERE tender_id=? AND status='approved' AND recommended_bid_id IS NOT NULL ORDER BY id DESC LIMIT 1", [tid])
-    if (!appr || appr.recommended_bid_id == null)
-      return res.status(409).json({ error: 'No recommended bid was captured at approval — nothing to award' })
-    const [[bid]] = await db.query(
-      `SELECT b.id, b.supplier_id, s.name AS supplier_name, c.commercial_value
-         FROM tender_bids b JOIN suppliers s ON s.id=b.supplier_id
-         LEFT JOIN tender_bid_commercial c ON c.bid_id=b.id WHERE b.id=?`, [appr.recommended_bid_id])
-    if (!bid) return res.status(409).json({ error: 'Recommended bid not found' })
-
     const conn = await db.getConnection()
     try {
       await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
       await conn.beginTransaction()
+
+      // tender row lock FIRST — every check below reads the locked row, in the same order as before
+      // (hold guard first). Recompute, approve, reject and cancel take the same lock first, so an
+      // approval can't be reset (or a PO created) between these checks and the conversion.
+      // Lock order: tender row → reservations → PO / po_lines / mto_lines / VDRL.
+      const [[tender]] = await conn.query('SELECT id, status, approval_status, currency, wbs_code, discipline FROM tender_packages WHERE id=? AND project_id=? FOR UPDATE', [tid, pid])
+      if (!tender) { await conn.rollback(); return res.status(404).json({ error: 'Tender not found' }) }
+      if (tender.status === 'on_hold') { await conn.rollback(); return res.status(409).json({ error: 'This tender is on hold — take it off hold before generating a Purchase Order' }) }
+      if (!po_number) { await conn.rollback(); return res.status(400).json({ error: 'po_number is required' }) }
+      if (tender.approval_status !== 'approved') { await conn.rollback(); return res.status(409).json({ error: `Tender is not approved (approval_status='${tender.approval_status}') — cannot generate a PO` }) }
+
+      // winning bid captured at approval — read under the lock
+      const [[appr]] = await conn.query("SELECT recommended_bid_id FROM tender_approvals WHERE tender_id=? AND status='approved' AND recommended_bid_id IS NOT NULL ORDER BY id DESC LIMIT 1", [tid])
+      if (!appr || appr.recommended_bid_id == null) { await conn.rollback(); return res.status(409).json({ error: 'No recommended bid was captured at approval — nothing to award' }) }
+      const [[bid]] = await conn.query(
+        `SELECT b.id, b.supplier_id, s.name AS supplier_name, c.commercial_value
+           FROM tender_bids b JOIN suppliers s ON s.id=b.supplier_id
+           LEFT JOIN tender_bid_commercial c ON c.bid_id=b.id WHERE b.id=?`, [appr.recommended_bid_id])
+      if (!bid) { await conn.rollback(); return res.status(409).json({ error: 'Recommended bid not found' }) }
 
       // idempotency: a PO already links this tender → don't double-award
       const [[existingPo]] = await conn.query('SELECT id FROM purchase_orders WHERE tender_id=? LIMIT 1', [tid])
