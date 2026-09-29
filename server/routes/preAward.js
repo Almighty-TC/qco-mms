@@ -60,6 +60,11 @@ const PREQUAL_SORT = {
   supplier_name: 's.name',
 }
 
+// 'on_hold' has no designed hold feature yet — neither create nor PATCH may set it (400). A real
+// hold/resume feature must come with its own dedicated action, and decide then how an approved,
+// held tender behaves on release (design memory, decisions 3 and 6).
+const NO_HOLD_YET = "status 'on_hold' can't be set — putting a tender on hold isn't available yet; it needs its own dedicated action"
+
 // Returns null if value is an allowed member, else a clean error string.
 const badEnum = (label, val, allowed) =>
   allowed.includes(val) ? null : `Invalid ${label} — must be one of: ${allowed.join(', ')}`
@@ -127,6 +132,7 @@ router.get('/:projectId/tenders/:id', requireLivePermission('pre_award', 'can_vi
 // POST /api/pre-award/:projectId/tenders — required: ref, title, procurement_mode.
 // Enums validated in-app for clean 400s (never let a bad value hit the DB CHECK);
 // duplicate ref within the project → 409 via dbError (UNIQUE(project_id, ref)).
+// status 'on_hold' is refused (400) — see NO_HOLD_YET.
 router.post('/:projectId/tenders', requireLivePermission('pre_award', 'can_create'), async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
@@ -143,6 +149,7 @@ router.post('/:projectId/tenders', requireLivePermission('pre_award', 'can_creat
     if (discipline != null) { bad = badEnum('discipline', discipline, DISCIPLINES); if (bad) return res.status(400).json({ error: bad }) }
     bad = badEnum('stage',  stage,  STAGES);   if (bad) return res.status(400).json({ error: bad })
     bad = badEnum('status', status, STATUSES); if (bad) return res.status(400).json({ error: bad })
+    if (status === 'on_hold') return res.status(400).json({ error: NO_HOLD_YET })
     if (estimated_value != null && (isNaN(Number(estimated_value)) || Number(estimated_value) < 0))
       return res.status(400).json({ error: 'estimated_value must be a non-negative number' })
 
@@ -167,7 +174,7 @@ router.post('/:projectId/tenders', requireLivePermission('pre_award', 'can_creat
 // PATCH /api/pre-award/:projectId/tenders/:id — only provided fields written; any
 // provided enum re-validated. Audited with before/after. status 'cancelled' is refused
 // here (400): cancelling goes ONLY through POST .../cancel, which releases the tender's
-// reservations in the same transaction.
+// reservations in the same transaction. status 'on_hold' is refused too (400, NO_HOLD_YET).
 router.patch('/:projectId/tenders/:id', requireLivePermission('pre_award', 'can_edit'), async (req, res) => {
   try {
     const pid = Number(req.params.projectId); const id = Number(req.params.id)
@@ -212,6 +219,7 @@ router.patch('/:projectId/tenders/:id', requireLivePermission('pre_award', 'can_
       const bad = badEnum('status', b.status, STATUSES); if (bad) return res.status(400).json({ error: bad })
       if (b.status === 'cancelled')
         return res.status(400).json({ error: `status 'cancelled' can't be set here — use POST /api/pre-award/${pid}/tenders/${id}/cancel, which releases the tender's reservations in the same transaction` })
+      if (b.status === 'on_hold') return res.status(400).json({ error: NO_HOLD_YET })
       put('status', b.status)
     }
     if (b.estimated_value !== undefined) {
