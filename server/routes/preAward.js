@@ -1013,7 +1013,7 @@ router.post('/:projectId/tenders/:id/approve', requireLivePermission('pre_award'
   const pid = Number(req.params.projectId); const tid = Number(req.params.id)
   const role = req.user.role
   const { comment = null, level: reqLevel } = req.body || {}
-  // ONE transaction: the tender row is locked FIRST; every check (hold, approved, rejected, the level
+  // ONE transaction: the tender row is locked FIRST; every check (cancelled, hold, approved, rejected, the level
   // chain) and the recommended-bid capture read under that lock, and the approval row + tender update
   // commit together. Reject, cancel, recompute and generate-po take the same lock first.
   let conn = null, open = false
@@ -1024,6 +1024,9 @@ router.post('/:projectId/tenders/:id/approve', requireLivePermission('pre_award'
     await conn.beginTransaction(); open = true
     const [[tender]] = await conn.query('SELECT id, status, estimated_value, approval_status FROM tender_packages WHERE id = ? AND project_id = ? FOR UPDATE', [tid, pid])
     if (!tender) return refuse(404, 'Tender not found')
+    // a cancelled tender is terminal — its reservations were released at cancel; approving it would
+    // flip status to 'awarded' and let generate-po award a dead tender with nothing reserved
+    if (tender.status === 'cancelled') return refuse(409, 'Cannot approve: tender was cancelled')
     // a tender on hold is paused — approving it would silently overwrite the hold (status → 'awarded')
     if (tender.status === 'on_hold') return refuse(409, 'This tender is on hold — take it off hold before approving it')
     if (tender.approval_status === 'approved') return refuse(409, 'Tender is already approved')
