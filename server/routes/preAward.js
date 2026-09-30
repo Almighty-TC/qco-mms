@@ -175,11 +175,20 @@ router.post('/:projectId/tenders', requireLivePermission('pre_award', 'can_creat
 // provided enum re-validated. Audited with before/after. status 'cancelled' is refused
 // here (400): cancelling goes ONLY through POST .../cancel, which releases the tender's
 // reservations in the same transaction. status 'on_hold' is refused too (400, NO_HOLD_YET).
+// A CANCELLED tender is terminal: any other status in the body is refused (409) — its non-status
+// fields (title, value, …) stay editable. ONE transaction, tender row locked FIRST (the same lock
+// cancel, approve, reject, recompute, generate-po and reserve-lines take), so that check can't be
+// beaten by a concurrent cancel; every check reads the locked row, nothing is written on a refusal.
 router.patch('/:projectId/tenders/:id', requireLivePermission('pre_award', 'can_edit'), async (req, res) => {
+  const pid = Number(req.params.projectId); const id = Number(req.params.id)
+  let conn = null, open = false
+  const refuse = async (code, error) => { await conn.rollback(); open = false; return res.status(code).json({ error }) }
   try {
-    const pid = Number(req.params.projectId); const id = Number(req.params.id)
-    const [[before]] = await db.query('SELECT * FROM tender_packages WHERE id = ? AND project_id = ?', [id, pid])
-    if (!before) return res.status(404).json({ error: 'Tender not found' })
+    conn = await db.getConnection()
+    await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+    await conn.beginTransaction(); open = true
+    const [[before]] = await conn.query('SELECT * FROM tender_packages WHERE id = ? AND project_id = ? FOR UPDATE', [id, pid])
+    if (!before) return refuse(404, 'Tender not found')
 
     const b = req.body || {}
 
@@ -194,52 +203,57 @@ router.patch('/:projectId/tenders/:id', requireLivePermission('pre_award', 'can_
     if (changingMode || changingDisc) {
       const field = changingMode ? 'procurement_mode' : 'discipline'
       if (before.criteria_locked_at != null)
-        return res.status(409).json({ error: `Cannot change ${field}: criteria are locked for this tender` })
+        return refuse(409, `Cannot change ${field}: criteria are locked for this tender`)
       if (before.stage === 'award')
-        return res.status(409).json({ error: `Cannot change ${field}: the tender has been awarded` })
+        return refuse(409, `Cannot change ${field}: the tender has been awarded`)
     }
 
     const sets = []; const params = []
     const put = (col, val) => { sets.push(`${col} = ?`); params.push(val) }
 
     if (b.title !== undefined) {
-      if (!String(b.title).trim()) return res.status(400).json({ error: 'title cannot be empty' })
+      if (!String(b.title).trim()) return refuse(400, 'title cannot be empty')
       put('title', String(b.title).trim())
     }
     if (b.procurement_mode !== undefined) {
-      const bad = badEnum('procurement_mode', b.procurement_mode, PROC_MODES); if (bad) return res.status(400).json({ error: bad })
+      const bad = badEnum('procurement_mode', b.procurement_mode, PROC_MODES); if (bad) return refuse(400, bad)
       put('procurement_mode', b.procurement_mode)
     }
     if (b.discipline !== undefined) {
-      if (b.discipline !== null) { const bad = badEnum('discipline', b.discipline, DISCIPLINES); if (bad) return res.status(400).json({ error: bad }) }
+      if (b.discipline !== null) { const bad = badEnum('discipline', b.discipline, DISCIPLINES); if (bad) return refuse(400, bad) }
       put('discipline', b.discipline)
     }
-    if (b.stage !== undefined)  { const bad = badEnum('stage',  b.stage,  STAGES);   if (bad) return res.status(400).json({ error: bad }); put('stage',  b.stage) }
+    if (b.stage !== undefined)  { const bad = badEnum('stage',  b.stage,  STAGES);   if (bad) return refuse(400, bad); put('stage',  b.stage) }
     if (b.status !== undefined) {
-      const bad = badEnum('status', b.status, STATUSES); if (bad) return res.status(400).json({ error: bad })
+      const bad = badEnum('status', b.status, STATUSES); if (bad) return refuse(400, bad)
       if (b.status === 'cancelled')
-        return res.status(400).json({ error: `status 'cancelled' can't be set here — use POST /api/pre-award/${pid}/tenders/${id}/cancel, which releases the tender's reservations in the same transaction` })
-      if (b.status === 'on_hold') return res.status(400).json({ error: NO_HOLD_YET })
+        return refuse(400, `status 'cancelled' can't be set here — use POST /api/pre-award/${pid}/tenders/${id}/cancel, which releases the tender's reservations in the same transaction`)
+      if (b.status === 'on_hold') return refuse(400, NO_HOLD_YET)
+      // cancelled is terminal — no status change brings a cancelled tender back (read from the locked row)
+      if (before.status === 'cancelled')
+        return refuse(409, "This tender is cancelled — its status can't be changed; cancellation is final")
       put('status', b.status)
     }
     if (b.estimated_value !== undefined) {
       if (b.estimated_value !== null && (isNaN(Number(b.estimated_value)) || Number(b.estimated_value) < 0))
-        return res.status(400).json({ error: 'estimated_value must be a non-negative number' })
+        return refuse(400, 'estimated_value must be a non-negative number')
       put('estimated_value', b.estimated_value)
     }
     if (b.currency  !== undefined) put('currency',  b.currency || 'AUD')
     if (b.wbs_code  !== undefined) put('wbs_code',  b.wbs_code)
     if (b.owner_id  !== undefined) put('owner_id',  b.owner_id)
 
-    if (!sets.length) return res.status(400).json({ error: 'No updatable fields provided' })
+    if (!sets.length) return refuse(400, 'No updatable fields provided')
 
-    await db.query(`UPDATE tender_packages SET ${sets.join(', ')} WHERE id = ? AND project_id = ?`, [...params, id, pid])
-    const [[after]] = await db.query('SELECT * FROM tender_packages WHERE id = ?', [id])
+    await conn.query(`UPDATE tender_packages SET ${sets.join(', ')} WHERE id = ? AND project_id = ?`, [...params, id, pid])
+    const [[after]] = await conn.query('SELECT * FROM tender_packages WHERE id = ?', [id])
+    await conn.commit(); open = false
     audit(req, 'tender_updated', 'tender', id, before, after)
     res.json(after)
   } catch (e) {
+    if (open) await conn.rollback().catch(() => {})
     console.error('[preaward:update]', e.message); dbError(res, e)
-  }
+  } finally { if (conn) conn.release() }
 })
 
 // ═══ PREQUALIFICATION (Phase 2.2) ══════════════════════════════════════════════
@@ -1266,6 +1280,10 @@ router.post('/:projectId/tenders/:id/compute-recommendation', requireLivePermiss
     // PO-generated guard — the first gate (see GATING RULES), read under the tender lock
     const [[po]] = await conn.query('SELECT id, po_number FROM purchase_orders WHERE tender_id=? AND project_id=? LIMIT 1', [tid, pid])
     if (po) return refuse(409, `This tender has already generated Purchase Order ${po.po_number} — its evaluation history is final and cannot be recomputed`)
+
+    // cancelled is terminal — refused whatever its stage says (a stage of 'award' would otherwise send it
+    // through the approved-tender reset below and back to status 'active')
+    if (tender.status === 'cancelled') return refuse(409, "This tender is cancelled — its evaluation can't be recomputed")
 
     if (tender.criteria_locked_at == null)
       return refuse(409, 'Criteria are not locked — lock the criteria before computing the recommendation')
