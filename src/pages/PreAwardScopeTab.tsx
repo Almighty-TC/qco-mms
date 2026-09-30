@@ -55,6 +55,14 @@ const tagFor = (r: { status: string; qty_awarded: string | number | null }) =>
   : r.status === 'released'       ? { bg: 'rgba(148,163,184,0.18)', text: '#64748b', label: r.qty_awarded != null ? 'Not awarded' : 'Released' }
   : { bg: 'rgba(148,163,184,0.18)', text: '#64748b', label: r.status }
 
+// Readable text for the fixed released_reason codes written by cancel, reject and manual release.
+// Display only — the stored value is unchanged. Reasons written at award are already sentences and pass through as-is.
+const RELEASE_REASON_LABEL: Record<string, string> = {
+  tender_cancelled: 'Released when the tender was cancelled',
+  tender_rejected: 'Released when the tender was rejected',
+  manual_release_on_hold: 'Released manually while the tender was on hold',
+}
+
 export function PreAwardScopeTab({ dark, projectId, tenderId, userRole }: {
   dark: boolean; projectId: number; tenderId: number; userRole: string
 }) {
@@ -222,7 +230,7 @@ export function PreAwardScopeTab({ dark, projectId, tenderId, userRole }: {
                         </div>
                       )}
                       {awarded && r.released_reason && (
-                        <div style={{ fontSize: 11, color: sub, marginTop: 3, fontStyle: 'italic' }}>{r.released_reason}</div>
+                        <div style={{ fontSize: 11, color: sub, marginTop: 3, fontStyle: 'italic' }}>{RELEASE_REASON_LABEL[r.released_reason] ?? r.released_reason}</div>
                       )}
                     </div>
                     {awarded ? (
