@@ -800,6 +800,11 @@ router.get('/:projectId/tenders/:id/scores', requireLivePermission('pre_award', 
 // lock — a concurrent request for the same line blocks, then re-reads the committed
 // reservation and 422s (never a stale pre-lock read). 409 if this tender already has a row
 // for a requested line (modifying a reservation is a separate action, out of scope here).
+// The tender row is locked FIRST (the same lock cancel, reject, approve, recompute and generate-po
+// take), and the tender's state is gated under that lock: only a live, un-awarded, un-held tender
+// can add scope — 409 if cancelled, rejected, awarded/approved, handed off to a PO, or on hold.
+// Without the lock a reserve could land after a cancel/reject released the tender's reservations,
+// leaving active reservations on a dead tender. Lock order: tender row → mto_lines (sorted by id).
 router.post('/:projectId/tenders/:id/reserve-lines', requireLivePermission('pre_award', 'can_edit'), async (req, res) => {
   const pid = Number(req.params.projectId); const tid = Number(req.params.id)
   try {
@@ -817,9 +822,6 @@ router.post('/:projectId/tenders/:id/reserve-lines', requireLivePermission('pre_
       seen.add(mid)
     }
 
-    const [[tender]] = await db.query('SELECT id FROM tender_packages WHERE id = ? AND project_id = ?', [tid, pid])
-    if (!tender) return res.status(404).json({ error: 'Tender not found' })
-
     // scope resolved by the caller (not by getAvailableQty): each mto_line must be in this project
     const ids = lines.map(l => Number(l.mto_line_id))
     const [inProj] = await db.query(
@@ -833,6 +835,19 @@ router.post('/:projectId/tenders/:id/reserve-lines', requireLivePermission('pre_
     try {
       await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')  // fresh reads for the SUM-based availability
       await conn.beginTransaction()
+      // tender row lock FIRST — every state check below reads the locked row
+      const [[tender]] = await conn.query('SELECT id, status, approval_status FROM tender_packages WHERE id = ? AND project_id = ? FOR UPDATE', [tid, pid])
+      if (!tender) { await conn.rollback(); return res.status(404).json({ error: 'Tender not found' }) }
+      if (tender.status === 'cancelled') { await conn.rollback(); return res.status(409).json({ error: 'Tender is cancelled — it cannot reserve MTO lines' }) }
+      if (tender.approval_status === 'rejected') { await conn.rollback(); return res.status(409).json({ error: 'Tender was rejected — it cannot reserve MTO lines' }) }
+      if (tender.status === 'awarded' || tender.approval_status === 'approved') {
+        await conn.rollback()
+        return res.status(409).json({ error: `Tender has been awarded (status '${tender.status}', approval '${tender.approval_status}') — its scope is final` })
+      }
+      const [[po]] = await conn.query('SELECT id, po_number FROM purchase_orders WHERE tender_id = ? LIMIT 1', [tid])
+      if (po) { await conn.rollback(); return res.status(409).json({ error: `Tender has been handed off to PO ${po.po_number} — its scope is final` }) }
+      if (tender.status === 'on_hold') { await conn.rollback(); return res.status(409).json({ error: 'This tender is on hold — take it off hold before adding lines to its scope' }) }
+
       // stable lock order (sorted by id) so concurrent batches can't deadlock
       const ordered = [...lines].sort((a, b) => Number(a.mto_line_id) - Number(b.mto_line_id))
       const created = []
