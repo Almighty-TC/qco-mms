@@ -1162,13 +1162,14 @@ router.post('/:projectId/tenders/:id/reject', requireLivePermission('pre_award',
 })
 
 // ─── CANCEL ───────────────────────────────────────────────────────────────────
-// POST /api/pre-award/:projectId/tenders/:id/cancel (can_edit). Sets status='cancelled' and, in the
-// SAME transaction, releases every ACTIVE reservation with released_reason='tender_cancelled'.
+// POST /api/pre-award/:projectId/tenders/:id/cancel (can_approve — the same bar as approve, reject and
+// generate-po). Sets status='cancelled' and, in the SAME transaction, releases every ACTIVE
+// reservation with released_reason='tender_cancelled'.
 // Allowed at any point BEFORE award; refused (409) once awarded — status 'awarded' or the approval
 // chain complete — or once a PO links the tender (a recompute after handoff resets status to
 // 'active' while the PO still exists), and if already cancelled. Tender row locked first; every
 // check reads the locked row.
-router.post('/:projectId/tenders/:id/cancel', requireLivePermission('pre_award', 'can_edit'), async (req, res) => {
+router.post('/:projectId/tenders/:id/cancel', requireLivePermission('pre_award', 'can_approve'), async (req, res) => {
   const pid = Number(req.params.projectId); const tid = Number(req.params.id)
   try {
     const conn = await db.getConnection()
