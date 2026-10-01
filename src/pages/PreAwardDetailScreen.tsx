@@ -191,7 +191,7 @@ export function PreAwardDetailScreen({ dark, projectId, projectName, tenderId, u
           ) : tab === 'Evaluation' ? (
             <PreAwardEvaluationTab dark={dark} projectId={projectId} tenderId={tender.id} userRole={userRole} userId={userId} />
           ) : tab === 'Recommendation / Award' ? (
-            <PreAwardRecommendationTab dark={dark} projectId={projectId} tenderId={tender.id} userRole={userRole} userId={userId} onChanged={load} />
+            <PreAwardRecommendationTab dark={dark} projectId={projectId} tenderId={tender.id} tenderStatus={tender.status} userRole={userRole} userId={userId} onChanged={load} />
           ) : (
             <div style={{ padding: '32px 18px', border: bd, borderRadius: 8, background: cardBg, color: sub, fontSize: 13, textAlign: 'center' }}>
               <div style={{ fontWeight: 600, color: col, marginBottom: 6 }}>{tab}</div>

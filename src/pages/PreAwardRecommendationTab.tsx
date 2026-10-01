@@ -3,6 +3,7 @@
 //   GET  /:projectId/tenders/:id/approvals  (can_view)  chain state (row-existence model)
 //   POST /:projectId/tenders/:id/approve    (can_approve)
 //   POST /:projectId/tenders/:id/reject     (can_approve)
+//   POST /:projectId/tenders/:id/cancel     (can_approve) — the Cancel tender button + dialog
 // Thresholds read from GET /projects/:id (approval_threshold_1/2). needsDirector is
 // computed exactly as the backend does: approval_threshold_2 != null && value > it.
 // Recommendation-selection (winning bid / combined score) and award→PO generation
@@ -32,8 +33,8 @@ const fmtMoney = (v: string | number | null) => {
   return `AUD ${n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
 }
 
-export function PreAwardRecommendationTab({ dark, projectId, tenderId, userRole, userId, onChanged }: {
-  dark: boolean; projectId: number; tenderId: number; userRole: string; userId: number; onChanged?: () => void
+export function PreAwardRecommendationTab({ dark, projectId, tenderId, tenderStatus, userRole, userId, onChanged }: {
+  dark: boolean; projectId: number; tenderId: number; tenderStatus?: string; userRole: string; userId: number; onChanged?: () => void
 }) {
   const [chain, setChain] = useState<ChainState | null>(null)
   const [threshold2, setThreshold2] = useState<number | null>(null)
@@ -44,6 +45,8 @@ export function PreAwardRecommendationTab({ dark, projectId, tenderId, userRole,
   const [computing, setComputing] = useState(false)
   const [computeErr, setComputeErr] = useState('')
   const [showRecomputeWarn, setShowRecomputeWarn] = useState(false)
+  const [showCancel, setShowCancel] = useState(false)
+  const [cancelMsg, setCancelMsg] = useState('')
 
   const canApprove = CAN_APPROVE.includes(userRole)
   const col = dark ? '#f1f5f9' : '#0f172a'
@@ -72,6 +75,10 @@ export function PreAwardRecommendationTab({ dark, projectId, tenderId, userRole,
   const needsDirector = threshold2 != null && value > threshold2
   const status = chain?.approval_status ?? 'pending'
   const terminal = status === 'approved' || status === 'rejected'
+  // Mirrors the cancel endpoint's gate: refused once cancelled, once awarded (status 'awarded' or the chain
+  // approved — a PO only ever exists on an approved tender), so the button shows only before award. The
+  // server re-checks everything under the tender lock; its 409 is shown in the dialog.
+  const cancellable = canApprove && !!tenderStatus && tenderStatus !== 'cancelled' && tenderStatus !== 'awarded' && status !== 'approved'
 
   const rows = chain?.approvals ?? []
   const levelRow = (lvl: number, st: string) => rows.find(a => a.approval_level === lvl && a.status === st) || null
@@ -234,14 +241,20 @@ export function PreAwardRecommendationTab({ dark, projectId, tenderId, userRole,
             </div>
 
             {/* Actions */}
-            {canApprove && !terminal && (
+            {canApprove && (!terminal || cancellable) && (
               <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-                <button onClick={() => setAction('approve')} style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: '#15803d', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Approve</button>
-                <button onClick={() => setAction('reject')} style={{ padding: '8px 16px', borderRadius: 6, border: `1px solid ${dark ? '#7f1d1d' : '#fecaca'}`, background: 'none', color: '#b91c1c', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Reject</button>
+                {!terminal && <>
+                  <button onClick={() => setAction('approve')} style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: '#15803d', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Approve</button>
+                  <button onClick={() => setAction('reject')} style={{ padding: '8px 16px', borderRadius: 6, border: `1px solid ${dark ? '#7f1d1d' : '#fecaca'}`, background: 'none', color: '#b91c1c', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Reject</button>
+                </>}
+                {cancellable && (
+                  <button data-cancel-tender="" onClick={() => { setCancelMsg(''); setShowCancel(true) }} style={{ marginLeft: 'auto', padding: '8px 16px', borderRadius: 6, border: bd, background: 'none', color: '#b91c1c', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel tender</button>
+                )}
               </div>
             )}
             {terminal && <div style={{ marginTop: 14, fontSize: 12.5, color: sub }}>This tender is <strong style={{ color: col }}>{status}</strong>; the approval chain is closed.</div>}
-            {!canApprove && !terminal && <div style={{ marginTop: 14, fontSize: 12.5, color: sub }}>Your role can view the approval chain but cannot approve or reject.</div>}
+            {!canApprove && !terminal && <div style={{ marginTop: 14, fontSize: 12.5, color: sub }}>Your role can view the approval chain but cannot approve, reject or cancel.</div>}
+            {cancelMsg && <div data-cancel-msg="" style={{ marginTop: 12, fontSize: 12.5, color: dark ? '#86efac' : '#15803d' }}>{cancelMsg}</div>}
           </>
         )}
       </div>
@@ -252,6 +265,18 @@ export function PreAwardRecommendationTab({ dark, projectId, tenderId, userRole,
       {action && chain && (
         <ActionModal dark={dark} projectId={projectId} tenderId={tenderId} mode={action}
           onClose={() => setAction(null)} onDone={() => { setAction(null); load(); onChanged?.() }} />
+      )}
+
+      {showCancel && (
+        <CancelTenderModal dark={dark} projectId={projectId} tenderId={tenderId}
+          onClose={refused => { setShowCancel(false); if (refused) { load(); onChanged?.() } }}
+          onDone={released => {
+            setShowCancel(false)
+            setCancelMsg(released > 0
+              ? `Tender cancelled — ${released} reservation${released === 1 ? '' : 's'} released; their quantities are available to other tenders and POs again.`
+              : 'Tender cancelled — it had no active reservations to release.')
+            load(); onChanged?.()
+          }} />
       )}
 
       {showRecomputeWarn && (
@@ -312,6 +337,72 @@ function ActionModal({ dark, projectId, tenderId, mode, onClose, onDone }: {
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
           <button disabled={busy} onClick={onClose} style={{ padding: '8px 14px', borderRadius: 6, border: bd, background: 'none', color: sub, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
           <button disabled={busy} onClick={go} style={{ padding: '8px 14px', borderRadius: 6, border: 'none', background: isReject ? '#b91c1c' : '#15803d', color: '#fff', fontSize: 13, fontWeight: 600, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit' }}>{busy ? 'Working…' : (isReject ? 'Confirm reject' : 'Confirm approve')}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── CANCEL TENDER ───────────────────────────────────────────
+// Confirmation for POST cancel. The active-reservation count is fetched FRESH from GET /scope each time
+// the dialog opens (never reused from data loaded earlier on the page); confirm stays disabled until it
+// arrives. If the count can't be read, the generic copy is shown. The success line uses the server's
+// own released list, which is authoritative even if reservations changed while the dialog was open.
+// Closing after a refusal reports it (onClose(true)) so the page re-reads the tender's real state.
+function CancelTenderModal({ dark, projectId, tenderId, onClose, onDone }: {
+  dark: boolean; projectId: number; tenderId: number; onClose: (refused: boolean) => void; onDone: (released: number) => void
+}) {
+  const [count, setCount] = useState<number | null>(null)   // null = still loading
+  const [countErr, setCountErr] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const col = dark ? '#f1f5f9' : '#0f172a'
+  const sub = '#94a3b8'
+  const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
+  const cardBg = dark ? '#0f172a' : '#fff'
+
+  useEffect(() => {
+    let live = true
+    axios.get(`${API}/pre-award/${projectId}/tenders/${tenderId}/scope`)
+      .then(r => { if (live) setCount((r.data?.reservations ?? []).filter((x: { status: string }) => x.status === 'active').length) })
+      .catch(() => { if (live) setCountErr(true) })
+    return () => { live = false }
+  }, [projectId, tenderId])
+
+  const loadingCount = count == null && !countErr
+  const after = 'A cancelled tender cannot be reopened, approved or awarded, and cannot reserve MTO lines again. This cannot be undone.'
+  const warning = countErr
+    ? `Cancelling ends this tender permanently. All of its active MTO reservations will be released, and their quantities returned to each MTO line’s available quantity for other tenders and POs. ${after}`
+    : count === 0
+      ? `Cancelling ends this tender permanently. It has no active MTO reservations, so nothing will be released. ${after}`
+      : count === 1
+        ? `Cancelling ends this tender permanently. Its 1 active MTO reservation will be released, and its quantity returned to the MTO line’s available quantity for other tenders and POs. ${after}`
+        : `Cancelling ends this tender permanently. All ${count} of its active MTO reservations will be released, and their quantities returned to each MTO line’s available quantity for other tenders and POs. ${after}`
+  const confirmLabel = busy ? 'Cancelling…' : count ? `Cancel tender & release ${count} reservation${count === 1 ? '' : 's'}` : 'Cancel tender'
+
+  const go = async () => {
+    setBusy(true); setErr('')
+    try {
+      const { data } = await axios.post(`${API}/pre-award/${projectId}/tenders/${tenderId}/cancel`)
+      onDone(data?.released?.length ?? 0)
+    } catch (e) {
+      const s = axios.isAxiosError(e) ? e.response?.status : undefined
+      setErr(axios.isAxiosError(e) && e.response?.data?.error ? `${e.response.data.error}${s ? ` (${s})` : ''}` : 'Could not cancel the tender.')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div onClick={() => !busy && onClose(!!err)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div data-cancel-dialog="" onClick={e => e.stopPropagation()} style={{ background: cardBg, borderRadius: 12, padding: 24, width: 480, maxWidth: '94vw', border: bd }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: col, marginBottom: 10 }}>Cancel tender?</div>
+        {loadingCount
+          ? <div style={{ fontSize: 13, color: sub, padding: '12px 0' }}>Checking this tender’s active reservations…</div>
+          : <div data-cancel-warning="" style={{ fontSize: 13, color: dark ? '#fca5a5' : '#b91c1c', background: dark ? 'rgba(127,29,29,0.2)' : '#fef2f2', border: `1px solid ${dark ? '#7f1d1d' : '#fecaca'}`, borderRadius: 8, padding: '12px 14px', lineHeight: 1.5 }}>{warning}</div>}
+        {err && <div style={{ color: '#b91c1c', fontSize: 12.5, marginTop: 10 }}>{err}</div>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+          <button disabled={busy} onClick={() => onClose(!!err)} style={{ padding: '8px 14px', borderRadius: 6, border: bd, background: 'none', color: sub, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>Keep tender</button>
+          <button data-cancel-confirm="" disabled={busy || loadingCount} onClick={go} style={{ padding: '8px 14px', borderRadius: 6, border: 'none', background: '#b91c1c', color: '#fff', fontSize: 13, fontWeight: 600, cursor: busy || loadingCount ? 'default' : 'pointer', opacity: loadingCount ? 0.6 : 1, fontFamily: 'inherit' }}>{confirmLabel}</button>
         </div>
       </div>
     </div>
