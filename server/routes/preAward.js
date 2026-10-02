@@ -132,7 +132,8 @@ router.get('/:projectId/tenders/:id', requireLivePermission('pre_award', 'can_vi
 // POST /api/pre-award/:projectId/tenders — required: ref, title, procurement_mode.
 // Enums validated in-app for clean 400s (never let a bad value hit the DB CHECK);
 // duplicate ref within the project → 409 via dbError (UNIQUE(project_id, ref)).
-// status 'on_hold' is refused (400) — see NO_HOLD_YET.
+// status 'on_hold' is refused (400) — see NO_HOLD_YET; so is 'cancelled' (400) — a tender is cancelled only
+// through POST …/tenders/:id/cancel, which runs the cancel checks and writes the tender_cancelled audit row.
 router.post('/:projectId/tenders', requireLivePermission('pre_award', 'can_create'), async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
@@ -150,6 +151,8 @@ router.post('/:projectId/tenders', requireLivePermission('pre_award', 'can_creat
     bad = badEnum('stage',  stage,  STAGES);   if (bad) return res.status(400).json({ error: bad })
     bad = badEnum('status', status, STATUSES); if (bad) return res.status(400).json({ error: bad })
     if (status === 'on_hold') return res.status(400).json({ error: NO_HOLD_YET })
+    if (status === 'cancelled')
+      return res.status(400).json({ error: `status 'cancelled' can't be set when creating a tender — create it, then use POST /api/pre-award/${pid}/tenders/:id/cancel` })
     if (estimated_value != null && (isNaN(Number(estimated_value)) || Number(estimated_value) < 0))
       return res.status(400).json({ error: 'estimated_value must be a non-negative number' })
 
