@@ -797,6 +797,10 @@ router.patch('/pos/:id/approve', async (req, res) => {
       'SELECT id, po_number, value, currency, status, project_id FROM purchase_orders WHERE id=?', [id]
     )
     if (!po) return res.status(404).json({ error: 'PO not found' })
+    // A closed (complete) or cancelled PO is finished — approving it would lock it as po-raised again. Every other
+    // status behaves as before on all three paths (active and po-raised POs can still be approved and locked).
+    if (po.status === 'closed' || po.status === 'cancelled')
+      return res.status(409).json({ error: `A ${po.status} PO can't be approved` })
 
     const { threshold1, threshold2 } = await getProjectSettings(po.project_id)
     const poValue = po.value ?? 0
