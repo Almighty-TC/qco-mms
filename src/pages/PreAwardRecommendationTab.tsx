@@ -319,6 +319,24 @@ function ActionModal({ dark, projectId, tenderId, mode, onClose, onDone }: {
   const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
   const cardBg = dark ? '#0f172a' : '#fff'
   const isReject = mode === 'reject'
+  // Reject releases the tender's active MTO reservations in the same transaction. Their count is fetched FRESH
+  // from GET /scope each time the reject dialog opens; with none, or if it can't be read, the fallback is shown.
+  const [count, setCount] = useState<number | null>(null)   // null = still loading
+  const [countErr, setCountErr] = useState(false)
+  useEffect(() => {
+    if (!isReject) return
+    let live = true
+    axios.get(`${API}/pre-award/${projectId}/tenders/${tenderId}/scope`)
+      .then(r => { if (live) setCount((r.data?.reservations ?? []).filter((x: { status: string }) => x.status === 'active').length) })
+      .catch(() => { if (live) setCountErr(true) })
+    return () => { live = false }
+  }, [isReject, projectId, tenderId])
+  const loadingCount = isReject && count == null && !countErr
+  const rejectWarning = !countErr && count === 1
+    ? 'Rejecting closes the approval chain for this tender. Its 1 active MTO reservation will be released, and its quantity returned to the MTO line’s available quantity for other tenders and POs. This cannot be undone.'
+    : !countErr && count != null && count > 1
+      ? `Rejecting closes the approval chain for this tender. All ${count} of its active MTO reservations will be released, and their quantities returned to each MTO line’s available quantity for other tenders and POs. This cannot be undone.`
+      : 'Rejecting closes the approval chain for this tender and releases any active MTO reservations it still holds. This cannot be undone.'
 
   const go = async () => {
     setBusy(true); setErr('')
@@ -336,9 +354,10 @@ function ActionModal({ dark, projectId, tenderId, mode, onClose, onDone }: {
     <div onClick={() => !busy && onClose(!!err)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
       <div onClick={e => e.stopPropagation()} style={{ background: cardBg, borderRadius: 12, padding: 24, width: 460, maxWidth: '94vw', border: bd }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: col, marginBottom: 8 }}>{isReject ? 'Reject tender' : 'Approve tender'}</div>
-        {isReject && (
-          <div style={{ fontSize: 13, color: dark ? '#fca5a5' : '#b91c1c', background: dark ? 'rgba(127,29,29,0.2)' : '#fef2f2', border: `1px solid ${dark ? '#7f1d1d' : '#fecaca'}`, borderRadius: 8, padding: '11px 13px', marginBottom: 12 }}>
-            Rejecting closes the approval chain for this tender. This cannot be undone.
+        {isReject && (loadingCount
+          ? <div style={{ fontSize: 13, color: sub, padding: '11px 0', marginBottom: 12 }}>Checking this tender’s active reservations…</div>
+          : <div data-reject-warning="" style={{ fontSize: 13, color: dark ? '#fca5a5' : '#b91c1c', background: dark ? 'rgba(127,29,29,0.2)' : '#fef2f2', border: `1px solid ${dark ? '#7f1d1d' : '#fecaca'}`, borderRadius: 8, padding: '11px 13px', marginBottom: 12, lineHeight: 1.5 }}>
+            {rejectWarning}
           </div>
         )}
         {!isReject && <div style={{ fontSize: 12.5, color: sub, marginBottom: 12 }}>Recording your approval advances the chain to the next required level, or completes it (awarding the tender) if this is the final level.</div>}
@@ -347,7 +366,7 @@ function ActionModal({ dark, projectId, tenderId, mode, onClose, onDone }: {
         {err && <div style={{ color: '#b91c1c', fontSize: 12.5, marginTop: 10 }}>{err}</div>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
           <button disabled={busy} onClick={() => onClose(!!err)} style={{ padding: '8px 14px', borderRadius: 6, border: bd, background: 'none', color: sub, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
-          <button disabled={busy} onClick={go} style={{ padding: '8px 14px', borderRadius: 6, border: 'none', background: isReject ? '#b91c1c' : '#15803d', color: '#fff', fontSize: 13, fontWeight: 600, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit' }}>{busy ? 'Working…' : (isReject ? 'Confirm reject' : 'Confirm approve')}</button>
+          <button disabled={busy || loadingCount} onClick={go} style={{ padding: '8px 14px', borderRadius: 6, border: 'none', background: isReject ? '#b91c1c' : '#15803d', color: '#fff', fontSize: 13, fontWeight: 600, cursor: busy || loadingCount ? 'default' : 'pointer', opacity: loadingCount ? 0.6 : 1, fontFamily: 'inherit' }}>{busy ? 'Working…' : (isReject ? 'Confirm reject' : 'Confirm approve')}</button>
         </div>
       </div>
     </div>
