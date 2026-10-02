@@ -894,6 +894,23 @@ router.post('/:projectId/tenders/:id/reserve-lines', requireLivePermission('pre_
 // computed by the shared getAvailableQty — the SAME formula the reserve path enforces under
 // lock, so the displayed number and the enforced number can never disagree by design. Also
 // returns the project's active MTO registers so the "add lines" picker can offer a register.
+// "On PO" flag (display only — getAvailableQty is unchanged): a line counts as already on a PO when ANY revision of
+// it (same mto_id and line_number) has status 'po-raised' with a po_ref — direct POs are linked to the MTO only by
+// that free text, so availability never sees them. The most recent such ref wins. A ref equal to this tender's own
+// PO (its own award, written by generate-po) is not a flag. Returns Map(mto_line_id → po_ref | null).
+async function onPoRefs(lineIds, ownPoNumber) {
+  if (!lineIds.length) return new Map()
+  const [rows] = await db.query(
+    `SELECT m.id,
+            (SELECT x.po_ref FROM mto_lines x
+              WHERE x.mto_id = m.mto_id AND x.line_number = m.line_number AND x.status = 'po-raised'
+                AND x.po_ref IS NOT NULL AND x.po_ref <> '' AND (? IS NULL OR x.po_ref <> ?)
+              ORDER BY x.id DESC LIMIT 1) AS on_po_ref
+       FROM mto_lines m WHERE m.id IN (${lineIds.map(() => '?').join(',')})`,
+    [ownPoNumber ?? null, ownPoNumber ?? null, ...lineIds])
+  return new Map(rows.map(r => [r.id, r.on_po_ref ?? null]))
+}
+
 router.get('/:projectId/tenders/:id/scope', requireLivePermission('pre_award', 'can_view'), async (req, res) => {
   const pid = Number(req.params.projectId); const tid = Number(req.params.id)
   try {
@@ -930,19 +947,21 @@ router.get('/:projectId/tenders/:id/scope', requireLivePermission('pre_award', '
         WHERE t.tender_id = ? ORDER BY t.mto_line_id`,
       [hasWinner, legacy, hasWinner, legacy, award ? award.recommended_bid_id : null, tid])
 
+    // The PO this tender was handed off to, if any (the award→PO link is 1:1 via tender_id).
+    const [[po]] = await db.query(
+      'SELECT id, po_number, supplier_id, vendor_name, value, currency, status FROM purchase_orders WHERE tender_id = ? ORDER BY id DESC LIMIT 1', [tid])
+
     // Live availability only for ACTIVE reservations (converted/released rows no longer consume).
+    const onPo = await onPoRefs(rows.map(r => r.mto_line_id), po ? po.po_number : null)
     const reservations = []
     for (const row of rows) {
       const availability = row.status === 'active' ? await getAvailableQty(row.mto_line_id) : null
-      reservations.push({ ...row, availability })
+      const ref = onPo.get(row.mto_line_id) ?? null
+      reservations.push({ ...row, availability, on_po: ref != null, on_po_ref: ref })
     }
 
     const [registers] = await db.query(
       "SELECT id, name, reference, current_revision FROM mto_registers WHERE project_id = ? AND status = 'active' ORDER BY reference", [pid])
-
-    // The PO this tender was handed off to, if any (the award→PO link is 1:1 via tender_id).
-    const [[po]] = await db.query(
-      'SELECT id, po_number, supplier_id, vendor_name, value, currency, status FROM purchase_orders WHERE tender_id = ? ORDER BY id DESC LIMIT 1', [tid])
 
     res.json({ reservations, registers, po: po || null, award, tender: { status: tender.status, approval_status: tender.approval_status } })
   } catch (e) { console.error('[preaward:scope]', e.message); dbError(res, e) }
@@ -994,14 +1013,20 @@ router.get('/:projectId/tenders/:id/available-lines', requireLivePermission('pre
       mine = new Set(dups.map(d => d.mto_line_id))
     }
 
+    // "On PO" flag for the page (display only), ignoring this tender's own PO
+    const [[ownPo]] = await db.query('SELECT po_number FROM purchase_orders WHERE tender_id = ? ORDER BY id DESC LIMIT 1', [tid])
+    const onPo = await onPoRefs(lines.map(l => l.id), ownPo ? ownPo.po_number : null)
+
     // Approach A: reuse getAvailableQty per line (single source of truth), page-bounded.
     const data = []
     for (const l of lines) {
       const a = await getAvailableQty(l.id)
+      const ref = onPo.get(l.id) ?? null
       data.push({
         ...l,
         total_qty: a.total_qty, po_assigned: a.po_assigned, reserved: a.reserved, available: a.available,
         reserved_by_this_tender: mine.has(l.id),
+        on_po: ref != null, on_po_ref: ref,
       })
     }
 
