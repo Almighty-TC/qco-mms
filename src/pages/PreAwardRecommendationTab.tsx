@@ -130,6 +130,7 @@ export function PreAwardRecommendationTab({ dark, projectId, tenderId, tenderSta
     } catch (e) {
       const s = axios.isAxiosError(e) ? e.response?.status : undefined
       setComputeErr(axios.isAxiosError(e) && e.response?.data?.error ? `${e.response.data.error}${s ? ` (${s})` : ''}` : 'Could not compute the recommendation.')
+      load(); onChanged?.()   // a refusal can mean the page is stale (e.g. the tender was cancelled) — re-read it
     } finally { setComputing(false) }
   }
   // Recompute on an APPROVED tender shows the three-part warning first; otherwise compute directly.
@@ -273,7 +274,7 @@ export function PreAwardRecommendationTab({ dark, projectId, tenderId, tenderSta
 
       {action && chain && (
         <ActionModal dark={dark} projectId={projectId} tenderId={tenderId} mode={action}
-          onClose={() => setAction(null)} onDone={() => { setAction(null); load(); onChanged?.() }} />
+          onClose={refused => { setAction(null); if (refused) { load(); onChanged?.() } }} onDone={() => { setAction(null); load(); onChanged?.() }} />
       )}
 
       {showCancel && (
@@ -306,8 +307,9 @@ export function PreAwardRecommendationTab({ dark, projectId, tenderId, tenderSta
   )
 }
 
+// Closing after a refusal reports it (onClose(true)) so the page re-reads the tender's real state.
 function ActionModal({ dark, projectId, tenderId, mode, onClose, onDone }: {
-  dark: boolean; projectId: number; tenderId: number; mode: 'approve' | 'reject'; onClose: () => void; onDone: () => void
+  dark: boolean; projectId: number; tenderId: number; mode: 'approve' | 'reject'; onClose: (refused: boolean) => void; onDone: () => void
 }) {
   const [comment, setComment] = useState('')
   const [busy, setBusy] = useState(false)
@@ -331,7 +333,7 @@ function ActionModal({ dark, projectId, tenderId, mode, onClose, onDone }: {
   }
 
   return (
-    <div onClick={() => !busy && onClose()} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+    <div onClick={() => !busy && onClose(!!err)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
       <div onClick={e => e.stopPropagation()} style={{ background: cardBg, borderRadius: 12, padding: 24, width: 460, maxWidth: '94vw', border: bd }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: col, marginBottom: 8 }}>{isReject ? 'Reject tender' : 'Approve tender'}</div>
         {isReject && (
@@ -344,7 +346,7 @@ function ActionModal({ dark, projectId, tenderId, mode, onClose, onDone }: {
         <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2} style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: bd, background: dark ? '#0b1220' : '#f8fafc', color: col, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }} />
         {err && <div style={{ color: '#b91c1c', fontSize: 12.5, marginTop: 10 }}>{err}</div>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-          <button disabled={busy} onClick={onClose} style={{ padding: '8px 14px', borderRadius: 6, border: bd, background: 'none', color: sub, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+          <button disabled={busy} onClick={() => onClose(!!err)} style={{ padding: '8px 14px', borderRadius: 6, border: bd, background: 'none', color: sub, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
           <button disabled={busy} onClick={go} style={{ padding: '8px 14px', borderRadius: 6, border: 'none', background: isReject ? '#b91c1c' : '#15803d', color: '#fff', fontSize: 13, fontWeight: 600, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit' }}>{busy ? 'Working…' : (isReject ? 'Confirm reject' : 'Confirm approve')}</button>
         </div>
       </div>
@@ -503,6 +505,7 @@ function AwardToPoSection({ dark, projectId, tenderId, approvalStatus, canApprov
       const s = axios.isAxiosError(e) ? e.response?.status : undefined
       setSubmitErr(axios.isAxiosError(e) && e.response?.data?.error ? `${e.response.data.error}${s ? ` (${s})` : ''}` : 'Could not generate the PO.')
       setBusy(false)
+      load(); onChanged?.()            // a refusal can mean the card is stale (e.g. the tender was put on hold) — re-read it
     }
   }
 
