@@ -78,6 +78,9 @@ export function PreAwardRecommendationTab({ dark, projectId, tenderId, tenderSta
   // A cancelled tender keeps approval 'pending', but approve and reject both refuse it — the chain is closed.
   const cancelledTender = tenderStatus === 'cancelled'
   const closed = terminal || cancelledTender
+  // A held tender is paused, not closed: approve and reject both refuse it, so neither is offered (cancel still is).
+  const heldTender = tenderStatus === 'on_hold'
+  const decisionOpen = !closed && !heldTender
   // Mirrors the cancel endpoint's gate: refused once cancelled, once awarded (status 'awarded' or the chain
   // approved — a PO only ever exists on an approved tender), so the button shows only before award. The
   // server re-checks everything under the tender lock; its 409 is shown in the dialog.
@@ -244,9 +247,9 @@ export function PreAwardRecommendationTab({ dark, projectId, tenderId, tenderSta
             </div>
 
             {/* Actions */}
-            {canApprove && (!closed || cancellable) && (
+            {canApprove && (decisionOpen || cancellable) && (
               <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-                {!closed && <>
+                {decisionOpen && <>
                   <button onClick={() => setAction('approve')} style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: '#15803d', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Approve</button>
                   <button onClick={() => setAction('reject')} style={{ padding: '8px 16px', borderRadius: 6, border: `1px solid ${dark ? '#7f1d1d' : '#fecaca'}`, background: 'none', color: '#b91c1c', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Reject</button>
                 </>}
@@ -258,7 +261,8 @@ export function PreAwardRecommendationTab({ dark, projectId, tenderId, tenderSta
             {closed && <div style={{ marginTop: 14, fontSize: 12.5, color: sub }}>{cancelledTender
               ? <>This tender was <strong style={{ color: col }}>cancelled</strong>; the approval chain is closed.</>
               : <>This tender is <strong style={{ color: col }}>{status}</strong>; the approval chain is closed.</>}</div>}
-            {!canApprove && !closed && <div style={{ marginTop: 14, fontSize: 12.5, color: sub }}>Your role can view the approval chain but cannot approve, reject or cancel.</div>}
+            {!closed && heldTender && <div style={{ marginTop: 14, fontSize: 12.5, color: sub }}>This tender is <strong style={{ color: col }}>on hold</strong>; it can’t be approved or rejected until it’s taken off hold.</div>}
+            {!canApprove && decisionOpen && <div style={{ marginTop: 14, fontSize: 12.5, color: sub }}>Your role can view the approval chain but cannot approve, reject or cancel.</div>}
             {cancelMsg && <div data-cancel-msg="" style={{ marginTop: 12, fontSize: 12.5, color: dark ? '#86efac' : '#15803d' }}>{cancelMsg}</div>}
           </>
         )}

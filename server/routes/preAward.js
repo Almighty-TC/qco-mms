@@ -1135,8 +1135,8 @@ async function releaseActiveReservations(conn, tid, reason) {
 // Rejection is terminal (approve refuses a rejected tender; recompute does not reset it), so the
 // tender's reservations can never be awarded: its ACTIVE reservations are released in the SAME
 // transaction as the rejection, with released_reason='tender_rejected' (distinct from a cancellation).
-// A cancelled tender is refused (409), as approve refuses it. Tender row locked first; every check
-// reads the locked row.
+// A cancelled or held tender is refused (409), as approve refuses both. Tender row locked first; every
+// check reads the locked row.
 router.post('/:projectId/tenders/:id/reject', requireLivePermission('pre_award', 'can_approve'), async (req, res) => {
   const pid = Number(req.params.projectId); const tid = Number(req.params.id)
   try {
@@ -1150,6 +1150,9 @@ router.post('/:projectId/tenders/:id/reject', requireLivePermission('pre_award',
       // a cancelled tender is terminal — its reservations were released at cancel; rejecting it would
       // record an approval decision on a dead tender
       if (tender.status === 'cancelled') { await conn.rollback(); return res.status(409).json({ error: 'Cannot reject: tender was cancelled' }) }
+      // a tender on hold is paused — rejecting it would release its reservations while it is held (approve
+      // and generate-po refuse a held tender the same way)
+      if (tender.status === 'on_hold') { await conn.rollback(); return res.status(409).json({ error: 'This tender is on hold — take it off hold before rejecting it' }) }
       if (tender.approval_status === 'approved') { await conn.rollback(); return res.status(409).json({ error: 'Tender is already approved; cannot reject' }) }
       if (tender.approval_status === 'rejected') { await conn.rollback(); return res.status(409).json({ error: 'Tender is already rejected' }) }
 
