@@ -1117,7 +1117,7 @@ const PODetailInner = ({ dark, poId, projectName, onBack, onLeaf }: PODetailInne
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
           <HelpButton screenName="PO Detail" sections={PO_DETAIL_HELP} dark={dark} />
-          {!po.isLocked && (
+          {!po.isLocked && po.status !== 'closed' && po.status !== 'cancelled' && (
             <button onClick={() => setApprove(true)} style={{ padding: '8px 18px', borderRadius: 6, border: 'none', background: '#15803d', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
               🔒 Approve & Lock PO
             </button>
