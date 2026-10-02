@@ -910,6 +910,9 @@ router.patch('/pos/:id/approve', async (req, res) => {
 
 // ─── REJECT PO ────────────────────────────────────────────────────────────────
 // Item 10D: Any approver can reject with a reason. PO reverts to draft.
+// Only a PO awaiting approval can be rejected — the two states the approve route's multi-level path puts it in.
+// Anything else (rfq, po-raised, active, closed, cancelled, loa) is refused (409): a reject there would silently
+// unlock it, undo an approval, or reopen a closed or cancelled PO.
 router.patch('/pos/:id/reject', async (req, res) => {
   try {
     const id = Number(req.params.id)
@@ -920,6 +923,8 @@ router.patch('/pos/:id/reject', async (req, res) => {
       'SELECT id, po_number, status, owner_id FROM purchase_orders WHERE id=?', [id]
     )
     if (!po) return res.status(404).json({ error: 'PO not found' })
+    if (!['pending_approval', 'pending_director_approval'].includes(po.status))
+      return res.status(409).json({ error: `Only a PO awaiting approval can be rejected (status '${po.status}')` })
 
     await db.query("UPDATE purchase_orders SET status='rfq', is_locked=0 WHERE id=?", [id])
     await db.query(
