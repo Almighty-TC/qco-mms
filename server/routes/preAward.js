@@ -1255,9 +1255,10 @@ router.get('/:projectId/tenders/:id/approvals', requireLivePermission('pre_award
 // ═══ EVALUATION COMPUTATION + RECOMMENDATION (Phase 3.x) ════════════════════════
 // POST compute-recommendation (can_approve): derive commercial scores, apply
 // mandatory/min-score gates, rank survivors, persist the tender_evaluations roll-up.
-// If the tender is already approved/awarded, archive the prior computation into the
-// immutable tender_evaluation_snapshots, void the approval chain (status→'unapproved'),
-// and roll back approval_status/stage/status before writing the new results.
+// If the tender is already approved (approval_status 'approved' — the only signal: a stage of 'award' or a
+// status of 'awarded' alone can be set by create or PATCH without any approval), archive the prior computation
+// into the immutable tender_evaluation_snapshots, void the approval chain (status→'unapproved'), and roll back
+// approval_status/stage/status before writing the new results.
 //
 // GATING RULES (consolidated):
 //  - FIRST, before any other logic: a tender that has generated a real PO (a purchase_orders
@@ -1297,11 +1298,9 @@ router.post('/:projectId/tenders/:id/compute-recommendation', requireLivePermiss
     const [[po]] = await conn.query('SELECT id, po_number FROM purchase_orders WHERE tender_id=? AND project_id=? LIMIT 1', [tid, pid])
     if (po) return refuse(409, `This tender has already generated Purchase Order ${po.po_number} — its evaluation history is final and cannot be recomputed`)
 
-    // cancelled is terminal — refused whatever its stage says (a stage of 'award' would otherwise send it
-    // through the approved-tender reset below and back to status 'active')
+    // cancelled is terminal — refused whatever its stage or status says
     if (tender.status === 'cancelled') return refuse(409, "This tender is cancelled — its evaluation can't be recomputed")
-    // rejected is terminal too — refused whatever its stage or status says (a stage of 'award' or a status of
-    // 'awarded' would otherwise send it through the approved-tender reset below, back to approval 'pending')
+    // rejected is terminal too — refused whatever its stage or status says; a rejection is never recomputed
     if (tender.approval_status === 'rejected') return refuse(409, "This tender was rejected — its evaluation can't be recomputed")
 
     if (tender.criteria_locked_at == null)
@@ -1412,7 +1411,9 @@ router.post('/:projectId/tenders/:id/compute-recommendation', requireLivePermiss
 
     // ── write phase (+ archive/rollback if already approved) — same transaction, tender row still locked ──
     {
-      const wasApproved = tender.approval_status === 'approved' || tender.stage === 'award' || tender.status === 'awarded'
+      // approved means approval_status 'approved' only — a stage of 'award' or a status of 'awarded' can be set by
+      // create or PATCH without any approval, and must not archive and reset a tender that was never approved
+      const wasApproved = tender.approval_status === 'approved'
       if (wasApproved) {
         // assemble the archive from the PRIOR computation (current tender_evaluations)
         const [priorEvals] = await conn.query('SELECT bid_id, tech_score, comm_score, combined_score, rank_position, scores_json, evaluated_by, evaluated_at FROM tender_evaluations WHERE tender_id=?', [tid])
