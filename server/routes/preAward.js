@@ -1132,8 +1132,8 @@ async function releaseActiveReservations(conn, tid, reason) {
 }
 
 // ─── REJECT ───────────────────────────────────────────────────────────────────
-// Rejection is terminal (approve refuses a rejected tender, and compute-recommendation refuses one
-// outright, so a recompute can't reset it), so the tender's reservations can never be awarded: its
+// Rejection is terminal (approve and cancel refuse a rejected tender, and compute-recommendation refuses
+// one outright, so a recompute can't reset it), so the tender's reservations can never be awarded: its
 // ACTIVE reservations are released in the SAME transaction as the rejection, with
 // released_reason='tender_rejected' (distinct from a cancellation).
 // A cancelled or held tender is refused (409), as approve refuses both. Tender row locked first; every
@@ -1175,8 +1175,8 @@ router.post('/:projectId/tenders/:id/reject', requireLivePermission('pre_award',
 // reservation with released_reason='tender_cancelled'.
 // Allowed at any point BEFORE award; refused (409) once awarded — status 'awarded' or the approval
 // chain complete — or once a PO links the tender (a recompute after handoff resets status to
-// 'active' while the PO still exists), and if already cancelled. Tender row locked first; every
-// check reads the locked row.
+// 'active' while the PO still exists), and if already cancelled or rejected. Tender row locked first;
+// every check reads the locked row.
 router.post('/:projectId/tenders/:id/cancel', requireLivePermission('pre_award', 'can_approve'), async (req, res) => {
   const pid = Number(req.params.projectId); const tid = Number(req.params.id)
   try {
@@ -1187,6 +1187,9 @@ router.post('/:projectId/tenders/:id/cancel', requireLivePermission('pre_award',
       const [[tender]] = await conn.query('SELECT id, status, approval_status FROM tender_packages WHERE id = ? AND project_id = ? FOR UPDATE', [tid, pid])
       if (!tender) { await conn.rollback(); return res.status(404).json({ error: 'Tender not found' }) }
       if (tender.status === 'cancelled') { await conn.rollback(); return res.status(409).json({ error: 'Tender is already cancelled' }) }
+      // a rejected tender is terminal — reject already released its reservations; cancelling it would
+      // overwrite that recorded outcome
+      if (tender.approval_status === 'rejected') { await conn.rollback(); return res.status(409).json({ error: 'Cannot cancel: tender was rejected' }) }
       if (tender.status === 'awarded' || tender.approval_status === 'approved') {
         await conn.rollback()
         return res.status(409).json({ error: `Cannot cancel: the tender has been awarded (status '${tender.status}', approval '${tender.approval_status}')` })

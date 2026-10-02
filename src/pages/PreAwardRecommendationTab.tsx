@@ -81,10 +81,10 @@ export function PreAwardRecommendationTab({ dark, projectId, tenderId, tenderSta
   // A held tender is paused, not closed: approve and reject both refuse it, so neither is offered (cancel still is).
   const heldTender = tenderStatus === 'on_hold'
   const decisionOpen = !closed && !heldTender
-  // Mirrors the cancel endpoint's gate: refused once cancelled, once awarded (status 'awarded' or the chain
-  // approved — a PO only ever exists on an approved tender), so the button shows only before award. The
-  // server re-checks everything under the tender lock; its 409 is shown in the dialog.
-  const cancellable = canApprove && !!tenderStatus && tenderStatus !== 'cancelled' && tenderStatus !== 'awarded' && status !== 'approved'
+  // Mirrors the cancel endpoint's gate: refused once cancelled, once rejected, once awarded (status 'awarded' or
+  // the chain approved — a PO only ever exists on an approved tender), so the button shows only on an open tender.
+  // The server re-checks everything under the tender lock; its 409 is shown in the dialog.
+  const cancellable = canApprove && !!tenderStatus && tenderStatus !== 'cancelled' && tenderStatus !== 'awarded' && status !== 'approved' && status !== 'rejected'
 
   const rows = chain?.approvals ?? []
   const levelRow = (lvl: number, st: string) => rows.find(a => a.approval_level === lvl && a.status === st) || null
