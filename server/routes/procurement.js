@@ -1040,6 +1040,12 @@ router.get('/pos/:id/documents/:docId/download', async (req, res) => {
 })
 
 // ─── BULK UPLOAD ─────────────────────────────────────────────────────────────
+// A PO the bulk import must not overwrite: locked, in an approval-or-later status, or generated from a tender
+// award (tender_id set — its supplier and value are the record of that award). The preview marks these 'locked';
+// bulk-confirm re-checks the same rule on the server instead of trusting the client's rowStatus.
+const BULK_LOCKED_STATUSES = ['po-raised', 'approved', 'pending_director_approval']
+const bulkLocked = po => !!po.is_locked || BULK_LOCKED_STATUSES.includes(po.status) || po.tender_id != null
+
 // Item 6: Parse CSV/XLSX upload, return preview with validation results.
 router.post('/:projectId/pos/bulk-upload', uploadBulk.single('file'), async (req, res) => {
   try {
@@ -1109,7 +1115,7 @@ router.post('/:projectId/pos/bulk-upload', uploadBulk.single('file'), async (req
     const poNumbers  = normalised.map(r => r.po_number).filter(Boolean)
     const [existing] = await db.query(
       poNumbers.length
-        ? `SELECT po_number, status, is_locked, id FROM purchase_orders WHERE project_id=? AND TRIM(LOWER(po_number)) IN (${poNumbers.map(() => 'TRIM(LOWER(?))').join(',')})`
+        ? `SELECT po_number, status, is_locked, tender_id, id FROM purchase_orders WHERE project_id=? AND TRIM(LOWER(po_number)) IN (${poNumbers.map(() => 'TRIM(LOWER(?))').join(',')})`
         : 'SELECT NULL LIMIT 0',
       poNumbers.length ? [pid, ...poNumbers] : []
     )
@@ -1135,8 +1141,7 @@ router.post('/:projectId/pos/bulk-upload', uploadBulk.single('file'), async (req
 
       let rowStatus = errors.length > 0 ? 'invalid' : 'new'
       if (!inFileDup && found) {
-        const isLocked = !!found.is_locked || ['po-raised','approved','pending_director_approval'].includes(found.status)
-        rowStatus = isLocked ? 'locked' : 'duplicate'
+        rowStatus = bulkLocked(found) ? 'locked' : 'duplicate'
       }
 
       return {
@@ -1180,11 +1185,18 @@ router.post('/:projectId/pos/bulk-confirm', async (req, res) => {
       try {
         if (r.rowStatus === 'duplicate' && !replace_duplicates) { skipped++; continue }
         if (r.rowStatus === 'duplicate' && replace_duplicates) {
-          // Replace existing unlocked PO
+          // Replace existing unlocked PO — the lock rule is re-checked here, never taken from the client's rowStatus
           const [[ex]] = await db.query(
-            'SELECT id, status FROM purchase_orders WHERE project_id=? AND LOWER(po_number)=LOWER(?)',
+            'SELECT id, status, is_locked, tender_id FROM purchase_orders WHERE project_id=? AND LOWER(po_number)=LOWER(?)',
             [pid, r.po_number]
           )
+          if (ex && bulkLocked(ex)) {
+            skipped++
+            errors.push({ po_number: r.po_number, error: ex.tender_id != null
+              ? `PO ${r.po_number} was generated from a tender award — it can't be replaced by an import`
+              : `PO ${r.po_number} is locked or approved — it can't be replaced by an import` })
+            continue
+          }
           if (ex) {
             const before = { ...ex }
             await db.query(`
@@ -1531,6 +1543,8 @@ router.put('/pos/:id/replace', async (req, res) => {
       'SELECT * FROM purchase_orders WHERE id=?', [id]
     )
     if (!existing) return res.status(404).json({ error: 'PO not found' })
+    if (existing.tender_id != null)
+      return res.status(409).json({ error: `PO ${existing.po_number} was generated from a tender award — its header can't be replaced` })
     const locked = !!existing.is_locked || ['po-raised','approved','pending_director_approval'].includes(existing.status)
     if (locked) return res.status(400).json({ error: 'Cannot replace an approved or locked PO. Use a variation order instead.' })
 
@@ -1616,7 +1630,7 @@ router.post('/:projectId/pos', async (req, res) => {
 router.put('/pos/:id', async (req, res) => {
   try {
     const id = Number(req.params.id)
-    const [[existing]] = await db.query('SELECT id,po_number,is_locked FROM purchase_orders WHERE id=?', [id])
+    const [[existing]] = await db.query('SELECT id,po_number,is_locked,tender_id,vendor_name,supplier_id,value,currency FROM purchase_orders WHERE id=?', [id])
     if (!existing) return res.status(404).json({ error: 'PO not found' })
     if (existing.is_locked) return res.status(400).json({ error: 'This PO is locked and cannot be edited' })
 
@@ -1626,6 +1640,22 @@ router.put('/pos/:id', async (req, res) => {
       milestone_po_date, milestone_fat_date, milestone_esd_date,
       milestone_eta_date, milestone_ros_date,
     } = req.body
+
+    // A PO generated from a tender award keeps the award's supplier, value, currency and number. Each is compared
+    // as this route would WRITE it (so leaving one out, which would clear or default it, counts as a change too);
+    // value numerically. Every other header field stays editable.
+    if (existing.tender_id != null) {
+      const sameNum = (a, b) => (a == null || b == null) ? (a == null && b == null) : Math.round(Number(a) * 100) === Math.round(Number(b) * 100)
+      const changed = [
+        po_number !== existing.po_number && 'po_number',
+        vendor_name !== existing.vendor_name && 'vendor_name',
+        !sameNum(supplier_id || null, existing.supplier_id) && 'supplier_id',
+        !sameNum(value || null, existing.value) && 'value',
+        (currency || 'AUD') !== existing.currency && 'currency',
+      ].filter(Boolean)
+      if (changed.length)
+        return res.status(409).json({ error: `PO ${existing.po_number} was generated from a tender award — its ${changed.join(', ')} can't be changed` })
+    }
 
     await db.query(`
       UPDATE purchase_orders SET
