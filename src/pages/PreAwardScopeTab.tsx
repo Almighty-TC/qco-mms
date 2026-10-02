@@ -24,6 +24,8 @@ interface Reservation {
   tli_id: number; mto_line_id: number; qty_reserved: string | number; status: string
   line_number: string; description: string; uom: string | null; mto_id: number; mto_reference: string
   availability: Availability | null
+  // "On PO" flag (GET /scope): a revision of this MTO line is po-raised with a po_ref other than this tender's own PO
+  on_po: boolean; on_po_ref: string | null
   // award outcome (GET /scope): stored at award by generate-po; NULL while active
   qty_awarded: string | number | null; qty_released: string | number | null
   released_at: string | null; released_reason: string | null
@@ -37,7 +39,13 @@ interface PickerLine {
   wbs_code: string | null; status: string; inspection_class: string | null; vdrl_required: number
   total_qty: number | null; po_assigned: number; reserved: number; available: number | null
   reserved_by_this_tender: boolean
+  on_po: boolean; on_po_ref: string | null
 }
+
+// Advisory badge: the MTO line is already on a PO (direct POs aren't counted in availability). Reserving is still allowed.
+const OnPoBadge = ({ poRef }: { poRef: string }) => (
+  <span data-on-po="" title="This MTO line is already marked PO-raised against this PO; check before tendering it" style={{ background: 'rgba(245,158,11,0.16)', color: '#b45309', fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 9999 }}>On PO {poRef}</span>
+)
 
 const fmtQty = (v: string | number | null | undefined) => {
   if (v == null || v === '') return '—'
@@ -217,6 +225,7 @@ export function PreAwardScopeTab({ dark, projectId, tenderId, userRole }: {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                         <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12.5, fontWeight: 700, color: '#E84E0F' }}>{r.mto_reference} · {r.line_number}</span>
                         {pill(r)}
+                        {r.status === 'active' && r.on_po_ref && <OnPoBadge poRef={r.on_po_ref} />}
                       </div>
                       <div style={{ fontSize: 13, color: col, marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.description}>{r.description}</div>
                       {r.status === 'active' && r.availability && (
@@ -350,6 +359,7 @@ function AddLinesModal({ dark, projectId, tenderId, registers, onClose, onDone }
                     <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, fontWeight: 700, color: col }}>{l.line_number}</span>
                     {already && <span style={{ background: 'rgba(37,99,235,0.14)', color: '#1d4ed8', fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 9999 }}>Already reserved</span>}
                     {!already && none && <span style={{ background: 'rgba(148,163,184,0.18)', color: '#64748b', fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 9999 }}>None available</span>}
+                    {l.on_po_ref && <OnPoBadge poRef={l.on_po_ref} />}
                   </div>
                   <div style={{ fontSize: 12.5, color: sub, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.description}>{l.description}</div>
                 </div>
