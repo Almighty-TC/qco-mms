@@ -1132,9 +1132,10 @@ async function releaseActiveReservations(conn, tid, reason) {
 }
 
 // ─── REJECT ───────────────────────────────────────────────────────────────────
-// Rejection is terminal (approve refuses a rejected tender; recompute does not reset it), so the
-// tender's reservations can never be awarded: its ACTIVE reservations are released in the SAME
-// transaction as the rejection, with released_reason='tender_rejected' (distinct from a cancellation).
+// Rejection is terminal (approve refuses a rejected tender, and compute-recommendation refuses one
+// outright, so a recompute can't reset it), so the tender's reservations can never be awarded: its
+// ACTIVE reservations are released in the SAME transaction as the rejection, with
+// released_reason='tender_rejected' (distinct from a cancellation).
 // A cancelled or held tender is refused (409), as approve refuses both. Tender row locked first; every
 // check reads the locked row.
 router.post('/:projectId/tenders/:id/reject', requireLivePermission('pre_award', 'can_approve'), async (req, res) => {
@@ -1256,6 +1257,7 @@ router.get('/:projectId/tenders/:id/approvals', requireLivePermission('pre_award
 //  - FIRST, before any other logic: a tender that has generated a real PO (a purchase_orders
 //    row links it) is final — 409. Its evaluation is what the PO was awarded on. A PO exists
 //    only after approval, so the approved-tender archive/rollback below never sees such a tender.
+//  - a cancelled or rejected tender is final (409), whatever its stage or status.
 //  - criteria must be locked (409).
 //  - every eligible bid must be fully scored on every MANUAL criterion (409) — the
 //    anti-bias completeness guard: technical scoring is finished before prices fold in.
@@ -1292,6 +1294,9 @@ router.post('/:projectId/tenders/:id/compute-recommendation', requireLivePermiss
     // cancelled is terminal — refused whatever its stage says (a stage of 'award' would otherwise send it
     // through the approved-tender reset below and back to status 'active')
     if (tender.status === 'cancelled') return refuse(409, "This tender is cancelled — its evaluation can't be recomputed")
+    // rejected is terminal too — refused whatever its stage or status says (a stage of 'award' or a status of
+    // 'awarded' would otherwise send it through the approved-tender reset below, back to approval 'pending')
+    if (tender.approval_status === 'rejected') return refuse(409, "This tender was rejected — its evaluation can't be recomputed")
 
     if (tender.criteria_locked_at == null)
       return refuse(409, 'Criteria are not locked — lock the criteria before computing the recommendation')
