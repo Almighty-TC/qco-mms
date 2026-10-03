@@ -787,6 +787,13 @@ router.put('/:projectId/:mtoId/lines/:lineId', async (req, res) => {
 })
 
 // ─── DELETE /:projectId/:mtoId/lines/:lineId — soft-delete a line ─────────────
+// DELETE guard (§15 a): deleting a key's current row makes the line "removed" — its availability is
+// null, and reserve-lines and generate-po refuse every tender that holds it. After the po-raised 403,
+// one READ COMMITTED transaction: read the row, lock its key's rows (lockKeyRows), re-read under the
+// lock (404 if already deleted, 409 if its key changed), then 409 if any row of the key has a
+// tender_line_items row that is active, converted or partial_released, or any po_lines row
+// (source_mto_line_id). Released-only history is allowed — it strands nothing. Then the soft delete
+// and the register's line_count refresh, in the same transaction.
 router.delete('/:projectId/:mtoId/lines/:lineId', async (req, res) => {
   try {
     const [[line]] = await db.query(
@@ -800,15 +807,53 @@ router.delete('/:projectId/:mtoId/lines/:lineId', async (req, res) => {
       return res.status(403).json({ error: 'Cannot delete a line with a raised PO' })
     }
 
-    await db.query(`UPDATE mto_lines SET is_deleted = 1 WHERE id = ?`, [line.id])
-
-    // Refresh line_count
-    await db.query(
-      `UPDATE mto_registers SET line_count = (
-         SELECT COUNT(*) FROM mto_lines WHERE mto_id = ? AND revision = ? AND is_deleted = 0
-       ) WHERE id = ?`,
-      [line.mto_id, line.revision, line.mto_id]
-    )
+    const conn = await db.getConnection()
+    try {
+      await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+      await conn.beginTransaction()
+      const readRow = oldNumber => conn.query(
+        `SELECT l.id, l.mto_id, l.revision, l.line_number, l.is_deleted, (l.line_number = ?) AS same_key
+           FROM mto_lines l JOIN mto_registers r ON r.id = l.mto_id
+          WHERE l.id = ? AND r.project_id = ?`,
+        [oldNumber, line.id, req.params.projectId])
+      const [[r0]] = await readRow(line.line_number)
+      if (!r0) { await conn.rollback(); return res.status(404).json({ error: 'Line not found' }) }
+      await lockKeyRows(conn, [{ mto_id: r0.mto_id, line_number: r0.line_number }])
+      const [[r1]] = await readRow(r0.line_number)   // under the lock
+      if (!r1 || r1.is_deleted) { await conn.rollback(); return res.status(404).json({ error: 'Line not found' }) }
+      if (r1.mto_id !== r0.mto_id || !r1.same_key) { await conn.rollback(); return res.status(409).json({ error: LINE_CHANGED }) }
+      const [held] = await conn.query(
+        `SELECT t.status, tp.approval_status, COUNT(*) AS n
+           FROM tender_line_items t
+           JOIN mto_lines k ON k.id = t.mto_line_id
+           JOIN tender_packages tp ON tp.id = t.tender_id
+          WHERE k.mto_id = ? AND k.line_number = ? AND t.status IN ('active','converted','partial_released')
+          GROUP BY t.status, tp.approval_status`,
+        [r1.mto_id, r0.line_number])
+      const [[pol]] = await conn.query(
+        `SELECT COUNT(*) AS n FROM po_lines p JOIN mto_lines k ON k.id = p.source_mto_line_id
+          WHERE k.mto_id = ? AND k.line_number = ?`,
+        [r1.mto_id, r0.line_number])
+      const count = (st, appr) => held.filter(h => h.status === st && (appr == null || (h.approval_status === 'approved') === appr)).reduce((s, h) => s + Number(h.n), 0)
+      const active = count('active'), activeApproved = count('active', true), converted = count('converted'), partial = count('partial_released'), poLines = Number(pol.n)
+      if (active + converted + partial + poLines > 0) {
+        await conn.rollback()
+        const advice = []
+        if (active > activeApproved) advice.push('Cancelling or rejecting a tender releases its active reservations.')
+        if (activeApproved) advice.push(`${activeApproved} active reservation(s) belong to an approved tender, which can't be cancelled or rejected until its recommendation is recomputed.`)
+        if (converted + partial + poLines) advice.push("A line on a PO can't be removed while the PO exists.")
+        return res.status(409).json({ error: `Line ${r0.line_number} can't be deleted: it has ${active} active, ${converted} converted and ${partial} partially released tender reservation(s) and ${poLines} PO line(s). ${advice.join(' ')}` })
+      }
+      await conn.query(`UPDATE mto_lines SET is_deleted = 1 WHERE id = ?`, [line.id])
+      // Refresh line_count
+      await conn.query(
+        `UPDATE mto_registers SET line_count = (
+           SELECT COUNT(*) FROM mto_lines WHERE mto_id = ? AND revision = ? AND is_deleted = 0
+         ) WHERE id = ?`,
+        [r1.mto_id, r1.revision, r1.mto_id]
+      )
+      await conn.commit()
+    } catch (te) { await conn.rollback(); throw te } finally { conn.release() }
 
     audit(req, 'DELETE', 'mto_line', line.id, line, null)
     res.json({ ok: true })
