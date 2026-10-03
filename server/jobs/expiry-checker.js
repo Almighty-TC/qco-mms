@@ -196,6 +196,7 @@ async function checkContractExpiry() {
 // Runs both checks once on server startup (to catch any missed checks
 // after a restart), then repeats every 24 hours.
 function startExpiryChecker() {
+  if (process.env.QMAT_DISABLE_JOBS === '1') { console.log('[expiry-checker] disabled by QMAT_DISABLE_JOBS'); return null }
   console.log('[expiry-checker] Starting daily expiry checks (contract + password)')
 
   async function runAll() {
