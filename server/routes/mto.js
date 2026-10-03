@@ -1119,16 +1119,21 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
       'SELECT line_number, description, quantity, uom, wbs_code FROM mto_lines WHERE mto_id = ? AND revision = ? AND status = ? AND is_deleted = 0',
       [mtoId, mto.current_revision, 'po-raised']
     )
-    const uploadMap = new Map(lines.map(l => [String(l.line_number), l]))
+    // Compared as stored: the line by trimmed, lowercased number (the key is collation-equal in SQL);
+    // quantity parsed as the insert does (blank or non-numeric = null) and compared at the column's
+    // scale, DECIMAL(15,3); description, UOM and WBS trimmed and exact (blank = null).
+    const qty3 = v => { const s = String(v ?? '').trim(); const n = s === '' ? NaN : parseFloat(s); return isNaN(n) ? null : Math.round(n * 1000) }
+    const txt  = v => String(v ?? '').trim()
+    const uploadMap = new Map(lines.map(l => [lineKey(l.line_number), l]))
     const conflicts = []
     for (const locked of lockedLines) {
-      const uploaded = uploadMap.get(String(locked.line_number))
+      const uploaded = uploadMap.get(lineKey(locked.line_number))
       if (!uploaded) continue
       const changed = {}
-      if (String(uploaded.quantity ?? '') !== String(locked.quantity ?? '')) changed.quantity = { locked: locked.quantity, uploaded: uploaded.quantity }
-      if (String(uploaded.description ?? '') !== String(locked.description ?? '')) changed.description = { locked: locked.description, uploaded: uploaded.description }
-      if (String(uploaded.uom ?? '') !== String(locked.uom ?? '')) changed.uom = { locked: locked.uom, uploaded: uploaded.uom }
-      if (String(uploaded.wbs_code ?? '') !== String(locked.wbs_code ?? '')) changed.wbs_code = { locked: locked.wbs_code, uploaded: uploaded.wbs_code }
+      if (qty3(uploaded.quantity) !== qty3(locked.quantity)) changed.quantity = { locked: locked.quantity, uploaded: uploaded.quantity }
+      if (txt(uploaded.description) !== txt(locked.description)) changed.description = { locked: locked.description, uploaded: uploaded.description }
+      if (txt(uploaded.uom) !== txt(locked.uom)) changed.uom = { locked: locked.uom, uploaded: uploaded.uom }
+      if (txt(uploaded.wbs_code) !== txt(locked.wbs_code)) changed.wbs_code = { locked: locked.wbs_code, uploaded: uploaded.wbs_code }
       if (Object.keys(changed).length > 0) conflicts.push({ line_number: locked.line_number, changes: changed })
     }
 
