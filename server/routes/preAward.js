@@ -18,7 +18,7 @@ const { dbError } = require('../utils/dbError')
 const { authenticateToken } = require('../middleware/auth')
 const { denyReadOnly, requireProjectScope } = require('../middleware/permissions')
 const { requireLivePermission } = require('../middleware/requireLivePermission')
-const { getAvailableQty } = require('../lib/mtoAvailability')
+const { getAvailableQty, keyInfo, lockKeyRows } = require('../lib/mtoAvailability')
 
 router.use(authenticateToken)
 router.use(denyReadOnly)                          // floor: viewer/auditor barred from writes
@@ -813,15 +813,18 @@ router.get('/:projectId/tenders/:id/scores', requireLivePermission('pre_award', 
 // POST reserve-lines (can_edit): a tender reserves MTO line quantity — composing its
 // scope (same trust tier as the criteria editor). Body { lines:[{mto_line_id, qty_reserved}] }.
 // Atomic (all-or-nothing) across the batch. Race-safe: the txn runs at READ COMMITTED and
-// locks each mto_line row FOR UPDATE, then reads availability via getAvailableQty UNDER that
-// lock — a concurrent request for the same line blocks, then re-reads the committed
-// reservation and 422s (never a stale pre-lock read). 409 if this tender already has a row
-// for a requested line (modifying a reservation is a separate action, out of scope here).
+// locks every requested line's KEY rows (all revisions of the line, lockKeyRows) FOR UPDATE, then
+// reads availability via getAvailableQty UNDER that lock — a concurrent request for the same line
+// (any revision's row) blocks, then re-reads the committed reservation and 422s (never a stale
+// pre-lock read). Only current-revision ids can be reserved: 409 for an older revision's id or a
+// line removed from the current revision. 409 if this tender already has a row for a requested
+// line id, or an active/converted reservation on any revision's row of the line (modifying a
+// reservation is a separate action, out of scope here).
 // The tender row is locked FIRST (the same lock cancel, reject, approve, recompute and generate-po
 // take), and the tender's state is gated under that lock: only a live, un-awarded, un-held tender
 // can add scope — 409 if cancelled, rejected, awarded/approved, handed off to a PO, or on hold.
 // Without the lock a reserve could land after a cancel/reject released the tender's reservations,
-// leaving active reservations on a dead tender. Lock order: tender row → mto_lines (sorted by id).
+// leaving active reservations on a dead tender. Lock order: tender row → key rows (lockKeyRows).
 router.post('/:projectId/tenders/:id/reserve-lines', requireLivePermission('pre_award', 'can_edit'), async (req, res) => {
   const pid = Number(req.params.projectId); const tid = Number(req.params.id)
   try {
@@ -865,14 +868,24 @@ router.post('/:projectId/tenders/:id/reserve-lines', requireLivePermission('pre_
       if (po) { await conn.rollback(); return res.status(409).json({ error: `Tender has been handed off to PO ${po.po_number} — its scope is final` }) }
       if (tender.status === 'on_hold') { await conn.rollback(); return res.status(409).json({ error: 'This tender is on hold — take it off hold before adding lines to its scope' }) }
 
-      // stable lock order (sorted by id) so concurrent batches can't deadlock
+      // serialization point: every requested line's key rows, all keys in one statement (lockKeyRows)
+      const [keyRows] = await conn.query(`SELECT mto_id, line_number FROM mto_lines WHERE id IN (${ids.map(() => '?').join(',')})`, ids)
+      await lockKeyRows(conn, keyRows)
+      const info = await keyInfo(ids, conn)   // read UNDER the lock
       const ordered = [...lines].sort((a, b) => Number(a.mto_line_id) - Number(b.mto_line_id))
       const created = []
       for (const l of ordered) {
         const mid = Number(l.mto_line_id); const q = Number(l.qty_reserved)
-        await conn.query('SELECT id FROM mto_lines WHERE id = ? FOR UPDATE', [mid])   // serialization point
+        const k = info.get(mid)
+        if (k.current_line_id == null) { await conn.rollback(); return res.status(409).json({ error: `mto_line_id ${mid} (line ${k.line_number}) has been removed from the current revision ${k.current_revision} — it can't be reserved` }) }
+        if (k.current_line_id !== mid) { await conn.rollback(); return res.status(409).json({ error: `mto_line_id ${mid} (line ${k.line_number}, revision ${k.revision}) is not in the current revision ${k.current_revision} — reserve mto_line_id ${k.current_line_id} instead` }) }
         const [[dup]] = await conn.query('SELECT id FROM tender_line_items WHERE tender_id = ? AND mto_line_id = ?', [tid, mid])
         if (dup) { await conn.rollback(); return res.status(409).json({ error: `Tender already has a reservation for mto_line_id ${mid} — modifying a reservation is a separate action` }) }
+        const [[held]] = await conn.query(
+          `SELECT t.mto_line_id, t.status, k.revision FROM tender_line_items t JOIN mto_lines k ON k.id = t.mto_line_id
+            WHERE t.tender_id = ? AND t.status IN ('active','converted') AND k.mto_id = ? AND k.line_number = ? LIMIT 1`,
+          [tid, k.mto_id, k.line_number])
+        if (held) { await conn.rollback(); return res.status(409).json({ error: `Tender already has a reservation on line ${k.line_number} (mto_line_id ${held.mto_line_id}, revision ${held.revision}, ${held.status}) — one reservation per MTO line across revisions` }) }
         const a = await getAvailableQty(mid, conn)   // computed UNDER the lock, at READ COMMITTED
         if (q > a.available) {
           await conn.rollback()
@@ -894,7 +907,7 @@ router.post('/:projectId/tenders/:id/reserve-lines', requireLivePermission('pre_
 // computed by the shared getAvailableQty — the SAME formula the reserve path enforces under
 // lock, so the displayed number and the enforced number can never disagree by design. Also
 // returns the project's active MTO registers so the "add lines" picker can offer a register.
-// "On PO" flag (display only — getAvailableQty is unchanged): a line counts as already on a PO when ANY revision of
+// "On PO" flag (display only — it does not affect getAvailableQty): a line counts as already on a PO when ANY revision of
 // it (same mto_id and line_number) has status 'po-raised' with a po_ref — direct POs are linked to the MTO only by
 // that free text, so availability never sees them. The most recent such ref wins. A ref equal to this tender's own
 // PO (its own award, written by generate-po) is not a flag. Returns Map(mto_line_id → po_ref | null).
@@ -952,12 +965,20 @@ router.get('/:projectId/tenders/:id/scope', requireLivePermission('pre_award', '
       'SELECT id, po_number, supplier_id, vendor_name, value, currency, status FROM purchase_orders WHERE tender_id = ? ORDER BY id DESC LIMIT 1', [tid])
 
     // Live availability only for ACTIVE reservations (converted/released rows no longer consume).
+    // revision_note: null when the reservation is on its line's current-revision row; otherwise it
+    // names the current revision — 'old_revision' (the line has a newer row) or 'removed' (no row).
     const onPo = await onPoRefs(rows.map(r => r.mto_line_id), po ? po.po_number : null)
+    const keys = await keyInfo(rows.map(r => r.mto_line_id))
     const reservations = []
     for (const row of rows) {
       const availability = row.status === 'active' ? await getAvailableQty(row.mto_line_id) : null
       const ref = onPo.get(row.mto_line_id) ?? null
-      reservations.push({ ...row, availability, on_po: ref != null, on_po_ref: ref })
+      const k = keys.get(row.mto_line_id)
+      const revision_note = k.current_line_id === row.mto_line_id ? null : {
+        state: k.current_line_id == null ? 'removed' : 'old_revision',
+        reserved_revision: k.revision, current_revision: k.current_revision, current_mto_line_id: k.current_line_id,
+      }
+      reservations.push({ ...row, availability, on_po: ref != null, on_po_ref: ref, revision_note })
     }
 
     const [registers] = await db.query(
@@ -1003,14 +1024,18 @@ router.get('/:projectId/tenders/:id/available-lines', requireLivePermission('pre
          FROM mto_lines WHERE ${whereSql} ORDER BY line_number ASC, id ASC LIMIT ? OFFSET ?`,
       [...params, limit, offset])
 
-    // which of THESE page lines this tender already reserved (active) → picker disables them
+    // which of THESE page lines this tender already holds — an active or converted reservation on any
+    // revision's row of the line (the reserve-lines 409) → picker disables them
     let mine = new Set()
     if (lines.length) {
       const ids = lines.map(l => l.id)
       const [dups] = await db.query(
-        `SELECT mto_line_id FROM tender_line_items WHERE tender_id = ? AND status = 'active' AND mto_line_id IN (${ids.map(() => '?').join(',')})`,
+        `SELECT DISTINCT m.id FROM mto_lines m
+           JOIN mto_lines k ON k.mto_id = m.mto_id AND k.line_number = m.line_number
+           JOIN tender_line_items t ON t.mto_line_id = k.id AND t.tender_id = ? AND t.status IN ('active','converted')
+          WHERE m.id IN (${ids.map(() => '?').join(',')})`,
         [tid, ...ids])
-      mine = new Set(dups.map(d => d.mto_line_id))
+      mine = new Set(dups.map(d => d.id))
     }
 
     // "On PO" flag for the page (display only), ignoring this tender's own PO
@@ -1538,7 +1563,7 @@ router.post('/:projectId/tenders/:id/generate-po', requireLivePermission('pre_aw
       // tender row lock FIRST — every check below reads the locked row, in the same order as before
       // (hold guard first). Recompute, approve, reject and cancel take the same lock first, so an
       // approval can't be reset (or a PO created) between these checks and the conversion.
-      // Lock order: tender row → reservations → PO / po_lines / mto_lines / VDRL.
+      // Lock order: tender row → reservations → key rows (lockKeyRows) → PO / po_lines / mto_lines / VDRL.
       const [[tender]] = await conn.query('SELECT id, status, approval_status, currency, wbs_code, discipline FROM tender_packages WHERE id=? AND project_id=? FOR UPDATE', [tid, pid])
       if (!tender) { await conn.rollback(); return res.status(404).json({ error: 'Tender not found' }) }
       if (tender.status === 'on_hold') { await conn.rollback(); return res.status(409).json({ error: 'This tender is on hold — take it off hold before generating a Purchase Order' }) }
@@ -1558,12 +1583,26 @@ router.post('/:projectId/tenders/:id/generate-po', requireLivePermission('pre_aw
       const [[existingPo]] = await conn.query('SELECT id FROM purchase_orders WHERE tender_id=? LIMIT 1', [tid])
       if (existingPo) { await conn.rollback(); return res.status(409).json({ error: `Tender already handed off to PO #${existingPo.id}` }) }
 
-      // active reservations (locked), joined to their MTO lines for line detail
+      // active reservations (locked) — no join: the MTO rows are locked separately, in order, below
       const [resv] = await conn.query(
-        `SELECT t.id AS tli_id, t.mto_line_id, t.qty_reserved, m.description, m.uom
-           FROM tender_line_items t JOIN mto_lines m ON m.id=t.mto_line_id
+        `SELECT t.id AS tli_id, t.mto_line_id, t.qty_reserved
+           FROM tender_line_items t
           WHERE t.tender_id=? AND t.status='active' ORDER BY t.mto_line_id FOR UPDATE`, [tid])
       if (resv.length === 0) { await conn.rollback(); return res.status(409).json({ error: 'No active reservations to convert' }) }
+
+      // every reserved line's key rows (lockKeyRows), then line detail and the current-revision row under the lock.
+      // A line removed from the current revision can't be awarded. The po_line keeps the reserved row as its
+      // source_mto_line_id; status and po_ref go on the line's current-revision row.
+      const resvIds = [...new Set(resv.map(r => r.mto_line_id))]
+      const [keyRows] = await conn.query(`SELECT mto_id, line_number FROM mto_lines WHERE id IN (${resvIds.map(() => '?').join(',')})`, resvIds)
+      await lockKeyRows(conn, keyRows)
+      const info = await keyInfo(resvIds, conn)
+      const gone = resv.map(r => info.get(r.mto_line_id)).filter(k => k.current_line_id == null)
+      if (gone.length) {
+        await conn.rollback()
+        return res.status(409).json({ error: `Reserved line(s) removed from the current MTO revision: ${gone.map(k => `${k.line_number} (mto_line_id ${k.id}, current revision ${k.current_revision})`).join(', ')} — cannot generate a PO` })
+      }
+      for (const r of resv) { const k = info.get(r.mto_line_id); r.description = k.description; r.uom = k.uom; r.current_line_id = k.current_line_id }
 
       // Winning bid's per-line proposed quantities. ZERO rows = a LEGACY bid (predates this
       // feature) → full conversion, exactly the original behavior. Rows present → per-line award.
@@ -1624,7 +1663,7 @@ router.post('/:projectId/tenders/:id/generate-po', requireLivePermission('pre_aw
             [rawQ, `Partial award: proposed ${rawQ} of ${r.qty_reserved} reserved; ${(reserved - q).toFixed(3)} released`, r.tli_id])
           outcome.partial_released++
         }
-        await conn.query("UPDATE mto_lines SET status='po-raised', po_ref=? WHERE id=?", [po_number, r.mto_line_id])
+        await conn.query("UPDATE mto_lines SET status='po-raised', po_ref=? WHERE id=?", [po_number, r.current_line_id])
       }
 
       // ── PHASE 2 — VDRL transfer (runs AFTER all Phase-1 conversions, same txn + FOR UPDATE lock) ──
