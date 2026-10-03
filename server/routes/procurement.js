@@ -62,23 +62,14 @@ const multer  = require('multer')
 const uploadDir = path.join(__dirname, '..', 'uploads', 'po_documents')
 fs.mkdirSync(uploadDir, { recursive: true })
 
-const poDocStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const dir = path.join(uploadDir, String(req.params.id || 'tmp'))
-    fs.mkdirSync(dir, { recursive: true })
-    cb(null, dir)
-  },
-  filename: (req, file, cb) => {
-    // Prefix with timestamp to avoid collisions
-    const ts   = Date.now()
-    const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')
-    cb(null, `${ts}_${safe}`)
-  },
-})
+// Blob migration: memoryStorage (buffer) → blobStore.persist in the handler (which keeps
+// the per-poId subdir + timestamped-name shape for the disk-fallback path). No disk file is
+// written until AFTER the role + PO-exists checks, so rejections need no file cleanup.
+const blobStore = require('../lib/blobStore')
 const { fileFilter } = require('../utils/upload')
 const { fileNotEmpty } = require('../utils/validate')
 const uploadPoDoc = multer({
-  storage: poDocStorage,
+  storage: multer.memoryStorage(),
   limits:  { fileSize: 50 * 1024 * 1024 },   // 50 MB
   fileFilter: fileFilter('document'),
 })
@@ -806,6 +797,10 @@ router.patch('/pos/:id/approve', async (req, res) => {
       'SELECT id, po_number, value, currency, status, project_id FROM purchase_orders WHERE id=?', [id]
     )
     if (!po) return res.status(404).json({ error: 'PO not found' })
+    // A closed (complete) or cancelled PO is finished — approving it would lock it as po-raised again. Every other
+    // status behaves as before on all three paths (active and po-raised POs can still be approved and locked).
+    if (po.status === 'closed' || po.status === 'cancelled')
+      return res.status(409).json({ error: `A ${po.status} PO can't be approved` })
 
     const { threshold1, threshold2 } = await getProjectSettings(po.project_id)
     const poValue = po.value ?? 0
@@ -919,6 +914,9 @@ router.patch('/pos/:id/approve', async (req, res) => {
 
 // ─── REJECT PO ────────────────────────────────────────────────────────────────
 // Item 10D: Any approver can reject with a reason. PO reverts to draft.
+// Only a PO awaiting approval can be rejected — the two states the approve route's multi-level path puts it in.
+// Anything else (rfq, po-raised, active, closed, cancelled, loa) is refused (409): a reject there would silently
+// unlock it, undo an approval, or reopen a closed or cancelled PO.
 router.patch('/pos/:id/reject', async (req, res) => {
   try {
     const id = Number(req.params.id)
@@ -929,6 +927,8 @@ router.patch('/pos/:id/reject', async (req, res) => {
       'SELECT id, po_number, status, owner_id FROM purchase_orders WHERE id=?', [id]
     )
     if (!po) return res.status(404).json({ error: 'PO not found' })
+    if (!['pending_approval', 'pending_director_approval'].includes(po.status))
+      return res.status(409).json({ error: `Only a PO awaiting approval can be rejected (status '${po.status}')` })
 
     await db.query("UPDATE purchase_orders SET status='rfq', is_locked=0 WHERE id=?", [id])
     await db.query(
@@ -956,15 +956,14 @@ router.patch('/pos/:id/reject', async (req, res) => {
 router.post('/pos/:id/documents', uploadPoDoc.single('file'), async (req, res) => {
   try {
     const id = Number(req.params.id)
+    // memoryStorage: no disk file exists yet on these rejection paths — nothing to clean up.
     if (!DOC_UPLOAD_ROLES.has(req.user.role)) {
-      if (req.file) fs.unlinkSync(req.file.path)
       return res.status(403).json({ error: 'Your role cannot upload PO documents' })
     }
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
 
     const [[po]] = await db.query('SELECT id, po_number FROM purchase_orders WHERE id=?', [id])
     if (!po) {
-      fs.unlinkSync(req.file.path)
       return res.status(404).json({ error: 'PO not found' })
     }
 
@@ -981,11 +980,15 @@ router.post('/pos/:id/documents', uploadPoDoc.single('file'), async (req, res) =
       [id]
     )
 
-    // Insert new document record
-    const relativePath = path.relative(
-      path.join(__dirname, '..'),
-      req.file.path
-    )
+    // Blob migration: persist to blob (key) or disk (legacy relative shape under the per-poId
+    // subdir). storedName + diskAbsPath replicate the old diskStorage destination/filename.
+    const storedName = `${Date.now()}_${req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+    const diskAbsPath = path.join(uploadDir, String(id), storedName)
+    const { value: relativePath } = await blobStore.persist({
+      key: blobStore.keyFor('procurement', storedName),   // module key matches documents.js RESOLVERS
+      diskAbsPath, buffer: req.file.buffer, contentType: req.file.mimetype,
+      diskValue: path.relative(path.join(__dirname, '..'), diskAbsPath),
+    })
     await db.query(`
       INSERT INTO po_documents
         (po_id, doc_type, file_name, file_path, file_size_bytes, mime_type,
@@ -1017,6 +1020,16 @@ router.get('/pos/:id/documents/:docId/download', async (req, res) => {
     )
     if (!doc) return res.status(404).json({ error: 'Document not found' })
 
+    // DUAL-READ FALLBACK (blob migration): blob first, then existing disk read.
+    const blobStream = await blobStore.getFile(blobStore.keyFor('procurement', doc.file_path))
+    if (blobStream) {
+      audit(req, 'signed_po_downloaded', `purchase_orders/${poId}/documents/${docId}`,
+        null, { file: doc.file_name, version: doc.version })
+      res.setHeader('Content-Disposition', `attachment; filename="${doc.file_name}"`)
+      res.setHeader('Content-Type', doc.mime_type)
+      return blobStream.pipe(res)
+    }
+
     // Resolve absolute path — never expose file_path in response
     const absPath = path.join(__dirname, '..', doc.file_path)
     if (!fs.existsSync(absPath)) {
@@ -1036,6 +1049,12 @@ router.get('/pos/:id/documents/:docId/download', async (req, res) => {
 })
 
 // ─── BULK UPLOAD ─────────────────────────────────────────────────────────────
+// A PO the bulk import must not overwrite: locked, in an approval-or-later status, or generated from a tender
+// award (tender_id set — its supplier and value are the record of that award). The preview marks these 'locked';
+// bulk-confirm re-checks the same rule on the server instead of trusting the client's rowStatus.
+const BULK_LOCKED_STATUSES = ['po-raised', 'approved', 'pending_director_approval']
+const bulkLocked = po => !!po.is_locked || BULK_LOCKED_STATUSES.includes(po.status) || po.tender_id != null
+
 // Item 6: Parse CSV/XLSX upload, return preview with validation results.
 router.post('/:projectId/pos/bulk-upload', uploadBulk.single('file'), async (req, res) => {
   try {
@@ -1105,7 +1124,7 @@ router.post('/:projectId/pos/bulk-upload', uploadBulk.single('file'), async (req
     const poNumbers  = normalised.map(r => r.po_number).filter(Boolean)
     const [existing] = await db.query(
       poNumbers.length
-        ? `SELECT po_number, status, is_locked, id FROM purchase_orders WHERE project_id=? AND TRIM(LOWER(po_number)) IN (${poNumbers.map(() => 'TRIM(LOWER(?))').join(',')})`
+        ? `SELECT po_number, status, is_locked, tender_id, id FROM purchase_orders WHERE project_id=? AND TRIM(LOWER(po_number)) IN (${poNumbers.map(() => 'TRIM(LOWER(?))').join(',')})`
         : 'SELECT NULL LIMIT 0',
       poNumbers.length ? [pid, ...poNumbers] : []
     )
@@ -1131,8 +1150,7 @@ router.post('/:projectId/pos/bulk-upload', uploadBulk.single('file'), async (req
 
       let rowStatus = errors.length > 0 ? 'invalid' : 'new'
       if (!inFileDup && found) {
-        const isLocked = !!found.is_locked || ['po-raised','approved','pending_director_approval'].includes(found.status)
-        rowStatus = isLocked ? 'locked' : 'duplicate'
+        rowStatus = bulkLocked(found) ? 'locked' : 'duplicate'
       }
 
       return {
@@ -1176,11 +1194,18 @@ router.post('/:projectId/pos/bulk-confirm', async (req, res) => {
       try {
         if (r.rowStatus === 'duplicate' && !replace_duplicates) { skipped++; continue }
         if (r.rowStatus === 'duplicate' && replace_duplicates) {
-          // Replace existing unlocked PO
+          // Replace existing unlocked PO — the lock rule is re-checked here, never taken from the client's rowStatus
           const [[ex]] = await db.query(
-            'SELECT id, status FROM purchase_orders WHERE project_id=? AND LOWER(po_number)=LOWER(?)',
+            'SELECT id, status, is_locked, tender_id FROM purchase_orders WHERE project_id=? AND LOWER(po_number)=LOWER(?)',
             [pid, r.po_number]
           )
+          if (ex && bulkLocked(ex)) {
+            skipped++
+            errors.push({ po_number: r.po_number, error: ex.tender_id != null
+              ? `PO ${r.po_number} was generated from a tender award — it can't be replaced by an import`
+              : `PO ${r.po_number} is locked or approved — it can't be replaced by an import` })
+            continue
+          }
           if (ex) {
             const before = { ...ex }
             await db.query(`
@@ -1527,6 +1552,8 @@ router.put('/pos/:id/replace', async (req, res) => {
       'SELECT * FROM purchase_orders WHERE id=?', [id]
     )
     if (!existing) return res.status(404).json({ error: 'PO not found' })
+    if (existing.tender_id != null)
+      return res.status(409).json({ error: `PO ${existing.po_number} was generated from a tender award — its header can't be replaced` })
     const locked = !!existing.is_locked || ['po-raised','approved','pending_director_approval'].includes(existing.status)
     if (locked) return res.status(400).json({ error: 'Cannot replace an approved or locked PO. Use a variation order instead.' })
 
@@ -1612,7 +1639,7 @@ router.post('/:projectId/pos', async (req, res) => {
 router.put('/pos/:id', async (req, res) => {
   try {
     const id = Number(req.params.id)
-    const [[existing]] = await db.query('SELECT id,po_number,is_locked FROM purchase_orders WHERE id=?', [id])
+    const [[existing]] = await db.query('SELECT id,po_number,is_locked,tender_id,vendor_name,supplier_id,value,currency FROM purchase_orders WHERE id=?', [id])
     if (!existing) return res.status(404).json({ error: 'PO not found' })
     if (existing.is_locked) return res.status(400).json({ error: 'This PO is locked and cannot be edited' })
 
@@ -1622,6 +1649,22 @@ router.put('/pos/:id', async (req, res) => {
       milestone_po_date, milestone_fat_date, milestone_esd_date,
       milestone_eta_date, milestone_ros_date,
     } = req.body
+
+    // A PO generated from a tender award keeps the award's supplier, value, currency and number. Each is compared
+    // as this route would WRITE it (so leaving one out, which would clear or default it, counts as a change too);
+    // value numerically. Every other header field stays editable.
+    if (existing.tender_id != null) {
+      const sameNum = (a, b) => (a == null || b == null) ? (a == null && b == null) : Math.round(Number(a) * 100) === Math.round(Number(b) * 100)
+      const changed = [
+        po_number !== existing.po_number && 'po_number',
+        vendor_name !== existing.vendor_name && 'vendor_name',
+        !sameNum(supplier_id || null, existing.supplier_id) && 'supplier_id',
+        !sameNum(value || null, existing.value) && 'value',
+        (currency || 'AUD') !== existing.currency && 'currency',
+      ].filter(Boolean)
+      if (changed.length)
+        return res.status(409).json({ error: `PO ${existing.po_number} was generated from a tender award — its ${changed.join(', ')} can't be changed` })
+    }
 
     await db.query(`
       UPDATE purchase_orders SET
@@ -1646,11 +1689,18 @@ router.put('/pos/:id', async (req, res) => {
 })
 
 // ─── DELETE PO ────────────────────────────────────────────────────────────────
+// A PO generated from a Pre-Award tender (tender_id set) is refused (409): it is the record of
+// that award, and its po_lines are the MTO quantity the award consumed — deleting them would
+// silently free that quantity (getAvailableQty) while the tender's reservations stay 'converted'.
 router.delete('/pos/:id', async (req, res) => {
   try {
     const id = Number(req.params.id)
-    const [[existing]] = await db.query('SELECT id,po_number,is_locked FROM purchase_orders WHERE id=?', [id])
+    const [[existing]] = await db.query(
+      `SELECT po.id, po.po_number, po.is_locked, po.tender_id, t.ref AS tender_ref
+         FROM purchase_orders po LEFT JOIN tender_packages t ON t.id = po.tender_id WHERE po.id=?`, [id])
     if (!existing) return res.status(404).json({ error: 'PO not found' })
+    if (existing.tender_id != null)
+      return res.status(409).json({ error: `PO ${existing.po_number} was generated from tender ${existing.tender_ref} and cannot be deleted — it is the record of that award. Voiding or cancelling a PO is not currently available in the system.` })
     if (existing.is_locked) return res.status(400).json({ error: 'Locked POs cannot be deleted' })
     await db.query('DELETE FROM po_lines WHERE po_id=?', [id])
     await db.query('DELETE FROM purchase_orders WHERE id=?', [id])
@@ -1678,14 +1728,24 @@ router.post('/pos/:id/lines', async (req, res) => {
   }
 })
 
+// Both line routes resolve the line against the PO in the URL (404 if it isn't on that PO) —
+// never acting on a line id alone. A line generated from a tender award (source_mto_line_id set)
+// carries the awarded MTO quantity that getAvailableQty counts as consumed: its qty and uom can't
+// change and it can't be deleted (409). Every other field, and every other line, is unaffected.
+const sameQty = (a, b) => (a == null || b == null) ? (a == null && b == null) : Math.round(Number(a) * 1000) === Math.round(Number(b) * 1000)
+
 router.put('/pos/:id/lines/:lineId', async (req, res) => {
   try {
-    const lineId = Number(req.params.lineId)
+    const poId = Number(req.params.id); const lineId = Number(req.params.lineId)
     const { line_number, description, qty, uom, uom_id, unit_price, ros_date, cdd } = req.body
+    const [[existing]] = await db.query('SELECT id, line_number, qty, uom, source_mto_line_id FROM po_lines WHERE id=? AND po_id=?', [lineId, poId])
+    if (!existing) return res.status(404).json({ error: 'PO line not found on this PO' })
+    if (existing.source_mto_line_id != null && (!sameQty(qty || null, existing.qty) || (uom || 'EA') !== existing.uom))
+      return res.status(409).json({ error: `Line ${existing.line_number} was generated from a tender award — its quantity and unit are the awarded MTO quantity and cannot be changed` })
     await db.query(`
       UPDATE po_lines SET line_number=?,description=?,qty=?,uom=?,uom_id=?,unit_price=?,ros_date=?,cdd=?
-      WHERE id=?
-    `, [line_number, description, qty||null, uom||'EA', uom_id||null, unit_price||null, ros_date||null, cdd||null, lineId])
+      WHERE id=? AND po_id=?
+    `, [line_number, description, qty||null, uom||'EA', uom_id||null, unit_price||null, ros_date||null, cdd||null, lineId, poId])
     const [[line]] = await db.query('SELECT * FROM po_lines WHERE id=?', [lineId])
     res.json(line)
   } catch (e) {
@@ -1695,7 +1755,12 @@ router.put('/pos/:id/lines/:lineId', async (req, res) => {
 
 router.delete('/pos/:id/lines/:lineId', async (req, res) => {
   try {
-    await db.query('DELETE FROM po_lines WHERE id=?', [Number(req.params.lineId)])
+    const poId = Number(req.params.id); const lineId = Number(req.params.lineId)
+    const [[existing]] = await db.query('SELECT id, line_number, source_mto_line_id FROM po_lines WHERE id=? AND po_id=?', [lineId, poId])
+    if (!existing) return res.status(404).json({ error: 'PO line not found on this PO' })
+    if (existing.source_mto_line_id != null)
+      return res.status(409).json({ error: `Line ${existing.line_number} was generated from a tender award — it carries the awarded MTO quantity and cannot be deleted` })
+    await db.query('DELETE FROM po_lines WHERE id=? AND po_id=?', [lineId, poId])
     res.json({ ok: true })
   } catch (e) {
     dbError(res, e)

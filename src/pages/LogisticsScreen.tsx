@@ -13,6 +13,7 @@ import { ScopeBanner } from '../components/ScopeBanner'
 import { Pager } from '../components/Pager'
 import { useResizableTable, ResetColumnsButton } from '../components/colResize'
 import { HelpButton } from '../components/HelpDrawer'
+import { downloadFile, viewFile } from '../lib/fileAccess'   // authed Download/View (blob-aware)
 import { LOGISTICS_HELP } from '../helpContent'
 
 // Resizable column defaults — SCN register (13 cols), seeded from the prior fixed widths.
@@ -21,6 +22,7 @@ const LOG_MIN = [36, 80, 70, 90, 80, 100, 60, 70, 70, 50, 60, 90, 40]
 import { usePagedList } from '../hooks/usePagedList'
 
 import { API } from '../lib/api'
+import { containerDimViolations, containerDimMessage } from '../lib/packaging'
 
 // ─── TYPES ────────────────────────────────────────────────────
 interface SCNRow {
@@ -32,6 +34,8 @@ interface SCNRow {
   status: string; display_status: string; rag?: string | null
   is_critical_path: number
   total_packages?: number | null; total_weight_kg?: number | null
+  packed_by_type?: 'internal'|'vendor'|'forwarder' | null
+  packaging_status?: 'pending'|'complete' | null; packaging_delegated_to?: number | null
 }
 interface PipelineCounts {
   pending_pickup: number; in_transit: number; customs_review: number
@@ -42,6 +46,12 @@ interface SCNDetail extends SCNRow {
   customs_cleared?: number; customs_cleared_date?: string | null
   bl_number?: string | null; container_ref?: string | null; notes?: string | null
   forwarder_notified: number; forwarder_user_id?: number | null
+  // D5: forwarder-delegated packaging
+  packed_by_type?: 'internal'|'vendor'|'forwarder' | null
+  packaging_delegated_to?: number | null; packaging_status?: 'pending'|'complete' | null
+  packaging_completed_at?: string | null; forwarder_user_name?: string | null
+  transport_modes?: string | null; transport_mode_notes?: string | null   // Item 2: multi-modal legs + notes
+  heats?: ScnHeat[]   // 3a: declared heats (with optional package_id)
   po_id?: number | null; vendor_display?: string | null
   lines: POLine[]; additional_items: any[]; packages: Package[]
   scn_lines?: ScnLineAlloc[]   // Stage 4: per-SCN line allocation (qty on SCN + packed)
@@ -51,18 +61,51 @@ interface SCNDetail extends SCNRow {
 interface POLine { id: number; line_number: string; description: string; qty: number | null; qty_assigned: number | null; uom: string }
 interface Package {
   id: number; scn_id: number; package_number: string; description?: string | null
+  parent_package_id?: number | null   // Q2: nesting — set when this is a sub-package of a container
+  container_type_id?: number | null   // Q4: ISO container type when this package is a typed container
+  container_no?: string | null; seal_no?: string | null   // Q4: container identifier + governed seal
   length_mm?: number | null; width_mm?: number | null; height_mm?: number | null
   gross_weight_kg?: number | null; net_weight_kg?: number | null
   is_dangerous_goods: number; dg_class?: string | null; dg_un_number?: string | null
   marks_numbers?: string | null
   contents?: PkgContentView[]   // Stage 4: declared packing-list contents for this box
+  // 3b-4: per-package received rollup — what has actually been received FROM this package,
+  // traced via receipt_lines.source_scn_package_id. NULL pre-migration or if nothing received.
+  received?: { receipt_count: number; qty_received: number; heat_count: number } | null
+}
+
+// ─── Q2 PACKAGE TREE ──────────────────────────────────────────
+// Orders a flat package list depth-first (container → sub-packages) for display,
+// tagging each row with its nesting depth + whether it's a container (has children).
+// Orphans (parent not in the set) fall back to top-level — never dropped.
+function orderPackagesTree<T extends { id: number; parent_package_id?: number | null }>(packages: T[]) {
+  const byParent = new Map<string, T[]>()
+  packages.forEach(p => {
+    const k = p.parent_package_id == null ? 'root' : String(p.parent_package_id)
+    ;(byParent.get(k) || byParent.set(k, []).get(k)!).push(p)
+  })
+  const out: { pkg: T; depth: number; isContainer: boolean }[] = []
+  const seen = new Set<number>()
+  const walk = (key: string, depth: number) => {
+    (byParent.get(key) || []).forEach(p => {
+      if (seen.has(p.id)) return
+      seen.add(p.id)
+      out.push({ pkg: p, depth, isContainer: byParent.has(String(p.id)) })
+      walk(String(p.id), depth + 1)
+    })
+  }
+  walk('root', 0)
+  packages.forEach(p => { if (!seen.has(p.id)) out.push({ pkg: p, depth: 0, isContainer: byParent.has(String(p.id)) }) })
+  return out
 }
 interface PkgContentView { scn_line_id: number; qty: number | string; uom?: string | null; label: string; kind?: string }
 interface ScnLineAlloc { id: number; po_line_id?: number | null; additional_item_id?: number | null; qty: number | string; uom?: string | null; line_number?: string | null; po_description?: string | null; ai_description?: string | null; packed_qty: number | string }
 interface Doc {
   id: number; document_type: string; file_name?: string | null; notes?: string | null
-  uploaded_by_name?: string | null; uploaded_at: string
+  uploaded_by_name?: string | null; uploaded_by?: number | null; uploaded_at: string   // uploaded_by id → own-uploads-only delete
+  package_id?: number | null; heat_id?: number | null   // 3a: optional links
 }
+interface ScnHeat { id: number; heat_number: string; material_grade?: string | null; mill_cert_ref?: string | null; package_id?: number | null }   // 3a
 interface StatusLogEntry {
   id: number; from_status?: string | null; to_status: string
   changed_by_name?: string | null; changed_at: string; notes?: string | null
@@ -85,7 +128,7 @@ const STATUS_BAR_COLOR: Record<string, string> = {
   customs_review: '#f59e0b', pending_delivery: '#8b5cf6', delivered: '#22c55e',
 }
 const RAG_COLOR: Record<string, string> = { red: '#ef4444', amber: '#f59e0b', green: '#22c55e' }
-const MODE_ICON: Record<string, string> = { sea: '🚢', air: '✈', road: '🚛', rail: '🚂', courier: '📦' }
+const MODE_ICON: Record<string, string> = { sea: '🚢', air: '✈', road: '🚛', rail: '🚂', courier: '📦', multi: '🔀' }
 // Full-text expansions shown on hover over the abbreviated column headers.
 const HEAD_TITLE: Record<string, string> = {
   SCN: 'Shipment Control Note', PO: 'Purchase Order', ETD: 'Estimated Time of Departure',
@@ -133,6 +176,7 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
   const [modeFilter, setModeFilter] = useState('all')
   const [criticalOnly, setCritical] = useState(false)
   const [arrivalDays, setArrivalDays] = useState('')
+  const [packagingFilter, setPackagingFilter] = useState<string | null>(null)   // D5: pending/complete packing
 
   const [selectedScn, setSelectedScn] = useState<SCNDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -156,16 +200,17 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
     if (criticalOnly)           params.critical_only = 'true'
     if (modeFilter !== 'all')   params.mode          = modeFilter
     if (arrivalDays)            params.arrival_days  = arrivalDays
+    if (packagingFilter)        params.packaging     = packagingFilter
     const { data } = await axios.get(`${API}/logistics/register/${projectId}`, { params })
     setPipeline(data.pipeline_counts)
     return { data: (data.data ?? []) as SCNRow[], total: (data.total ?? 0) as number }
-  }, [projectId, statusFilter, debouncedSearch, criticalOnly, modeFilter, arrivalDays])
+  }, [projectId, statusFilter, debouncedSearch, criticalOnly, modeFilter, arrivalDays, packagingFilter])
 
   const {
     data: scns, total, page, setPage, setPageSize, pageSize, loading,
     sortCol, sortDir, toggleSort, reload,
   } = usePagedList<SCNRow>({
-    fetcher, deps: [projectId, statusFilter, debouncedSearch, criticalOnly, modeFilter, arrivalDays],
+    fetcher, deps: [projectId, statusFilter, debouncedSearch, criticalOnly, modeFilter, arrivalDays, packagingFilter],
     pageSize: 50, initialSortCol: 'created_at', initialSortDir: 'desc',
   })
   const sortArrow = (k: string) => sortCol === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
@@ -286,10 +331,18 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
             <option value="road">🚛 Road</option>
             <option value="rail">🚂 Rail</option>
             <option value="courier">📦 Courier</option>
+            <option value="multi">🔀 Multi-modal</option>
           </select>
           <button onClick={() => setCritical(v => !v)}
             style={{ ...inputSt, cursor: 'pointer', color: criticalOnly ? '#E84E0F' : sub, borderColor: criticalOnly ? '#E84E0F' : undefined, width: 'auto' }}>
             ★ {criticalOnly ? 'Critical' : 'All'}
+          </button>
+          {/* D5: delegated-packaging filter — for a forwarder this is "delegated to me,
+              pending packing" (server already scopes to their SCNs); for internal roles a review queue. */}
+          <button onClick={() => setPackagingFilter(v => v === 'pending' ? null : 'pending')}
+            title="Show SCNs awaiting packing (delegated)"
+            style={{ ...inputSt, cursor: 'pointer', color: packagingFilter === 'pending' ? '#7c3aed' : sub, borderColor: packagingFilter === 'pending' ? '#7c3aed' : undefined, width: 'auto' }}>
+            📦 {packagingFilter === 'pending' ? 'Pending packing' : 'Packing'}
           </button>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: sub }}>
             Arriving within
@@ -593,7 +646,7 @@ export const SCNDetailModal = ({ dark, scn, onClose, onRefresh, addToast, projec
         <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
           {tab === 'overview' && <OverviewTab dark={dark} scn={scn} onRefresh={onRefresh} addToast={addToast} />}
           {tab === 'packages' && <PackagesTab dark={dark} scn={scn} onRefresh={onRefresh} addToast={addToast} readOnly={readOnlyManagement} />}
-          {tab === 'documents' && <DocumentsTab dark={dark} scn={scn} onRefresh={onRefresh} addToast={addToast} />}
+          {tab === 'documents' && <DocumentsTab dark={dark} scn={scn} projectId={projectId} onRefresh={onRefresh} addToast={addToast} />}
           {tab === 'timeline' && <TimelineTab dark={dark} scn={scn} />}
           {tab === 'poc' && <PocTab dark={dark} scn={scn} projectId={projectId} onRefresh={onRefresh} addToast={addToast} />}
         </div>
@@ -663,17 +716,29 @@ const OverviewTab = ({ dark, scn, onRefresh, addToast }: {
     } finally { setSavingDate(false) }
   }
 
+  // Item 2: for multi-modal, show the constituent legs after the icon.
+  const modeDisplay = scn.mode === 'multi'
+    ? `🔀 Multi-modal${scn.transport_modes ? ` (${scn.transport_modes.split(',').join(' → ')})` : ''}`
+    : (scn.mode ? `${MODE_ICON[scn.mode] || ''} ${scn.mode}` : '—')
   const metaLeft = [
     ['Forwarder',    scn.forwarder_name || '—'],
-    ['Mode',         scn.mode ? `${MODE_ICON[scn.mode] || ''} ${scn.mode}` : '—'],
+    ['Mode',         modeDisplay],
+    ...(scn.mode === 'multi' && scn.transport_mode_notes ? [['Leg detail', scn.transport_mode_notes]] : []),
     ['Incoterms',    scn.incoterms || '—'],
     ['Origin',       scn.origin_location || '—'],
     ['Destination',  scn.destination_name ? `${scn.destination_name} (${scn.destination_code})` : '—'],
   ]
-  const metaRight = [
+  const packedByLabel = scn.packed_by_type === 'forwarder' ? `Freight forwarder${scn.forwarder_user_name ? ` (${scn.forwarder_user_name})` : ''}`
+    : scn.packed_by_type === 'vendor' ? 'Vendor' : 'Internal'
+  const metaRight: [string, any][] = [
     ['Total Packages',   scn.total_packages ?? '—'],
     ['Total Weight',     fmtW(scn.total_weight_kg)],
     ['DG Goods',         scn.packages?.some((p: Package) => p.is_dangerous_goods) ? '⚠️ Yes' : 'No'],
+    ['Packed by',        packedByLabel],
+    // D5: hand-back status, only meaningful for delegated packaging.
+    ...(scn.packaging_status ? [['Packaging', scn.packaging_status === 'complete'
+        ? `✓ Complete${scn.packaging_completed_at ? ` · ${String(scn.packaging_completed_at).slice(0, 10)}` : ''}`
+        : '⏳ Pending'] as [string, any]] : []),
     ['Forwarder Notified', scn.forwarder_notified ? '✓ Yes' : 'No'],
     ['BL / AWB Number',  scn.bl_number || '—'],
     ['Container Ref',    scn.container_ref || '—'],
@@ -901,55 +966,182 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
   const sub    = '#94a3b8'
   const theadBg = dark ? '#162032' : '#f8fafc'
 
-  const emptyForm = { description: '', length_mm: '', width_mm: '', height_mm: '', gross_weight_kg: '', net_weight_kg: '', is_dangerous_goods: false, dg_class: '', dg_un_number: '', marks_numbers: '' }
+  // B-fix: forwarder leaf packages carry per-line contents (scn_line_id + qty), mirroring
+  // the wizard's container-first contents model. description holds the package TYPE (the
+  // backend maps a package's "type" into the description column — same as the create-txn).
+  const emptyForm = { description: '', length_mm: '', width_mm: '', height_mm: '', gross_weight_kg: '', net_weight_kg: '', is_dangerous_goods: false, dg_class: '', dg_un_number: '', marks_numbers: '',
+    container_type_id: '' as number | '', parent_package_id: '' as number | '', container_no: '', seal_no: '', seal_reason: '',
+    contents: [] as { scn_line_id: number | ''; qty: string }[] }
   const [adding, setAdding] = useState(false)
+  // D5.1 container-first: how the add form was opened — 'container' (top-level typed),
+  // 'loose' (top-level leaf), or 'sub' (leaf nested into a specific container).
+  const [addKind, setAddKind] = useState<'container'|'loose'|'sub'>('loose')
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
   const [editingId, setEditingId] = useState<number|null>(null)
+  const [originalSeal, setOriginalSeal] = useState('')   // Q4.3: detect a seal CHANGE → require reason
+  const [containerTypes, setContainerTypes] = useState<{ id: number; code: string; description: string; inner_length_mm?: number; inner_width_mm?: number; inner_height_mm?: number; capacity_m3?: number | null }[]>([])
+  useEffect(() => { axios.get(`${API}/logistics/container-types`).then(r => setContainerTypes(r.data || [])).catch(() => {}) }, [])
+  const ctById = (id?: number | null) => containerTypes.find(c => c.id === id)
+  // D5.1 container-first: open the add form in a given mode.
+  const closeForm = () => { setAdding(false); setEditingId(null); setForm(emptyForm); setFormError(''); setOriginalSeal('') }
+  const openAdd = (kind: 'container'|'loose'|'sub', parentId?: number) => {
+    setEditingId(null); setAddKind(kind); setOriginalSeal('')
+    setForm({ ...emptyForm, parent_package_id: parentId ?? '' }); setAdding(true)
+  }
+  // Q2: explicit delete-with-contents confirm for containers.
+  const [confirmDel, setConfirmDel] = useState<{ id: number; childCount: number } | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const inputSt: React.CSSProperties = {
     fontSize: 11, padding: '4px 7px', borderRadius: 5, border: bd,
     background: dark ? '#0f172a' : '#f8fafc', color: col, fontFamily: 'inherit', width: '100%',
   }
 
   const totalGross = scn.packages?.reduce((s, p) => s + (Number(p.gross_weight_kg) || 0), 0) || 0
+  // Q2: tree-ordered packages (container → sub-packages) for display.
+  const tree = orderPackagesTree(scn.packages || [])
+  // Item 3 (display-only): top-level units (containers + loose) number consecutively
+  // 01, 02, 03… (the DB package_number is a flat sequence that counts nested rows, so
+  // containers appeared as 01, 04…). Nested rows are labelled "Item" — not a number.
+  const displayLabel = new Map<number, string>()
+  let _topN = 0
+  tree.forEach(({ pkg: tp, depth }) => displayLabel.set(tp.id, depth === 0 ? String(++_topN).padStart(2, '0') : 'Item'))
 
   const savePackage = async () => {
-    if (!form.length_mm || !form.width_mm || !form.height_mm || !form.gross_weight_kg)
+    const isContainer = !!form.container_type_id
+    // Dimensions required for ordinary packages only — a container's dims are display-only.
+    if (!isContainer && (!form.length_mm || !form.width_mm || !form.height_mm || !form.gross_weight_kg))
       return setFormError('Dimensions and gross weight are required')
+    // Item 1: a sub-package nested into a container must FIT its inner dims (per-type
+    // relaxation — open-top relaxes height, flat-rack carries out-of-gauge). Dims are mm.
+    if (form.parent_package_id) {
+      const parentPkg = (scn.packages || []).find(p => p.id === Number(form.parent_package_id))
+      const ct = containerTypes.find(c => c.id === parentPkg?.container_type_id)
+      if (ct) {
+        const v = containerDimViolations({ length_mm: form.length_mm, width_mm: form.width_mm, height_mm: form.height_mm }, ct as any)
+        if (v) return setFormError(containerDimMessage(v, ct as any))
+      }
+    }
+    // Q4.3 seal governance (client guard mirrors the backend): CHANGING an existing seal
+    // requires a reason. First-set needs none. Backend enforces it regardless.
+    const sealChanged = (form.seal_no || '').trim() !== (originalSeal || '').trim()
+    if (sealChanged && (originalSeal || '').trim() && !(form.seal_reason || '').trim())
+      return setFormError('Changing an existing seal number requires a reason.')
     setSaving(true); setFormError('')
+    const payload: any = {
+      description: form.description, length_mm: form.length_mm, width_mm: form.width_mm, height_mm: form.height_mm,
+      gross_weight_kg: form.gross_weight_kg, net_weight_kg: form.net_weight_kg, is_dangerous_goods: form.is_dangerous_goods,
+      dg_class: form.dg_class, dg_un_number: form.dg_un_number, marks_numbers: form.marks_numbers,
+      container_no: form.container_no || undefined,
+      seal_no: sealChanged ? (form.seal_no || '') : undefined,   // only send when changed (set-once governed)
+      seal_reason: form.seal_reason || undefined,
+    }
+    if (!editingId) {   // container type + nesting are set at creation
+      if (form.container_type_id) payload.container_type_id = form.container_type_id
+      if (form.parent_package_id) payload.parent_package_id = form.parent_package_id
+      // B-fix: leaf packages carry per-line contents → scn_package_lines. Drop empty/zero
+      // rows; attach the line's uom so the packing list reads correctly. Containers never
+      // hold items directly (mirrors the wizard's container-first model).
+      if (!isContainer) {
+        const contents = (form.contents || [])
+          .filter(c => c.scn_line_id !== '' && Number(c.qty) > 0)
+          .map(c => ({ scn_line_id: Number(c.scn_line_id), qty: Number(c.qty),
+            uom: (scn.scn_lines || []).find(s => s.id === Number(c.scn_line_id))?.uom || null }))
+        if (contents.length) payload.contents = contents
+      }
+    }
     try {
       if (editingId) {
-        await axios.put(`${API}/logistics/scn/${scn.id}/packages/${editingId}`, form)
+        await axios.put(`${API}/logistics/scn/${scn.id}/packages/${editingId}`, payload)
         addToast('success', 'Package updated')
       } else {
-        await axios.post(`${API}/logistics/scn/${scn.id}/packages`, form)
-        addToast('success', 'Package added')
+        await axios.post(`${API}/logistics/scn/${scn.id}/packages`, payload)
+        addToast('success', isContainer ? 'Container added' : 'Package added')
       }
-      setAdding(false); setEditingId(null); setForm(emptyForm); onRefresh()
+      setAdding(false); setEditingId(null); setForm(emptyForm); setOriginalSeal(''); onRefresh()
     } catch (e: any) {
       setFormError(e.response?.data?.error || 'Failed to save package')
     } finally { setSaving(false) }
   }
 
-  const deletePackage = async (pkgId: number) => {
+  // D5: forwarder/expeditor marks delegated packaging complete (hand-back).
+  const [completing, setCompleting] = useState(false)
+  const markComplete = async () => {
+    setCompleting(true)
     try {
-      await axios.delete(`${API}/logistics/scn/${scn.id}/packages/${pkgId}`)
-      addToast('success', 'Package deleted'); onRefresh()
-    } catch (_) { addToast('error', 'Failed to delete package') }
+      await axios.put(`${API}/logistics/scn/${scn.id}/packaging/complete`)
+      addToast('success', 'Packaging marked complete')
+      onRefresh()
+    } catch (e: any) {
+      addToast('error', e.response?.data?.error || 'Failed to mark complete')
+    } finally { setCompleting(false) }
+  }
+
+  // Q2: cascade only when explicitly confirmed (container + contents). The backend
+  // default-denies a container delete with a 409, which we surface verbatim.
+  const deletePackage = async (pkgId: number, cascade = false) => {
+    setDeleting(true)
+    try {
+      await axios.delete(`${API}/logistics/scn/${scn.id}/packages/${pkgId}${cascade ? '?cascade=1' : ''}`)
+      addToast('success', cascade ? 'Container + sub-packages deleted' : 'Package deleted')
+      setConfirmDel(null); onRefresh()
+    } catch (e: any) {
+      addToast('error', e.response?.data?.error || 'Failed to delete package')
+    } finally { setDeleting(false) }
+  }
+  // 🗑 click: a container (has children) → explicit confirm step; a leaf → delete directly.
+  const onDeleteClick = (pkgId: number, isContainer: boolean) => {
+    if (isContainer) {
+      const childCount = (scn.packages || []).filter(p => p.parent_package_id === pkgId).length
+      setConfirmDel({ id: pkgId, childCount })
+    } else {
+      deletePackage(pkgId, false)
+    }
   }
 
   return (
     <div>
+      {/* D5: delegated-packaging banner — shows who packs + hand-back status/action. */}
+      {scn.packed_by_type === 'forwarder' && (
+        <div style={{ border: `1px solid ${scn.packaging_status === 'complete' ? '#86efac' : '#c4b5fd'}`, background: scn.packaging_status === 'complete' ? 'rgba(34,197,94,0.06)' : 'rgba(124,58,237,0.05)', borderRadius: 8, padding: '10px 14px', marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontSize: 12, color: col }}>
+            📦 Packing delegated to <strong>{scn.forwarder_user_name || 'freight forwarder'}</strong> ·{' '}
+            <strong style={{ color: scn.packaging_status === 'complete' ? '#16a34a' : '#7c3aed' }}>
+              {scn.packaging_status === 'complete' ? `✓ Complete${scn.packaging_completed_at ? ` (${String(scn.packaging_completed_at).slice(0, 10)})` : ''}` : 'Pending packing'}
+            </strong>
+          </span>
+          {!readOnly && scn.packaging_status === 'pending' && (
+            <button onClick={markComplete} disabled={completing}
+              style={{ padding: '5px 14px', borderRadius: 6, border: 'none', background: '#16a34a', color: '#fff', cursor: completing ? 'wait' : 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
+              {completing ? 'Marking…' : '✓ Mark packaging complete'}
+            </button>
+          )}
+        </div>
+      )}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <span style={{ fontSize: 13, fontWeight: 600, color: col }}>{scn.packages?.length || 0} packages · {totalGross.toLocaleString('en-AU', { maximumFractionDigits: 1 })} kg total</span>
         {!readOnly && !adding && !editingId && (
-          <button onClick={() => { setAdding(true); setEditingId(null); setForm(emptyForm) }}
-            style={{ padding: '5px 14px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
-            + Add Package
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => openAdd('container')}
+              style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid #c4b5fd', background: 'rgba(124,58,237,0.06)', color: '#6d28d9', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+              📦 Add container
+            </button>
+            <button onClick={() => openAdd('loose')}
+              style={{ padding: '5px 14px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+              + Add loose package
+            </button>
+          </div>
         )}
       </div>
+      {/* D5.1: when adding, the form renders at the top in the chosen mode. */}
+      {adding && (
+        <div style={{ marginBottom: 12 }}>
+          <PackageFormRow form={form} setForm={setForm} inputSt={inputSt} col={col} sub={sub} bd={bd} dark={dark} error={formError}
+            containerTypes={containerTypes} packages={scn.packages || []} scnLines={scn.scn_lines || []} originalSeal={originalSeal} addKind={addKind}
+            onSave={savePackage} onCancel={closeForm} saving={saving} mode="add" />
+        </div>
+      )}
 
       {/* Stage 4: per-line packing allocation (how much of each line is packed across boxes).
           Only shown for SCNs that have structured contents — legacy SCNs render nothing here. */}
@@ -980,20 +1172,60 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
             </tr>
           </thead>
           <tbody>
-            {(scn.packages || []).map(p => (
+            {tree.map(({ pkg: p, depth, isContainer }) => (
               editingId === p.id ? (
                 <tr key={p.id}>
                   <td colSpan={10} style={{ padding: 10 }}>
                     <PackageFormRow form={form} setForm={setForm} inputSt={inputSt} col={col} sub={sub} bd={bd} dark={dark} error={formError}
-                      onSave={savePackage} onCancel={() => { setEditingId(null); setForm(emptyForm); setFormError('') }} saving={saving} mode="edit" />
+                      containerTypes={containerTypes} packages={scn.packages || []} originalSeal={originalSeal}
+                      onSave={savePackage} onCancel={() => { setEditingId(null); setForm(emptyForm); setFormError(''); setOriginalSeal('') }} saving={saving} mode="edit" />
                   </td>
                 </tr>
               ) : (
                 <tr key={p.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
-                  <td style={{ padding: '7px 8px', fontFamily: 'JetBrains Mono, monospace', color: '#E84E0F', fontSize: 11 }}>{p.package_number}</td>
-                  <td style={{ padding: '7px 8px', color: col }}>{p.description || '—'}</td>
+                  <td style={{ padding: '7px 8px', fontFamily: 'JetBrains Mono, monospace', color: depth > 0 ? sub : '#E84E0F', fontSize: 11, paddingLeft: 8 + depth * 18 }}>
+                    {depth > 0 && <span style={{ color: sub }}>└ </span>}{displayLabel.get(p.id) ?? p.package_number}
+                  </td>
+                  <td style={{ padding: '7px 8px', color: col }}>
+                    {p.description || '—'}
+                    {isContainer && <span title="Container — holds sub-packages, not items directly" style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, color: '#7c3aed', background: 'rgba(124,58,237,0.1)', borderRadius: 6, padding: '1px 6px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>📦 container</span>}
+                    {p.container_type_id != null && (
+                      <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, color: '#0369a1', background: 'rgba(2,132,199,0.1)', borderRadius: 6, padding: '1px 6px' }}>{ctById(p.container_type_id)?.code || 'ISO'}</span>
+                    )}
+                    {(p.container_no || p.seal_no) && (
+                      <div style={{ fontSize: 10, color: sub, marginTop: 2, fontFamily: 'JetBrains Mono, monospace' }}>
+                        {p.container_no && <span>📦 {p.container_no}</span>}
+                        {p.container_no && p.seal_no && <span> · </span>}
+                        {p.seal_no && <span title="Sealed — set-once, audited">🔒 {p.seal_no}</span>}
+                      </div>
+                    )}
+                    {/* 3a: heats linked to this package + any mill cert linked to it. */}
+                    {(() => {
+                      const hts = (scn.heats || []).filter(h => h.package_id === p.id)
+                      const certs = (scn.documents || []).filter(d => d.document_type === 'Mill Test Certificate' && d.package_id === p.id)
+                      if (!hts.length && !certs.length) return null
+                      return (
+                        <div style={{ fontSize: 10, marginTop: 3, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                          {hts.map(h => <span key={h.id} title={`Heat${h.material_grade ? ` · ${h.material_grade}` : ''}`} style={{ color: '#b45309', background: 'rgba(217,119,6,0.1)', borderRadius: 5, padding: '1px 6px', fontFamily: 'JetBrains Mono, monospace' }}>🔥 {h.heat_number}</span>)}
+                          {certs.map(d => <span key={d.id} title={d.file_name || 'Mill Test Certificate'} style={{ color: '#15803d', background: 'rgba(34,197,94,0.1)', borderRadius: 5, padding: '1px 6px' }}>📄 MTC</span>)}
+                        </div>
+                      )
+                    })()}
+                    {/* 3b-4: trace-back — what's actually been received FROM this package
+                        (qty + receipt count), traced through the receipt provenance link. */}
+                    {p.received && p.received.receipt_count > 0 && (
+                      <div style={{ fontSize: 10, marginTop: 3 }}>
+                        <span title={`${p.received.receipt_count} receipt line(s)${p.received.heat_count ? ` · ${p.received.heat_count} heat(s)` : ''}`}
+                          style={{ color: '#1d4ed8', background: 'rgba(37,99,235,0.1)', borderRadius: 5, padding: '1px 6px', fontFamily: 'JetBrains Mono, monospace' }}>
+                          📥 received {Number(p.received.qty_received).toLocaleString()}
+                        </span>
+                      </div>
+                    )}
+                  </td>
                   <td style={{ padding: '7px 8px', color: col, minWidth: 160 }}>
-                    {(p.contents && p.contents.length) ? (
+                    {isContainer ? (
+                      <span style={{ color: sub, fontStyle: 'italic', fontSize: 11 }}>items in sub-packages</span>
+                    ) : (p.contents && p.contents.length) ? (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                         {p.contents.map((c, ci) => (
                           <span key={ci} style={{ fontSize: 11 }}>
@@ -1013,9 +1245,15 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
                   <td style={{ padding: '7px 8px' }}>
                     {readOnly ? <span style={{ color: sub }}>—</span> : (
                     <div style={{ display: 'flex', gap: 4 }}>
-                      <button onClick={() => { setEditingId(p.id); setAdding(false); setForm({ description: p.description||'', length_mm: String(p.length_mm||''), width_mm: String(p.width_mm||''), height_mm: String(p.height_mm||''), gross_weight_kg: String(p.gross_weight_kg||''), net_weight_kg: String(p.net_weight_kg||''), is_dangerous_goods: !!p.is_dangerous_goods, dg_class: p.dg_class||'', dg_un_number: p.dg_un_number||'', marks_numbers: p.marks_numbers||'' }) }}
+                      {/* D5.1: a typed container gets a "+ pkg" action to pack a sub-package into it. */}
+                      {p.container_type_id != null && (
+                        <button onClick={() => openAdd('sub', p.id)} title="Add a package into this container"
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#7c3aed', fontSize: 12, fontWeight: 700 }}>+ pkg</button>
+                      )}
+                      <button onClick={() => { setAdding(false); setEditingId(p.id); setOriginalSeal(p.seal_no||''); setForm({ description: p.description||'', length_mm: String(p.length_mm||''), width_mm: String(p.width_mm||''), height_mm: String(p.height_mm||''), gross_weight_kg: String(p.gross_weight_kg||''), net_weight_kg: String(p.net_weight_kg||''), is_dangerous_goods: !!p.is_dangerous_goods, dg_class: p.dg_class||'', dg_un_number: p.dg_un_number||'', marks_numbers: p.marks_numbers||'', container_type_id: p.container_type_id||'', parent_package_id: p.parent_package_id||'', container_no: p.container_no||'', seal_no: p.seal_no||'', seal_reason: '' }) }}
                         style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 13 }}>✎</button>
-                      <button onClick={() => deletePackage(p.id)}
+                      <button onClick={() => onDeleteClick(p.id, isContainer)}
+                        title={isContainer ? 'Delete container (asks about sub-packages)' : 'Delete package'}
                         style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 13 }}>🗑</button>
                     </div>
                     )}
@@ -1023,14 +1261,6 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
                 </tr>
               )
             ))}
-            {adding && (
-              <tr>
-                <td colSpan={9} style={{ padding: 10 }}>
-                  <PackageFormRow form={form} setForm={setForm} inputSt={inputSt} col={col} sub={sub} bd={bd} dark={dark} error={formError}
-                    onSave={savePackage} onCancel={() => { setAdding(false); setForm(emptyForm); setFormError('') }} saving={saving} mode="add" />
-                </td>
-              </tr>
-            )}
           </tbody>
           {(scn.packages?.length || 0) > 0 && (
             <tfoot>
@@ -1044,15 +1274,115 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
           )}
         </table>
       </div>
+
+      {/* Q2: explicit delete-with-contents confirm for a container. */}
+      {confirmDel && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9600 }}
+          onClick={() => !deleting && setConfirmDel(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: dark ? '#1e293b' : '#fff', border: bd, borderRadius: 10, padding: 22, maxWidth: 420, width: '90%' }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: col, marginBottom: 8 }}>Delete container with contents?</div>
+            <div style={{ fontSize: 13, color: sub, marginBottom: 18 }}>
+              This package is a <strong style={{ color: '#7c3aed' }}>container</strong> holding{' '}
+              <strong style={{ color: col }}>{confirmDel.childCount}</strong> sub-package{confirmDel.childCount !== 1 ? 's' : ''}.
+              Deleting it removes the container, all its sub-packages, and their packing-list contents. This cannot be undone.
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setConfirmDel(null)} disabled={deleting}
+                style={{ padding: '7px 14px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+              <button onClick={() => deletePackage(confirmDel.id, true)} disabled={deleting}
+                style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#ef4444', color: '#fff', cursor: deleting ? 'wait' : 'pointer', fontSize: 13, fontWeight: 600, opacity: deleting ? 0.6 : 1 }}>
+                {deleting ? 'Deleting…' : 'Delete container + contents'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
-const PackageFormRow = ({ form, setForm, inputSt, col, sub, bd, dark, error, onSave, onCancel, saving, mode }: any) => (
+// B-fix: package types mirror the wizard's PKG_TYPES (CreateSCNWizard.tsx) — the chosen
+// type is stored in the package's description column (same mapping the create-txn uses).
+const PKG_TYPES = ['Crate (timber)', 'Crate (steel)', 'Pallet', 'Drum', 'Carton', 'Bundle', 'Skid', 'IBC', 'Loose', 'Bag', 'Others']
+
+const PackageFormRow = ({ form, setForm, inputSt, col, sub, bd, dark, error, onSave, onCancel, saving, mode, containerTypes = [], packages = [], scnLines = [], originalSeal = '', addKind = 'loose' }: any) => {
+  const isContainerAdd = mode === 'add' && addKind === 'container'
+  const isContainerRow = isContainerAdd || (mode === 'edit' && form.container_type_id != null && form.container_type_id !== '')
+  const ct = (containerTypes as any[]).find((c: any) => c.id === Number(form.container_type_id))
+  const parent = form.parent_package_id ? (packages as any[]).find((p: any) => p.id === Number(form.parent_package_id)) : null
+  const sealChanged = (form.seal_no || '').trim() !== (originalSeal || '').trim()
+  const reasonNeeded = sealChanged && (originalSeal || '').trim()
+  const showSeal = isContainerRow                 // container_no/seal only on containers
+  const showDims = !isContainerAdd                // a typed container's dims are display-only
+  const headerLabel = isContainerAdd ? '📦 New container'
+    : addKind === 'sub' ? `↳ Package into container${parent ? ` #${parent.package_number}` : ''}`
+    : '📦 New loose package'
+
+  // B-fix: contents (packing list) — only on a leaf package being ADDED (containers hold
+  // sub-packages, not items). Balance-aware, mirroring the wizard: a line's remaining =
+  // SCN qty − already-packed (persisted) − qty in OTHER rows of this same form.
+  const showContents = mode === 'add' && !isContainerAdd
+  const contents: { scn_line_id: number | ''; qty: string }[] = form.contents || []
+  const slLabel = (sl: any) => sl.po_line_id
+    ? `Line ${sl.line_number ?? sl.po_line_id} — ${(sl.po_description || '').trim()}`.replace(/—\s*$/, '').trim()
+    : (sl.ai_description || 'Off-PO item')
+  const lineRemaining = (scnLineId: number, exceptIdx: number) => {
+    const sl = (scnLines as any[]).find((s: any) => s.id === scnLineId)
+    if (!sl) return 0
+    const inOtherRows = contents.reduce((t, c, idx) =>
+      idx !== exceptIdx && Number(c.scn_line_id) === scnLineId ? t + (Number(c.qty) || 0) : t, 0)
+    return Number(sl.qty) - Number(sl.packed_qty || 0) - inOtherRows
+  }
+  const setContents = (next: typeof contents) => setForm((p: any) => ({ ...p, contents: next }))
+  const addContentRow = () => setContents([...contents, { scn_line_id: '', qty: '' }])
+  const updateContentRow = (idx: number, field: 'scn_line_id' | 'qty', val: string) =>
+    setContents(contents.map((c, i) => i === idx ? { ...c, [field]: field === 'scn_line_id' ? (val ? Number(val) : '') : val } : c))
+  const removeContentRow = (idx: number) => setContents(contents.filter((_, i) => i !== idx))
+
+  return (
   <div style={{ background: dark ? '#0f172a' : '#f0fdf4', border: `1px solid rgba(34,197,94,0.3)`, borderRadius: 8, padding: '12px 14px' }}>
+    {mode === 'add' && (
+      <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 10, color: isContainerAdd ? '#6d28d9' : '#374151' }}>{headerLabel}</div>
+    )}
+    {/* Container type picker + reference dims (container add only) */}
+    {isContainerAdd && (
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+        <div><label style={{ fontSize: 10, color: '#7c3aed', fontWeight: 700, display: 'block', marginBottom: 2 }}>Container type *</label>
+          <select value={form.container_type_id} onChange={e => setForm((p: any) => ({ ...p, container_type_id: e.target.value ? Number(e.target.value) : '' }))} style={{ ...inputSt, borderColor: form.container_type_id ? undefined : '#f59e0b' }}>
+            <option value="">— Select ISO container type —</option>
+            {(containerTypes as any[]).map(c => <option key={c.id} value={c.id}>{c.code} · {c.description}</option>)}
+          </select></div>
+        <div><label style={{ fontSize: 10, color: sub, display: 'block', marginBottom: 2 }}>Inner dimensions (reference)</label>
+          <div style={{ ...inputSt, background: dark ? '#162032' : '#f1f5f9', color: sub, display: 'flex', alignItems: 'center', minHeight: 30 }}>{ct ? `${ct.inner_length_mm} × ${ct.inner_width_mm} × ${ct.inner_height_mm} mm${ct.capacity_m3 ? ` · ${ct.capacity_m3} m³` : ''}` : '—'}</div></div>
+      </div>
+    )}
+    {/* container_no (free) + seal_no (governed) — only for containers */}
+    {showSeal && (
+      <div style={{ display: 'grid', gridTemplateColumns: reasonNeeded ? '1fr 1fr 1fr' : '1fr 1fr', gap: 8, marginBottom: 10 }}>
+        <div><label style={{ fontSize: 10, color: sub, display: 'block', marginBottom: 2 }}>Container No.</label>
+          <input value={form.container_no} onChange={e => setForm((p: any) => ({ ...p, container_no: e.target.value }))} placeholder="e.g. MSKU1234567" style={inputSt} /></div>
+        <div><label style={{ fontSize: 10, color: sub, display: 'block', marginBottom: 2 }}>Seal No. {originalSeal && <span style={{ color: '#7c3aed' }} title="Set-once + audited; changing requires a reason">🔒</span>}</label>
+          <input value={form.seal_no} onChange={e => setForm((p: any) => ({ ...p, seal_no: e.target.value }))} placeholder="Seal number" style={inputSt} /></div>
+        {reasonNeeded && (
+          <div><label style={{ fontSize: 10, color: '#d97706', fontWeight: 700, display: 'block', marginBottom: 2 }}>Reason for re-seal *</label>
+            <input value={form.seal_reason} onChange={e => setForm((p: any) => ({ ...p, seal_reason: e.target.value }))} placeholder="Why is the seal changing?" style={{ ...inputSt, borderColor: (form.seal_reason || '').trim() ? undefined : '#f59e0b' }} /></div>
+        )}
+      </div>
+    )}
+    {showDims && (<>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6,1fr)', gap: 8, marginBottom: 8 }}>
-      <div><label style={{ fontSize: 10, color: sub, display: 'block', marginBottom: 2 }}>Description</label>
-        <input value={form.description} onChange={e => setForm((p: any) => ({ ...p, description: e.target.value }))} style={inputSt} /></div>
+      {/* B-fix: package TYPE dropdown (same options as the wizard), stored in description.
+          'Others' reveals a free-text input so a bespoke type can still be named. */}
+      <div><label style={{ fontSize: 10, color: sub, display: 'block', marginBottom: 2 }}>Type</label>
+        <select value={PKG_TYPES.includes(form.description) ? form.description : (form.description ? 'Others' : '')}
+          onChange={e => setForm((p: any) => ({ ...p, description: e.target.value === 'Others' ? '' : e.target.value }))} style={inputSt}>
+          <option value="">— Select type —</option>
+          {PKG_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+        {(!PKG_TYPES.includes(form.description)) && (
+          <input value={form.description} onChange={e => setForm((p: any) => ({ ...p, description: e.target.value }))}
+            placeholder="Specify type" style={{ ...inputSt, marginTop: 4 }} />
+        )}</div>
       <div><label style={{ fontSize: 10, color: sub, display: 'block', marginBottom: 2 }}>Length (mm)*</label>
         <input type="number" value={form.length_mm} onChange={e => setForm((p: any) => ({ ...p, length_mm: e.target.value }))} style={inputSt} /></div>
       <div><label style={{ fontSize: 10, color: sub, display: 'block', marginBottom: 2 }}>Width (mm)*</label>
@@ -1076,6 +1406,54 @@ const PackageFormRow = ({ form, setForm, inputSt, col, sub, bd, dark, error, onS
           <input value={form.dg_un_number} onChange={e => setForm((p: any) => ({ ...p, dg_un_number: e.target.value }))} style={inputSt} /></div>
       </div>
     )}
+    </>)}
+    {/* B-fix: per-line contents allocation (packing list) for a leaf package. */}
+    {showContents && (
+      <div style={{ marginTop: 10, borderTop: '1px dashed rgba(148,163,184,0.4)', paddingTop: 10 }}>
+        {/* Fix 2: an itemized package is one physical box (qty locked to 1) — consistent with
+            the wizard. Bundle-of-N is a future redesign (docs/MAP_BUNDLE_QTY_REDESIGN). */}
+        <div style={{ fontSize: 11, fontWeight: 700, color: col, marginBottom: 6 }}>
+          Contents (packing list)
+          <span style={{ fontSize: 10, fontWeight: 400, color: sub, marginLeft: 6 }}>· one itemized box (qty 1)</span>
+        </div>
+        {(scnLines as any[]).length === 0 && (
+          <div style={{ fontSize: 11, color: sub, fontStyle: 'italic', marginBottom: 6 }}>No allocatable lines on this SCN.</div>
+        )}
+        {contents.map((c, idx) => {
+          const sel = Number(c.scn_line_id)
+          const rem = c.scn_line_id !== '' ? lineRemaining(sel, idx) : 0
+          const thisQty = Number(c.qty) || 0
+          const over = c.scn_line_id !== '' && thisQty > rem + 1e-9
+          return (
+            <div key={idx} style={{ marginBottom: 6 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px 24px', gap: 6, alignItems: 'center' }}>
+                <select value={c.scn_line_id === '' ? '' : String(c.scn_line_id)} onChange={e => updateContentRow(idx, 'scn_line_id', e.target.value)} style={inputSt}>
+                  <option value="">Select line…</option>
+                  {(scnLines as any[]).filter((sl: any) => lineRemaining(sl.id, idx) > 1e-9 || sl.id === sel).map((sl: any) => (
+                    <option key={sl.id} value={sl.id}>{slLabel(sl)} — {Math.max(0, lineRemaining(sl.id, idx))} {sl.uom || ''} to pack</option>
+                  ))}
+                </select>
+                <input type="number" min={0} value={c.qty} placeholder="qty" onChange={e => updateContentRow(idx, 'qty', e.target.value)}
+                  style={{ ...inputSt, borderColor: over ? '#ef4444' : undefined }} />
+                <button onClick={() => removeContentRow(idx)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 15, cursor: 'pointer' }}>×</button>
+              </div>
+              {c.scn_line_id !== '' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, marginLeft: 2 }}>
+                  <button onClick={() => updateContentRow(idx, 'qty', String(Math.max(0, rem)))} disabled={rem <= 0 && !over}
+                    style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontFamily: 'inherit', border: '1px solid #93c5fd',
+                      background: (rem > 0 || over) ? '#eff6ff' : '#f1f5f9', color: (rem > 0 || over) ? '#2563eb' : '#94a3b8', cursor: (rem > 0 || over) ? 'pointer' : 'not-allowed' }}>+ Balance</button>
+                  <span style={{ fontSize: 11, color: over ? '#ef4444' : rem > 0 ? '#d97706' : '#16a34a' }}>
+                    {over ? `Over by ${(thisQty - rem).toFixed(0)}` : `Remaining: ${Math.max(0, rem)}`}
+                  </span>
+                </div>
+              )}
+            </div>
+          )
+        })}
+        <button onClick={addContentRow} disabled={(scnLines as any[]).length === 0}
+          style={{ fontSize: 11, color: '#16a34a', background: 'none', border: '1px dashed rgba(34,197,94,0.5)', borderRadius: 6, padding: '4px 10px', cursor: (scnLines as any[]).length === 0 ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>+ Add line item</button>
+      </div>
+    )}
     {error && <div style={{ color: '#ef4444', fontSize: 12, marginBottom: 8 }}>{error}</div>}
     <div style={{ display: 'flex', gap: 8 }}>
       <button onClick={onCancel} style={{ padding: '5px 14px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
@@ -1084,13 +1462,14 @@ const PackageFormRow = ({ form, setForm, inputSt, col, sub, bd, dark, error, onS
       </button>
     </div>
   </div>
-)
+  )
+}
 
 // ─── DOCUMENTS TAB ───────────────────────────────────────────
-const DOC_TYPES = ['Commercial Invoice','Packing List','Bill of Lading','Airway Bill','Certificate of Origin','Insurance Certificate','Dangerous Goods Declaration','Customs Entry','Other']
+const DOC_TYPES = ['Commercial Invoice','Packing List','Bill of Lading','Airway Bill','Certificate of Origin','Insurance Certificate','Dangerous Goods Declaration','Customs Entry','Mill Test Certificate','Other']
 
-const DocumentsTab = ({ dark, scn, onRefresh, addToast }: {
-  dark: boolean; scn: SCNDetail; onRefresh: () => void
+const DocumentsTab = ({ dark, scn, projectId, onRefresh, addToast }: {
+  dark: boolean; scn: SCNDetail; projectId: number; onRefresh: () => void
   addToast: (t: 'success'|'error', m: string) => void
 }) => {
   const col = dark ? '#f1f5f9' : '#0f172a'
@@ -1108,6 +1487,18 @@ const DocumentsTab = ({ dark, scn, onRefresh, addToast }: {
   const [file, setFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState('')
+  // 3a: a Mill Test Certificate may optionally link to a package and/or heat.
+  const [docPackageId, setDocPackageId] = useState<number | ''>('')
+  const [docHeatId, setDocHeatId] = useState<number | ''>('')
+  const isMTC = docType === 'Mill Test Certificate'
+
+  // FIX 1: mirror the backend authz. Internal roles upload/delete as before; a forwarder may
+  // upload only on their CARRIER SCN (forwarder_user_id === their id), and delete only their
+  // OWN uploads on that SCN. Others (subcontractor/vendor) see no write controls.
+  const { isForwarder, isExternalUser, user } = useCurrentUser()
+  const isCarrier = !!user && scn.forwarder_user_id != null && scn.forwarder_user_id === user.id
+  const canUpload = !isExternalUser || (isForwarder && isCarrier)
+  const canDeleteDoc = (d: Doc) => !isExternalUser || (isForwarder && isCarrier && d.uploaded_by === user?.id)
 
   const uploadDoc = async () => {
     if (!file) return setUploadError('Please select a file')
@@ -1117,10 +1508,12 @@ const DocumentsTab = ({ dark, scn, onRefresh, addToast }: {
       fd.append('file', file)
       fd.append('document_type', docType)
       if (docNotes) fd.append('notes', docNotes)
+      if (isMTC && docPackageId) fd.append('package_id', String(docPackageId))
+      if (isMTC && docHeatId) fd.append('heat_id', String(docHeatId))
       await axios.post(`${API}/logistics/scn/${scn.id}/documents`, fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
-      setShowUpload(false); setFile(null); setDocNotes('')
+      setShowUpload(false); setFile(null); setDocNotes(''); setDocPackageId(''); setDocHeatId('')
       addToast('success', 'Document uploaded'); onRefresh()
     } catch (e: any) {
       setUploadError(e.response?.data?.error || 'Upload failed')
@@ -1138,10 +1531,12 @@ const DocumentsTab = ({ dark, scn, onRefresh, addToast }: {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <span style={{ fontSize: 13, fontWeight: 600, color: col }}>{scn.documents?.length || 0} documents</span>
-        <button onClick={() => setShowUpload(true)}
-          style={{ padding: '5px 14px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
-          + Upload Document
-        </button>
+        {canUpload && (
+          <button onClick={() => setShowUpload(true)}
+            style={{ padding: '5px 14px', borderRadius: 6, border: 'none', background: '#E84E0F', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+            + Upload Document
+          </button>
+        )}
       </div>
 
       {showUpload && (
@@ -1156,6 +1551,25 @@ const DocumentsTab = ({ dark, scn, onRefresh, addToast }: {
             <label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>File *</label>
             <input type="file" onChange={e => setFile(e.target.files?.[0] || null)} style={{ fontSize: 12, color: col }} />
           </div>
+          {/* 3a: link a Mill Test Certificate to a package and/or heat (optional). */}
+          {isMTC && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10, paddingBottom: 10, borderBottom: `1px dashed ${dark ? '#334155' : '#cbd5e1'}` }}>
+              <div>
+                <label style={{ fontSize: 11, color: '#7c3aed', display: 'block', marginBottom: 4 }}>Link to package (optional)</label>
+                <select value={docPackageId} onChange={e => setDocPackageId(e.target.value ? Number(e.target.value) : '')} style={inputSt}>
+                  <option value="">— Not linked</option>
+                  {(scn.packages || []).map(p => <option key={p.id} value={p.id}>#{p.package_number}{p.description ? ` · ${p.description}` : ''}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: '#7c3aed', display: 'block', marginBottom: 4 }}>Link to heat (optional)</label>
+                <select value={docHeatId} onChange={e => setDocHeatId(e.target.value ? Number(e.target.value) : '')} style={inputSt}>
+                  <option value="">— Not linked</option>
+                  {(scn.heats || []).map(h => <option key={h.id} value={h.id}>{h.heat_number}{h.material_grade ? ` · ${h.material_grade}` : ''}</option>)}
+                </select>
+              </div>
+            </div>
+          )}
           <div style={{ marginBottom: 10 }}>
             <label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>Notes</label>
             <input value={docNotes} onChange={e => setDocNotes(e.target.value)} placeholder="Optional notes" style={inputSt} />
@@ -1196,8 +1610,17 @@ const DocumentsTab = ({ dark, scn, onRefresh, addToast }: {
                 <td style={{ padding: '7px 10px', color: sub }}>{d.uploaded_by_name || '—'}</td>
                 <td style={{ padding: '7px 10px', color: sub, whiteSpace: 'nowrap' }}>{fmtFull(d.uploaded_at)}</td>
                 <td style={{ padding: '7px 10px', color: sub }}>{d.notes || '—'}</td>
-                <td style={{ padding: '7px 10px' }}>
-                  <button onClick={() => deleteDoc(d.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 14 }}>🗑</button>
+                <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
+                  {/* Authed Download + View (blob-aware dual-read resolver). Never window.open(apiURL). */}
+                  {d.file_name && (() => { const url = `${API}/documents/${projectId}/download/logistics:${d.id}`; return (<>
+                    <button onClick={() => viewFile(url, d.file_name || undefined).catch(() => addToast('error', 'Failed to open document'))} title="View"
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 14, marginRight: 8 }}>👁</button>
+                    <button onClick={() => downloadFile(url, d.file_name || undefined).catch(() => addToast('error', 'Failed to download document'))} title="Download"
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#16a34a', fontSize: 14, marginRight: 8 }}>↓</button>
+                  </>) })()}
+                  {canDeleteDoc(d)
+                    ? <button onClick={() => deleteDoc(d.id)} title="Delete" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 14 }}>🗑</button>
+                    : (!d.file_name && <span style={{ color: sub }}>—</span>)}
                 </td>
               </tr>
             ))}
@@ -1223,7 +1646,12 @@ const PocTab = ({ dark, scn, projectId, onRefresh, addToast }: {
   const bd  = `1px solid ${dark ? '#334155' : '#dde3ed'}`
   const sub = '#94a3b8'
   const theadBg = dark ? '#162032' : '#f8fafc'
-  const { isExternalUser } = useCurrentUser()
+  // FIX 1: carrier forwarders may upload PoC on their SCN (and delete only their OWN PoC);
+  // internal unchanged. Other external users keep read/download only.
+  const { isExternalUser, isForwarder, user } = useCurrentUser()
+  const isCarrier = !!user && scn.forwarder_user_id != null && scn.forwarder_user_id === user.id
+  const canUpload = !isExternalUser || (isForwarder && isCarrier)
+  const canDeletePoc = (d: Doc) => !isExternalUser || (isForwarder && isCarrier && d.uploaded_by === user?.id)
 
   const [file, setFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -1282,8 +1710,8 @@ const PocTab = ({ dark, scn, projectId, onRefresh, addToast }: {
         </button>
       </div>
 
-      {/* Upload the signed copy — internal only */}
-      {!isExternalUser && (
+      {/* Upload the signed copy — internal roles + the assigned carrier forwarder */}
+      {canUpload && (
         <div style={{ background: dark ? '#162032' : '#f0f9ff', border: `1px solid rgba(37,99,235,0.3)`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: col, marginBottom: 10 }}>2 · Upload the signed copy</div>
           <input type="file" onChange={e => setFile(e.target.files?.[0] || null)} style={{ fontSize: 12, color: col, display: 'block', marginBottom: 10 }} />
@@ -1320,9 +1748,12 @@ const PocTab = ({ dark, scn, projectId, onRefresh, addToast }: {
                 <td style={{ padding: '7px 10px', color: sub }}>{d.uploaded_by_name || '—'}</td>
                 <td style={{ padding: '7px 10px', color: sub, whiteSpace: 'nowrap' }}>{fmtFull(d.uploaded_at)}</td>
                 <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
+                  {/* Consistency: in-browser View alongside the existing Download (both authed). */}
+                  <button onClick={() => viewFile(`${API}/documents/${projectId}/download/logistics:${d.id}`, d.file_name || undefined).catch(() => addToast('error', 'Failed to open document'))} title="View"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 14, marginRight: 8 }}>👁</button>
                   <button onClick={() => downloadDoc(d.id, d.file_name)} title="Download"
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 14, marginRight: 6 }}>⬇</button>
-                  {!isExternalUser && (
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#16a34a', fontSize: 14, marginRight: 8 }}>↓</button>
+                  {canDeletePoc(d) && (
                     <button onClick={() => deleteDoc(d.id)} title="Delete"
                       style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 14 }}>🗑</button>
                   )}

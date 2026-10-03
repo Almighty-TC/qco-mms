@@ -18,7 +18,7 @@ const VALID_ROLES = new Set([
   'engineering_lead', 'project_control', 'project_controls_manager', 'auditor', 'materials_engineer',
 ])
 const VALID_MODULES = new Set([
-  'dashboard', 'procurement', 'expediting', 'vdrl', 'logistics',
+  'dashboard', 'procurement', 'pre_award', 'expediting', 'vdrl', 'logistics',
   'material_control', 'traceability', 'document_inbox', 'audit', 'admin',
 ])
 const VALID_RAG    = new Set(['red', 'amber', 'green', 'blue', 'grey'])

@@ -16,6 +16,7 @@ const path    = require('path')
 const { fileColumnsReady } = require('../lib/schemaColumns')
 const { fileNotEmpty } = require('../utils/validate')
 const { validateRevisionFormat, compareRevisions, RevisionError } = require('../lib/revision')
+const { lockKeyRows } = require('../lib/mtoAvailability')
 
 // ─── AUTH MIDDLEWARE ──────────────────────────────────────────────────────────
 router.use(authenticateToken)
@@ -27,6 +28,7 @@ router.param('projectId', require('../middleware/permissions').requireProjectSco
 // ─── FILE UPLOAD CONFIG ───────────────────────────────────────────────────────
 // New-revision files accepted in memory buffer — parsed then discarded.
 const { fileFilter } = require('../utils/upload')
+const blobStore = require('../lib/blobStore')   // blob migration
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 },
@@ -670,6 +672,25 @@ router.post('/:projectId/:mtoId/lines', async (req, res) => {
 })
 
 // ─── PUT /:projectId/:mtoId/lines/:lineId — update a line ────────────────────
+// line_number guard (§12): a line's key is (mto_id, line_number) across revisions, and tender
+// reservations and PO consumption count on every row of the key, so a line_number change re-keys
+// the row. A change (compared in SQL — collation-equal values are no change) on an unlocked line runs
+// in one READ COMMITTED transaction: read the row, lock the old and new keys' rows (lockKeyRows — the
+// lock reserve-lines and generate-po take), re-read the row under the lock (409 if its key changed),
+// then 409 if the row isn't in its register's current revision, if any row of either key has a
+// tender_line_items row (any status) or a po_lines row (source_mto_line_id), or if the new number
+// already exists in that revision. Other edits, and the po-raised branch, take the existing path.
+const LINE_CHANGED = 'line changed during the request — retry'
+async function readLineForRenumber(conn, lineId, projectId, oldNumber) {
+  const [[row]] = await conn.query(
+    `SELECT l.id, l.mto_id, l.revision, l.line_number, r.current_revision,
+            (l.revision = r.current_revision) AS is_current, (l.line_number = ?) AS same_key
+       FROM mto_lines l JOIN mto_registers r ON r.id = l.mto_id
+      WHERE l.id = ? AND r.project_id = ?`,
+    [oldNumber, lineId, projectId])
+  return row
+}
+
 router.put('/:projectId/:mtoId/lines/:lineId', async (req, res) => {
   try {
     const [[line]] = await db.query(
@@ -713,7 +734,49 @@ router.put('/:projectId/:mtoId/lines/:lineId', async (req, res) => {
       ]
     }
 
-    await db.query(sql, params)
+    // line_number guard — only an unlocked line whose number actually changes
+    let renumber = false
+    const newNumber = line_number == null ? null : String(line_number)
+    if (!locked && newNumber != null) {
+      const [[cmp]] = await db.query('SELECT (line_number = ?) AS same FROM mto_lines WHERE id = ?', [newNumber, line.id])
+      renumber = !cmp.same
+    }
+    if (renumber) {
+      const conn = await db.getConnection()
+      try {
+        await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+        await conn.beginTransaction()
+        const r0 = await readLineForRenumber(conn, line.id, req.params.projectId, line.line_number)
+        if (!r0 || !r0.same_key) { await conn.rollback(); return res.status(409).json({ error: LINE_CHANGED }) }
+        await lockKeyRows(conn, [{ mto_id: r0.mto_id, line_number: r0.line_number }, { mto_id: r0.mto_id, line_number: newNumber }])
+        const r1 = await readLineForRenumber(conn, line.id, req.params.projectId, r0.line_number)   // under the lock
+        if (!r1 || r1.mto_id !== r0.mto_id || !r1.same_key) { await conn.rollback(); return res.status(409).json({ error: LINE_CHANGED }) }
+        if (!r1.is_current) {
+          await conn.rollback()
+          return res.status(409).json({ error: `Line ${r1.line_number} (mto_line_id ${r1.id}) is in revision ${r1.revision}, not the current revision ${r1.current_revision} — only current-revision lines can be renumbered` })
+        }
+        const [hist] = await conn.query(
+          `SELECT k.line_number,
+                  (SELECT COUNT(*) FROM tender_line_items t WHERE t.mto_line_id IN (SELECT x.id FROM mto_lines x WHERE x.mto_id = k.mto_id AND x.line_number = k.line_number)) AS reservations,
+                  (SELECT COUNT(*) FROM po_lines p WHERE p.source_mto_line_id IN (SELECT x.id FROM mto_lines x WHERE x.mto_id = k.mto_id AND x.line_number = k.line_number)) AS po_lines
+             FROM mto_lines k WHERE k.mto_id = ? AND k.line_number IN (?, ?)
+            GROUP BY k.mto_id, k.line_number`,
+          [r1.mto_id, r1.line_number, newNumber])
+        const held = hist.filter(h => Number(h.reservations) > 0 || Number(h.po_lines) > 0)
+        if (held.length) {
+          await conn.rollback()
+          return res.status(409).json({ error: `Line ${r1.line_number} can't be renumbered to ${newNumber}: ${held.map(h => `${h.line_number} has ${h.reservations} tender reservation(s) and ${h.po_lines} PO line(s)`).join('; ')} — renumber it through a new MTO revision instead` })
+        }
+        const [[dup]] = await conn.query(
+          'SELECT id FROM mto_lines WHERE mto_id = ? AND revision = ? AND line_number = ? AND is_deleted = 0 AND id <> ?',
+          [r1.mto_id, r1.revision, newNumber, r1.id])
+        if (dup) { await conn.rollback(); return res.status(409).json({ error: `Line number "${newNumber}" already exists in revision ${r1.revision}.` }) }
+        await conn.query(sql, params)
+        await conn.commit()
+      } catch (te) { await conn.rollback(); throw te } finally { conn.release() }
+    } else {
+      await db.query(sql, params)
+    }
     const [[updated]] = await db.query(`SELECT * FROM mto_lines WHERE id = ?`, [line.id])
     audit(req, 'UPDATE', 'mto_line', line.id, line, updated)
     res.json(updated)
@@ -724,6 +787,13 @@ router.put('/:projectId/:mtoId/lines/:lineId', async (req, res) => {
 })
 
 // ─── DELETE /:projectId/:mtoId/lines/:lineId — soft-delete a line ─────────────
+// DELETE guard (§15 a): deleting a key's current row makes the line "removed" — its availability is
+// null, and reserve-lines and generate-po refuse every tender that holds it. After the po-raised 403,
+// one READ COMMITTED transaction: read the row, lock its key's rows (lockKeyRows), re-read under the
+// lock (404 if already deleted, 409 if its key changed), then 409 if any row of the key has a
+// tender_line_items row that is active, converted or partial_released, or any po_lines row
+// (source_mto_line_id). Released-only history is allowed — it strands nothing. Then the soft delete
+// and the register's line_count refresh, in the same transaction.
 router.delete('/:projectId/:mtoId/lines/:lineId', async (req, res) => {
   try {
     const [[line]] = await db.query(
@@ -737,15 +807,53 @@ router.delete('/:projectId/:mtoId/lines/:lineId', async (req, res) => {
       return res.status(403).json({ error: 'Cannot delete a line with a raised PO' })
     }
 
-    await db.query(`UPDATE mto_lines SET is_deleted = 1 WHERE id = ?`, [line.id])
-
-    // Refresh line_count
-    await db.query(
-      `UPDATE mto_registers SET line_count = (
-         SELECT COUNT(*) FROM mto_lines WHERE mto_id = ? AND revision = ? AND is_deleted = 0
-       ) WHERE id = ?`,
-      [line.mto_id, line.revision, line.mto_id]
-    )
+    const conn = await db.getConnection()
+    try {
+      await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+      await conn.beginTransaction()
+      const readRow = oldNumber => conn.query(
+        `SELECT l.id, l.mto_id, l.revision, l.line_number, l.is_deleted, (l.line_number = ?) AS same_key
+           FROM mto_lines l JOIN mto_registers r ON r.id = l.mto_id
+          WHERE l.id = ? AND r.project_id = ?`,
+        [oldNumber, line.id, req.params.projectId])
+      const [[r0]] = await readRow(line.line_number)
+      if (!r0) { await conn.rollback(); return res.status(404).json({ error: 'Line not found' }) }
+      await lockKeyRows(conn, [{ mto_id: r0.mto_id, line_number: r0.line_number }])
+      const [[r1]] = await readRow(r0.line_number)   // under the lock
+      if (!r1 || r1.is_deleted) { await conn.rollback(); return res.status(404).json({ error: 'Line not found' }) }
+      if (r1.mto_id !== r0.mto_id || !r1.same_key) { await conn.rollback(); return res.status(409).json({ error: LINE_CHANGED }) }
+      const [held] = await conn.query(
+        `SELECT t.status, tp.approval_status, COUNT(*) AS n
+           FROM tender_line_items t
+           JOIN mto_lines k ON k.id = t.mto_line_id
+           JOIN tender_packages tp ON tp.id = t.tender_id
+          WHERE k.mto_id = ? AND k.line_number = ? AND t.status IN ('active','converted','partial_released')
+          GROUP BY t.status, tp.approval_status`,
+        [r1.mto_id, r0.line_number])
+      const [[pol]] = await conn.query(
+        `SELECT COUNT(*) AS n FROM po_lines p JOIN mto_lines k ON k.id = p.source_mto_line_id
+          WHERE k.mto_id = ? AND k.line_number = ?`,
+        [r1.mto_id, r0.line_number])
+      const count = (st, appr) => held.filter(h => h.status === st && (appr == null || (h.approval_status === 'approved') === appr)).reduce((s, h) => s + Number(h.n), 0)
+      const active = count('active'), activeApproved = count('active', true), converted = count('converted'), partial = count('partial_released'), poLines = Number(pol.n)
+      if (active + converted + partial + poLines > 0) {
+        await conn.rollback()
+        const advice = []
+        if (active > activeApproved) advice.push('Cancelling or rejecting a tender releases its active reservations.')
+        if (activeApproved) advice.push(`${activeApproved} active reservation(s) belong to an approved tender, which can't be cancelled or rejected until its recommendation is recomputed.`)
+        if (converted + partial + poLines) advice.push("A line on a PO can't be removed while the PO exists.")
+        return res.status(409).json({ error: `Line ${r0.line_number} can't be deleted: it has ${active} active, ${converted} converted and ${partial} partially released tender reservation(s) and ${poLines} PO line(s). ${advice.join(' ')}` })
+      }
+      await conn.query(`UPDATE mto_lines SET is_deleted = 1 WHERE id = ?`, [line.id])
+      // Refresh line_count
+      await conn.query(
+        `UPDATE mto_registers SET line_count = (
+           SELECT COUNT(*) FROM mto_lines WHERE mto_id = ? AND revision = ? AND is_deleted = 0
+         ) WHERE id = ?`,
+        [r1.mto_id, r1.revision, r1.mto_id]
+      )
+      await conn.commit()
+    } catch (te) { await conn.rollback(); throw te } finally { conn.release() }
 
     audit(req, 'DELETE', 'mto_line', line.id, line, null)
     res.json({ ok: true })
@@ -905,11 +1013,14 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
     // file on disk so the revision is downloadable as-submitted from the
     // Document Inbox (previously the buffer was discarded after parsing).
     const mtoDir = path.join(__dirname, '..', 'uploads', 'mto-revisions')
-    fs.mkdirSync(mtoDir, { recursive: true })
     const safeName   = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')
     const storedName = `${Date.now()}_${safeName}`
-    fs.writeFileSync(path.join(mtoDir, storedName), req.file.buffer)
-    const relPath = path.join('uploads', 'mto-revisions', storedName)   // relative to server root
+    // Blob migration: persist to blob (key) or disk (legacy relative shape — unchanged).
+    const { value: relPath } = await blobStore.persist({
+      key: blobStore.keyFor('mto', storedName),   // module key matches documents.js RESOLVERS
+      diskAbsPath: path.join(mtoDir, storedName), buffer: req.file.buffer, contentType: req.file.mimetype,
+      diskValue: path.join('uploads', 'mto-revisions', storedName),
+    })
 
     // ─── Revision record ──────────────────────────────────────────
     // Initial population fills the seeded row in place; a new revision inserts.

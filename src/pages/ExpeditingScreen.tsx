@@ -24,6 +24,7 @@ import { CreateSCNWizard } from '../components/CreateSCNWizard'
 import { ToastProvider, useToast } from '../hooks/useToast'
 
 import { API } from '../lib/api'
+import { downloadFile, viewFile } from '../lib/fileAccess'   // authed blob access (never window.open on a JWT-gated route → 401)
 
 // ─── TYPES ────────────────────────────────────────────────────
 interface Milestone {
@@ -343,7 +344,7 @@ const VDRLUploadModal: React.FC<{dark:boolean;projectId:number;onClose:()=>void;
             </div>
             {parseError && <div style={{color:'#dc2626',fontSize:12,marginBottom:12}}>{parseError}</div>}
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <a href="#" onClick={e=>{e.preventDefault();window.open(`${API}/expediting/${projectId}/vdrl/template`)}} style={{fontSize:12,color:'#2563eb',textDecoration:'none'}}>↓ Download template</a>
+              <a href="#" onClick={e=>{e.preventDefault();downloadFile(`${API}/expediting/${projectId}/vdrl/template`,'QCO_VDRL_Template.xlsx')}} style={{fontSize:12,color:'#2563eb',textDecoration:'none'}}>↓ Download template</a>
               <div style={{display:'flex',gap:8}}>
                 <button onClick={onClose} style={{padding:'7px 14px',borderRadius:6,border:bd,background:'none',color:sub,fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>Cancel</button>
                 <button onClick={handleDryRun} disabled={!file||importing} style={{padding:'7px 16px',borderRadius:6,border:'none',background:'#2563eb',color:'#fff',fontSize:12,cursor:'pointer',opacity:!file||importing?0.5:1,fontFamily:'inherit'}}>
@@ -600,6 +601,27 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, userRole = '', on
     { label: 'At Risk',    value: stats.at_risk,    color: '#f59e0b' },
     { label: 'Complete',   value: stats.complete,   color: '#22c55e' },
   ]
+
+  // ─── VDRL PER-DOC FILE UPLOAD ─────────────────────────────
+  // Attach the actual document file to a VDRL line via the blob-backed route
+  // (multipart, field 'file'). On success the backend bumps status→Under review +
+  // stamps submitted_date and returns the updated row; we merge it into both the list
+  // (preserving joined fields) and the open modal so it reflects the file + new status.
+  const [vdrlFileUploading, setVdrlFileUploading] = useState(false)
+  const uploadVdrlDocFile = async (docId: number, file: File) => {
+    setVdrlFileUploading(true)
+    try {
+      const fd = new FormData(); fd.append('file', file)
+      const { data: updated } = await axios.post(
+        `${API}/expediting/${projectId}/vdrl/documents/${docId}/file`,
+        fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+      setVdrlDocs(prev => prev.map(d => d.id === updated.id ? { ...d, ...updated } : d))
+      setSelectedDoc((prev: any) => prev && prev.id === updated.id ? { ...prev, ...updated } : prev)
+      addToast('success', `Attached ${updated.file_name}`)
+    } catch (e: any) {
+      addToast('error', e?.response?.data?.error || 'File upload failed')
+    } finally { setVdrlFileUploading(false) }
+  }
 
   // ─── VDRL TEMPLATE DOWNLOAD ───────────────────────────────
   // Triggers download of the pre-formatted .xlsx upload template.
@@ -1026,6 +1048,26 @@ const ExpeditingScreenInner = ({ dark, projectId, projectName, userRole = '', on
                             <div style={{color:col,fontWeight:500}}>{v}</div>
                           </div>
                         ))}
+                      </div>
+
+                      {/* ── File section ── attached file (authed view/download via the blob-aware
+                          unified resolver vdrl:<docId>) or an upload control when none is attached. */}
+                      <div style={{marginTop:18,paddingTop:16,borderTop:bd}}>
+                        <div style={{fontSize:9,color:sub,textTransform:'uppercase',marginBottom:8,letterSpacing:'0.05em'}}>Document file</div>
+                        {selectedDoc.file_name ? (
+                          <div style={{display:'flex',alignItems:'center',gap:12,fontSize:12}}>
+                            <span style={{color:col,fontWeight:500,flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>📎 {selectedDoc.file_name}</span>
+                            <button onClick={()=>viewFile(`${API}/documents/${projectId}/download/vdrl:${selectedDoc.id}`, selectedDoc.file_name).catch(()=>addToast('error','Could not open the file'))}
+                              style={{background:'none',border:bd,borderRadius:6,padding:'5px 12px',cursor:'pointer',color:'#2563eb',fontSize:12,fontFamily:'inherit'}}>👁 View</button>
+                            <button onClick={()=>downloadFile(`${API}/documents/${projectId}/download/vdrl:${selectedDoc.id}`, selectedDoc.file_name).catch(()=>addToast('error','Download failed'))}
+                              style={{background:'none',border:bd,borderRadius:6,padding:'5px 12px',cursor:'pointer',color:'#16a34a',fontSize:12,fontFamily:'inherit'}}>↓ Download</button>
+                          </div>
+                        ) : (
+                          <label style={{display:'inline-flex',alignItems:'center',gap:8,padding:'7px 14px',borderRadius:6,border:'none',background:vdrlFileUploading?'#93c5fd':'#2563eb',color:'#fff',fontSize:12,fontWeight:600,cursor:vdrlFileUploading?'default':'pointer',fontFamily:'inherit'}}>
+                            {vdrlFileUploading ? 'Uploading…' : '↑ Upload file'}
+                            <input type="file" disabled={vdrlFileUploading} onChange={e=>{const f=e.target.files?.[0]; if(f) uploadVdrlDocFile(selectedDoc.id, f); e.target.value=''}} style={{display:'none'}} />
+                          </label>
+                        )}
                       </div>
                     </div>
                   </div>

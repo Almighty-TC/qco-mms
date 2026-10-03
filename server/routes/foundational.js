@@ -24,18 +24,9 @@ router.use(require('../middleware/permissions').enforce(p =>
 router.use(require('../middleware/permissions').queueGate(/\/foundational\/\d+\/(wbs|commodities|equipment)$/, /\/foundational\/\d+\/(wbs|commodities|equipment)\/\d+$/)) // C-c D1: proposers (project_control) must use approval queue for create/delete; admin direct
 router.param('projectId', require('../middleware/permissions').requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects
 
-// Multer for certificate uploads
-const certStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const dir = path.join(__dirname, '../uploads/certificates')
-    fs.mkdirSync(dir, { recursive: true })
-    cb(null, dir)
-  },
-  filename: (req, file, cb) => {
-    cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`)
-  },
-})
-const uploadCert = multer({ storage: certStorage, limits: { fileSize: 25 * 1024 * 1024 }, fileFilter: fileFilter('document') })
+// Multer for certificate uploads — blob migration: memoryStorage → blobStore.persist.
+const blobStore = require('../lib/blobStore')
+const uploadCert = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 }, fileFilter: fileFilter('document') })
 
 // ─── HELPER: audit ───────────────────────────────────────────────────────────
 // Writes an audit_log row. Fire-and-forget (NOT awaited) so an audit failure can
@@ -1068,6 +1059,29 @@ router.delete('/:projectId/equipment/:id', async (req, res) => {
 // CERTIFICATES ENDPOINTS (shared by commodity + equipment)
 // ═══════════════════════════════════════════════════════════════
 
+// GET /api/foundational/:projectId/certificates/:id/download
+// ⚠ MUST be registered BEFORE the /:entityType/:entityId route below — otherwise that
+// generic route shadows this one ('209/download' → entityId='download' → NaN → 500). Express
+// matches in registration order, so the literal-'download' route has to come first.
+router.get('/:projectId/certificates/:id/download', async (req, res) => {
+  try {
+    const [[cert]] = await db.query('SELECT * FROM foundational_certificates WHERE id=?', [Number(req.params.id)])
+    if (!cert?.filename) return res.status(404).json({ error: 'File not found' })
+    const niceName = path.basename(cert.filename).replace(/^\d+-/, '')
+    // DUAL-READ FALLBACK (blob migration): blob first, then existing disk read.
+    const blobStream = await blobStore.getFile(blobStore.keyFor('foundational', cert.filename))
+    if (blobStream) {
+      res.setHeader('Content-Disposition', `attachment; filename="${niceName.replace(/[\r\n"]/g, '')}"`)
+      return blobStream.pipe(res)
+    }
+    const fp = path.join(__dirname, '../uploads/certificates', cert.filename)
+    if (!fs.existsSync(fp)) return res.status(404).json({ error: 'File not on disk' })
+    res.download(fp, niceName)
+  } catch (e) {
+    dbError(res, e)
+  }
+})
+
 // GET /api/foundational/:projectId/certificates/:entityType/:entityId
 router.get('/:projectId/certificates/:entityType/:entityId', async (req, res) => {
   try {
@@ -1093,8 +1107,19 @@ router.post('/:projectId/certificates/:entityType/:entityId', uploadCert.single(
     const { cert_type, ref_number, applies_to, issue_date, status } = req.body
     if (!cert_type) return res.status(400).json({ error: 'Certificate type is required' })
 
-    const filename  = req.file?.filename || null
+    // Blob migration: persist to blob (key) or disk (legacy BARE filename — unchanged).
+    let filename = null
     const file_size = req.file?.size || null
+    if (req.file) {
+      const storedName = `${Date.now()}-${req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+      const certDir = path.join(__dirname, '../uploads/certificates')
+      const { value } = await blobStore.persist({
+        key: blobStore.keyFor('foundational', storedName),
+        diskAbsPath: path.join(certDir, storedName), buffer: req.file.buffer, contentType: req.file.mimetype,
+        diskValue: storedName,   // legacy shape = bare filename
+      })
+      filename = value
+    }
 
     const [r] = await db.query(
       `INSERT INTO foundational_certificates (entity_type, entity_id, project_id, cert_type, ref_number, applies_to, issue_date, filename, file_size, status, uploaded_by)
@@ -1107,6 +1132,10 @@ router.post('/:projectId/certificates/:entityType/:entityId', uploadCert.single(
       `SELECT fc.*, u.full_name AS uploaded_by_name FROM foundational_certificates fc
        LEFT JOIN users u ON u.id=fc.uploaded_by WHERE fc.id=?`, [r.insertId]
     )
+    // Audit-gap fix: record the cert upload (foundational's fire-and-forget audit — mirrors
+    // the commodity_created shape: before {}, after {…}; non-blocking, never affects the response).
+    audit(req, 'certificate_uploaded', `foundational_certificates/${r.insertId}`, {},
+      { entity_type: entityType, entity_id: Number(entityId), cert_type, ref_number: ref_number || null, filename, uploaded_by: req.user.id })
     res.status(201).json(created)
   } catch (e) {
     console.error('[foundational:certs:create]', e.message)
@@ -1136,6 +1165,9 @@ router.delete('/:projectId/certificates/:id', certGate, async (req, res) => {
       fs.unlink(fp, () => {})
     }
     await db.query('DELETE FROM foundational_certificates WHERE id=?', [id])
+    // Audit-gap fix: record the cert deletion (mirrors commodity_deleted: before=row, after={};
+    // `cert` was SELECTed above BEFORE the delete). Fire-and-forget, non-blocking.
+    audit(req, 'certificate_deleted', `foundational_certificates/${id}`, cert, {})
     res.json({ ok: true })
   } catch (e) {
     dbError(res, e)
@@ -1143,18 +1175,6 @@ router.delete('/:projectId/certificates/:id', certGate, async (req, res) => {
 })
 
 // GET /api/foundational/:projectId/certificates/:id/download
-router.get('/:projectId/certificates/:id/download', async (req, res) => {
-  try {
-    const [[cert]] = await db.query('SELECT * FROM foundational_certificates WHERE id=?', [Number(req.params.id)])
-    if (!cert?.filename) return res.status(404).json({ error: 'File not found' })
-    const fp = path.join(__dirname, '../uploads/certificates', cert.filename)
-    if (!fs.existsSync(fp)) return res.status(404).json({ error: 'File not on disk' })
-    res.download(fp, cert.filename.replace(/^\d+-/, ''))
-  } catch (e) {
-    dbError(res, e)
-  }
-})
-
 // ═══════════════════════════════════════════════════════════════
 // COMMODITY VALIDATE + IMPORT
 // ═══════════════════════════════════════════════════════════════
