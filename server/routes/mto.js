@@ -1148,9 +1148,73 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
       conflicts:     conflicts.length,
     }
 
+    // ─── Held lines (Phase 2 sub-step 1c) ─────────────────────────
+    // A line is held when any row of its key has an active, converted or partial_released reservation
+    // or a PO line (source_mto_line_id); committed = active reserved + PO quantity across the key. Two
+    // grouped queries for the register, keyed by lineKey. Dropped: a held current-revision line not
+    // among the kept file rows (the insert loop's filter) — a real upload needs ack_held_lines. Lowered:
+    // a kept row below the committed total (parsed as the insert does, 3 decimals) — a warning only.
+    const [heldResv] = await db.query(
+      `SELECT k.line_number, SUM(CASE WHEN t.status = 'active' THEN t.qty_reserved ELSE 0 END) AS active_qty,
+              GROUP_CONCAT(DISTINCT tp.ref ORDER BY tp.ref) AS tender_refs,
+              GROUP_CONCAT(DISTINCT CASE WHEN tp.approval_status = 'approved' THEN tp.ref END ORDER BY tp.ref) AS approved_refs
+         FROM mto_lines k
+         JOIN tender_line_items t ON t.mto_line_id = k.id AND t.status IN ('active','converted','partial_released')
+         JOIN tender_packages tp ON tp.id = t.tender_id
+        WHERE k.mto_id = ? GROUP BY k.line_number`, [mtoId])
+    const [heldPo] = await db.query(
+      `SELECT k.line_number, SUM(p.qty) AS po_qty, GROUP_CONCAT(DISTINCT po.po_number ORDER BY po.po_number) AS po_numbers
+         FROM mto_lines k
+         JOIN po_lines p ON p.source_mto_line_id = k.id
+         JOIN purchase_orders po ON po.id = p.po_id
+        WHERE k.mto_id = ? GROUP BY k.line_number`, [mtoId])
+    const held = new Map()
+    const heldOf = ln => { const key = lineKey(ln); if (!held.has(key)) held.set(key, { active: 0, po: 0, refs: [], approved: [], pos: [] }); return held.get(key) }
+    for (const r of heldResv) Object.assign(heldOf(r.line_number), { active: Number(r.active_qty) || 0, refs: r.tender_refs ? r.tender_refs.split(',') : [], approved: r.approved_refs ? r.approved_refs.split(',') : [] })
+    for (const r of heldPo) Object.assign(heldOf(r.line_number), { po: Number(r.po_qty) || 0, pos: r.po_numbers ? r.po_numbers.split(',') : [] })
+    const held_warnings = []
+    if (held.size) {
+      const q3 = v => Math.round(v * 1000)
+      const fq = v => String(q3(v) / 1000)
+      const keptRows = new Map()
+      for (const l of lines) {
+        if (!l.line_number || !l.description) continue
+        const note = String(l.notes || '').toLowerCase()
+        if (note.includes('delete before uploading') || note.includes('example')) continue
+        keptRows.set(lineKey(l.line_number), l)
+      }
+      const [curKeys] = await db.query(
+        'SELECT line_number FROM mto_lines WHERE mto_id = ? AND revision = ? AND is_deleted = 0', [mtoId, mto.current_revision])
+      const holders = h => [
+        h.refs.length && `${h.refs.length > 1 ? 'tenders' : 'tender'} ${h.refs.join(', ')} (${fq(h.active)} reserved)`,
+        h.pos.length && `${h.pos.length > 1 ? 'POs' : 'PO'} ${h.pos.join(', ')} (${fq(h.po)} on PO lines)`,
+      ].filter(Boolean).join(' and ')
+      for (const c of curKeys) {
+        const h = held.get(lineKey(c.line_number))
+        if (!h || keptRows.has(lineKey(c.line_number))) continue
+        let message = `Line ${c.line_number} is held by ${holders(h)} but is not in this file — it will be removed from revision ${newRev}.`
+        for (const ref of h.approved) message += ` Tender ${ref} is approved — Generate PO will be refused until this line is back in a revision.`
+        held_warnings.push({ line_number: c.line_number, type: 'dropped', committed: q3(h.active + h.po) / 1000, message })
+      }
+      for (const [key, l] of keptRows) {
+        const h = held.get(key)
+        if (!h) continue
+        const committed = h.active + h.po
+        const qty = (l.quantity != null && l.quantity !== '' && !isNaN(parseFloat(l.quantity))) ? parseFloat(l.quantity) : null
+        if (q3(qty ?? 0) >= q3(committed)) continue
+        const parts = [
+          h.refs.length && `${fq(h.active)} reserved on ${h.refs.length > 1 ? 'tenders' : 'tender'} ${h.refs.join(', ')}`,
+          h.pos.length && `${fq(h.po)} on PO lines ${h.pos.join(', ')}`,
+        ].filter(Boolean).join('; ')
+        held_warnings.push({ line_number: String(l.line_number), type: 'lowered', committed: q3(committed) / 1000,
+          message: `Line ${l.line_number}: quantity ${qty == null ? '(blank)' : fq(qty)} is below the ${fq(committed)} committed (${parts}).` })
+      }
+    }
+    const requires_ack = held_warnings.some(w => w.type === 'dropped')
+
     // ─── BUG-2: dry-run returns preview without inserting ─────────
     if (dryRun) {
-      return res.json({ dryRun: true, summary, conflicts })
+      return res.json({ dryRun: true, summary, conflicts, held_warnings, requires_ack })
     }
 
     // ─── BUG-2: conflict guard — block upload if locked lines would change ─────
@@ -1158,6 +1222,14 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
       return res.status(422).json({
         error: `${conflicts.length} locked (PO-raised) line(s) would be modified. Resolve conflicts first.`,
         conflicts,
+      })
+    }
+
+    // ─── 1c: dropping a held line needs the acknowledgement ───────
+    if (requires_ack && !['1', 'true'].includes(String(req.body?.ack_held_lines ?? '').trim().toLowerCase())) {
+      return res.status(409).json({
+        error: `${held_warnings.filter(w => w.type === 'dropped').length} line(s) held by a tender or PO would be removed by this revision — review the warnings, then upload again with the acknowledgement to proceed.`,
+        held_warnings, requires_ack: true,
       })
     }
 
@@ -1239,7 +1311,7 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
     )
 
     audit(req, 'UPLOAD_REVISION', 'mto_register', mto.id, { revision: mto.current_revision }, { revision: newRev })
-    res.json({ ok: true, revision: newRev, linesImported: imported })
+    res.json({ ok: true, revision: newRev, linesImported: imported, held_warnings })
   } catch (e) {
     console.error('POST /mto/:projectId/:mtoId/upload', e.message)
     dbError(res, e, 'Upload failed')
