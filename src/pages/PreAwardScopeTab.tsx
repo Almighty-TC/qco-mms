@@ -20,6 +20,8 @@ import { API } from '../lib/api'
 const CAN_EDIT = ['admin', 'procurement_manager', 'procurement_officer', 'project_manager']  // mirrors reserve-lines' can_edit
 
 interface Availability { line_id: number; total_qty: number | null; po_assigned: number; reserved: number; available: number | null }
+// GET /scope revision_note: null when the reservation is on its line's current-revision row
+interface RevisionNote { state: 'old_revision' | 'removed'; reserved_revision: string; current_revision: string; current_mto_line_id: number | null }
 interface Reservation {
   tli_id: number; mto_line_id: number; qty_reserved: string | number; status: string
   line_number: string; description: string; uom: string | null; mto_id: number; mto_reference: string
@@ -29,6 +31,7 @@ interface Reservation {
   // award outcome (GET /scope): stored at award by generate-po; NULL while active
   qty_awarded: string | number | null; qty_released: string | number | null
   released_at: string | null; released_reason: string | null
+  revision_note: RevisionNote | null
 }
 interface LinkedPo { id: number; po_number: string; vendor_name: string | null }
 interface Award { recommended_bid_id: number; supplier_name: string; legacy: boolean }
@@ -62,6 +65,25 @@ const tagFor = (r: { status: string; qty_awarded: string | number | null }) =>
   : r.status === 'partial_released' ? { bg: AMBER.bg, text: AMBER.text, label: 'Partially awarded' }
   : r.status === 'released'       ? { bg: 'rgba(148,163,184,0.18)', text: '#64748b', label: r.qty_awarded != null ? 'Not awarded' : 'Released' }
   : { bg: 'rgba(148,163,184,0.18)', text: '#64748b', label: r.status }
+
+// Revision note for a reservation that isn't on its line's current-revision row. Display only.
+// removed = the line has no current row, so it can't be reserved or awarded; the advice for an active
+// row depends on approval (an approved tender must be recomputed before it can be cancelled or rejected).
+// old_revision with equal revisions = a line removed and re-added, or a duplicate current row.
+const RED = { bg: 'rgba(220,38,38,0.12)', text: '#b91c1c' }
+const revisionNoteFor = (n: RevisionNote, active: boolean, approved: boolean): { kind: string; tone: 'amber' | 'red' | 'muted'; text: string } => {
+  const C = n.current_revision
+  if (n.state === 'removed') {
+    if (!active) return { kind: 'removed', tone: 'muted', text: `Removed from revision ${C}` }
+    return { kind: 'removed', tone: 'red', text: approved
+      ? `Removed from revision ${C} — this line can't be reserved or awarded. This tender is approved, so recompute its recommendation first, then cancel or reject it to release the line, or restore the line in the MTO.`
+      : `Removed from revision ${C} — this line can't be reserved or awarded. Cancel or reject the tender to release it, or restore the line in the MTO.` }
+  }
+  if (n.reserved_revision === C) return { kind: 'old_revision_same', tone: active ? 'amber' : 'muted', text: `Reserved on an earlier row of this line in revision ${C} — quantities follow the current row.` }
+  return active
+    ? { kind: 'old_revision', tone: 'amber', text: `Reserved on revision ${n.reserved_revision} · current revision ${C} — quantities follow the current line` }
+    : { kind: 'old_revision', tone: 'muted', text: `Reserved on revision ${n.reserved_revision} (current ${C})` }
+}
 
 // Readable text for the fixed released_reason codes written by cancel, reject and manual release.
 // Display only — the stored value is unchanged. Reasons written at award are already sentences and pass through as-is.
@@ -209,6 +231,8 @@ export function PreAwardScopeTab({ dark, projectId, tenderId, userRole }: {
               {reservations.map(r => {
                 const partial = r.status === 'partial_released'
                 const awarded = r.status !== 'active'
+                const note = r.revision_note ? revisionNoteFor(r.revision_note, r.status === 'active', tenderState?.approval_status === 'approved') : null
+                const noteColor = note?.tone === 'red' ? RED.text : note?.tone === 'amber' ? AMBER.text : sub
                 const fig = (label: string, v: string | number | null, strong?: string) => (
                   <div style={{ textAlign: 'right', minWidth: 58 }}>
                     <div style={{ fontSize: 15, fontWeight: 800, color: strong ?? col }}>{fmtQty(v)}</div>
@@ -225,10 +249,14 @@ export function PreAwardScopeTab({ dark, projectId, tenderId, userRole }: {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                         <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12.5, fontWeight: 700, color: '#E84E0F' }}>{r.mto_reference} · {r.line_number}</span>
                         {pill(r)}
+                        {note?.kind === 'removed' && <span data-removed="" style={{ background: RED.bg, color: RED.text, fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 9999 }}>Removed</span>}
                         {r.status === 'active' && r.on_po_ref && <OnPoBadge poRef={r.on_po_ref} />}
                       </div>
                       <div style={{ fontSize: 13, color: col, marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.description}>{r.description}</div>
-                      {r.status === 'active' && r.availability && (
+                      {note && (
+                        <div data-revision-note={note.kind} style={{ fontSize: 11.5, color: noteColor, fontWeight: note.tone === 'muted' ? 400 : 600, marginTop: 3 }}>{note.text}</div>
+                      )}
+                      {r.status === 'active' && r.availability && note?.kind !== 'removed' && (
                         <div style={{ fontSize: 11.5, color: sub, marginTop: 3 }}>
                           Line total {fmtQty(r.availability.total_qty)} · {fmtQty(r.availability.available)} still available across all tenders/POs
                         </div>
