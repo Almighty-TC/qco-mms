@@ -869,9 +869,13 @@ router.post('/:projectId/tenders/:id/reserve-lines', requireLivePermission('pre_
       if (tender.status === 'on_hold') { await conn.rollback(); return res.status(409).json({ error: 'This tender is on hold — take it off hold before adding lines to its scope' }) }
 
       // serialization point: every requested line's key rows, all keys in one statement (lockKeyRows)
-      const [keyRows] = await conn.query(`SELECT mto_id, line_number FROM mto_lines WHERE id IN (${ids.map(() => '?').join(',')})`, ids)
+      const [keyRows] = await conn.query(`SELECT id, mto_id, line_number FROM mto_lines WHERE id IN (${ids.map(() => '?').join(',')})`, ids)
       await lockKeyRows(conn, keyRows)
       const info = await keyInfo(ids, conn)   // read UNDER the lock
+      // a line renumbered between the read above and the lock: the rows locked were its old key's
+      if (keyRows.some(r => { const k = info.get(r.id); return !k || k.mto_id !== r.mto_id || k.line_number !== r.line_number })) {
+        await conn.rollback(); return res.status(409).json({ error: 'line changed during the request — retry' })
+      }
       const ordered = [...lines].sort((a, b) => Number(a.mto_line_id) - Number(b.mto_line_id))
       const created = []
       for (const l of ordered) {
@@ -1594,9 +1598,12 @@ router.post('/:projectId/tenders/:id/generate-po', requireLivePermission('pre_aw
       // A line removed from the current revision can't be awarded. The po_line keeps the reserved row as its
       // source_mto_line_id; status and po_ref go on the line's current-revision row.
       const resvIds = [...new Set(resv.map(r => r.mto_line_id))]
-      const [keyRows] = await conn.query(`SELECT mto_id, line_number FROM mto_lines WHERE id IN (${resvIds.map(() => '?').join(',')})`, resvIds)
+      const [keyRows] = await conn.query(`SELECT id, mto_id, line_number FROM mto_lines WHERE id IN (${resvIds.map(() => '?').join(',')})`, resvIds)
       await lockKeyRows(conn, keyRows)
       const info = await keyInfo(resvIds, conn)
+      if (keyRows.some(r => { const k = info.get(r.id); return !k || k.mto_id !== r.mto_id || k.line_number !== r.line_number })) {
+        await conn.rollback(); return res.status(409).json({ error: 'line changed during the request — retry' })
+      }
       const gone = resv.map(r => info.get(r.mto_line_id)).filter(k => k.current_line_id == null)
       if (gone.length) {
         await conn.rollback()
