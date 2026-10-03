@@ -127,12 +127,60 @@ function sameMtoContent(uploaded, existing) {
     String(l.uom ?? '').trim().toLowerCase(),
     String(l.wbs_code ?? '').trim().toLowerCase(),
     ymd(l.ros_date),
+    String(l.item_type ?? '').trim().toLowerCase(),
+    String(l.item_ref ?? '').trim().toLowerCase(),
   ].join('|')
   const valid = a => a.filter(l => l.line_number != null && l.line_number !== '' && l.description)
   const u = valid(uploaded).map(sig).sort()
   const e = valid(existing).map(sig).sort()
   if (u.length === 0 || u.length !== e.length) return false
   return u.every((s, i) => s === e[i])
+}
+
+// ─── LINE CLASSIFICATION (Phase 2 sub-step 1b) ──────────────────────────────
+// item_type (bulk | commodity | equipment, nullable) and item_ref (the commodity code or equipment
+// tag, VARCHAR(100)) on mto_lines. A file names the two columns with tolerant headers (lowercase,
+// spaces, underscores, hyphens and slashes removed); a file without them imports as before.
+const ITEM_TYPES = ['bulk', 'commodity', 'equipment']
+const TYPE_HEADERS = new Set(['itemtype'])
+const REF_HEADERS = new Set(['commoditycodeequipmenttag', 'itemref'])
+const tolerantKey = k => String(k).toLowerCase().replace(/[\s_\-/]+/g, '')
+const blankToNull = v => { const s = v == null ? '' : String(v).trim(); return s === '' ? null : s }
+const lineKey = ln => String(ln ?? '').trim().toLowerCase()
+// The two classification cells of a parsed row, read by tolerant header.
+function rawClassification(row) {
+  let type, ref
+  for (const [k, v] of Object.entries(row)) {
+    const t = tolerantKey(k)
+    if (TYPE_HEADERS.has(t)) type = v
+    else if (REF_HEADERS.has(t)) ref = v
+  }
+  return { type, ref }
+}
+// Resolves one line's classification. Both cells blank → carry the pair from `prev` (Map lineKey →
+// { item_type, item_ref }, the current revision's non-deleted rows; null when there is nothing to
+// carry). Otherwise the given pair is used: a valid type, a reference of at most 100 characters,
+// the two together. Then the equipment rule on the resolved row. Never truncates.
+function resolveClassification({ type, ref, wbs, ln, prev }) {
+  const errors = []
+  const label = `Line ${String(ln ?? '').trim()}`
+  let t = blankToNull(type), r = blankToNull(ref)
+  if (t == null && r == null) {
+    const p = prev ? prev.get(lineKey(ln)) : null
+    if (p) { t = p.item_type ?? null; r = p.item_ref ?? null }
+  } else {
+    let typeOk = true
+    if (t != null) {
+      if (ITEM_TYPES.includes(t.toLowerCase())) t = t.toLowerCase()
+      else { typeOk = false; errors.push(`${label}: item type "${t}" must be bulk, commodity or equipment`) }
+    }
+    if (r != null && r.length > 100) errors.push(`${label}: the commodity code / equipment tag is ${r.length} characters — the limit is 100`)
+    if (t != null && typeOk && r == null) errors.push(`${label}: item type "${t}" needs a Commodity Code / Equipment Tag`)
+    if (r != null && t == null) errors.push(`${label}: "${r}" needs an Item Type (bulk, commodity or equipment)`)
+  }
+  if (!errors.length && t === 'equipment' && (blankToNull(wbs) == null || r == null))
+    errors.push(`${label}: equipment lines need a WBS code and an equipment tag`)
+  return { item_type: errors.length ? null : t, item_ref: errors.length ? null : r, errors }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -212,18 +260,19 @@ router.get('/:projectId/template', async (req, res) => {
   wb.created = new Date()
 
   // ── ONE sheet: MTO Details (top) + line-items table (below) ───────────────
-  // Line columns match the upload parser EXACTLY (line_number, wbs_code, description,
-  // quantity, uom, ros_date) + a Notes column the parser uses to skip example rows.
+  // Line columns match the upload parser EXACTLY (line_number, wbs_code, item type, commodity
+  // code / equipment tag, description, quantity, uom, ros_date) + a Notes column the parser uses
+  // to skip example rows.
   // The old Unit Rate / Total Value columns were removed — MTO carries no pricing
   // (that lives on po_lines), so the parser never read them and they only misled.
   const ws = wb.addWorksheet('MTO Lines', { views: [{ state: 'frozen', ySplit: 8 }] })
   ws.columns = [
-    { width: 18 }, { width: 16 }, { width: 50 }, { width: 10 },
+    { width: 18 }, { width: 16 }, { width: 14 }, { width: 28 }, { width: 50 }, { width: 10 },
     { width: 8 }, { width: 14 }, { width: 30 },
   ]
 
   // Row 1: orange title banner
-  ws.mergeCells('A1:G1')
+  ws.mergeCells('A1:I1')
   const titleCell = ws.getCell('A1')
   titleCell.value = 'QCO MMS — MTO Import Template'
   titleCell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 13, name: 'Calibri' }
@@ -250,7 +299,7 @@ router.get('/:projectId/template', async (req, res) => {
   })
 
   // Row 7: guidance note across the sheet
-  ws.mergeCells('A7:G7')
+  ws.mergeCells('A7:I7')
   const note = ws.getCell('A7')
   note.value = '↓  Line items — enter one row per item below. Delete the grey example rows before uploading.'
   note.font = { italic: true, color: { argb: 'FF64748b' }, size: 10 }
@@ -258,7 +307,7 @@ router.get('/:projectId/template', async (req, res) => {
 
   // Row 8: line column headers (dark blue) — exactly the fields the parser reads,
   // plus Notes (used to detect/skip the grey example rows on import).
-  const headers = ['Line Number','WBS Code','Description','Quantity','UOM','ROS Date','Notes']
+  const headers = ['Line Number','WBS Code','Item Type','Commodity Code / Equipment Tag','Description','Quantity','UOM','ROS Date','Notes']
   const headerRow = ws.getRow(8)
   headers.forEach((h, i) => {
     const cell = headerRow.getCell(i + 1)
@@ -272,9 +321,9 @@ router.get('/:projectId/template', async (req, res) => {
 
   // Rows 9-11: example rows (grey italic)
   const examples = [
-    ['L-001','02.01.01','HP Separator Vessel — 3-phase horizontal',1,'EA','31-Aug-2025','Delete before uploading'],
-    ['L-002','02.02.01','Centrifugal Feed Pump P-101A',2,'EA','31-Oct-2025','Delete before uploading'],
-    ['L-003','03.01.01','HV Cable 11kV 3C×150mm² XLPE',250,'m','15-Dec-2025','Delete before uploading'],
+    ['L-001','02.01.01','equipment','V-101','HP Separator Vessel — 3-phase horizontal',1,'EA','31-Aug-2025','Delete before uploading'],
+    ['L-002','02.02.01','equipment','P-101A','Centrifugal Feed Pump P-101A',2,'EA','31-Oct-2025','Delete before uploading'],
+    ['L-003','03.01.01','bulk','CBL-11KV-3C150','HV Cable 11kV 3C×150mm² XLPE',250,'m','15-Dec-2025','Delete before uploading'],
   ]
   examples.forEach((ex, i) => {
     const row = ws.getRow(9 + i)
@@ -285,8 +334,8 @@ router.get('/:projectId/template', async (req, res) => {
   // Rows 12-60: blank data rows
   for (let r = 12; r <= 60; r++) ws.getRow(r).height = 18
 
-  // col E (5) — UOM (guide only), from the first data row
-  ws.dataValidations.add('E9:E500', {
+  // col G (7) — UOM (guide only), from the first data row
+  ws.dataValidations.add('G9:G500', {
     type: 'list', allowBlank: true, showErrorMessage: false,
     formulae: ['"EA,NR,KG,T,M,MM,M2,M3,L,KL,SET,LOT,PR,LM,KN"'],
   })
@@ -306,6 +355,8 @@ router.get('/:projectId/template', async (req, res) => {
     ['LINE ITEMS (table below the details)', true, 'FF1e3a5f', 11],
     ['Line Number — Required. Format: L-001. Must be unique.', false, null, 10],
     ['WBS Code — Must match a WBS code in your project (e.g. 02.01.01).', false, null, 10],
+    ['Item Type — Optional: bulk, commodity or equipment (blank = unclassified). Equipment lines need a WBS Code and an equipment tag.', false, null, 10],
+    ['Commodity Code / Equipment Tag — Required when an Item Type is set (max 100 characters). Leave both blank to keep the previous revision\'s classification.', false, null, 10],
     ['Description — Required for every line.', false, null, 10],
     ['Quantity — Numeric.', false, null, 10],
     ['UOM — Select from dropdown (guide only): EA, NR, KG, T, M, MM, M2, M3, L, KL, SET, LOT, PR, LM, KN', false, null, 10],
@@ -381,10 +432,11 @@ router.post('/:projectId/parse-file', upload.single('file'), async (req, res) =>
       if (!n.line_number && n['line_#']) n.line_number = n['line_#']
       if (!n.line_number && n.line_no) n.line_number = n.line_no
       n._rowNum = idx + hdrIdx + 2   // 1-based sheet row of this data row
+      n._cls = rawClassification(row)   // Item Type / Commodity Code / Equipment Tag cells (tolerant headers)
       return n
     })
 
-    const warnings = [], validLines = []
+    const warnings = [], validLines = [], classified = []
     let linesSkipped = 0
     const lineNumbers = new Map()
     const VALID_UOM = new Set(['EA','m','m2','m3','kg','t','LT','SET','LOT'])
@@ -425,7 +477,26 @@ router.post('/:projectId/parse-file', upload.single('file'), async (req, res) =>
       if (row.ros_date != null && row.ros_date !== '' && !rosDate)
         warnings.push({ row: rn, message: `ROS date '${row.ros_date}' could not be parsed — left blank`, severity: 'warning' })
 
-      validLines.push({ line_number: lineNum, wbs_code: wbsCode, description: String(row.description).trim(), quantity: qty, uom: uom || null, ros_date: rosDate })
+      // Classification: parse-file previews a new register's first upload, so there is no previous
+      // revision to carry from — blank cells stay unclassified.
+      const cls = resolveClassification({ type: row._cls.type, ref: row._cls.ref, wbs: wbsCode, ln: lineNum, prev: null })
+      for (const m of cls.errors) warnings.push({ row: rn, message: m, severity: 'error' })
+      if (cls.item_ref) classified.push({ rn, item_type: cls.item_type, item_ref: cls.item_ref })
+
+      validLines.push({ line_number: lineNum, wbs_code: wbsCode, description: String(row.description).trim(), quantity: qty, uom: uom || null, ros_date: rosDate, item_type: cls.item_type, item_ref: cls.item_ref })
+    }
+
+    // Library check (warnings only, never blocking): each reference against the project's commodity
+    // library (bulk, commodity) or equipment list (equipment) — at most two queries for the whole file.
+    const known = async (sql, vals) => vals.length
+      ? new Set((await db.query(sql, [req.params.projectId, vals]))[0].map(r => String(Object.values(r)[0]).toLowerCase()))
+      : new Set()
+    const knownCodes = await known('SELECT code FROM commodity_library WHERE project_id = ? AND code IN (?)', [...new Set(classified.filter(c => c.item_type !== 'equipment').map(c => c.item_ref))])
+    const knownTags  = await known('SELECT tag FROM equipment_list WHERE project_id = ? AND tag IN (?)', [...new Set(classified.filter(c => c.item_type === 'equipment').map(c => c.item_ref))])
+    for (const c of classified) {
+      const isTag = c.item_type === 'equipment'
+      if (!(isTag ? knownTags : knownCodes).has(c.item_ref.toLowerCase()))
+        warnings.push({ row: c.rn, message: isTag ? `Equipment tag "${c.item_ref}" not found in the project's equipment list` : `Commodity code "${c.item_ref}" not found in the project's commodity library`, severity: 'warning' })
     }
 
     res.json({
@@ -587,7 +658,7 @@ router.get('/:projectId/:mtoId/diff', async (req, res) => {
       } else {
         const prev = fromMap.get(ln)
         const changes = {}
-        const FIELDS = ['description','quantity','wbs_code','ros_date','inspection_class','uom']
+        const FIELDS = ['description','quantity','wbs_code','ros_date','inspection_class','uom','item_type','item_ref']
         for (const f of FIELDS) {
           const pv = prev[f] == null ? null : String(prev[f])
           const nv = line[f] == null ? null : String(line[f])
@@ -637,6 +708,9 @@ router.post('/:projectId/:mtoId/lines', async (req, res) => {
     if (quantity != null && quantity !== '' && (isNaN(Number(quantity)) || Number(quantity) < 0)) {
       return res.status(400).json({ error: 'Quantity must be a non-negative number.' })
     }
+    // Optional classification (Phase 2 1b) — validated as a pair, with the equipment rule; no carry-forward.
+    const cls = resolveClassification({ type: req.body.item_type, ref: req.body.item_ref, wbs: wbs_code, ln: line_number, prev: null })
+    if (cls.errors.length) return res.status(400).json({ error: cls.errors.join('; ') })
     // Reject a duplicate line number within the current revision (logical conflict).
     const [[dupLine]] = await db.query(
       'SELECT id FROM mto_lines WHERE mto_id = ? AND revision = ? AND line_number = ? AND is_deleted = 0',
@@ -646,12 +720,12 @@ router.post('/:projectId/:mtoId/lines', async (req, res) => {
     const [result] = await db.query(
       `INSERT INTO mto_lines
        (mto_id, revision, line_number, wbs_code, description, quantity, uom,
-        ros_date, inspection_class, vdrl_required, po_ref, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ros_date, inspection_class, vdrl_required, po_ref, status, item_type, item_ref)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [mto.id, mto.current_revision, line_number, wbs_code || null, description,
        quantity || null, uom || null, ros_date || null,
        inspection_class || 'Class II', vdrl_required ? 1 : 0,
-       po_ref || null, status || 'not-started']
+       po_ref || null, status || 'not-started', cls.item_type, cls.item_ref]
     )
 
     // Update line_count on register
@@ -706,18 +780,44 @@ router.put('/:projectId/:mtoId/lines/:lineId', async (req, res) => {
     const { line_number, wbs_code, description, quantity, uom, ros_date,
             inspection_class, vdrl_required, po_ref, status } = req.body
 
+    // Classification (Phase 2 1b): item_type and item_ref change only when the key is in the body —
+    // the current editor doesn't send them, so an absent key leaves the stored value. If either key
+    // is present, the merged row is validated: a valid type, the pair together, at most 100
+    // characters, and the equipment rule against the merged WBS. Editable on po-raised lines too
+    // (TC 2026-10-03); quantity, description, UOM, WBS and line_number stay locked there.
+    const body = req.body || {}
+    const hasType = Object.prototype.hasOwnProperty.call(body, 'item_type')
+    const hasRef  = Object.prototype.hasOwnProperty.call(body, 'item_ref')
+    let clsSql = '', clsParams = []
+    if (hasType || hasRef) {
+      const cls = resolveClassification({
+        type: hasType ? body.item_type : line.item_type,
+        ref:  hasRef  ? body.item_ref  : line.item_ref,
+        wbs:  locked ? line.wbs_code : (wbs_code ?? line.wbs_code),
+        ln:   locked ? line.line_number : (line_number ?? line.line_number),
+        prev: null,
+      })
+      if (cls.errors.length) return res.status(400).json({ error: cls.errors.join('; ') })
+      clsSql = ', item_type = ?, item_ref = ?'; clsParams = [cls.item_type, cls.item_ref]
+    } else if (!locked && line.item_type === 'equipment') {
+      // No item keys sent: an unlocked equipment line still needs a WBS code and a tag on the merged
+      // row (a locked line's WBS isn't editable).
+      if (blankToNull(wbs_code ?? line.wbs_code) == null || blankToNull(line.item_ref) == null)
+        return res.status(400).json({ error: `Line ${String(line_number ?? line.line_number ?? '').trim()}: equipment lines need a WBS code and an equipment tag` })
+    }
+
     let sql, params
     if (locked) {
       // GOVERNANCE (baseline-major): qty/rev changes on a PO-raised line are intentionally
       // blocked here (only ros_date/vdrl_required editable). If this is ever unlocked, the
       // qty/rev edit MUST route through pending_changes confirmation (action='edit',
       // confirmer=project_manager) per the signed baseline-major definition — never write direct.
-      sql = `UPDATE mto_lines SET ros_date = ?, vdrl_required = ? WHERE id = ?`
-      params = [ros_date ?? line.ros_date, vdrl_required != null ? (vdrl_required ? 1 : 0) : line.vdrl_required, line.id]
+      sql = `UPDATE mto_lines SET ros_date = ?, vdrl_required = ?${clsSql} WHERE id = ?`
+      params = [ros_date ?? line.ros_date, vdrl_required != null ? (vdrl_required ? 1 : 0) : line.vdrl_required, ...clsParams, line.id]
     } else {
       sql = `UPDATE mto_lines SET
                line_number = ?, wbs_code = ?, description = ?, quantity = ?, uom = ?,
-               ros_date = ?, inspection_class = ?, vdrl_required = ?, po_ref = ?, status = ?
+               ros_date = ?, inspection_class = ?, vdrl_required = ?, po_ref = ?, status = ?${clsSql}
              WHERE id = ?`
       params = [
         line_number ?? line.line_number,
@@ -730,6 +830,7 @@ router.put('/:projectId/:mtoId/lines/:lineId', async (req, res) => {
         vdrl_required != null ? (vdrl_required ? 1 : 0) : line.vdrl_required,
         po_ref      ?? line.po_ref,
         status      ?? line.status,
+        ...clsParams,
         line.id
       ]
     }
@@ -977,12 +1078,35 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
       if (dups.length) return res.status(400).json({ error: dups.join('; ') })
     }
 
+    // ─── Classification (Phase 2 sub-step 1b) ─────────────────────
+    // Per kept row: the file's Item Type / Commodity Code / Equipment Tag cells or — both blank — the
+    // pair carried from the current revision's non-deleted row with the same line number. Every error
+    // is returned (400) before anything is written, for dryRun and real uploads alike. The resolved
+    // values feed the no-change check and the insert.
+    {
+      const [prevRows] = await db.query(
+        'SELECT line_number, item_type, item_ref FROM mto_lines WHERE mto_id = ? AND revision = ? AND is_deleted = 0',
+        [mtoId, mto.current_revision])
+      const prev = new Map(prevRows.map(p => [lineKey(p.line_number), p]))
+      const clsErrors = []
+      lines.forEach((l, i) => {
+        const note = String(l.notes || '').toLowerCase()
+        if (!l.line_number || !l.description || note.includes('delete before uploading') || note.includes('example')) {
+          l.item_type = null; l.item_ref = null; return
+        }
+        const raw = rawClassification(rows[i])
+        const c = resolveClassification({ type: raw.type, ref: raw.ref, wbs: l.wbs_code, ln: l.line_number, prev })
+        clsErrors.push(...c.errors); l.item_type = c.item_type; l.item_ref = c.item_ref
+      })
+      if (clsErrors.length) return res.status(400).json({ error: clsErrors.join('; ') })
+    }
+
     // ─── Reject a no-change re-upload ─────────────────────────────
     // An MTO whose content is identical to the current revision (only the
     // version differs) is meaningless — prompt and reject rather than create a
     // duplicate revision. Compared against the live (current) revision's lines.
     const [curLines] = await db.query(
-      'SELECT line_number, description, quantity, uom, wbs_code, ros_date, inspection_class, vdrl_required FROM mto_lines WHERE mto_id=? AND revision=? AND is_deleted=0',
+      'SELECT line_number, description, quantity, uom, wbs_code, ros_date, inspection_class, vdrl_required, item_type, item_ref FROM mto_lines WHERE mto_id=? AND revision=? AND is_deleted=0',
       [mtoId, mto.current_revision])
     if (sameMtoContent(lines, curLines)) {
       return res.status(409).json({
@@ -1083,8 +1207,8 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
       // inspection_class / vdrl_required omitted — DB defaults apply (removed from MTO input).
       await db.query(
         `INSERT INTO mto_lines
-         (mto_id, revision, line_number, wbs_code, description, quantity, uom, ros_date, po_ref, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (mto_id, revision, line_number, wbs_code, description, quantity, uom, ros_date, po_ref, status, item_type, item_ref)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [mto.id, newRev,
          String(l.line_number),
          l.wbs_code     || null,
@@ -1093,7 +1217,9 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
          l.uom          || null,
          upDate(l.ros_date),
          l.po_ref       || null,
-         l.status       || 'not-started']
+         l.status       || 'not-started',
+         l.item_type    ?? null,
+         l.item_ref     ?? null]
       )
       imported++
     }
