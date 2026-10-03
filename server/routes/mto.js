@@ -953,6 +953,30 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
       return n
     })
 
+    // ─── Reject duplicate line numbers within the file ────────────
+    // Over the rows the insert loop keeps (line number + description, not an example row),
+    // compared trimmed and the way the column's collation would (case- and accent-insensitive).
+    // Runs before anything is written, for dryRun and real uploads alike. Row numbers are the
+    // sheet's own (SheetJS __rowNum__ is 0-based).
+    {
+      const sameLine = new Intl.Collator('en', { sensitivity: 'base' })
+      const kept = []
+      lines.forEach((l, i) => {
+        if (!l.line_number || !l.description) return
+        const note = String(l.notes || '').toLowerCase()
+        if (note.includes('delete before uploading') || note.includes('example')) return
+        kept.push({ ln: String(l.line_number).trim(), row: rows[i].__rowNum__ + 1 })
+      })
+      const groups = []
+      for (const k of kept) {
+        const g = groups.find(x => sameLine.compare(x.ln, k.ln) === 0)
+        if (g) g.rows.push(k.row); else groups.push({ ln: k.ln, rows: [k.row] })
+      }
+      const dups = groups.filter(g => g.rows.length > 1)
+        .flatMap(g => g.rows.slice(1).map(r => `Duplicate line number "${g.ln}" on rows ${g.rows[0]} and ${r}`))
+      if (dups.length) return res.status(400).json({ error: dups.join('; ') })
+    }
+
     // ─── Reject a no-change re-upload ─────────────────────────────
     // An MTO whose content is identical to the current revision (only the
     // version differs) is meaningless — prompt and reject rather than create a
