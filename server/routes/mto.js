@@ -17,6 +17,7 @@ const { fileColumnsReady } = require('../lib/schemaColumns')
 const { fileNotEmpty } = require('../utils/validate')
 const { validateRevisionFormat, compareRevisions, RevisionError } = require('../lib/revision')
 const { lockKeyRows } = require('../lib/mtoAvailability')
+const { hasPermission } = require('../middleware/permissions')
 
 // ─── AUTH MIDDLEWARE ──────────────────────────────────────────────────────────
 router.use(authenticateToken)
@@ -889,6 +890,83 @@ router.put('/:projectId/:mtoId/lines/:lineId', async (req, res) => {
   } catch (e) {
     console.error('PUT /mto/:projectId/:mtoId/lines/:lineId', e.message)
     res.status(500).json({ error: 'Failed to update line' })
+  }
+})
+
+// ─── POST /:projectId/:mtoId/lines/:lineId/unraise/approve — un-raise a po-raised line (1f) ─────────────
+// Sets a po-raised line back to not-started or rfq, only when nothing backs the flag: no purchase order
+// whose po_number matches (trimmed, case-insensitive) any non-empty po_ref on the key's po-raised rows,
+// no po_lines row and no converted or partial_released reservation on any row of the key (active
+// reservations don't block). Every non-deleted po-raised row of the key is updated and its po_ref cleared.
+// The /approve segment makes enforce require can_approve; the handler checks it again with the same
+// lookup. One READ COMMITTED transaction: the key rows are locked (lockKeyRows) and re-read, and the
+// audit row is inserted on the same connection, so a failed audit rolls the change back.
+const UNRAISE_TARGETS = new Set(['not-started', 'rfq'])
+const UNRAISE_REASON_MIN = 10, UNRAISE_REASON_MAX = 1000   // characters, after trimming
+router.post('/:projectId/:mtoId/lines/:lineId/unraise/approve', async (req, res) => {
+  const target = req.body?.status
+  const reason = String(req.body?.reason ?? '').trim()
+  if (!UNRAISE_TARGETS.has(target)) return res.status(400).json({ error: "status must be 'not-started' or 'rfq'" })
+  const reasonLength = Array.from(reason).length
+  if (reasonLength < UNRAISE_REASON_MIN || reasonLength > UNRAISE_REASON_MAX)
+    return res.status(400).json({ error: `The reason must be ${UNRAISE_REASON_MIN} to ${UNRAISE_REASON_MAX.toLocaleString('en-US')} characters (it is ${reasonLength})` })
+  let conn
+  try {
+    if (!(await hasPermission(req.user, 'mto', 'can_approve'))) return res.status(403).json({ error: 'Your role cannot un-raise a PO Raised line' })
+    const readLine = c => c.query(
+      `SELECT l.id, l.mto_id, l.revision, l.line_number, l.status, l.po_ref, l.is_deleted, r.current_revision
+         FROM mto_lines l JOIN mto_registers r ON r.id = l.mto_id
+        WHERE l.id = ? AND l.mto_id = ? AND r.project_id = ?`,
+      [req.params.lineId, req.params.mtoId, req.params.projectId])
+    const [[l0]] = await readLine(db)
+    if (!l0 || l0.is_deleted) return res.status(404).json({ error: 'Line not found' })
+
+    conn = await db.getConnection()
+    await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+    await conn.beginTransaction()
+    const refuse = async (body) => { await conn.rollback(); return res.status(409).json(body) }
+    await lockKeyRows(conn, [{ mto_id: l0.mto_id, line_number: l0.line_number }])
+    const [[l1]] = await readLine(conn)   // under the lock
+    if (!l1 || l1.is_deleted || l1.mto_id !== l0.mto_id || l1.line_number !== l0.line_number) return refuse({ code: 'line_changed', error: LINE_CHANGED })
+    if (l1.revision !== l1.current_revision) return refuse({ code: 'not_current', error: `Line ${l1.line_number} (mto_line_id ${l1.id}) is in revision ${l1.revision}, not the current revision ${l1.current_revision}` })
+    if (l1.status !== 'po-raised') return refuse({ code: 'not_po_raised', error: `Line ${l1.line_number} is ${l1.status}, not PO Raised` })
+
+    const [keyRows] = await conn.query(
+      'SELECT id, revision, status, po_ref, is_deleted FROM mto_lines WHERE mto_id = ? AND line_number = ? ORDER BY id', [l1.mto_id, l1.line_number])
+    const refs = [...new Set(keyRows.filter(k => k.status === 'po-raised').map(k => String(k.po_ref ?? '').trim()).filter(Boolean))]
+    if (refs.length) {
+      const [pos] = await conn.query('SELECT po_number FROM purchase_orders WHERE po_number IN (?) ORDER BY po_number', [refs])
+      if (pos.length) return refuse({ code: 'po_exists', po_numbers: pos.map(p => p.po_number),
+        error: `Line ${l1.line_number} is backed by ${pos.length > 1 ? 'purchase orders' : 'purchase order'} ${pos.map(p => p.po_number).join(', ')} — it can't be un-raised` })
+    }
+    const [[links]] = await conn.query(
+      `SELECT (SELECT COUNT(*) FROM po_lines p JOIN mto_lines k ON k.id = p.source_mto_line_id WHERE k.mto_id = ? AND k.line_number = ?) AS po_lines,
+              (SELECT COUNT(*) FROM tender_line_items t JOIN mto_lines k ON k.id = t.mto_line_id
+                WHERE k.mto_id = ? AND k.line_number = ? AND t.status IN ('converted','partial_released')) AS converted`,
+      [l1.mto_id, l1.line_number, l1.mto_id, l1.line_number])
+    if (Number(links.po_lines)) return refuse({ code: 'po_line_link', error: `Line ${l1.line_number} has ${links.po_lines} PO line(s) — it can't be un-raised` })
+    if (Number(links.converted)) return refuse({ code: 'converted_reservation', error: `Line ${l1.line_number} has ${links.converted} converted or partially released tender reservation(s) — it can't be un-raised` })
+
+    const raised = keyRows.filter(k => !k.is_deleted && k.status === 'po-raised')
+    await conn.query('UPDATE mto_lines SET status = ?, po_ref = NULL WHERE id IN (?)', [target, raised.map(k => k.id)])
+    const resource = (req.originalUrl || req.url || '').split('?')[0].replace(/^\/api(?=\/)/, '')
+    await conn.query(
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id,
+          before_value, after_value, reason_category, reason_detail, resource, ip)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [req.user.id, 'UNRAISE', 'mto_line', l1.id, Number(req.params.projectId) || null,
+       JSON.stringify({ rows: raised.map(k => ({ id: k.id, revision: k.revision, status: k.status, po_ref: k.po_ref })) }),
+       JSON.stringify({ status: target, po_ref: null, rows: raised.length }),
+       'unraise', reason, resource, req.ip ?? null])
+    await conn.commit()
+    const [[line]] = await db.query('SELECT * FROM mto_lines WHERE id = ?', [l1.id])
+    res.json({ line, updated_rows: raised.length, po_ref_cleared: true })
+  } catch (e) {
+    if (conn) { try { await conn.rollback() } catch (_) { /* already rolled back */ } }
+    console.error('POST /mto/:projectId/:mtoId/lines/:lineId/unraise/approve', e.message)
+    dbError(res, e, 'Un-raise failed')
+  } finally {
+    if (conn) conn.release()
   }
 })
 
