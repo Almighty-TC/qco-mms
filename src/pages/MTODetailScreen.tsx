@@ -4,7 +4,7 @@
 //   B — Version History (revisions list)
 //   C — Rev Diff (compare any two revisions)
 //   D — Variation Flags (placeholder)
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import axios from 'axios'
 import { ToastProvider, useToast } from '../hooks/useToast'
@@ -269,6 +269,20 @@ const MTOLineEditModal = ({
 }
 
 // ─── UPLOAD REVISION MODAL ────────────────────────────────────────────────────
+// "Check file" sends the same form as a dryRun and shows the result in the modal: the summary,
+// locked-line conflicts, held-line warnings and, when a held line would be dropped, the
+// acknowledgement box. Upload is enabled only after a clean check (and the box, when required);
+// it sends ack_held_lines=1 only when the box is ticked. Editing the form clears the check.
+interface UploadConflict { line_number: string; changes: Record<string, { locked: unknown; uploaded: unknown }> }
+interface HeldWarning { line_number: string; type: 'dropped' | 'lowered'; committed?: number; message: string }
+interface UploadCheck { summary: Record<string, unknown>; conflicts: UploadConflict[]; held_warnings: HeldWarning[]; requires_ack: boolean }
+const checkVal = (v: unknown) => (v == null || v === '' ? '(blank)' : String(v))
+function uploadErrorText(e: any): string {
+  const msg: string = e?.response?.data?.error ?? e?.message ?? 'Upload failed'
+  return e?.response?.status === 409 && /identical to the current revision/i.test(msg)
+    ? 'Identical to the current revision — nothing to upload.' : msg
+}
+
 const UploadRevModal = ({
   dark, projectId, mto, onClose, onUploaded,
 }: {
@@ -278,8 +292,17 @@ const UploadRevModal = ({
   const [file,     setFile]     = useState<File | null>(null)
   const [notes,    setNotes]    = useState('')
   const [uploading, setUploading] = useState(false)
+  const [checking,   setChecking]   = useState(false)
+  const [check,      setCheck]      = useState<UploadCheck | null>(null)
+  const [checkError, setCheckError] = useState<string | null>(null)
+  const [ackHeld,    setAckHeld]    = useState(false)
+  const checkSeq = useRef(0)   // a check answered after the form changed is ignored
+  const uploadingRef = useRef(false)   // one upload in flight, even for two clicks before a re-render
 
   const [newRev, setNewRev] = useState(suggestRev(mto.current_revision))
+  function resetCheck() { checkSeq.current++; setCheck(null); setCheckError(null); setAckHeld(false) }
+  function pickFile(f: File) { setFile(f); resetCheck() }
+  const canUpload = !!check && !checkError && check.conflicts.length === 0 && (!check.requires_ack || ackHeld)
   const bg  = dark ? '#0f172a' : '#fff'
   const bd  = `1px solid ${dark ? '#334155' : '#e2e8f0'}`
   const col = dark ? '#f1f5f9' : '#0f172a'
@@ -290,20 +313,55 @@ const UploadRevModal = ({
     fontFamily: 'IBM Plex Sans, sans-serif', width: '100%', boxSizing: 'border-box',
   }
 
-  async function doUpload() {
+  function uploadForm(file: File, ack: boolean) {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('revision', newRev.trim())
+    fd.append('notes', notes || `Rev ${newRev.trim()} upload`)
+    if (ack) fd.append('ack_held_lines', '1')
+    return fd
+  }
+
+  async function doCheck() {
     if (!file) return
+    resetCheck()
+    const seq = checkSeq.current
+    setChecking(true)
+    try {
+      const { data } = await axios.post(`${API}/mto/${projectId}/${mto.id}/upload`, uploadForm(file, false), { params: { dryRun: 'true' } })
+      if (seq !== checkSeq.current) return
+      setCheck({ summary: data.summary ?? {}, conflicts: data.conflicts ?? [], held_warnings: data.held_warnings ?? [], requires_ack: !!data.requires_ack })
+    } catch (e: any) {
+      if (seq === checkSeq.current) setCheckError(uploadErrorText(e))
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  async function doUpload() {
+    if (!file || !canUpload || uploadingRef.current) return
+    uploadingRef.current = true
     setUploading(true)
     try {
-      const fd = new FormData()
-      fd.append('file', file)
-      fd.append('revision', newRev.trim())
-      fd.append('notes', notes || `Rev ${newRev.trim()} upload`)
-      const { data } = await axios.post(`${API}/mto/${projectId}/${mto.id}/upload`, fd)
+      const { data } = await axios.post(`${API}/mto/${projectId}/${mto.id}/upload`, uploadForm(file, ackHeld))
       addToast('success', `Rev ${data.revision} uploaded — ${data.linesImported} lines imported`)
+      const held: HeldWarning[] = data.held_warnings ?? []
+      if (held.length) addToast('warning', held.map(w => w.message).join(' '))
       onUploaded()
     } catch (e: any) {
-      addToast('error', e.response?.data?.error ?? 'Upload failed')
+      const d = e.response?.data
+      if (e.response?.status === 409 && d?.requires_ack) {
+        // held lines changed after the check — show the warnings and the box again
+        setAckHeld(false)
+        setCheck(c => ({ summary: c?.summary ?? {}, conflicts: c?.conflicts ?? [], held_warnings: d.held_warnings ?? [], requires_ack: true }))
+      } else if (e.response?.status === 422 && Array.isArray(d?.conflicts)) {
+        setCheck(c => ({ summary: c?.summary ?? {}, conflicts: d.conflicts, held_warnings: c?.held_warnings ?? [], requires_ack: c?.requires_ack ?? false }))
+      } else {
+        const msg = uploadErrorText(e)
+        setCheck(null); setCheckError(msg); addToast('error', msg)
+      }
     } finally {
+      uploadingRef.current = false
       setUploading(false)
     }
   }
@@ -324,7 +382,7 @@ const UploadRevModal = ({
 
         <div style={{ marginBottom: 14 }}>
           <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4, fontFamily: 'IBM Plex Sans, sans-serif' }}>New revision *</label>
-          <input value={newRev} onChange={e => setNewRev(e.target.value.slice(0, 10))}
+          <input value={newRev} disabled={uploading} onChange={e => { setNewRev(e.target.value.slice(0, 10)); resetCheck() }}
             placeholder="e.g. B, 2, 2A, R1" maxLength={10}
             style={{ ...inp, width: 160, fontFamily: 'JetBrains Mono, monospace', borderColor: revisionFormatError(newRev) ? '#ef4444' : undefined }} />
           <span style={{ fontSize: 11, color: revisionFormatError(newRev) ? '#ef4444' : sub, marginLeft: 10 }}>
@@ -336,12 +394,12 @@ const UploadRevModal = ({
           <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4, fontFamily: 'IBM Plex Sans, sans-serif' }}>File *</label>
           <div style={{
             border: `2px dashed ${file ? '#2563eb' : (dark ? '#334155' : '#e2e8f0')}`,
-            borderRadius: 8, padding: '20px 16px', textAlign: 'center', cursor: 'pointer',
-            background: dark ? '#1e293b' : '#f8fafc',
+            borderRadius: 8, padding: '20px 16px', textAlign: 'center', cursor: uploading ? 'not-allowed' : 'pointer',
+            background: dark ? '#1e293b' : '#f8fafc', opacity: uploading ? 0.6 : 1,
           }}
             onDragOver={e => e.preventDefault()}
-            onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) setFile(f) }}
-            onClick={() => { const i = document.createElement('input'); i.type='file'; i.accept='.xlsx,.csv'; i.onchange=()=>{if(i.files?.[0]) setFile(i.files[0])}; i.click() }}>
+            onDrop={e => { e.preventDefault(); if (uploading) return; const f = e.dataTransfer.files[0]; if (f) pickFile(f) }}
+            onClick={() => { if (uploading) return; const i = document.createElement('input'); i.type='file'; i.accept='.xlsx,.csv'; i.onchange=()=>{if(i.files?.[0]) pickFile(i.files[0])}; i.click() }}>
             {file
               ? <span style={{ color: '#2563eb', fontWeight: 600, fontSize: 13 }}>📎 {file.name}</span>
               : <span style={{ color: sub, fontSize: 13, fontFamily: 'IBM Plex Sans, sans-serif' }}>Drop XLSX / CSV here or click to browse</span>}
@@ -350,14 +408,65 @@ const UploadRevModal = ({
 
         <div style={{ marginBottom: 20 }}>
           <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4, fontFamily: 'IBM Plex Sans, sans-serif' }}>Revision Notes</label>
-          <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2}
+          <textarea value={notes} disabled={uploading} onChange={e => { setNotes(e.target.value); resetCheck() }} rows={2}
             placeholder={`Rev ${newRev.trim() || '?'} — describe what changed`}
             style={{ ...inp, resize: 'vertical' }} />
         </div>
 
+        {(check || checkError) && (
+          <div data-upload-check="" style={{ marginBottom: 16, border: bd, borderRadius: 8, padding: '10px 12px', maxHeight: 260, overflowY: 'auto',
+            background: dark ? '#111827' : '#f8fafc', color: col, fontSize: 12, fontFamily: 'IBM Plex Sans, sans-serif' }}>
+            {checkError ? (
+              <div data-upload-error="" style={{ color: '#ef4444', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{checkError}</div>
+            ) : check && (<>
+              {/* Only the two summary counts the backend gets right; its new/modified/deleted counts are wrong (§15 (u)). */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', color: sub }}>
+                <span>Rows in file: <strong style={{ color: col }}>{checkVal(check.summary.totalLines)}</strong></span>
+                <span>Conflicts: <strong style={{ color: col }}>{check.conflicts.length}</strong></span>
+              </div>
+              {check.conflicts.length > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ fontWeight: 600, color: '#ef4444', marginBottom: 4 }}>Locked (PO-raised) lines would change — resolve before uploading:</div>
+                  <ul style={{ margin: 0, paddingLeft: 18 }}>
+                    {check.conflicts.map(c => (
+                      <li key={c.line_number} data-conflict={c.line_number} style={{ overflowWrap: 'anywhere' }}>
+                        <strong>{c.line_number}</strong>: {Object.entries(c.changes).map(([f, ch]) => `${f} ${checkVal(ch.locked)} → ${checkVal(ch.uploaded)}`).join('; ')}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {check.held_warnings.length > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ fontWeight: 600, color: '#d97706', marginBottom: 4 }}>Lines held by a tender or PO:</div>
+                  <ul style={{ margin: 0, paddingLeft: 18 }}>
+                    {check.held_warnings.map((w, i) => (
+                      <li key={i} data-held-warning={w.type} style={{ overflowWrap: 'anywhere' }}>
+                        {w.type === 'dropped' && <strong style={{ color: '#ef4444' }}>Removed: </strong>}{w.message}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {check.requires_ack && (
+                <label data-requires-ack="" style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 10, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={ackHeld} onChange={e => setAckHeld(e.target.checked)} />
+                  <span>I understand these lines will be removed from the new revision</span>
+                </label>
+              )}
+              {check.conflicts.length === 0 && check.held_warnings.length === 0 && (
+                <div style={{ marginTop: 6, color: '#16a34a' }}>Check passed — ready to upload.</div>
+              )}
+            </>)}
+          </div>
+        )}
+
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
           <button onClick={onClose} style={{ background: 'transparent', border: bd, color: sub, padding: '7px 16px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontFamily: 'IBM Plex Sans, sans-serif' }}>Cancel</button>
-          <button onClick={doUpload} disabled={!file || uploading || !!revisionFormatError(newRev)} style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '7px 18px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'IBM Plex Sans, sans-serif', opacity: (!file || uploading || !!revisionFormatError(newRev)) ? 0.5 : 1 }}>
+          <button onClick={doCheck} disabled={!file || checking || uploading || !!revisionFormatError(newRev)} style={{ background: 'transparent', border: '1px solid #2563eb', color: '#2563eb', padding: '7px 16px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'IBM Plex Sans, sans-serif', opacity: (!file || checking || uploading || !!revisionFormatError(newRev)) ? 0.5 : 1 }}>
+            {checking ? 'Checking…' : 'Check file'}
+          </button>
+          <button onClick={doUpload} disabled={!canUpload || uploading || !!revisionFormatError(newRev)} style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '7px 18px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'IBM Plex Sans, sans-serif', opacity: (!canUpload || uploading || !!revisionFormatError(newRev)) ? 0.5 : 1 }}>
             {uploading ? 'Uploading…' : `↑ Upload Rev ${newRev.trim() || '?'}`}
           </button>
         </div>
