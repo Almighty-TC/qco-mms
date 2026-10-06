@@ -1307,6 +1307,9 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
       const note = String(l.notes || '').toLowerCase()
       if (note.includes('delete before uploading') || note.includes('example')) continue   // skip template examples
       const qty = (l.quantity != null && l.quantity !== '' && !isNaN(parseFloat(l.quantity))) ? parseFloat(l.quantity) : null
+      // 1e: status and po_ref carry from the current revision's row with the same key (the curLines read);
+      // a new line starts not-started with no PO. The file's status and po_ref columns are ignored.
+      const carried = curByKey.get(lineKey(l.line_number))
       // inspection_class / vdrl_required omitted — DB defaults apply (removed from MTO input).
       await db.query(
         `INSERT INTO mto_lines
@@ -1319,8 +1322,8 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
          qty,
          l.uom          || null,
          upDate(l.ros_date),
-         l.po_ref       || null,
-         l.status       || 'not-started',
+         carried ? carried.po_ref : null,
+         carried ? carried.status : 'not-started',
          l.item_type    ?? null,
          l.item_ref     ?? null]
       )
