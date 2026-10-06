@@ -109,19 +109,17 @@ function parseSheetDate(v, XLSX) {
   const d = new Date(s); return isNaN(d.getTime()) ? null : ymd(d.getFullYear(), d.getMonth() + 1, d.getDate())
 }
 
-// True when an uploaded line set is content-identical to an existing revision's
-// lines (so a "new" revision would change nothing). Compares the substantive MTO
-// fields, normalised the way they'd be stored; order-independent.
-function sameMtoContent(uploaded, existing) {
-  const vd = v => (v === 1 || v === '1' || v === true || /^(y|yes|true)$/i.test(String(v ?? ''))) ? 1 : 0
+// One line's content signature, normalised the way it would be stored — shared by the no-change
+// check and the upload's dryRun counts (which compare lines by key, so they leave out line_number).
+function lineSignature(l, withLineNumber = true) {
   const ymd = d => {            // local Y-M-D so a stored time/TZ doesn't shift the day
     if (!d) return ''
     const dt = new Date(d)
     return isNaN(dt) ? String(d).slice(0, 10)
       : `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
   }
-  const sig = l => [
-    String(l.line_number ?? '').trim(),
+  return [
+    ...(withLineNumber ? [String(l.line_number ?? '').trim()] : []),
     String(l.description ?? '').trim().toLowerCase(),
     String(Number(l.quantity) || 0),
     String(l.uom ?? '').trim().toLowerCase(),
@@ -130,9 +128,16 @@ function sameMtoContent(uploaded, existing) {
     String(l.item_type ?? '').trim().toLowerCase(),
     String(l.item_ref ?? '').trim().toLowerCase(),
   ].join('|')
+}
+
+// True when an uploaded line set is content-identical to an existing revision's
+// lines (so a "new" revision would change nothing). Compares the substantive MTO
+// fields, normalised the way they'd be stored; order-independent.
+function sameMtoContent(uploaded, existing) {
+  const vd = v => (v === 1 || v === '1' || v === true || /^(y|yes|true)$/i.test(String(v ?? ''))) ? 1 : 0
   const valid = a => a.filter(l => l.line_number != null && l.line_number !== '' && l.description)
-  const u = valid(uploaded).map(sig).sort()
-  const e = valid(existing).map(sig).sort()
+  const u = valid(uploaded).map(l => lineSignature(l)).sort()
+  const e = valid(existing).map(l => lineSignature(l)).sort()
   if (u.length === 0 || u.length !== e.length) return false
   return u.every((s, i) => s === e[i])
 }
@@ -1106,7 +1111,7 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
     // version differs) is meaningless — prompt and reject rather than create a
     // duplicate revision. Compared against the live (current) revision's lines.
     const [curLines] = await db.query(
-      'SELECT line_number, description, quantity, uom, wbs_code, ros_date, inspection_class, vdrl_required, item_type, item_ref FROM mto_lines WHERE mto_id=? AND revision=? AND is_deleted=0',
+      'SELECT line_number, description, quantity, uom, wbs_code, ros_date, inspection_class, vdrl_required, item_type, item_ref, status, po_ref FROM mto_lines WHERE mto_id=? AND revision=? AND is_deleted=0',
       [mtoId, mto.current_revision])
     if (sameMtoContent(lines, curLines)) {
       return res.status(409).json({
@@ -1137,14 +1142,34 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
       if (Object.keys(changed).length > 0) conflicts.push({ line_number: locked.line_number, changes: changed })
     }
 
-    // Summary for dry-run or conflict reporting
-    const existingLineNums = new Set(lockedLines.map(l => String(l.line_number)))
-    const uploadedLineNums = new Set(lines.map(l => String(l.line_number)))
+    // The kept file rows (the insert loop's filter), keyed by lineKey.
+    const keptRows = new Map()
+    let keptLines = 0
+    for (const l of lines) {
+      if (!l.line_number || !l.description) continue
+      const note = String(l.notes || '').toLowerCase()
+      if (note.includes('delete before uploading') || note.includes('example')) continue
+      keptRows.set(lineKey(l.line_number), l); keptLines++
+    }
+
+    // Summary for dry-run or conflict reporting (Phase 2 sub-step 1d): the kept rows against the
+    // current revision's non-deleted rows, by key; modified = a different signature (without
+    // line_number, with the resolved classification) or a line number that differs exactly once
+    // trimmed (a case-only renumber). totalLines counts every parsed row.
+    const curByKey = new Map(curLines.map(c => [lineKey(c.line_number), c]))
+    let newLines = 0, modifiedLines = 0
+    for (const [key, l] of keptRows) {
+      const c = curByKey.get(key)
+      if (!c) newLines++
+      else if (lineSignature(l, false) !== lineSignature(c, false) || String(l.line_number).trim() !== String(c.line_number).trim()) modifiedLines++
+    }
     const summary = {
       totalLines:    lines.length,
-      newLines:      lines.filter(l => !existingLineNums.has(String(l.line_number))).length,
-      modifiedLines: conflicts.length,
-      deletedLines:  0,
+      keptLines,
+      skippedRows:   lines.length - keptLines,
+      newLines,
+      modifiedLines,
+      deletedLines:  [...curByKey.keys()].filter(k => !keptRows.has(k)).length,
       conflicts:     conflicts.length,
     }
 
@@ -1176,13 +1201,6 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
     if (held.size) {
       const q3 = v => Math.round(v * 1000)
       const fq = v => String(q3(v) / 1000)
-      const keptRows = new Map()
-      for (const l of lines) {
-        if (!l.line_number || !l.description) continue
-        const note = String(l.notes || '').toLowerCase()
-        if (note.includes('delete before uploading') || note.includes('example')) continue
-        keptRows.set(lineKey(l.line_number), l)
-      }
       const [curKeys] = await db.query(
         'SELECT line_number FROM mto_lines WHERE mto_id = ? AND revision = ? AND is_deleted = 0', [mtoId, mto.current_revision])
       const holders = h => [
@@ -1210,7 +1228,15 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
           message: `Line ${l.line_number}: quantity ${qty == null ? '(blank)' : fq(qty)} is below the ${fq(committed)} committed (${parts}).` })
       }
     }
-    const requires_ack = held_warnings.some(w => w.type === 'dropped')
+    // Dropped po-raised lines (1d): a current po-raised line missing from the kept rows, unless it is
+    // already warned as a dropped held line. They need the acknowledgement too.
+    const warnedDropped = new Set(held_warnings.filter(w => w.type === 'dropped').map(w => lineKey(w.line_number)))
+    for (const [key, c] of curByKey) {
+      if (c.status !== 'po-raised' || keptRows.has(key) || warnedDropped.has(key)) continue
+      held_warnings.push({ line_number: c.line_number, type: 'dropped_locked', po_ref: c.po_ref ?? null,
+        message: `Line ${c.line_number} is po-raised on PO ${c.po_ref || '(no PO reference)'} but is not in this file — it will be removed from revision ${newRev}.` })
+    }
+    const requires_ack = held_warnings.some(w => w.type === 'dropped' || w.type === 'dropped_locked')
 
     // ─── BUG-2: dry-run returns preview without inserting ─────────
     if (dryRun) {
@@ -1228,7 +1254,7 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
     // ─── 1c: dropping a held line needs the acknowledgement ───────
     if (requires_ack && !['1', 'true'].includes(String(req.body?.ack_held_lines ?? '').trim().toLowerCase())) {
       return res.status(409).json({
-        error: `${held_warnings.filter(w => w.type === 'dropped').length} line(s) held by a tender or PO would be removed by this revision — review the warnings, then upload again with the acknowledgement to proceed.`,
+        error: `${held_warnings.filter(w => w.type === 'dropped' || w.type === 'dropped_locked').length} line(s) held by a tender or PO would be removed by this revision — review the warnings, then upload again with the acknowledgement to proceed.`,
         held_warnings, requires_ack: true,
       })
     }
