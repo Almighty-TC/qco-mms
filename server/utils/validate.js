@@ -29,6 +29,27 @@ function fileNotEmpty(file) {
   return null
 }
 
+// Read an uploaded spreadsheet. A file named *.csv is decoded as UTF-8 and parsed as text
+// (raw), so every cell stays as typed: UTF-8 text isn't read as Latin-1, and codes keep their
+// form (WBS 01 and 02.10, PO 000777, tag 1E3) and dates stay text for the existing parsers
+// (DD/MM/YYYY). A CSV that isn't valid UTF-8 throws an Error with http = 400. Every other file
+// is read exactly as before, with the caller's options.
+const CSV_NOT_UTF8 = 'Save it as CSV UTF-8, or use the .xlsx template.'
+function readWorkbook(buffer, filename, opts) {
+  const XLSX = require('xlsx')
+  if (!String(filename || '').toLowerCase().endsWith('.csv')) return XLSX.read(buffer, opts)
+  let text
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(buffer)
+  } catch {
+    const err = new Error(CSV_NOT_UTF8)
+    err.http = 400
+    throw err
+  }
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1)   // a leading BOM
+  return XLSX.read(text, { type: 'string', raw: true })
+}
+
 // Parse + structurally validate an uploaded import spreadsheet (header:1 rows).
 // Catches empty/corrupt files and missing required columns up front so the
 // per-row logic can assume a well-formed sheet. Returns either
@@ -40,11 +61,12 @@ function parseImportSheet(file, requiredHeaders = []) {
   const XLSX = require('xlsx')
   let rows
   try {
-    const wb = XLSX.read(file.buffer, { type: 'buffer' })
+    const wb = readWorkbook(file.buffer, file.originalname, { type: 'buffer' })
     const ws = wb.Sheets[wb.SheetNames[0]]
     if (!ws) return { error: 'The spreadsheet has no readable sheet.' }
     rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
-  } catch {
+  } catch (e) {
+    if (e.http) return { error: e.message }
     return { error: 'Could not read the file — it may be corrupt or not a real spreadsheet.' }
   }
   if (!rows.length) return { error: 'The spreadsheet is empty.' }
@@ -59,4 +81,4 @@ function parseImportSheet(file, requiredHeaders = []) {
   return { headers, rows, dataRows, col }
 }
 
-module.exports = { dateOrder, fileNotEmpty, parseImportSheet }
+module.exports = { dateOrder, fileNotEmpty, parseImportSheet, readWorkbook }

@@ -8,7 +8,7 @@ const db      = require('../db')
 const { dbError } = require('../utils/dbError')
 const { authenticateToken } = require('../middleware/auth')
 const { fileFilter } = require('../utils/upload')
-const { dateOrder } = require('../utils/validate')
+const { dateOrder, readWorkbook } = require('../utils/validate')
 const { setSealNo, setContainerNo, SealGovernanceError } = require('../lib/sealGovernance') // Q4.3 shared seal governance
 
 // ─── Q3 CHILD-STOCK CAPABILITY DETECT ─────────────────────────
@@ -1533,7 +1533,7 @@ router.post('/:projectId/vdrl/upload', uploadVDRL.single('file'), async (req, re
 
   try {
     const XLSX_LIB = require('xlsx')
-    const wb = XLSX_LIB.read(req.file.buffer, { type: 'buffer', cellDates: true })
+    const wb = readWorkbook(req.file.buffer, req.file.originalname, { type: 'buffer', cellDates: true })
     const sheetName = wb.SheetNames.includes('VDRL Documents') ? 'VDRL Documents' : wb.SheetNames[0]
     const ws = wb.Sheets[sheetName]
     const rawRows = XLSX_LIB.utils.sheet_to_json(ws, { defval: null })
@@ -1630,7 +1630,10 @@ router.post('/:projectId/vdrl/upload', uploadVDRL.single('file'), async (req, re
       hasErrors,
       dryRun,
     })
-  } catch (e) { console.error(e); dbError(res, e) }
+  } catch (e) {
+    if (e.http) return res.status(e.http).json({ error: e.message })
+    console.error(e); dbError(res, e)
+  }
 })
 
 // ─── ITP CRUD ─────────────────────────────────────────────────

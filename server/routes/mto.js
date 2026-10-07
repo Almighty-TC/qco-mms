@@ -14,7 +14,7 @@ const XLSX    = require('xlsx')
 const fs      = require('fs')
 const path    = require('path')
 const { fileColumnsReady } = require('../lib/schemaColumns')
-const { fileNotEmpty } = require('../utils/validate')
+const { fileNotEmpty, readWorkbook } = require('../utils/validate')
 const { validateRevisionFormat, compareRevisions, RevisionError } = require('../lib/revision')
 const { lockKeyRows } = require('../lib/mtoAvailability')
 const { hasPermission } = require('../middleware/permissions')
@@ -115,6 +115,10 @@ function parseSheetDate(v, XLSX) {
 function lineSignature(l, withLineNumber = true) {
   const ymd = d => {            // local Y-M-D so a stored time/TZ doesn't shift the day
     if (!d) return ''
+    if (typeof d === 'string') {   // date text (CSV cells, .xlsx text cells): read it as the import does, so DD/MM/YYYY is day-first
+      const parsed = parseSheetDate(d, XLSX)
+      if (parsed) return parsed
+    }
     const dt = new Date(d)
     return isNaN(dt) ? String(d).slice(0, 10)
       : `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
@@ -373,7 +377,7 @@ router.get('/:projectId/template', async (req, res) => {
     ['2. Delete the grey example rows before uploading.', false, null, 10],
     ['3. Do not change the line-item column headers.', false, null, 10],
     ['4. Rows with blank Description are skipped on import.', false, null, 10],
-    ['5. Save as .xlsx or .csv before uploading.', false, null, 10],
+    ['5. Save as .xlsx, or CSV UTF-8, before uploading.', false, null, 10],
   ]
   instrLines.forEach(([text, bold, color, size], i) => {
     const c = ws2.getCell(i+1, 1)
@@ -396,7 +400,7 @@ router.post('/:projectId/parse-file', upload.single('file'), async (req, res) =>
     const [wbsRows] = await db.query('SELECT code FROM wbs_nodes WHERE project_id = ?', [req.params.projectId])
     const validWBS = new Set(wbsRows.map(r => r.code))
     const XLSX_LIB = require('xlsx')
-    const wb = XLSX_LIB.read(req.file.buffer, { type: 'buffer', cellDates: true })
+    const wb = readWorkbook(req.file.buffer, req.file.originalname, { type: 'buffer', cellDates: true })
 
     const mtoHeader = { name: null, reference: null, revision: null, owner: null, description: null }
     const sheetName = wb.SheetNames.includes('MTO Lines') ? 'MTO Lines' : wb.SheetNames[0]
@@ -512,6 +516,7 @@ router.post('/:projectId/parse-file', upload.single('file'), async (req, res) =>
       preview: validLines.slice(0, 15)
     })
   } catch (e) {
+    if (e.http) return res.status(e.http).json({ error: e.message, hasErrors: true })
     console.error('parse-file', e.message)
     res.status(500).json({ error: 'Failed to parse file: ' + e.message, hasErrors: true })
   }
@@ -1117,7 +1122,7 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
     { const fe = fileNotEmpty(req.file); if (fe) return res.status(400).json({ error: fe }) }
 
     // ─── Parse workbook ───────────────────────────────────────────
-    const wb   = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true })
+    const wb   = readWorkbook(req.file.buffer, req.file.originalname, { type: 'buffer', cellDates: true })
     const ws   = wb.Sheets[wb.SheetNames.includes('MTO Lines') ? 'MTO Lines' : wb.SheetNames[0]]
     function norm(key) { return String(key).trim().toLowerCase().replace(/\s+/g, '_') }
     // Locate the real header row (past the title banner), then parse from there.
@@ -1420,6 +1425,7 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
     audit(req, 'UPLOAD_REVISION', 'mto_register', mto.id, { revision: mto.current_revision }, { revision: newRev })
     res.json({ ok: true, revision: newRev, linesImported: imported, held_warnings })
   } catch (e) {
+    if (e.http) return res.status(e.http).json({ error: e.message })
     console.error('POST /mto/:projectId/:mtoId/upload', e.message)
     dbError(res, e, 'Upload failed')
   }
