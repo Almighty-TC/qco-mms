@@ -10,6 +10,7 @@ import axios from 'axios'
 import { ToastProvider, useToast } from '../hooks/useToast'
 import { ToastContainer } from '../components/Toast'
 import { useResizableTable, ResetColumnsButton } from '../components/colResize'
+import { useAuth } from '../context/AuthContext'
 
 // Resizable column defaults — MTO line-items grid (12 cols) + revision history (5 cols).
 const MTO_LINE_W   = [70, 110, 100, 140, 260, 90, 70, 110, 120, 120, 80, 50]
@@ -145,17 +146,42 @@ const TypeBadge = ({ t }: { t: MTOLine['item_type'] }) => {
   return <span data-item-type-badge={t} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 5, background: st.bg, color: st.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{st.label}</span>
 }
 
+// ─── UN-RAISE (Phase 2 2d) ───────────────────────────────────────────────────
+// Roles that hold mto can_approve, which the un-raise route requires. UI hint only — the
+// server decides (it re-checks the permission). Keep in step with the permission table;
+// a permissions endpoint for the frontend is a go-live item.
+const MTO_CAN_APPROVE = ['admin', 'engineering_lead', 'project_manager']
+const UNRAISE_REASON_MIN = 10
+const UNRAISE_REASON_MAX = 1000
+
+// The dialog's message for a refused un-raise, by the response's code.
+function unraiseErrorText(e: any): string {
+  const d = e?.response?.data
+  switch (d?.code) {
+    case 'po_exists':             return `Backed by purchase order(s) ${(d.po_numbers ?? []).join(', ')} — it can't be un-raised.`
+    case 'po_line_link':          return 'A PO line references this line — it can\'t be un-raised.'
+    case 'converted_reservation': return 'A tender reservation on this line became a PO — it can\'t be un-raised.'
+    case 'not_current':           return 'This row isn\'t in the current revision.'
+    case 'not_po_raised':         return 'This line is no longer PO Raised.'
+    case 'line_changed':          return 'The line changed while you were working — close this and try again.'
+  }
+  return d?.error ?? 'Un-raise failed'   // 400, 403 and anything else: the server's text
+}
+
 // ─── LINE EDIT MODAL ──────────────────────────────────────────────────────────
 const MTOLineEditModal = ({
-  line, dark, onClose, onSaved, projectId, mtoId,
+  line, dark, onClose, onSaved, onRefetch, projectId, mtoId,
 }: {
   line: MTOLine; dark: boolean
   onClose: () => void
   onSaved: (updated: MTOLine) => void
+  onRefetch?: () => void
   projectId: number; mtoId: number
 }) => {
   const { addToast } = useToast()
+  const { user } = useAuth()
   const locked = line.status === 'po-raised'
+  const canUnraise = locked && MTO_CAN_APPROVE.includes(user?.role ?? '')
 
   const [rosDate,      setRosDate]      = useState(line.ros_date?.slice(0,10) ?? '')
   const [description,  setDescription]  = useState(line.description)
@@ -180,6 +206,38 @@ const MTOLineEditModal = ({
     : clsRef && !clsType ? 'A Commodity Code / Equipment Tag needs an item type.'
     : clsType === 'equipment' && !clsWbs ? `Equipment lines need a WBS code${locked ? ' (this line has none, and its WBS is locked)' : ''}.`
     : null
+
+  // Un-raise dialog (2d): set a po-raised line back to not-started or rfq.
+  const [unraiseOpen,   setUnraiseOpen]   = useState(false)
+  const [unraiseTarget, setUnraiseTarget] = useState<'not-started' | 'rfq'>('not-started')
+  const [unraiseReason, setUnraiseReason] = useState('')
+  const [unraising,     setUnraising]     = useState(false)
+  const [unraiseError,  setUnraiseError]  = useState<string | null>(null)
+  const unraisingRef = useRef(false)   // one request in flight, even for two clicks before a re-render
+  const reasonLength = Array.from(unraiseReason.trim()).length
+  const canSubmitUnraise = !unraising && reasonLength >= UNRAISE_REASON_MIN && reasonLength <= UNRAISE_REASON_MAX
+
+  async function unraise() {
+    if (!canSubmitUnraise || unraisingRef.current) return
+    unraisingRef.current = true
+    setUnraising(true)
+    setUnraiseError(null)
+    try {
+      const { data } = await axios.post(
+        `${API}/mto/${projectId}/${mtoId}/lines/${line.id}/unraise/approve`,
+        { status: unraiseTarget, reason: unraiseReason.trim() }
+      )
+      addToast('success', `Line ${line.line_number} un-raised (${data.updated_rows} row(s))`)
+      setUnraiseOpen(false)
+      onSaved(data.line)   // closes the editor and refetches the table
+    } catch (e: any) {
+      setUnraiseError(unraiseErrorText(e))
+      if (e.response?.data?.code === 'not_po_raised') onRefetch?.()
+    } finally {
+      unraisingRef.current = false
+      setUnraising(false)
+    }
+  }
 
   const bg  = dark ? '#0f172a' : '#fff'
   const bd  = `1px solid ${dark ? '#334155' : '#e2e8f0'}`
@@ -235,8 +293,15 @@ const MTOLineEditModal = ({
             background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)',
             borderRadius: 7, padding: '10px 14px', marginBottom: 16, fontSize: 12,
             color: '#92400e', fontFamily: 'IBM Plex Sans, sans-serif',
+            display: 'flex', alignItems: 'center', gap: 12,
           }}>
-            🔒 This line is locked — PO has been raised. Only the ROS date, item type and tag can be edited.
+            <span style={{ flex: 1 }}>🔒 This line is locked — PO has been raised. Only the ROS date, item type and tag can be edited.</span>
+            {canUnraise && (
+              <button data-unraise-button="" onClick={() => { setUnraiseError(null); setUnraiseOpen(true) }}
+                style={{ background: 'transparent', border: '1px solid #d97706', color: '#b45309', padding: '4px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'IBM Plex Sans, sans-serif', whiteSpace: 'nowrap' }}>
+                Un-raise…
+              </button>
+            )}
           </div>
         )}
 
@@ -320,6 +385,44 @@ const MTOLineEditModal = ({
             {saving ? 'Saving…' : 'Save changes'}
           </button>
         </div>
+
+        {unraiseOpen && (
+          <div onClick={e => { e.stopPropagation(); if (!unraising) setUnraiseOpen(false) }}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div data-unraise-dialog="" onClick={e => e.stopPropagation()} style={{
+              background: bg, border: bd, borderRadius: 12, padding: 24, width: '90%', maxWidth: 460,
+              boxShadow: '0 20px 60px rgba(0,0,0,0.4)', fontFamily: 'IBM Plex Sans, sans-serif',
+            }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: col, marginBottom: 10 }}>Un-raise line {line.line_number}</div>
+              <div style={{ fontSize: 12, color: sub, marginBottom: 14, lineHeight: 1.5 }}>
+                This clears the PO reference on every PO Raised row of this line. It is refused if a purchase order, PO line or converted tender reservation backs the line.
+              </div>
+              <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4 }}>Set status to</label>
+              <select data-unraise-target="" value={unraiseTarget} disabled={unraising}
+                onChange={e => setUnraiseTarget(e.target.value as 'not-started' | 'rfq')} style={{ ...inp, marginBottom: 12 }}>
+                <option value="not-started">Not started</option>
+                <option value="rfq">RFQ</option>
+              </select>
+              <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4 }}>Reason *</label>
+              <textarea data-unraise-reason="" value={unraiseReason} disabled={unraising} rows={3}
+                onChange={e => setUnraiseReason(e.target.value)} style={{ ...inp, resize: 'vertical' }} />
+              <div data-unraise-count="" style={{ fontSize: 11, textAlign: 'right', marginTop: 2,
+                color: reasonLength < UNRAISE_REASON_MIN || reasonLength > UNRAISE_REASON_MAX ? '#ef4444' : sub }}>
+                {reasonLength} / {UNRAISE_REASON_MAX}
+              </div>
+              {unraiseError && (
+                <div data-unraise-error="" style={{ marginTop: 10, color: '#ef4444', fontSize: 12, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{unraiseError}</div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
+                <button onClick={() => setUnraiseOpen(false)} disabled={unraising} style={{ background: 'transparent', border: bd, color: sub, padding: '7px 16px', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+                <button data-unraise-submit="" onClick={unraise} disabled={!canSubmitUnraise}
+                  style={{ background: '#d97706', color: '#fff', border: 'none', padding: '7px 18px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, opacity: canSubmitUnraise ? 1 : 0.5 }}>
+                  {unraising ? 'Un-raising…' : 'Un-raise'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>,
     document.body
@@ -332,9 +435,26 @@ const MTOLineEditModal = ({
 // acknowledgement box. Upload is enabled only after a clean check (and the box, when required);
 // it sends ack_held_lines=1 only when the box is ticked. Editing the form clears the check.
 interface UploadConflict { line_number: string; changes: Record<string, { locked: unknown; uploaded: unknown }> }
-interface HeldWarning { line_number: string; type: 'dropped' | 'lowered'; committed?: number; message: string }
+interface HeldWarning { line_number: string; type: 'dropped' | 'lowered' | 'dropped_locked'; committed?: number; po_ref?: string | null; message: string }
 interface UploadCheck { summary: Record<string, unknown>; conflicts: UploadConflict[]; held_warnings: HeldWarning[]; requires_ack: boolean }
 const checkVal = (v: unknown) => (v == null || v === '' ? '(blank)' : String(v))
+// Summary counts shown after a check, in order; a field the server didn't send is omitted.
+const SUMMARY_FIELDS: { key: string; label: string; onlyAboveZero?: boolean }[] = [
+  { key: 'totalLines',    label: 'Rows in file' },
+  { key: 'keptLines',     label: 'To import' },
+  { key: 'newLines',      label: 'New' },
+  { key: 'modifiedLines', label: 'Modified' },
+  { key: 'deletedLines',  label: 'Removed lines' },
+  { key: 'skippedRows',   label: 'Skipped rows', onlyAboveZero: true },
+]
+const summaryCount = (v: unknown): number | null =>
+  typeof v === 'number' ? (Number.isFinite(v) ? v : null)
+    : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null
+const LIST_CAP = 20   // conflicts and warnings shown before "Show all"
+// Removed lines first ('dropped', then 'dropped_locked', then 'lowered'), so the cap never hides a
+// line being removed; sort is stable, so the server's order is kept within a type.
+const HELD_ORDER: Record<string, number> = { dropped: 0, dropped_locked: 1, lowered: 2 }
+const isRemoved = (w: HeldWarning) => w.type === 'dropped' || w.type === 'dropped_locked'
 function uploadErrorText(e: any): string {
   const msg: string = e?.response?.data?.error ?? e?.message ?? 'Upload failed'
   return e?.response?.status === 409 && /identical to the current revision/i.test(msg)
@@ -354,13 +474,20 @@ const UploadRevModal = ({
   const [check,      setCheck]      = useState<UploadCheck | null>(null)
   const [checkError, setCheckError] = useState<string | null>(null)
   const [ackHeld,    setAckHeld]    = useState(false)
+  const [showAllConflicts, setShowAllConflicts] = useState(false)
+  const [showAllWarnings,  setShowAllWarnings]  = useState(false)
   const checkSeq = useRef(0)   // a check answered after the form changed is ignored
   const uploadingRef = useRef(false)   // one upload in flight, even for two clicks before a re-render
 
   const [newRev, setNewRev] = useState(suggestRev(mto.current_revision))
-  function resetCheck() { checkSeq.current++; setCheck(null); setCheckError(null); setAckHeld(false) }
+  function resetCheck() {
+    checkSeq.current++; setCheck(null); setCheckError(null); setAckHeld(false)
+    setShowAllConflicts(false); setShowAllWarnings(false)
+  }
   function pickFile(f: File) { setFile(f); resetCheck() }
   const canUpload = !!check && !checkError && check.conflicts.length === 0 && (!check.requires_ack || ackHeld)
+  const heldWarnings = check ? [...check.held_warnings].sort((a, b) => (HELD_ORDER[a.type] ?? 3) - (HELD_ORDER[b.type] ?? 3)) : []
+  const removedCount = heldWarnings.filter(isRemoved).length   // the whole list, not only the visible rows
   const bg  = dark ? '#0f172a' : '#fff'
   const bd  = `1px solid ${dark ? '#334155' : '#e2e8f0'}`
   const col = dark ? '#f1f5f9' : '#0f172a'
@@ -477,39 +604,60 @@ const UploadRevModal = ({
             {checkError ? (
               <div data-upload-error="" style={{ color: '#ef4444', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{checkError}</div>
             ) : check && (<>
-              {/* Only the two summary counts the backend gets right; its new/modified/deleted counts are wrong (§15 (u)). */}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', color: sub }}>
-                <span>Rows in file: <strong style={{ color: col }}>{checkVal(check.summary.totalLines)}</strong></span>
-                <span>Conflicts: <strong style={{ color: col }}>{check.conflicts.length}</strong></span>
+                {SUMMARY_FIELDS.map(({ key, label, onlyAboveZero }) => {
+                  const n = summaryCount(check.summary[key])
+                  if (n === null || (onlyAboveZero && n <= 0)) return null
+                  return <span key={key} data-summary={key}>{label}: <strong style={{ color: col }}>{n}</strong></span>
+                })}
+                <span data-summary="conflicts">Conflicts: <strong style={{ color: col }}>{check.conflicts.length}</strong></span>
               </div>
               {check.conflicts.length > 0 && (
                 <div style={{ marginTop: 8 }}>
                   <div style={{ fontWeight: 600, color: '#ef4444', marginBottom: 4 }}>Locked (PO-raised) lines would change — resolve before uploading:</div>
                   <ul style={{ margin: 0, paddingLeft: 18 }}>
-                    {check.conflicts.map(c => (
+                    {(showAllConflicts ? check.conflicts : check.conflicts.slice(0, LIST_CAP)).map(c => (
                       <li key={c.line_number} data-conflict={c.line_number} style={{ overflowWrap: 'anywhere' }}>
                         <strong>{c.line_number}</strong>: {Object.entries(c.changes).map(([f, ch]) => `${f} ${checkVal(ch.locked)} → ${checkVal(ch.uploaded)}`).join('; ')}
                       </li>
                     ))}
                   </ul>
+                  {check.conflicts.length > LIST_CAP && (
+                    <div data-more="conflicts" style={{ marginTop: 4, color: sub }}>
+                      {!showAllConflicts && <>and {check.conflicts.length - LIST_CAP} more · </>}
+                      <button data-show-all="conflicts" onClick={() => setShowAllConflicts(v => !v)}
+                        style={{ background: 'none', border: 'none', padding: 0, color: '#2563eb', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>
+                        {showAllConflicts ? `Show first ${LIST_CAP}` : 'Show all'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
               {check.held_warnings.length > 0 && (
                 <div style={{ marginTop: 8 }}>
                   <div style={{ fontWeight: 600, color: '#d97706', marginBottom: 4 }}>Lines held by a tender or PO:</div>
                   <ul style={{ margin: 0, paddingLeft: 18 }}>
-                    {check.held_warnings.map((w, i) => (
+                    {(showAllWarnings ? heldWarnings : heldWarnings.slice(0, LIST_CAP)).map((w, i) => (
                       <li key={i} data-held-warning={w.type} style={{ overflowWrap: 'anywhere' }}>
-                        {w.type === 'dropped' && <strong style={{ color: '#ef4444' }}>Removed: </strong>}{w.message}
+                        {(w.type === 'dropped' || w.type === 'dropped_locked') && <strong style={{ color: '#ef4444' }}>Removed: </strong>}{w.message}
                       </li>
                     ))}
                   </ul>
+                  {check.held_warnings.length > LIST_CAP && (
+                    <div data-more="warnings" style={{ marginTop: 4, color: sub }}>
+                      {!showAllWarnings && <>and {check.held_warnings.length - LIST_CAP} more · </>}
+                      <button data-show-all="warnings" onClick={() => setShowAllWarnings(v => !v)}
+                        style={{ background: 'none', border: 'none', padding: 0, color: '#2563eb', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>
+                        {showAllWarnings ? `Show first ${LIST_CAP}` : 'Show all'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
               {check.requires_ack && (
                 <label data-requires-ack="" style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 10, cursor: 'pointer' }}>
                   <input type="checkbox" checked={ackHeld} onChange={e => setAckHeld(e.target.checked)} />
-                  <span>I understand these lines will be removed from the new revision</span>
+                  <span>I understand these {removedCount} line(s) will be removed from the new revision</span>
                 </label>
               )}
               {check.conflicts.length === 0 && check.held_warnings.length === 0 && (
@@ -700,6 +848,7 @@ const LineItemsTab = ({
           projectId={projectId}
           mtoId={mtoId}
           onClose={() => setEditTarget(null)}
+          onRefetch={reload}
           onSaved={() => {
             // Re-fetch the current page: an edit may change status and move the
             // row out of the active filter, so a local splice would be wrong.
