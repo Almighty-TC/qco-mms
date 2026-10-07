@@ -12,8 +12,8 @@ import { ToastContainer } from '../components/Toast'
 import { useResizableTable, ResetColumnsButton } from '../components/colResize'
 
 // Resizable column defaults — MTO line-items grid (12 cols) + revision history (5 cols).
-const MTO_LINE_W   = [70, 110, 260, 90, 70, 110, 120, 120, 80, 50]
-const MTO_LINE_MIN = [50, 70, 120, 60, 50, 80, 80, 90, 60, 40]
+const MTO_LINE_W   = [70, 110, 100, 140, 260, 90, 70, 110, 120, 120, 80, 50]
+const MTO_LINE_MIN = [50, 70, 70, 80, 120, 60, 50, 80, 80, 90, 60, 40]
 const MTO_REV_W    = [140, 200, 130, 320, 80]
 const MTO_REV_MIN  = [90, 120, 90, 120, 60]
 import { HelpButton } from '../components/HelpDrawer'
@@ -57,6 +57,8 @@ interface MTOLine {
   po_ref: string | null
   status: 'not-started' | 'rfq' | 'po-raised'
   is_deleted: number
+  item_type: 'bulk' | 'commodity' | 'equipment' | null
+  item_ref: string | null
 }
 
 interface Revision {
@@ -131,6 +133,18 @@ const LinePill = ({ s }: { s: MTOLine['status'] }) => {
   )
 }
 
+// ─── ITEM TYPE BADGE ─────────────────────────────────────────────────────────
+const TYPE_STYLE: Record<string, { bg: string; color: string; label: string }> = {
+  equipment: { bg: 'rgba(124,58,237,0.12)', color: '#7c3aed', label: 'Equipment' },
+  commodity: { bg: 'rgba(37,99,235,0.12)',  color: '#2563eb', label: 'Commodity' },
+  bulk:      { bg: 'rgba(100,116,139,0.14)', color: '#64748b', label: 'Bulk' },
+}
+const TypeBadge = ({ t }: { t: MTOLine['item_type'] }) => {
+  const st = t ? TYPE_STYLE[t] : null
+  if (!st) return <span style={{ color: '#94a3b8' }}>—</span>
+  return <span data-item-type-badge={t} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 5, background: st.bg, color: st.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{st.label}</span>
+}
+
 // ─── LINE EDIT MODAL ──────────────────────────────────────────────────────────
 const MTOLineEditModal = ({
   line, dark, onClose, onSaved, projectId, mtoId,
@@ -151,6 +165,21 @@ const MTOLineEditModal = ({
   const [poRef,        setPoRef]        = useState(line.po_ref ?? '')
   const [status,       setStatus]       = useState(line.status)
   const [saving,       setSaving]       = useState(false)
+  // Classification (Phase 2 2b): editable on locked lines too; sent only when changed.
+  const [itemType,     setItemType]     = useState<string>(line.item_type ?? '')
+  const [itemRef,      setItemRef]      = useState(line.item_ref ?? '')
+  const [serverError,  setServerError]  = useState<string | null>(null)
+  const clsType = itemType || null
+  const clsRef  = itemRef.trim() || null
+  const typeChanged = clsType !== (line.item_type ?? null)
+  const refChanged  = clsRef !== (line.item_ref ?? null)
+  const clsWbs = (locked ? (line.wbs_code ?? '') : wbsCode).trim()
+  const clsError = !(typeChanged || refChanged || (!locked && clsType === 'equipment')) ? null
+    : clsRef && Array.from(clsRef).length > 100 ? `The tag is at most 100 characters (it is ${Array.from(clsRef).length}).`
+    : clsType && !clsRef ? 'An item type needs a Commodity Code / Equipment Tag.'
+    : clsRef && !clsType ? 'A Commodity Code / Equipment Tag needs an item type.'
+    : clsType === 'equipment' && !clsWbs ? `Equipment lines need a WBS code${locked ? ' (this line has none, and its WBS is locked)' : ''}.`
+    : null
 
   const bg  = dark ? '#0f172a' : '#fff'
   const bd  = `1px solid ${dark ? '#334155' : '#e2e8f0'}`
@@ -164,18 +193,24 @@ const MTOLineEditModal = ({
 
   async function save() {
     setSaving(true)
+    setServerError(null)
     try {
+      // Clearing the type clears the tag too, so both keys go as null.
+      const cls: { item_type?: string | null; item_ref?: string | null } =
+        !clsType && line.item_type ? { item_type: null, item_ref: null }
+          : { ...(typeChanged ? { item_type: clsType } : {}), ...(refChanged ? { item_ref: clsRef } : {}) }
       const payload = locked
-        ? { ros_date: rosDate || null }
+        ? { ros_date: rosDate || null, ...cls }
         : { description, quantity: quantity ? parseFloat(quantity) : null, uom, wbs_code: wbsCode || null,
-            ros_date: rosDate || null, po_ref: poRef || null, status }
+            ros_date: rosDate || null, po_ref: poRef || null, status, ...cls }
       const { data } = await axios.put<MTOLine>(
         `${API}/mto/${projectId}/${mtoId}/lines/${line.id}`, payload
       )
       addToast('success', `Line ${line.line_number} updated`)
       onSaved(data)
     } catch (e: any) {
-      addToast('error', e.response?.data?.error ?? 'Update failed')
+      if (e.response?.status === 400) setServerError(e.response?.data?.error ?? 'The server refused the change')
+      else addToast('error', e.response?.data?.error ?? 'Update failed')
     } finally {
       setSaving(false)
     }
@@ -201,7 +236,7 @@ const MTOLineEditModal = ({
             borderRadius: 7, padding: '10px 14px', marginBottom: 16, fontSize: 12,
             color: '#92400e', fontFamily: 'IBM Plex Sans, sans-serif',
           }}>
-            🔒 This line is locked — PO has been raised. Only the ROS date can be edited.
+            🔒 This line is locked — PO has been raised. Only the ROS date, item type and tag can be edited.
           </div>
         )}
 
@@ -254,11 +289,34 @@ const MTOLineEditModal = ({
               <option value="po-raised">PO Raised</option>
             </select>
           </div>
+          {/* Item type — editable on locked lines too */}
+          <div>
+            <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4, fontFamily: 'IBM Plex Sans, sans-serif' }}>Item Type</label>
+            <select data-item-type="" value={itemType} onChange={e => { setItemType(e.target.value); if (!e.target.value) setItemRef('') }} style={inp}>
+              <option value="">—</option>
+              <option value="bulk">Bulk</option>
+              <option value="commodity">Commodity</option>
+              <option value="equipment">Equipment</option>
+            </select>
+          </div>
+          {/* Commodity code / equipment tag — editable on locked lines too */}
+          <div>
+            <label style={{ fontSize: 12, color: sub, display: 'block', marginBottom: 4, fontFamily: 'IBM Plex Sans, sans-serif' }}>Commodity Code / Equipment Tag</label>
+            <input data-item-ref="" value={itemRef} onChange={e => setItemRef(e.target.value)}
+              style={{ ...inp, fontFamily: 'JetBrains Mono, monospace' }} />
+          </div>
+          {clsError && (
+            <div data-cls-error="" style={{ gridColumn: '1/-1', color: '#ef4444', fontSize: 12, fontFamily: 'IBM Plex Sans, sans-serif' }}>{clsError}</div>
+          )}
         </div>
+
+        {serverError && (
+          <div data-server-error="" style={{ marginTop: 14, color: '#ef4444', fontSize: 12, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontFamily: 'IBM Plex Sans, sans-serif' }}>{serverError}</div>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
           <button onClick={onClose} style={{ background: 'transparent', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, color: sub, padding: '7px 16px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontFamily: 'IBM Plex Sans, sans-serif' }}>Cancel</button>
-          <button onClick={save} disabled={saving} style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '7px 18px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'IBM Plex Sans, sans-serif', opacity: saving ? 0.6 : 1 }}>
+          <button onClick={save} disabled={saving || !!clsError} style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '7px 18px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'IBM Plex Sans, sans-serif', opacity: (saving || clsError) ? 0.6 : 1 }}>
             {saving ? 'Saving…' : 'Save changes'}
           </button>
         </div>
@@ -571,6 +629,8 @@ const LineItemsTab = ({
                 {([
                   { label: 'LINE', key: 'line_number' },
                   { label: 'WBS', key: 'wbs_code' },
+                  { label: 'TYPE' },
+                  { label: 'CODE / TAG' },
                   { label: 'DESCRIPTION', key: 'description' },
                   { label: 'QTY', key: 'quantity', align: 'right' },
                   { label: 'UOM' },
@@ -591,7 +651,7 @@ const LineItemsTab = ({
             </thead>
             <tbody>
               {lines.length === 0 ? (
-                <tr><td colSpan={10} style={{ padding: 28, textAlign: 'center', color: sub, fontSize: 13 }}>No lines match the filter.</td></tr>
+                <tr><td colSpan={12} style={{ padding: 28, textAlign: 'center', color: sub, fontSize: 13 }}>No lines match the filter.</td></tr>
               ) : lines.map((l, i) => {
                 const locked = l.status === 'po-raised'
                 const tdS: React.CSSProperties = {
@@ -602,6 +662,8 @@ const LineItemsTab = ({
                   <tr key={l.id}>
                     <td style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, whiteSpace: 'nowrap' }}>{l.line_number}</td>
                     <td data-align="left" style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub }}>{l.wbs_code ?? '—'}</td>
+                    <td data-align="center" data-col="item-type" style={{ ...tdS, textAlign: 'center' }}><TypeBadge t={l.item_type} /></td>
+                    <td data-align="left" data-col="item-ref" style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>{l.item_ref || '—'}</td>
                     <td data-align="left" style={{ ...tdS, maxWidth: 260 }}>{l.description}</td>
                     <td style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', textAlign: 'right' }}>{l.quantity != null ? l.quantity : '—'}</td>
                     <td style={{ ...tdS, fontFamily: 'JetBrains Mono, monospace', color: sub }}>{l.uom ?? '—'}</td>
@@ -766,6 +828,8 @@ const RevDiffTab = ({
     ros_date: 'ROS',
     inspection_class: 'Insp',
     uom: 'UOM',
+    item_type: 'Item type',
+    item_ref: 'Code / tag',
   }
 
   const thS: React.CSSProperties = {
