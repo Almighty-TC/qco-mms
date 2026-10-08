@@ -56,10 +56,11 @@ function readWorkbook(buffer, filename, opts) {
 //   'ok'         a real calendar date, year 1900 to 2100                      value 'YYYY-MM-DD'
 //   'invalid'    date-shaped but not a real date (13/13/2024, 31/02/2024,     value null
 //                29/02/2023, day or month 0), or a year outside 1900–2100
-//   'unreadable' text that isn't date-shaped (TBA, TBC)                        value null
-// Date-shaped: a Date (its local day); a number (an Excel serial, via XLSX.SSF); YYYY-M-D (a time
-// may follow); D-Mon-YYYY or "D Mon YYYY"; D/M/YYYY or D-M-YYYY (day first); other text that
-// JavaScript's Date reads (local day). Every valid value reads as it always has.
+//   'unreadable' text that isn't one of the forms below (TBA, TBC, "May 2025") value null
+// Date-shaped: a Date (its local day); a number (an Excel serial, via XLSX.SSF); and text only in
+// these forms: YYYY-M-D (a time may follow); YYYY/M/D; D/M/YYYY, D-M-YYYY and D.M.YYYY (day first);
+// "D Mon YYYY" and D-Mon-YYYY; "Mon D, YYYY" and "Mon D YYYY" (month by its first three letters).
+// There is no lenient fallback: other text never reads as a date.
 const DATE_MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 }
 const MIN_YEAR = 1900, MAX_YEAR = 2100
 function parseCalendarDate(v, XLSX) {
@@ -80,8 +81,13 @@ function parseCalendarDate(v, XLSX) {
   if (m && DATE_MONTHS[m[2].slice(0, 3).toLowerCase()]) return calendar(m[3], DATE_MONTHS[m[2].slice(0, 3).toLowerCase()], m[1])
   m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/)                            // D/M/YYYY or D-M-YYYY, day first
   if (m) return calendar(m[3], m[2], m[1])
-  const d = new Date(s)
-  return isNaN(d.getTime()) ? { value: null, kind: 'unreadable' } : calendar(d.getFullYear(), d.getMonth() + 1, d.getDate())
+  m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/)                                // D.M.YYYY, day first
+  if (m) return calendar(m[3], m[2], m[1])
+  m = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/)                                // YYYY/M/D
+  if (m) return calendar(m[1], m[2], m[3])
+  m = s.match(/^([A-Za-z]{3,})\.?\s+(\d{1,2}),?\s+(\d{4})$/)                   // Mon D, YYYY or Mon D YYYY
+  if (m && DATE_MONTHS[m[1].slice(0, 3).toLowerCase()]) return calendar(m[3], DATE_MONTHS[m[1].slice(0, 3).toLowerCase()], m[2])
+  return { value: null, kind: 'unreadable' }
 }
 
 // Parse + structurally validate an uploaded import spreadsheet (header:1 rows).
