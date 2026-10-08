@@ -50,6 +50,40 @@ function readWorkbook(buffer, filename, opts) {
   return XLSX.read(text, { type: 'string', raw: true })
 }
 
+// Read an uploaded date cell the way the MTO importer always has (parseSheetDate's forms) and
+// check it is a real calendar date. Returns { value, kind }:
+//   'blank'      null, empty or whitespace                                    value null
+//   'ok'         a real calendar date, year 1900 to 2100                      value 'YYYY-MM-DD'
+//   'invalid'    date-shaped but not a real date (13/13/2024, 31/02/2024,     value null
+//                29/02/2023, day or month 0), or a year outside 1900–2100
+//   'unreadable' text that isn't date-shaped (TBA, TBC)                        value null
+// Date-shaped: a Date (its local day); a number (an Excel serial, via XLSX.SSF); YYYY-M-D (a time
+// may follow); D-Mon-YYYY or "D Mon YYYY"; D/M/YYYY or D-M-YYYY (day first); other text that
+// JavaScript's Date reads (local day). Every valid value reads as it always has.
+const DATE_MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 }
+const MIN_YEAR = 1900, MAX_YEAR = 2100
+function parseCalendarDate(v, XLSX) {
+  const invalid = { value: null, kind: 'invalid' }
+  if (v == null || (typeof v === 'string' && v.trim() === '')) return { value: null, kind: 'blank' }
+  const calendar = (y, m, d) => {
+    y = Number(y); m = Number(m); d = Number(d)
+    if (![y, m, d].every(Number.isInteger) || y < MIN_YEAR || y > MAX_YEAR || m < 1 || m > 12) return invalid
+    if (d < 1 || d > new Date(Date.UTC(y, m, 0)).getUTCDate()) return invalid   // the month's last day (leap years included)
+    return { value: `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`, kind: 'ok' }
+  }
+  if (v instanceof Date) return isNaN(v.getTime()) ? invalid : calendar(v.getFullYear(), v.getMonth() + 1, v.getDate())
+  if (typeof v === 'number') { const e = XLSX.SSF.parse_date_code(v); return e ? calendar(e.y, e.m, e.d) : invalid }
+  const s = String(v).trim()
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/)                              // YYYY-M-D
+  if (m) return calendar(m[1], m[2], m[3])
+  m = s.match(/^(\d{1,2})[-/\s]([A-Za-z]{3,})[-/\s](\d{4})$/)                   // 31-Aug-2025, 1 May 2024
+  if (m && DATE_MONTHS[m[2].slice(0, 3).toLowerCase()]) return calendar(m[3], DATE_MONTHS[m[2].slice(0, 3).toLowerCase()], m[1])
+  m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/)                            // D/M/YYYY or D-M-YYYY, day first
+  if (m) return calendar(m[3], m[2], m[1])
+  const d = new Date(s)
+  return isNaN(d.getTime()) ? { value: null, kind: 'unreadable' } : calendar(d.getFullYear(), d.getMonth() + 1, d.getDate())
+}
+
 // Parse + structurally validate an uploaded import spreadsheet (header:1 rows).
 // Catches empty/corrupt files and missing required columns up front so the
 // per-row logic can assume a well-formed sheet. Returns either
@@ -81,4 +115,4 @@ function parseImportSheet(file, requiredHeaders = []) {
   return { headers, rows, dataRows, col }
 }
 
-module.exports = { dateOrder, fileNotEmpty, parseImportSheet, readWorkbook }
+module.exports = { dateOrder, fileNotEmpty, parseImportSheet, readWorkbook, parseCalendarDate }

@@ -14,7 +14,7 @@ const XLSX    = require('xlsx')
 const fs      = require('fs')
 const path    = require('path')
 const { fileColumnsReady } = require('../lib/schemaColumns')
-const { fileNotEmpty, readWorkbook } = require('../utils/validate')
+const { fileNotEmpty, readWorkbook, parseCalendarDate } = require('../utils/validate')
 const { validateRevisionFormat, compareRevisions, RevisionError } = require('../lib/revision')
 const { lockKeyRows } = require('../lib/mtoAvailability')
 const { hasPermission } = require('../middleware/permissions')
@@ -95,19 +95,11 @@ function compareRev(a, b) {
 
 // Parse a spreadsheet cell into a YYYY-MM-DD string without timezone drift.
 // Handles Date objects, Excel serials, ISO, "31-Aug-2025" and DD/MM/YYYY.
-const _MONTHS = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 }
+// A spreadsheet date cell as YYYY-MM-DD, or null when it is blank, unreadable or not a real
+// calendar date (parseCalendarDate in utils/validate.js does the reading and the calendar check).
 function parseSheetDate(v, XLSX) {
-  if (v == null || v === '') return null
-  const ymd = (y, m, d) => `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
-  if (v instanceof Date) return ymd(v.getFullYear(), v.getMonth() + 1, v.getDate())  // local components — no UTC shift
-  if (typeof v === 'number') { const e = XLSX.SSF.parse_date_code(v); return e ? ymd(e.y, e.m, e.d) : null }
-  const s = String(v).trim()
-  if (/^\d{4}-\d{1,2}-\d{1,2}/.test(s)) { const [y,m,d] = s.slice(0,10).split('-'); return ymd(y, Number(m), Number(d)) }
-  let m = s.match(/^(\d{1,2})[-/\s]([A-Za-z]{3,})[-/\s](\d{4})$/)   // 31-Aug-2025
-  if (m && _MONTHS[m[2].slice(0,3).toLowerCase()]) return ymd(m[3], _MONTHS[m[2].slice(0,3).toLowerCase()], Number(m[1]))
-  m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/)                // DD/MM/YYYY (AU)
-  if (m) return ymd(m[3], Number(m[2]), Number(m[1]))
-  const d = new Date(s); return isNaN(d.getTime()) ? null : ymd(d.getFullYear(), d.getMonth() + 1, d.getDate())
+  const d = parseCalendarDate(v, XLSX)
+  return d.kind === 'ok' ? d.value : null
 }
 
 // One line's content signature, normalised the way it would be stored — shared by the no-change
@@ -483,8 +475,11 @@ router.post('/:projectId/parse-file', upload.single('file'), async (req, res) =>
         else qty = n
       }
 
-      const rosDate = parseDate(row.ros_date)
-      if (row.ros_date != null && row.ros_date !== '' && !rosDate)
+      const rosCheck = parseCalendarDate(row.ros_date, XLSX_LIB)
+      const rosDate = rosCheck.kind === 'ok' ? rosCheck.value : null
+      if (rosCheck.kind === 'invalid')
+        warnings.push({ row: rn, message: `ROS date '${row.ros_date}' is not a valid date`, severity: 'error' })
+      else if (rosCheck.kind === 'unreadable')
         warnings.push({ row: rn, message: `ROS date '${row.ros_date}' could not be parsed — left blank`, severity: 'warning' })
 
       // Classification: parse-file previews a new register's first upload, so there is no previous
@@ -1189,6 +1184,33 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
       if (clsErrors.length) return res.status(400).json({ error: clsErrors.join('; ') })
     }
 
+    // ─── ROS dates ────────────────────────────────────────────────
+    // Over the rows the insert loop keeps: a date-shaped value that isn't a real calendar date (or a
+    // year outside 1900–2100) is refused (400) with the sheet's row numbers, before anything is
+    // written, for dryRun and real uploads alike. Text that isn't a date (TBA, TBC) stays blank and
+    // is reported in dateWarnings, without blocking.
+    const dateWarnings = []
+    {
+      const shown = v => v instanceof Date
+        ? (isNaN(v.getTime()) ? 'invalid date' : `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`)
+        : String(v)
+      const invalidDates = []
+      lines.forEach((l, i) => {
+        if (!l.line_number || !l.description) return
+        const note = String(l.notes || '').toLowerCase()
+        if (note.includes('delete before uploading') || note.includes('example')) return
+        const kind = parseCalendarDate(l.ros_date, XLSX).kind
+        if (kind !== 'invalid' && kind !== 'unreadable') return
+        const entry = { row: rows[i].__rowNum__ + 1, line_number: String(l.line_number).trim(), value: shown(l.ros_date) }
+        if (kind === 'invalid') invalidDates.push(entry); else dateWarnings.push(entry)
+      })
+      if (invalidDates.length) {
+        const first = invalidDates.slice(0, 10).map(x => `Row ${x.row}: ROS date '${x.value}' is not a valid date (use DD/MM/YYYY or YYYY-MM-DD)`)
+        const more = invalidDates.length - first.length
+        return res.status(400).json({ error: first.join('; ') + (more > 0 ? `; and ${more} more` : ''), invalid_dates: invalidDates.slice(0, 500) })
+      }
+    }
+
     // ─── Reject a no-change re-upload ─────────────────────────────
     // An MTO whose content is identical to the current revision (only the
     // version differs) is meaningless — prompt and reject rather than create a
@@ -1323,7 +1345,7 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
 
     // ─── BUG-2: dry-run returns preview without inserting ─────────
     if (dryRun) {
-      return res.json({ dryRun: true, summary, conflicts, held_warnings, requires_ack })
+      return res.json({ dryRun: true, summary, conflicts, held_warnings, requires_ack, dateWarnings })
     }
 
     // ─── BUG-2: conflict guard — block upload if locked lines would change ─────
@@ -1423,7 +1445,7 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
     )
 
     audit(req, 'UPLOAD_REVISION', 'mto_register', mto.id, { revision: mto.current_revision }, { revision: newRev })
-    res.json({ ok: true, revision: newRev, linesImported: imported, held_warnings })
+    res.json({ ok: true, revision: newRev, linesImported: imported, held_warnings, dateWarnings })
   } catch (e) {
     if (e.http) return res.status(e.http).json({ error: e.message })
     console.error('POST /mto/:projectId/:mtoId/upload', e.message)

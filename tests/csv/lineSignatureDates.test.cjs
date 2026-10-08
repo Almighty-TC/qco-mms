@@ -1,6 +1,7 @@
 // Date strings in lineSignature (server/routes/mto.js) — the no-change check and the upload
 // dry-run counts. lineSignature isn't exported, so it is read from the route file's source
-// together with parseSheetDate and _MONTHS and run in a vm context (no database, no endpoint).
+// together with parseSheetDate (which calls parseCalendarDate from utils/validate.js) and run in a
+// vm context (no database, no endpoint).
 // Exit code 1 on any failure. Usage: node tests/csv/lineSignatureDates.test.cjs
 const fs = require('fs'), path = require('path'), vm = require('vm')
 const SERVER = path.join(__dirname, '..', '..', 'server')
@@ -12,8 +13,9 @@ function block(start) {
   for (; j < src.length; j++) { if (src[j] === '{') depth++; else if (src[j] === '}' && --depth === 0) break }
   return src.slice(i, j + 1)
 }
-const ctx = { XLSX }; vm.createContext(ctx)
-vm.runInContext(`${src.match(/^const _MONTHS = .*$/m)[0]}\n${block('function parseSheetDate(')}\n${block('function lineSignature(')}\nthis.lineSignature = lineSignature`, ctx)
+const { parseCalendarDate } = require(path.join(SERVER, 'utils', 'validate.js'))   // parseSheetDate calls it
+const ctx = { XLSX, parseCalendarDate }; vm.createContext(ctx)
+vm.runInContext(`${block('function parseSheetDate(')}\n${block('function lineSignature(')}\nthis.lineSignature = lineSignature`, ctx)
 const sig = ros => ctx.lineSignature({ line_number: 'S-001', description: 'x', quantity: '1.000', uom: 'EA', wbs_code: '01', ros_date: ros, item_type: null, item_ref: null })
 const db = (y, m, d) => new Date(y, m - 1, d)   // mysql2 DATE: a Date at server-local midnight
 
