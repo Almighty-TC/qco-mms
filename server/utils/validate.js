@@ -100,17 +100,20 @@ function parseCalendarDate(v, XLSX) {
 // Catches empty/corrupt files and missing required columns up front so the
 // per-row logic can assume a well-formed sheet. Returns either
 //   { error: '...' }                                   (reject with 400)
-// or { headers, rows, dataRows, col }                  (proceed)
+// or { headers, rows, dataRows, col, sheetRows }       (proceed)
+// sheetRows[i] is the sheet's row number of dataRows[i]: rows[0] is the sheet range's first row
+// and sheet_to_json (header: 1) keeps blank rows inside the range, so rows[k] is that row + k.
 function parseImportSheet(file, requiredHeaders = []) {
   const fe = fileNotEmpty(file)
   if (fe) return { error: fe }
   const XLSX = require('xlsx')
-  let rows
+  let rows, firstRow
   try {
     const wb = readWorkbook(file.buffer, file.originalname, { type: 'buffer' })
     const ws = wb.Sheets[wb.SheetNames[0]]
     if (!ws) return { error: 'The spreadsheet has no readable sheet.' }
     rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+    firstRow = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']).s.r + 1 : 1
   } catch (e) {
     if (e.http) return { error: e.message }
     return { error: 'Could not read the file — it may be corrupt or not a real spreadsheet.' }
@@ -121,10 +124,11 @@ function parseImportSheet(file, requiredHeaders = []) {
   if (missing.length) {
     return { error: `Missing required column${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}. Expected columns include: ${requiredHeaders.join(', ')}.` }
   }
-  const dataRows = rows.slice(1).filter(r => r.some(c => String(c).trim() !== ''))
+  const dataRows = [], sheetRows = []
+  rows.forEach((r, k) => { if (k > 0 && r.some(c => String(c).trim() !== '')) { dataRows.push(r); sheetRows.push(firstRow + k) } })
   if (!dataRows.length) return { error: 'The spreadsheet has a header row but no data rows.' }
   const col = name => headers.findIndex(h => h === name)
-  return { headers, rows, dataRows, col }
+  return { headers, rows, dataRows, col, sheetRows }
 }
 
 module.exports = { dateOrder, fileNotEmpty, parseImportSheet, readWorkbook, parseCalendarDate }

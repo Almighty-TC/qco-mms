@@ -8,6 +8,7 @@ const { authenticateToken } = require('../middleware/auth')
 const multer  = require('multer')
 const { fileFilter } = require('../utils/upload')
 const { parseImportSheet } = require('../utils/validate')
+const { checkWbsRows, existingCodes, normCode, refusal } = require('../lib/wbsImport')
 const path    = require('path')
 const fs      = require('fs')
 const XLSX    = require('xlsx')
@@ -449,57 +450,12 @@ router.post('/:projectId/wbs/validate', uploadWBS.single('file'), async (req, re
   try {
     const parsed = parseImportSheet(req.file, ['code', 'description'])
     if (parsed.error) return res.status(400).json({ error: parsed.error })
-    const { headers, dataRows } = parsed
-    const codeIdx = headers.findIndex(h => h === 'code')
-    const descIdx = headers.findIndex(h => h === 'description')
-    const parentIdx = headers.findIndex(h => h === 'parent_string' || h === 'parent_id')
-    const rosIdx  = headers.findIndex(h => h === 'ros')
-    const seenCodes = new Set()
-    const results = []
-
-    for (let i = 0; i < dataRows.length; i++) {
-      const r    = dataRows[i]
-      const code = codeIdx >= 0 ? String(r[codeIdx] || '').trim() : ''
-      const desc = descIdx >= 0 ? String(r[descIdx] || '').trim() : ''
-      const parent = parentIdx >= 0 ? String(r[parentIdx] || '').trim() : ''
-      const ros  = rosIdx  >= 0 ? String(r[rosIdx]  || '').trim() : ''
-      const rowNum = i + 2  // 1-indexed + header
-
-      const errors = []; const warnings = []
-
-      if (!code)  errors.push('Missing WBS code')
-      if (!desc)  errors.push('Missing description')
-      if (code && seenCodes.has(code)) errors.push(`Duplicate code "${code}"`)
-
-      // Parent must appear before child
-      if (parent && !seenCodes.has(parent)) {
-        errors.push(`Parent "${parent}" not yet seen — must appear before this row`)
-      }
-
-      // Circular reference check: code must not start with itself as prefix
-      if (code && parent && (parent === code || parent.startsWith(code + '.'))) {
-        errors.push('Circular reference: parent code is same as or child of this code')
-      }
-
-      // ROS date format
-      if (ros && !/^\d{4}-\d{2}-\d{2}$/.test(ros)) {
-        warnings.push(`ROS date "${ros}" should be YYYY-MM-DD format`)
-      }
-
-      if (code) seenCodes.add(code)
-
-      results.push({
-        row: rowNum, code, description: desc.slice(0, 50), parent, ros,
-        status: errors.length > 0 ? 'error' : warnings.length > 0 ? 'warning' : 'ok',
-        errors, warnings,
-      })
-    }
-
-    const readyCount   = results.filter(r => r.status === 'ok').length
-    const warningCount = results.filter(r => r.status === 'warning').length
-    const errorCount   = results.filter(r => r.status === 'error').length
-
-    res.json({ results, summary: { total: results.length, ready: readyCount, warnings: warningCount, errors: errorCount } })
+    const [nodes] = await db.query('SELECT id, code FROM wbs_nodes WHERE project_id=?', [Number(req.params.projectId)])
+    const { results, summary } = checkWbsRows({ ...parsed, existing: existingCodes(nodes), XLSX })
+    res.json({
+      results: results.map(r => ({ row: r.row, code: r.code, description: r.description.slice(0, 50), parent: r.parent, ros: r.ros, status: r.status, errors: r.errors, warnings: r.warnings })),
+      summary,
+    })
   } catch (e) {
     console.error('[wbs:validate]', e.message)
     dbError(res, e)
@@ -507,38 +463,57 @@ router.post('/:projectId/wbs/validate', uploadWBS.single('file'), async (req, re
 })
 
 // POST /api/foundational/:projectId/wbs/import — import validated file
+// The validate checks run first; any error refuses the whole file (400, nothing written). Then, in
+// one READ COMMITTED transaction with the project row locked, the checks that depend on the
+// project's nodes run again (a conflict now is a 409), every row is inserted in file order (parents
+// from the project's nodes or the rows just inserted), and the audit row is written inside it.
 router.post('/:projectId/wbs/import', uploadWBS.single('file'), async (req, res) => {
+  let conn
   try {
     const pid = Number(req.params.projectId)
     const parsed = parseImportSheet(req.file, ['code', 'description'])
     if (parsed.error) return res.status(400).json({ error: parsed.error })
-    const { headers, dataRows } = parsed
-    const codeIdx  = headers.findIndex(h => h === 'code')
-    const descIdx  = headers.findIndex(h => h === 'description')
-    const parentIdx = headers.findIndex(h => h === 'parent_string')
-    const rosIdx   = headers.findIndex(h => h === 'ros')
-    const codeToId = {}
-    let imported = 0
+    const [nodes] = await db.query('SELECT id, code FROM wbs_nodes WHERE project_id=?', [pid])
+    const first = checkWbsRows({ ...parsed, existing: existingCodes(nodes), XLSX })
+    if (first.summary.errors) return res.status(400).json(refusal(first.results))
 
-    for (const r of dataRows) {
-      const code   = String(r[codeIdx] || '').trim()
-      const desc   = String(r[descIdx] || '').trim()
-      const parent = parentIdx >= 0 ? String(r[parentIdx] || '').trim() : ''
-      const ros    = rosIdx >= 0 ? String(r[rosIdx] || '').trim() : ''
-      if (!code || !desc) continue
+    conn = await db.getConnection()
+    await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+    await conn.beginTransaction()
+    const [[project]] = await conn.query('SELECT id FROM projects WHERE id = ? FOR UPDATE', [pid])
+    if (!project) { await conn.rollback(); return res.status(404).json({ error: 'Project not found' }) }
+    const [locked] = await conn.query('SELECT id, code FROM wbs_nodes WHERE project_id=?', [pid])   // under the lock
+    const existing = existingCodes(locked)
+    const { results, summary } = checkWbsRows({ ...parsed, existing, XLSX })
+    if (summary.errors) { await conn.rollback(); return res.status(409).json(refusal(results)) }
 
-      const parentId = parent && codeToId[parent] ? codeToId[parent] : null
-      const [result] = await db.query(
-        `INSERT IGNORE INTO wbs_nodes (project_id, parent_id, code, description, ros_date) VALUES (?,?,?,?,?)`,
-        [pid, parentId, code, desc, ros || null]
+    const inserted = new Map()   // normalised code → id
+    for (const r of results) {
+      const pkey = r.parent ? normCode(r.parent) : null
+      const parentId = pkey ? (existing.get(pkey) ?? inserted.get(pkey) ?? null) : null
+      const [ins] = await conn.query(
+        `INSERT INTO wbs_nodes (project_id, parent_id, code, description, ros_date) VALUES (?,?,?,?,?)`,
+        [pid, parentId, r.code, r.description, r.rosDate]
       )
-      if (result.insertId) { codeToId[code] = result.insertId; imported++ }
+      inserted.set(normCode(r.code), ins.insertId)
     }
-    audit(req, 'wbs_imported', `projects/${pid}`, {}, { imported })
-    res.json({ ok: true, imported })
+    const codes = results.map(r => r.code)
+    const resource = (req.originalUrl || req.url || '').split('?')[0].replace(/^\/api(?=\/)/, '')   // as audit() does
+    await conn.query(
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, before_value, after_value, resource, ip)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+      [req.user.id, 'wbs_imported', 'projects', pid, pid, JSON.stringify({}),
+       JSON.stringify({ imported: codes.length, codes: codes.slice(0, 200), truncated: codes.length > 200 }),
+       resource, req.ip]
+    )
+    await conn.commit()
+    res.json({ ok: true, imported: codes.length })
   } catch (e) {
+    if (conn) { try { await conn.rollback() } catch (_) { /* already rolled back */ } }
     console.error('[wbs:import]', e.message)
     dbError(res, e)
+  } finally {
+    if (conn) conn.release()
   }
 })
 
