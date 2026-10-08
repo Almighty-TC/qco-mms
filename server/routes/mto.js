@@ -478,7 +478,9 @@ router.post('/:projectId/parse-file', upload.single('file'), async (req, res) =>
       const rosCheck = parseCalendarDate(row.ros_date, XLSX_LIB)
       const rosDate = rosCheck.kind === 'ok' ? rosCheck.value : null
       if (rosCheck.kind === 'invalid')
-        warnings.push({ row: rn, message: `ROS date '${row.ros_date}' is not a valid date`, severity: 'error' })
+        warnings.push({ row: rn, message: rosCheck.reason === 'two-digit-year'
+          ? `ROS date '${row.ros_date}' has a two-digit year — use a four-digit year`
+          : `ROS date '${row.ros_date}' is not a valid date`, severity: 'error' })
       else if (rosCheck.kind === 'unreadable')
         warnings.push({ row: rn, message: `ROS date '${row.ros_date}' could not be parsed — left blank`, severity: 'warning' })
 
@@ -1186,7 +1188,7 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
 
     // ─── ROS dates ────────────────────────────────────────────────
     // Over the rows the insert loop keeps: a date-shaped value that isn't a real calendar date (or a
-    // year outside 1900–2100) is refused (400) with the sheet's row numbers, before anything is
+    // year outside 1900–2100, or a two-digit year) is refused (400) with the sheet's row numbers, before anything is
     // written, for dryRun and real uploads alike. Text that isn't a date (TBA, TBC) stays blank and
     // is reported in dateWarnings, without blocking.
     const dateWarnings = []
@@ -1199,13 +1201,15 @@ router.post('/:projectId/:mtoId/upload', upload.single('file'), async (req, res)
         if (!l.line_number || !l.description) return
         const note = String(l.notes || '').toLowerCase()
         if (note.includes('delete before uploading') || note.includes('example')) return
-        const kind = parseCalendarDate(l.ros_date, XLSX).kind
+        const { kind, reason } = parseCalendarDate(l.ros_date, XLSX)
         if (kind !== 'invalid' && kind !== 'unreadable') return
         const entry = { row: rows[i].__rowNum__ + 1, line_number: String(l.line_number).trim(), value: shown(l.ros_date) }
-        if (kind === 'invalid') invalidDates.push(entry); else dateWarnings.push(entry)
+        if (kind === 'invalid') invalidDates.push({ ...entry, reason }); else dateWarnings.push(entry)
       })
       if (invalidDates.length) {
-        const first = invalidDates.slice(0, 10).map(x => `Row ${x.row}: ROS date '${x.value}' is not a valid date (use DD/MM/YYYY or YYYY-MM-DD)`)
+        const first = invalidDates.slice(0, 10).map(x => x.reason === 'two-digit-year'
+          ? `Row ${x.row}: ROS date '${x.value}' has a two-digit year (use a four-digit year: DD/MM/YYYY or YYYY-MM-DD)`
+          : `Row ${x.row}: ROS date '${x.value}' is not a valid date (use DD/MM/YYYY or YYYY-MM-DD)`)
         const more = invalidDates.length - first.length
         return res.status(400).json({ error: first.join('; ') + (more > 0 ? `; and ${more} more` : ''), invalid_dates: invalidDates.slice(0, 500) })
       }

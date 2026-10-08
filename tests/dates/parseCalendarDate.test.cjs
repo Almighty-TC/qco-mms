@@ -2,7 +2,8 @@
 // Part 1: kinds and values. Part 2: old against new — every valid value reads exactly as parseSheetDate
 // (routes/mto.js as of 9ef6732, copied below as the reference) read it. Part 3: a corpus of 300+ date
 // strings against parseCalendarDate as of c85ebbb (copied below), which still had the lenient fallback:
-// only the expected forms may change. Exit code 1 on any failure.
+// only the expected forms may change. Part 4: the same corpus against 68ca3a7 (date-2, copied below):
+// only the two-digit-year forms may change, from unreadable to invalid. Exit code 1 on any failure.
 // Usage: node tests/dates/parseCalendarDate.test.cjs
 const path = require('path')
 const SERVER = path.join(__dirname, '..', '..', 'server')
@@ -49,8 +50,38 @@ function c85ParseCalendarDate(v, XLSX) {
   return isNaN(d.getTime()) ? { value: null, kind: 'unreadable' } : calendar(d.getFullYear(), d.getMonth() + 1, d.getDate())
 }
 
+// parseCalendarDate as of 68ca3a7 (date-2: no lenient fallback; two-digit years unreadable).
+const D2_MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 }
+function d2ParseCalendarDate(v, XLSX) {
+  const invalid = { value: null, kind: 'invalid' }
+  if (v == null || (typeof v === 'string' && v.trim() === '')) return { value: null, kind: 'blank' }
+  const calendar = (y, m, d) => {
+    y = Number(y); m = Number(m); d = Number(d)
+    if (![y, m, d].every(Number.isInteger) || y < 1900 || y > 2100 || m < 1 || m > 12) return invalid
+    if (d < 1 || d > new Date(Date.UTC(y, m, 0)).getUTCDate()) return invalid
+    return { value: `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`, kind: 'ok' }
+  }
+  if (v instanceof Date) return isNaN(v.getTime()) ? invalid : calendar(v.getFullYear(), v.getMonth() + 1, v.getDate())
+  if (typeof v === 'number') { const e = XLSX.SSF.parse_date_code(v); return e ? calendar(e.y, e.m, e.d) : invalid }
+  const s = String(v).trim()
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/)
+  if (m) return calendar(m[1], m[2], m[3])
+  m = s.match(/^(\d{1,2})[-/\s]([A-Za-z]{3,})[-/\s](\d{4})$/)
+  if (m && D2_MONTHS[m[2].slice(0, 3).toLowerCase()]) return calendar(m[3], D2_MONTHS[m[2].slice(0, 3).toLowerCase()], m[1])
+  m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/)
+  if (m) return calendar(m[3], m[2], m[1])
+  m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/)
+  if (m) return calendar(m[3], m[2], m[1])
+  m = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/)
+  if (m) return calendar(m[1], m[2], m[3])
+  m = s.match(/^([A-Za-z]{3,})\.?\s+(\d{1,2}),?\s+(\d{4})$/)
+  if (m && D2_MONTHS[m[1].slice(0, 3).toLowerCase()]) return calendar(m[3], D2_MONTHS[m[1].slice(0, 3).toLowerCase()], m[2])
+  return { value: null, kind: 'unreadable' }
+}
+
 let pass = 0, fail = 0
-const ok = (v, value) => [v, 'ok', value], bad = v => [v, 'invalid', null], blank = v => [v, 'blank', null], unread = v => [v, 'unreadable', null]
+const ok = (v, value) => [v, 'ok', value], bad = v => [v, 'invalid', null, 'not-a-date'], blank = v => [v, 'blank', null], unread = v => [v, 'unreadable', null]
+const two = v => [v, 'invalid', null, 'two-digit-year']
 const label = v => v instanceof Date ? `Date(${isNaN(v.getTime()) ? 'invalid' : v.getFullYear() + '-' + (v.getMonth() + 1) + '-' + v.getDate()})` : JSON.stringify(v)
 
 // ── Part 1: kinds and values ─────────────────────────────────
@@ -92,13 +123,24 @@ const cases = [
   unread('TBA 2025'), unread('Q3 2025'), unread('Week 12'), unread('1'), unread('2024'), unread('May 2025'), unread('ASAP'),
   unread('TBC 15/06/2024'), ok('15 June 2024', '2024-06-15'), ok('Sept 5 2024', '2024-09-05'), bad('30 Feb 2024'),
   unread('5/2024'), unread('05-2024'),
-  // placeholders and 2-digit years
-  unread('N/A'), unread('-'), unread('?'), unread('pending'), unread('01/05/24'), unread('1-May-24'), unread('May 1, 24'), unread('01.05.24'),
+  // placeholders
+  unread('N/A'), unread('-'), unread('?'), unread('pending'),
+  // two-digit years (date-3): refused, whether or not the day and month are real
+  two('01/05/24'), two('1/5/24'), two('31/12/99'), two('29/02/23'), two('13/13/24'), two('31/02/24'), two('00/00/00'),   // D/M/YY
+  two('01-05-24'), two('1-5-24'), two('31-02-24'), two('24-05-01'),                                                       // D-M-YY
+  two('01.05.24'), two('1.5.24'), two('32.01.24'),                                                                        // D.M.YY
+  two('1-May-24'), two('01-May-24'), two('31-Aug-25'), two('1-Sept-24'), two('1-may-24'), two('1-MAY-24'), two('31-Feb-24'), // D-Mon-YY
+  two('1 May 24'), two('15 June 24'), two('30 Feb 24'), two('  1 May 24  '), two('1-May 24'),                            // "D Mon YY"
+  // still unreadable: not dates, or outside the two-digit forms
+  unread('TBA'), unread('Week 12'), unread('1'), unread('2024'), unread('May 2025'), unread('5/2024'), unread('05-2024'),
+  unread('May 1, 24'), unread('1/May/24'), unread('1-Foo-24'), unread('1-May-245'), unread('01/05/2'), unread('001/05/24'), unread('01/05/124'),
+  // four-digit forms unchanged
+  ok('01/05/2024', '2024-05-01'), ok('1-May-2024', '2024-05-01'), ok('1 May 2024', '2024-05-01'), ok('01.05.2024', '2024-05-01'), ok('2024-05-01', '2024-05-01'),
 ]
-for (const [v, kind, value] of cases) {
+for (const [v, kind, value, reason] of cases) {
   const r = parseCalendarDate(v, XLSX)
-  if (r.kind === kind && r.value === value) pass++
-  else { fail++; console.log(`FAIL ${label(v)}: expected ${kind} ${value}, got ${r.kind} ${r.value}`) }
+  if (r.kind === kind && r.value === value && (reason === undefined || r.reason === reason)) pass++
+  else { fail++; console.log(`FAIL ${label(v)}: expected ${kind} ${value}${reason ? ' ' + reason : ''}, got ${r.kind} ${r.value} ${r.reason || ''}`) }
 }
 const part1 = cases.length
 
@@ -146,11 +188,25 @@ for (const c of corpus) {
   if (differs) changed.push(`${JSON.stringify(c.text)} [${c.form}]: ${o.kind} ${o.value} → ${n.kind} ${n.value}`)
   let good = c.mayChange || !differs                                   // fixed forms: identical to c85ebbb
   if (c.want && !c.twoDigit) good = good && n.kind === 'ok' && n.value === c.want   // every 4-digit-year form reads the intended day
-  if (c.twoDigit || c.form === 'placeholder') good = good && n.kind === 'unreadable'
+  if (c.form === 'placeholder') good = good && n.kind === 'unreadable'
+  if (c.twoDigit) good = good && n.kind === 'invalid' && n.reason === 'two-digit-year'   // date-3: refused, not guessed
   if (good) pass++; else { corpusFail++; fail++; console.log(`FAIL corpus ${JSON.stringify(c.text)} [${c.form}]: c85ebbb ${o.kind} ${o.value}, now ${n.kind} ${n.value}`) }
 }
 console.log(`corpus: ${corpus.length} strings in ${Object.keys(FORMS).length} forms plus placeholders; ${changed.length} changed against c85ebbb:`)
 for (const line of changed) console.log('  ' + line)
 
-console.log(`parseCalendarDate: ${pass} passed, ${fail} failed (${part1} kind cases; old against new identical on ${same} of ${valid.length} valid values; corpus ${corpus.length - corpusFail} of ${corpus.length})`)
+// ── Part 4: the same corpus against 68ca3a7 (date-2) ─────────
+const changedD2 = []
+let d2Fail = 0
+for (const c of corpus) {
+  const o = d2ParseCalendarDate(c.text, XLSX), n = parseCalendarDate(c.text, XLSX)
+  const differs = o.kind !== n.kind || o.value !== n.value
+  if (differs) changedD2.push(`${c.text} [${c.form}]: ${o.kind} → ${n.kind} ${n.reason || ''}`)
+  const good = differs ? c.twoDigit && o.kind === 'unreadable' && n.kind === 'invalid' && n.reason === 'two-digit-year' : true
+  if (good) pass++; else { d2Fail++; fail++; console.log(`FAIL corpus vs 68ca3a7 ${JSON.stringify(c.text)} [${c.form}]: ${o.kind} ${o.value}, now ${n.kind} ${n.value}`) }
+}
+console.log(`corpus against 68ca3a7: ${changedD2.length} changed:`)
+for (const line of changedD2) console.log('  ' + line)
+
+console.log(`parseCalendarDate: ${pass} passed, ${fail} failed (${part1} kind cases; old against new identical on ${same} of ${valid.length} valid values; corpus ${corpus.length - corpusFail} of ${corpus.length}; against 68ca3a7 ${corpus.length - d2Fail} of ${corpus.length})`)
 process.exit(fail ? 1 : 0)
