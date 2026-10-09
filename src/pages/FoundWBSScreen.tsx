@@ -677,8 +677,9 @@ const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRow
 }
 
 // ─── UPLOAD VALIDATION MODAL ─────────────────────────────────
-interface ValidationRow { row: number; code: string; description: string; parent: string; ros: string; status: 'ok'|'warning'|'error'; errors: string[]; warnings: string[] }
+interface ValidationRow { row: number; code: string; description: string; parent: string; ros: string; rosDate?: string | null; status: 'ok'|'warning'|'error'; errors: string[]; warnings: string[] }
 interface ValidationResult { results: ValidationRow[]; summary: { total: number; ready: number; warnings: number; errors: number } }
+interface RefusedRow { row: number; code: string; errors: string[] }
 
 const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: number; dark: boolean; onClose: () => void; onImported: () => void }) => {
   const [file, setFile] = useState<File | null>(null)
@@ -686,11 +687,15 @@ const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: numb
   const [loading, setLoading] = useState(false)
   const [ackWarn, setAckWarn] = useState(false)
   const [importing, setImporting] = useState(false)
+  const importingRef = useRef(false)   // one import in flight, even for two clicks before a re-render
   const [err, setErr] = useState('')
+  const [refusal, setRefusal] = useState<{ status: number; error: string; rows: RefusedRow[] } | null>(null)   // the import's 400 or 409
+  const [showAllRefused, setShowAllRefused] = useState(false)
+  const [done, setDone] = useState<{ imported: number; expected: number } | null>(null)
   const col = dark ? '#f1f5f9' : '#0f172a'
 
   const validate = async (f: File) => {
-    setLoading(true); setErr(''); setResult(null)
+    setLoading(true); setErr(''); setResult(null); setAckWarn(false); setRefusal(null); setShowAllRefused(false); setDone(null)   // a new file needs its own acknowledgement
     const fd = new FormData(); fd.append('file', f)
     try {
       const { data } = await axios.post<ValidationResult>(`${API}/foundational/${projectId}/wbs/validate`, fd)
@@ -701,22 +706,30 @@ const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: numb
     } finally { setLoading(false) }
   }
 
+  const toImport = result ? result.summary.ready + result.summary.warnings : 0   // warning rows are imported too
+
   const doImport = async () => {
-    if (!file) return
-    setImporting(true)
+    if (!file || importingRef.current) return
+    importingRef.current = true
+    setImporting(true); setErr(''); setRefusal(null); setShowAllRefused(false); setDone(null)
+    const expected = toImport
     const fd = new FormData(); fd.append('file', file)
     try {
-      const { data } = await axios.post(`${API}/foundational/${projectId}/wbs/import`, fd)
+      const { data } = await axios.post<{ ok: boolean; imported: number }>(`${API}/foundational/${projectId}/wbs/import`, fd)
+      setDone({ imported: data.imported, expected })
       onImported()
-      onClose()
-      alert(`✓ Imported ${data.imported} nodes successfully`)
     } catch (e: unknown) {
-      const er = e as { response?: { data?: { error?: string } } }
-      setErr(er.response?.data?.error ?? 'Import failed')
-    } finally { setImporting(false) }
+      const er = e as { response?: { status?: number; data?: { error?: string; rows?: RefusedRow[] } } }
+      const status = er.response?.status, body = er.response?.data
+      if ((status === 400 || status === 409) && body?.error) setRefusal({ status, error: body.error, rows: Array.isArray(body.rows) ? body.rows : [] })
+      else setErr(body?.error ?? 'Import failed')
+    } finally {
+      importingRef.current = false
+      setImporting(false)
+    }
   }
 
-  const canImport = result && result.summary.errors === 0 && (result.summary.warnings === 0 || ackWarn)
+  const canImport = result && !done && result.summary.errors === 0 && (result.summary.warnings === 0 || ackWarn)   // no second import until a new file is chosen
   const STATUS_ICON: Record<string, string> = { ok: '✅', warning: '⚠️', error: '❌' }
   const STATUS_COLOR: Record<string, string> = { ok: '#22c55e', warning: '#f59e0b', error: '#ef4444' }
 
@@ -727,7 +740,7 @@ const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: numb
           <div style={{ fontSize: 16, fontWeight: 700, color: col }}>↑ Upload WBS File</div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer' }}>×</button>
         </div>
-        <input type="file" accept=".xlsx,.xls,.csv,.xer,.xml" onChange={e => { const f = e.target.files?.[0] ?? null; setFile(f); setResult(null); if (f) validate(f) }}
+        <input type="file" accept=".xlsx,.xls,.csv" disabled={importing} onChange={e => { const f = e.target.files?.[0] ?? null; setFile(f); setResult(null); if (f) validate(f) }}
           style={{ border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, borderRadius: 6, padding: '6px 10px', fontSize: 12, color: col, background: dark ? '#0f172a' : '#f8fafc', fontFamily: 'inherit', marginBottom: 16 }} />
         {loading && <div style={{ textAlign: 'center', color: '#94a3b8', padding: '24px 0' }}>Validating file…</div>}
         {err && <div style={{ marginBottom: 12, fontSize: 12, color: '#ef4444' }}>{err}</div>}
@@ -756,7 +769,7 @@ const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: numb
                       <td style={{ padding: '5px 10px', fontFamily: 'JetBrains Mono, monospace', color: col }}>{r.code}</td>
                       <td style={{ padding: '5px 10px', color: col, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.description}</td>
                       <td style={{ padding: '5px 10px', fontFamily: 'JetBrains Mono, monospace', color: '#94a3b8' }}>{r.parent || '—'}</td>
-                      <td style={{ padding: '5px 10px', fontFamily: 'JetBrains Mono, monospace', color: '#94a3b8' }}>{r.ros || '—'}</td>
+                      <td style={{ padding: '5px 10px', fontFamily: 'JetBrains Mono, monospace', color: '#94a3b8' }}>{'rosDate' in r ? (r.rosDate ?? '— (blank)') : (r.ros || '—')}</td>
                       <td style={{ padding: '5px 10px', color: STATUS_COLOR[r.status] }}>{[...r.errors, ...r.warnings].join('; ') || '—'}</td>
                     </tr>
                   ))}
@@ -771,11 +784,35 @@ const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: numb
             )}
           </div>
         )}
+        {refusal && (
+          <div data-wbs-error="" style={{ marginTop: 12, flexShrink: 0, maxHeight: 180, overflowY: 'auto', fontSize: 12, color: '#ef4444', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+            {refusal.status === 409 && <div style={{ fontWeight: 600, marginBottom: 4 }}>The project's WBS changed while importing. Nothing was imported; check the file again.</div>}
+            <div>{refusal.error}</div>
+            {refusal.rows.length > 0 && (
+              <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                {(showAllRefused ? refusal.rows : refusal.rows.slice(0, 20)).map(r => (
+                  <li key={r.row}>Row {r.row} · {r.code || '—'}: {r.errors.join('; ')}</li>
+                ))}
+              </ul>
+            )}
+            {!showAllRefused && refusal.rows.length > 20 && (
+              <div style={{ marginTop: 4 }}>and {refusal.rows.length - 20} more · <button type="button" onClick={() => setShowAllRefused(true)}
+                style={{ background: 'none', border: 'none', padding: 0, color: '#2563eb', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textDecoration: 'underline' }}>Show all</button></div>
+            )}
+          </div>
+        )}
+        {done && (
+          <div data-wbs-imported="" style={{ marginTop: 12, flexShrink: 0, fontSize: 12, color: done.imported === done.expected ? '#22c55e' : '#ef4444', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+            Imported {done.imported} of {done.expected} rows
+            {done.imported < done.expected && ` — ${done.expected - done.imported} row${done.expected - done.imported !== 1 ? 's were' : ' was'} not imported.`}
+            {done.imported > done.expected && ' — more than the check counted; check the WBS tree.'}
+          </div>
+        )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16, flexShrink: 0 }}>
           <button onClick={onClose} style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
           <button onClick={doImport} disabled={!canImport || importing}
             style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: canImport ? '#2563eb' : '#94a3b8', color: '#fff', fontSize: 12, fontWeight: 600, cursor: canImport ? 'pointer' : 'not-allowed', fontFamily: 'inherit', opacity: importing ? 0.7 : 1 }}>
-            {importing ? 'Importing…' : `↑ Import ${result?.summary.ready ?? 0} rows`}
+            {importing ? 'Importing…' : result && result.summary.errors > 0 ? `↑ Import (fix ${result.summary.errors} error(s) first)` : `↑ Import ${toImport} rows`}
           </button>
         </div>
       </div>
@@ -1745,7 +1782,7 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
           </>}
           <button onClick={() => { setFocusMode(f => !f); setFocusNode(null) }} style={{ ...secBtn, color: focusMode ? '#E84E0F' : '#64748b' }}>⛶ Focus</button>
           <button onClick={downloadTemplate} style={secBtn}>↓ Template</button>
-          <button onClick={() => setShowUpload(true)} style={secBtn}>↑ Upload XER/Excel</button>
+          <button onClick={() => setShowUpload(true)} style={secBtn}>↑ Upload Excel/CSV</button>
           <HelpButton screenName="WBS" sections={WBS_HELP} dark={dark} />
           {wbsView === 'tree' && <button onClick={() => setShowAdd(true)} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>+ Add node</button>}
         </div>
