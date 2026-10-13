@@ -3,7 +3,9 @@
 // (routes/mto.js as of 9ef6732, copied below as the reference) read it. Part 3: a corpus of 300+ date
 // strings against parseCalendarDate as of c85ebbb (copied below), which still had the lenient fallback:
 // only the expected forms may change. Part 4: the same corpus against 68ca3a7 (date-2, copied below):
-// only the two-digit-year forms may change, from unreadable to invalid. Exit code 1 on any failure.
+// only the two-digit-year forms may change, from unreadable to invalid. Part 5 (date-4): the corpus against
+// d6faf24 (copied below): only the D/Mon/YY and "Mon D, YY" forms may change, from unreadable to invalid.
+// Exit code 1 on any failure.
 // Usage: node tests/dates/parseCalendarDate.test.cjs
 const path = require('path')
 const SERVER = path.join(__dirname, '..', '..', 'server')
@@ -79,6 +81,39 @@ function d2ParseCalendarDate(v, XLSX) {
   return { value: null, kind: 'unreadable' }
 }
 
+// parseCalendarDate as of d6faf24 (date-3: two-digit years refused, but not D/Mon/YY or "Mon D, YY").
+const D6_MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 }
+function d6ParseCalendarDate(v, XLSX) {
+  const invalid = { value: null, kind: 'invalid', reason: 'not-a-date' }
+  if (v == null || (typeof v === 'string' && v.trim() === '')) return { value: null, kind: 'blank' }
+  const calendar = (y, m, d) => {
+    y = Number(y); m = Number(m); d = Number(d)
+    if (![y, m, d].every(Number.isInteger) || y < 1900 || y > 2100 || m < 1 || m > 12) return invalid
+    if (d < 1 || d > new Date(Date.UTC(y, m, 0)).getUTCDate()) return invalid
+    return { value: `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`, kind: 'ok' }
+  }
+  if (v instanceof Date) return isNaN(v.getTime()) ? invalid : calendar(v.getFullYear(), v.getMonth() + 1, v.getDate())
+  if (typeof v === 'number') { const e = XLSX.SSF.parse_date_code(v); return e ? calendar(e.y, e.m, e.d) : invalid }
+  const s = String(v).trim()
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/)
+  if (m) return calendar(m[1], m[2], m[3])
+  m = s.match(/^(\d{1,2})[-/\s]([A-Za-z]{3,})[-/\s](\d{4})$/)
+  if (m && D6_MONTHS[m[2].slice(0, 3).toLowerCase()]) return calendar(m[3], D6_MONTHS[m[2].slice(0, 3).toLowerCase()], m[1])
+  m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/)
+  if (m) return calendar(m[3], m[2], m[1])
+  m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/)
+  if (m) return calendar(m[3], m[2], m[1])
+  m = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/)
+  if (m) return calendar(m[1], m[2], m[3])
+  m = s.match(/^([A-Za-z]{3,})\.?\s+(\d{1,2}),?\s+(\d{4})$/)
+  if (m && D6_MONTHS[m[1].slice(0, 3).toLowerCase()]) return calendar(m[3], D6_MONTHS[m[1].slice(0, 3).toLowerCase()], m[2])
+  const twoDigitYear = { value: null, kind: 'invalid', reason: 'two-digit-year' }
+  if (/^\d{1,2}[/.-]\d{1,2}[/.-]\d{2}$/.test(s)) return twoDigitYear
+  m = s.match(/^\d{1,2}[-\s]([A-Za-z]{3,})[-\s]\d{2}$/)
+  if (m && D6_MONTHS[m[1].slice(0, 3).toLowerCase()]) return twoDigitYear
+  return { value: null, kind: 'unreadable' }
+}
+
 let pass = 0, fail = 0
 const ok = (v, value) => [v, 'ok', value], bad = v => [v, 'invalid', null, 'not-a-date'], blank = v => [v, 'blank', null], unread = v => [v, 'unreadable', null]
 const two = v => [v, 'invalid', null, 'two-digit-year']
@@ -133,7 +168,12 @@ const cases = [
   two('1 May 24'), two('15 June 24'), two('30 Feb 24'), two('  1 May 24  '), two('1-May 24'),                            // "D Mon YY"
   // still unreadable: not dates, or outside the two-digit forms
   unread('TBA'), unread('Week 12'), unread('1'), unread('2024'), unread('May 2025'), unread('5/2024'), unread('05-2024'),
-  unread('May 1, 24'), unread('1/May/24'), unread('1-Foo-24'), unread('1-May-245'), unread('01/05/2'), unread('001/05/24'), unread('01/05/124'),
+  unread('1-Foo-24'), unread('1-May-245'), unread('01/05/2'), unread('001/05/24'), unread('01/05/124'),
+  // date-4: D/Mon/YY and month-name-first with a two-digit year are refused too
+  two('1/May/24'), two('01/May/24'), two('15/June/24'), two('31/Feb/24'), two('1/may/24'),                                 // D/Mon/YY
+  two('May 1, 24'), two('May 1 24'), two('Feb 30, 24'), two('Sept 5, 99'), two('Jun. 15, 24'), two('june 15 24'),            // "Mon D, YY", "Mon D YY"
+  ok('May 1, 2024', '2024-05-01'), ok('1/May/2024', '2024-05-01'), ok('15/June/2024', '2024-06-15'), ok('Jun. 15, 2024', '2024-06-15'), bad('Feb 30, 2024'),
+  unread('Week 12 24'), unread('Foo 1, 24'), unread('1/Foo/24'), unread('May 1, 245'), unread('1/May/245'), unread('May 24'), unread('May, 1, 24'),
   // four-digit forms unchanged
   ok('01/05/2024', '2024-05-01'), ok('1-May-2024', '2024-05-01'), ok('1 May 2024', '2024-05-01'), ok('01.05.2024', '2024-05-01'), ok('2024-05-01', '2024-05-01'),
 ]
@@ -175,6 +215,7 @@ const FORMS = {   // form → [text(y, m, d), may change against c85ebbb]
   'Mon D, YYYY': [(y, m, d) => `${MON[m]} ${d}, ${y}`, false], 'Mon D YYYY': [(y, m, d) => `${MON[m]} ${d} ${y}`, false], 'Month D, YYYY': [(y, m, d) => `${MONTH[m]} ${d}, ${y}`, false],
   'DD.MM.YYYY': [(y, m, d) => `${p2(d)}.${p2(m)}.${y}`, true], 'D.M.YYYY': [(y, m, d) => `${d}.${m}.${y}`, true],
   'DD/MM/YY': [(y, m, d) => `${p2(d)}/${p2(m)}/${String(y).slice(2)}`, true], 'D-Mon-YY': [(y, m, d) => `${d}-${MON[m]}-${String(y).slice(2)}`, true],
+  'D/Mon/YY': [(y, m, d) => `${d}/${MON[m]}/${String(y).slice(2)}`, true], 'Mon D, YY': [(y, m, d) => `${MON[m]} ${d}, ${String(y).slice(2)}`, true],   // date-4
 }
 const corpus = []
 for (const [form, [fmt, mayChange]] of Object.entries(FORMS)) for (const [y, m, d] of DATES) corpus.push({ form, text: fmt(y, m, d), want: `${y}-${p2(m)}-${p2(d)}`, mayChange, twoDigit: /[^Y]YY$/.test(form) })   // DD/MM/YY, D-Mon-YY (not …YYYY)
@@ -208,5 +249,18 @@ for (const c of corpus) {
 console.log(`corpus against 68ca3a7: ${changedD2.length} changed:`)
 for (const line of changedD2) console.log('  ' + line)
 
-console.log(`parseCalendarDate: ${pass} passed, ${fail} failed (${part1} kind cases; old against new identical on ${same} of ${valid.length} valid values; corpus ${corpus.length - corpusFail} of ${corpus.length}; against 68ca3a7 ${corpus.length - d2Fail} of ${corpus.length})`)
+// ── Part 5: the same corpus against d6faf24 (date-4) ─────────
+const NEW_FORMS = ['D/Mon/YY', 'Mon D, YY'], changedD6 = {}
+let d6Fail = 0
+for (const c of corpus) {
+  const o = d6ParseCalendarDate(c.text, XLSX), n = parseCalendarDate(c.text, XLSX)
+  const differs = o.kind !== n.kind || o.value !== n.value || o.reason !== n.reason
+  if (differs) changedD6[c.form] = (changedD6[c.form] || 0) + 1
+  const good = differs ? NEW_FORMS.includes(c.form) && o.kind === 'unreadable' && n.kind === 'invalid' && n.reason === 'two-digit-year' : true
+  if (good) pass++; else { d6Fail++; fail++; console.log(`FAIL corpus vs d6faf24 ${JSON.stringify(c.text)} [${c.form}]: ${o.kind} ${o.value}, now ${n.kind} ${n.value}`) }
+}
+const original = corpus.filter(c => !NEW_FORMS.includes(c.form))
+console.log(`corpus against d6faf24: changed by form ${JSON.stringify(changedD6)}; the original ${original.length} strings changed ${original.filter(c => { const o = d6ParseCalendarDate(c.text, XLSX), n = parseCalendarDate(c.text, XLSX); return o.kind !== n.kind || o.value !== n.value }).length}`)
+
+console.log(`parseCalendarDate: ${pass} passed, ${fail} failed (${part1} kind cases; old against new identical on ${same} of ${valid.length} valid values; corpus ${corpus.length - corpusFail} of ${corpus.length}; against 68ca3a7 ${corpus.length - d2Fail} of ${corpus.length}; against d6faf24 ${corpus.length - d6Fail} of ${corpus.length})`)
 process.exit(fail ? 1 : 0)

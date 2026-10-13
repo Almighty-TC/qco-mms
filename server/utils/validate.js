@@ -56,8 +56,8 @@ function readWorkbook(buffer, filename, opts) {
 //   'ok'         a real calendar date, year 1900 to 2100                      value 'YYYY-MM-DD'
 //   'invalid'    date-shaped but not a real date (13/13/2024, 31/02/2024,     value null
 //                29/02/2023, day or month 0), or a year outside 1900–2100:      reason 'not-a-date';
-//                or a two-digit year (D/M/YY, D-M-YY, D.M.YY, D-Mon-YY,
-//                "D Mon YY"), refused rather than guessed:                      reason 'two-digit-year'
+//                or a two-digit year (D/M/YY, D-M-YY, D.M.YY, D-Mon-YY, D/Mon/YY,
+//                "D Mon YY", "Mon D, YY", "Mon D YY"), refused rather than guessed: reason 'two-digit-year'
 //   'unreadable' text that isn't one of the forms below (TBA, TBC, "May 2025") value null
 // Date-shaped: a Date (its local day); a number (an Excel serial, via XLSX.SSF); and text only in
 // these forms: YYYY-M-D (a time may follow); YYYY/M/D; D/M/YYYY, D-M-YYYY and D.M.YYYY (day first);
@@ -91,7 +91,9 @@ function parseCalendarDate(v, XLSX) {
   if (m && DATE_MONTHS[m[1].slice(0, 3).toLowerCase()]) return calendar(m[3], DATE_MONTHS[m[1].slice(0, 3).toLowerCase()], m[2])
   const twoDigitYear = { value: null, kind: 'invalid', reason: 'two-digit-year' }      // after every four-digit form
   if (/^\d{1,2}[/.-]\d{1,2}[/.-]\d{2}$/.test(s)) return twoDigitYear                    // D/M/YY, D-M-YY, D.M.YY
-  m = s.match(/^\d{1,2}[-\s]([A-Za-z]{3,})[-\s]\d{2}$/)                                // D-Mon-YY, "D Mon YY"
+  m = s.match(/^\d{1,2}[-/\s]([A-Za-z]{3,})[-/\s]\d{2}$/)                              // D-Mon-YY, D/Mon/YY, "D Mon YY"
+  if (m && DATE_MONTHS[m[1].slice(0, 3).toLowerCase()]) return twoDigitYear
+  m = s.match(/^([A-Za-z]{3,})\.?\s+\d{1,2},?\s+\d{2}$/)                                // "Mon D, YY", "Mon D YY"
   if (m && DATE_MONTHS[m[1].slice(0, 3).toLowerCase()]) return twoDigitYear
   return { value: null, kind: 'unreadable' }
 }
