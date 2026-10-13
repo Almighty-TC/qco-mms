@@ -39,6 +39,10 @@ const one = (row, opts) => check([row], opts).results[0]
 const eq = (a, b) => assert.deepStrictEqual(a, b)
 const okRow = r => { eq(r.errors, []); eq(r.warnings, []); eq(r.status, 'ok') }
 const NOT_SEEN = p => `Parent "${p}" not yet seen — must appear before this row`
+const NOT_FOUND = p => `Parent "${p}" was not found in this project or in the file`   // wbs-1b
+const NUM_CODE = c => `WBS code '${c}' was read from a number cell; trailing or leading zeros may have been lost (format the column as Text)`
+const NUM_PARENT = p => `Parent '${p}' was read from a number cell; trailing or leading zeros may have been lost (format the column as Text)`
+const EXAMPLE = 'Example row: delete it before uploading'
 const CIRCULAR = 'Circular reference: parent code is same as or child of this code'
 const EXISTS = c => `WBS code '${c}' already exists in this project`
 const NOT_DATE = v => `ROS date '${v}' is not a valid date (use DD/MM/YYYY or YYYY-MM-DD)`
@@ -85,16 +89,37 @@ test('an existing parent without its accent', () => okRow(one(['02.A.1', 'X', '0
 test('a parent earlier in the file', () => check([['03', 'A'], ['03.01', 'B', '03']]).results.forEach(okRow))
 test('a parent earlier in the file, in different case', () => check([['05.A', 'A'], ['05.A.1', 'B', '05.a']]).results.forEach(okRow))
 test('a parent later in the file', () => { const r = check([['03.01', 'B', '03'], ['03', 'A']]).results; eq(r[0].errors, [NOT_SEEN('03')]); okRow(r[1]) })
-test('a parent found nowhere', () => eq(one(['03.01', 'B', '99']).errors, [NOT_SEEN('99')]))
+test('a parent found nowhere', () => eq(one(['03.01', 'B', '99']).errors, [NOT_FOUND('99')]))   // wbs-1b wording
 test('a parent that is the node itself', () => eq(one(['03', 'A', '03']).errors, [CIRCULAR]))
 test('a parent that is the node itself, in different case', () => eq(one(['05.a', 'A', '05.A']).errors, [CIRCULAR]))
 test('a parent that is a child of the node', () => eq(one(['03', 'A', '03.01']).errors, [CIRCULAR]))
-test('03.010 is not a child of 03.01', () => eq(one(['03.01', 'A', '03.010']).errors, [NOT_SEEN('03.010')]))
+test('03.010 is not a child of 03.01', () => eq(one(['03.01', 'A', '03.010']).errors, [NOT_FOUND('03.010')]))   // wbs-1b wording
 test('parent_id only', () => eq(one(['03.01', 'B', '', '17']).errors, ['Parent given only as parent_id "17" — put the parent\'s code in parent_string']))
 test('parent_id with parent_string: parent_string is used', () => { const r = one(['01.02', 'B', '01', '17']); okRow(r); eq(r.parent, '01') })
 test('a sheet with a parent_id column and no parent_string column', () => eq(check([['03.01', 'B', 5]], { header: ['code', 'description', 'parent_id'] }).results[0].errors, ['Parent given only as parent_id "5" — put the parent\'s code in parent_string']))
 test('a parent on an earlier row that has its own error still resolves', () => { const r = check([['03', ''], ['03.01', 'B', '03']]).results; eq(r[0].errors, ['Missing description']); okRow(r[1]) })
 test('a top-level node (no parent)', () => { const r = one(['09', 'Top']); okRow(r); eq(r.parent, '') })
+
+// wbs-1b: number cells, the parent's three situations, example rows
+test('a code from a number cell (.xlsx) warns', () => { const r = one([1.1, 'Num code'], { file: xlsxFile }); eq([r.code, r.status, r.errors, r.warnings], ['1.1', 'warning', [], [NUM_CODE('1.1')]]) })
+test('a whole-number code cell warns', () => eq(one([7, 'Seven'], { file: xlsxFile }).warnings, [NUM_CODE('7')]))
+test('a parent from a number cell (.xlsx) warns', () => { const r = check([['1', 'Text one'], ['1.5', 'Child', 1]], { file: xlsxFile }).results[1]; eq([r.parent, r.status, r.errors, r.warnings], ['1', 'warning', [], [NUM_PARENT('1')]]) })
+test('a code and a parent from number cells: two warnings', () => eq(check([['2', 'Two'], [2.1, 'Child', 2]], { file: xlsxFile }).results[1].warnings, [NUM_CODE('2.1'), NUM_PARENT('2')]))
+test('a code typed as text in .xlsx does not warn', () => okRow(one(['01.10', 'Text code'], { file: xlsxFile })))
+test('CSV cells are text: 1.10 keeps its zero and does not warn', () => { const r = one(['1.10', 'CSV code']); okRow(r); eq(r.code, '1.10') })
+test('a number cell with an error: status error, the warning kept', () => { const r = one([3.5, ''], { file: xlsxFile }); eq([r.status, r.errors, r.warnings], ['error', ['Missing description'], [NUM_CODE('3.5')]]) })
+test('parent: in the project', () => okRow(one(['01.09', 'X', '01'])))
+test('parent: earlier in the file', () => check([['06', 'A'], ['06.01', 'B', '06']]).results.forEach(okRow))
+test('parent: later in the file says not yet seen', () => eq(check([['06.01', 'B', '06'], ['06', 'A']]).results[0].errors, [NOT_SEEN('06')]))
+test('parent: nowhere says not found', () => eq(one(['06.01', 'B', 'ZZ-NOPE']).errors, [NOT_FOUND('ZZ-NOPE')]))
+test('parent: later in the file in different case says not yet seen', () => eq(check([['06.01', 'B', '06.a'], ['06.A', 'A']]).results[0].errors, [NOT_SEEN('06.a')]))
+test('parent: later in the file with a different accent says not yet seen', () => eq(check([['06.02', 'B', '06.e'], ['06.É', 'A']]).results[0].errors, [NOT_SEEN('06.e')]))
+test('parent: blank means a top-level node, no message', () => eq(one(['06.01', 'B', '']).errors, []))
+test('EXAMPLE- code is refused', () => eq(one(['EXAMPLE-01', 'Example']).errors, [EXAMPLE]))
+test('example- in lower case is refused', () => eq(one(['example-01.01', 'Example']).errors, [EXAMPLE]))
+test('EXAMPLES-1 and MY-EXAMPLE-01 are ordinary codes', () => check([['EXAMPLES-1', 'A'], ['MY-EXAMPLE-01', 'B']]).results.forEach(okRow))
+test('the template\'s example rows: each refused, parents resolve', () => { const r = check([['EXAMPLE-01', 'Civil'], ['EXAMPLE-01.01', 'Foundations', 'EXAMPLE-01', '', '31/03/2025']]).results; eq(r.map(x => x.errors), [[EXAMPLE], [EXAMPLE]]) })
+test('rosDate: ISO for a date, null for TBA and blank', () => eq(check([['07', 'A', '', '', '30/06/2025'], ['08', 'B', '', '', 'TBA'], ['09', 'C']]).results.map(x => [x.ros, x.rosDate]), [['2025-06-30', '2025-06-30'], ['TBA', null], ['', null]]))
 
 // ROS dates
 test('ROS ISO', () => eq(one(['03', 'A', '', '', '2025-06-30']).rosDate, '2025-06-30'))

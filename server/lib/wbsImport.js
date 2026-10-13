@@ -11,8 +11,9 @@
 //             a code already earlier in the file (naming its first row) or already in the project;
 //             parent_string must be a code in the project or earlier in the file, and not the node
 //             itself or one of its children; a parent_id with no parent_string; a ROS date that isn't
-//             a real date, or has a two-digit year
-//   warnings  a ROS date that can't be read (TBA): stored blank
+//             a real date, or has a two-digit year; a code starting EXAMPLE- (the template's example rows)
+//   warnings  a ROS date that can't be read (TBA): stored blank; a code or parent read from a number
+//             cell (.xlsx), whose leading or trailing zeros may have been lost
 // Returns { results: [{ row, code, description, parent, ros, rosDate, status, errors, warnings }],
 //           summary: { total, ready, warnings, errors } }. row is the sheet's row number;
 // description is the full text (the validate route shortens it); ros is the ISO date when the date
@@ -39,6 +40,7 @@ function checkWbsRows({ dataRows, sheetRows, col, existing, XLSX }) {
   const codeIdx = col('code'), descIdx = col('description'), rosIdx = col('ros')
   const parentIdx = col('parent_string'), parentIdIdx = col('parent_id')
   const firstRowOf = new Map()   // normalised code → the sheet row it first appears on
+  const fileCodes = new Set(dataRows.map(r => normCode(cell(r, codeIdx))).filter(Boolean))   // every code in the file
   const results = []
 
   dataRows.forEach((r, i) => {
@@ -54,16 +56,22 @@ function checkWbsRows({ dataRows, sheetRows, col, existing, XLSX }) {
     if (chars(description) > MAX_DESCRIPTION) errors.push(`Description is longer than ${MAX_DESCRIPTION} characters (${chars(description)})`)
 
     const key = normCode(code)
+    if (key.startsWith('example-')) errors.push('Example row: delete it before uploading')
     if (code && firstRowOf.has(key)) errors.push(`Duplicate code "${code}" (first on row ${firstRowOf.get(key)})`)
     else if (code && existing.has(key)) errors.push(`WBS code '${code}' already exists in this project`)
 
     if (parent) {
       const pkey = normCode(parent)
       if (code && (pkey === key || pkey.startsWith(key + '.'))) errors.push('Circular reference: parent code is same as or child of this code')
-      else if (!existing.has(pkey) && !firstRowOf.has(pkey)) errors.push(`Parent "${parent}" not yet seen — must appear before this row`)
+      else if (!existing.has(pkey) && !firstRowOf.has(pkey)) errors.push(fileCodes.has(pkey)
+        ? `Parent "${parent}" not yet seen — must appear before this row`
+        : `Parent "${parent}" was not found in this project or in the file`)
     } else if (parentId) {
       errors.push(`Parent given only as parent_id "${parentId}" — put the parent's code in parent_string`)
     }
+
+    if (typeof cell(r, codeIdx) === 'number') warnings.push(`WBS code '${code}' was read from a number cell; trailing or leading zeros may have been lost (format the column as Text)`)
+    if (typeof cell(r, parentIdx) === 'number') warnings.push(`Parent '${parent}' was read from a number cell; trailing or leading zeros may have been lost (format the column as Text)`)
 
     const d = parseCalendarDate(rosCell, XLSX)
     const rosText = text(rosCell)

@@ -391,12 +391,14 @@ router.get('/:projectId/wbs/template', async (req, res) => {
     // ── Main data sheet ───────────────────────────────────────
     const headerStyle = { fill: { fgColor: { rgb: 'E84E0F' } }, font: { bold: true, color: { rgb: 'FFFFFF' } } }
     const headers = ['id','project_id','level','code','description','wbs_string','parent_string','parent_id','WBS Title','wbs.1','wbs.2','wbs.3','wbs.4','wbs.5','wbs.6','wbs.7','wbs.8','ROS']
+    // Example rows: EXAMPLE- codes never collide with a project's codes, and the import refuses them
+    // ("Example row: delete it before uploading"), so a template uploaded unchanged imports nothing.
     const examples = [
-      ['','','1','01','Civil & Structural','01','','','Civil & Structural','01','','','','','','','','2025-06-30'],
-      ['','','2','01.01','Foundations','01.01','01','','Foundations','01','01','','','','','','','2025-03-31'],
-      ['','','3','01.01.01','Piling Works','01.01.01','01.01','','Piling Works','01','01','01','','','','','','2024-12-31'],
-      ['','','4','01.01.01.01','Bored Piles','01.01.01.01','01.01.01','','Bored Piles','01','01','01','01','','','','','2024-10-31'],
-      ['','','5','01.01.01.01.01','Pile Design','01.01.01.01.01','01.01.01.01','','Pile Design','01','01','01','01','01','','','','2024-08-31'],
+      ['','','1','EXAMPLE-01','Civil & Structural','EXAMPLE-01','','','Civil & Structural','EXAMPLE-01','','','','','','','','2025-06-30'],
+      ['','','2','EXAMPLE-01.01','Foundations','EXAMPLE-01.01','EXAMPLE-01','','Foundations','EXAMPLE-01','01','','','','','','','31/03/2025'],
+      ['','','3','EXAMPLE-01.01.01','Piling Works','EXAMPLE-01.01.01','EXAMPLE-01.01','','Piling Works','EXAMPLE-01','01','01','','','','','','31-Dec-2024'],
+      ['','','4','EXAMPLE-01.01.01.01','Bored Piles','EXAMPLE-01.01.01.01','EXAMPLE-01.01.01','','Bored Piles','EXAMPLE-01','01','01','01','','','','','2024-10-31'],
+      ['','','5','EXAMPLE-01.01.01.01.01','Pile Design','EXAMPLE-01.01.01.01.01','EXAMPLE-01.01.01.01','','Pile Design','EXAMPLE-01','01','01','01','01','','','',''],
     ]
     const wsData = [headers, ...examples]
     const ws = XLSX.utils.aoa_to_sheet(wsData)
@@ -411,24 +413,23 @@ router.get('/:projectId/wbs/template', async (req, res) => {
     // ── Instructions sheet ────────────────────────────────────
     const instrData = [
       ['Column', 'Required', 'Description'],
-      ['id', 'No', 'Leave blank — auto-assigned on import'],
-      ['project_id', 'No', 'Leave blank — assigned from project context'],
-      ['level', 'Yes', 'Numeric depth (1=top-level, 2=child, 3=grandchild etc.)'],
-      ['code', 'Yes', 'Dotted WBS code e.g. 01, 01.01, 01.01.01. Must be unique per project.'],
+      ['id', 'No', 'Not used by the import'],
+      ['project_id', 'No', 'Not used by the import (the nodes go into the project you upload to)'],
+      ['level', 'No', 'Not used by the import (the depth follows from parent_string)'],
+      ['code', 'Yes', 'Dotted WBS code e.g. 01, 01.01, 01.01.01 (format the column as Text so zeros are kept)'],
       ['description', 'Yes', 'Node label / name e.g. "Civil & Structural"'],
-      ['wbs_string', 'Yes', 'Same as code — full dotted path'],
-      ['parent_string', 'Yes*', 'Parent\'s code. Leave blank for top-level nodes (level=1).'],
-      ['parent_id', 'No', 'Leave blank — resolved from parent_string on import'],
-      ['WBS Title', 'No', 'Alternate display name (optional)'],
-      ['wbs.1 – wbs.8', 'No', 'Individual code segments split by level (auto-split on import)'],
-      ['ROS', 'No', 'Required On Site date in YYYY-MM-DD format e.g. 2025-06-30'],
+      ['wbs_string', 'No', 'Not used by the import'],
+      ['parent_string', 'Yes*', 'Parent\'s code: a code already in the project or earlier in the file. Leave blank for top-level nodes.'],
+      ['parent_id', 'No', 'Not used by the import: put the parent\'s code in parent_string'],
+      ['WBS Title', 'No', 'Not used by the import'],
+      ['wbs.1 – wbs.8', 'No', 'Not used by the import'],
+      ['ROS', 'No', 'Required On Site date: YYYY-MM-DD, DD/MM/YYYY or D-Mon-YYYY (e.g. 2025-06-30, 30/06/2025, 30-Jun-2025). Two-digit years are refused; a blank cell or text such as TBA stores a blank date.'],
       ['', '', ''],
       ['NOTES', '', ''],
-      ['• One row per WBS node', '', ''],
-      ['• Codes must be in hierarchical order (parents before children)', '', ''],
-      ['• Duplicate codes within a project will cause an error', '', ''],
-      ['• Maximum 8 levels of nesting supported', '', ''],
-      ['• Date format: YYYY-MM-DD', '', ''],
+      ['• Only code, description, parent_string and ROS are used by the import; the other columns are kept for reference.', '', ''],
+      ['• One row per WBS node; a parent must already be in the project or appear earlier in the file.', '', ''],
+      ['• The whole file is refused, and nothing is imported, if any row has an error: for example a code already in the project, a code twice in the file, a parent that is not found, or a date that is not a real date.', '', ''],
+      ['• Delete the EXAMPLE- rows before uploading: any code starting EXAMPLE- is an error.', '', ''],
     ]
     const wsInstr = XLSX.utils.aoa_to_sheet(instrData)
     wsInstr['!cols'] = [{ wch: 20 }, { wch: 10 }, { wch: 60 }]
@@ -453,7 +454,7 @@ router.post('/:projectId/wbs/validate', uploadWBS.single('file'), async (req, re
     const [nodes] = await db.query('SELECT id, code FROM wbs_nodes WHERE project_id=?', [Number(req.params.projectId)])
     const { results, summary } = checkWbsRows({ ...parsed, existing: existingCodes(nodes), XLSX })
     res.json({
-      results: results.map(r => ({ row: r.row, code: r.code, description: r.description.slice(0, 50), parent: r.parent, ros: r.ros, status: r.status, errors: r.errors, warnings: r.warnings })),
+      results: results.map(r => ({ row: r.row, code: r.code, description: r.description.slice(0, 50), parent: r.parent, ros: r.ros, rosDate: r.rosDate, status: r.status, errors: r.errors, warnings: r.warnings })),
       summary,
     })
   } catch (e) {
