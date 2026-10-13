@@ -67,7 +67,8 @@ fs.mkdirSync(uploadDir, { recursive: true })
 // written until AFTER the role + PO-exists checks, so rejections need no file cleanup.
 const blobStore = require('../lib/blobStore')
 const { fileFilter } = require('../utils/upload')
-const { fileNotEmpty } = require('../utils/validate')
+const { parseImportSheet } = require('../utils/validate')
+const { checkPoRows, poRowsFromSheet, normKey } = require('../lib/poBulk')
 const uploadPoDoc = multer({
   storage: multer.memoryStorage(),
   limits:  { fileSize: 50 * 1024 * 1024 },   // 50 MB
@@ -1049,129 +1050,30 @@ router.get('/pos/:id/documents/:docId/download', async (req, res) => {
 })
 
 // ─── BULK UPLOAD ─────────────────────────────────────────────────────────────
-// A PO the bulk import must not overwrite: locked, in an approval-or-later status, or generated from a tender
-// award (tender_id set — its supplier and value are the record of that award). The preview marks these 'locked';
-// bulk-confirm re-checks the same rule on the server instead of trusting the client's rowStatus.
-const BULK_LOCKED_STATUSES = ['po-raised', 'approved', 'pending_director_approval']
-const bulkLocked = po => !!po.is_locked || BULK_LOCKED_STATUSES.includes(po.status) || po.tender_id != null
+// The preview reads the file (any .xlsx, .xls or CSV saved as UTF-8) and checks every row; the confirm
+// takes the rows back from the client, checks every one again on the server and ignores the client's
+// rowStatus, recomputes new, duplicate and locked from the database inside one transaction, and never
+// inserts an invalid row (skipped and reported in errors). The checks: server/lib/poBulk.js.
+
+// The purchase orders with the rows' PO numbers, in any project (po_number is unique across projects).
+async function bulkExisting(q, rows, forUpdate) {
+  const keys = [...new Set(rows.map(r => normKey(r.cells.po_number)).filter(Boolean))]
+  if (!keys.length) return new Map()
+  const [found] = await q.query(
+    `SELECT id, project_id, po_number, status, is_locked, tender_id FROM purchase_orders
+      WHERE TRIM(LOWER(po_number)) IN (${keys.map(() => '?').join(',')})${forUpdate ? ' FOR UPDATE' : ''}`, keys)
+  return new Map(found.map(p => [normKey(p.po_number), p]))
+}
 
 // Item 6: Parse CSV/XLSX upload, return preview with validation results.
 router.post('/:projectId/pos/bulk-upload', uploadBulk.single('file'), async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
-    { const fe = fileNotEmpty(req.file); if (fe) return res.status(400).json({ error: fe }) }
-
-    const ExcelJS = require('exceljs')
-    const rows = []
-
-    if (req.file.originalname.endsWith('.xlsx')) {
-      const wb = new ExcelJS.Workbook()
-      await wb.xlsx.load(req.file.buffer)
-      const ws = wb.worksheets[0]
-      if (!ws) return res.status(400).json({ error: 'No worksheet found in file' })
-
-      // First row = headers
-      let headers = []
-      ws.eachRow((row, rIdx) => {
-        if (rIdx === 1) {
-          headers = row.values.slice(1).map(v => String(v ?? '').trim().toLowerCase())
-        } else {
-          const obj = {}
-          row.values.slice(1).forEach((val, i) => { obj[headers[i]] = val })
-          rows.push(obj)
-        }
-      })
-    } else {
-      // CSV: simple parser
-      const text = req.file.buffer.toString('utf8')
-      const lines = text.split(/\r?\n/).filter(l => l.trim())
-      if (lines.length < 2) return res.status(400).json({ error: 'File is empty or has no data rows' })
-      const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, '').toLowerCase())
-      for (let i = 1; i < lines.length; i++) {
-        const vals = lines[i].split(',').map(v => v.trim().replace(/^"|"$/g, ''))
-        const obj  = {}
-        headers.forEach((h, idx) => { obj[h] = vals[idx] ?? '' })
-        rows.push(obj)
-      }
-    }
-
-    if (!rows.length) return res.status(400).json({ error: 'The file has a header row but no data rows.' })
-
-    // ── Map flexible column names ──────────────────────────────────────────────
-    const FIELD_MAP = {
-      'po number': 'po_number', 'po ref': 'po_number', 'po_number': 'po_number',
-      'description': 'description',
-      'supplier': 'vendor_name', 'vendor': 'vendor_name', 'vendor name': 'vendor_name',
-      'group': 'group_category', 'category': 'group_category', 'group/category': 'group_category',
-      'currency': 'currency', 'ccy': 'currency',
-      'value': 'value', 'po value': 'value', 'amount': 'value',
-      'incoterms': 'incoterms', 'inco terms': 'incoterms',
-      'wbs': 'wbs_code', 'wbs code': 'wbs_code',
-      'ros date': 'ros_date', 'ros': 'ros_date', 'required on site': 'ros_date',
-      'owner': 'owner_name',
-    }
-
-    const normalised = rows.map((r, idx) => {
-      const mapped = {}
-      for (const [rawKey, val] of Object.entries(r)) {
-        const normKey = FIELD_MAP[rawKey.toLowerCase()] ?? rawKey.toLowerCase()
-        mapped[normKey] = val
-      }
-      return { rowIndex: idx + 2, ...mapped }
-    }).filter(r => Object.values(r).some(v => v && String(v).trim()))
-
-    // ── Validate + duplicate check ─────────────────────────────────────────────
-    const poNumbers  = normalised.map(r => r.po_number).filter(Boolean)
-    const [existing] = await db.query(
-      poNumbers.length
-        ? `SELECT po_number, status, is_locked, tender_id, id FROM purchase_orders WHERE project_id=? AND TRIM(LOWER(po_number)) IN (${poNumbers.map(() => 'TRIM(LOWER(?))').join(',')})`
-        : 'SELECT NULL LIMIT 0',
-      poNumbers.length ? [pid, ...poNumbers] : []
-    )
-    const existingMap = {}
-    for (const e of existing) existingMap[e.po_number.toLowerCase()] = e
-
-    // Detect within-file duplicates
-    const seenInFile = {}
-    for (const r of normalised) {
-      const key = (r.po_number ?? '').toLowerCase().trim()
-      if (key) seenInFile[key] = (seenInFile[key] ?? 0) + 1
-    }
-
-    const preview = normalised.map(r => {
-      const errors  = []
-      const key     = (r.po_number ?? '').toLowerCase().trim()
-      const found   = existingMap[key]
-      const inFileDup = key && seenInFile[key] > 1
-
-      if (!r.po_number?.trim()) errors.push('PO Number is required')
-      if (!r.vendor_name?.trim() && !r.supplier_id) errors.push('Supplier/Vendor is required')
-      if (inFileDup)            errors.push('Duplicate within this upload file')
-
-      let rowStatus = errors.length > 0 ? 'invalid' : 'new'
-      if (!inFileDup && found) {
-        rowStatus = bulkLocked(found) ? 'locked' : 'duplicate'
-      }
-
-      return {
-        rowIndex:   r.rowIndex,
-        po_number:  r.po_number,
-        description: r.description,
-        vendor_name: r.vendor_name,
-        group_category: r.group_category,
-        currency:   r.currency || 'AUD',
-        value:      r.value ? Number(String(r.value).replace(/[^0-9.-]/g, '')) : null,
-        incoterms:  r.incoterms,
-        wbs_code:   r.wbs_code,
-        ros_date:   r.ros_date || null,
-        owner_name: r.owner_name,
-        rowStatus,   // 'new' | 'duplicate' | 'locked' | 'invalid'
-        errors,
-        existingStatus: found?.status ?? null,
-      }
-    })
-
-    res.json({ preview, totalRows: preview.length })
+    const parsed = parseImportSheet(req.file, [])
+    if (parsed.error) return res.status(400).json({ error: parsed.error })
+    const rows = poRowsFromSheet(parsed)
+    const { results } = checkPoRows({ rows, existing: await bulkExisting(db, rows, false), pid, XLSX: require('xlsx') })
+    res.json({ preview: results, totalRows: results.length })
   } catch (e) {
     console.error('[procurement:bulk-upload]', e.message)
     dbError(res, e)
@@ -1181,66 +1083,63 @@ router.post('/:projectId/pos/bulk-upload', uploadBulk.single('file'), async (req
 // ─── BULK UPLOAD CONFIRM ──────────────────────────────────────────────────────
 // Item 6: Confirm bulk import after user reviews preview.
 router.post('/:projectId/pos/bulk-confirm', async (req, res) => {
+  let conn
   try {
     const pid  = Number(req.params.projectId)
     const { rows, replace_duplicates = false } = req.body
     if (!Array.isArray(rows)) return res.status(400).json({ error: 'rows array required' })
+    const posted = rows.map((r, i) => ({ row: Number(r?.rowIndex) || i + 1, cells: r && typeof r === 'object' ? r : {} }))
 
-    let created = 0, replaced = 0, skipped = 0, failed = 0
+    conn = await db.getConnection()
+    await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+    await conn.beginTransaction()
+    const existing = await bulkExisting(conn, posted, true)   // locks the existing rows
+    const { results } = checkPoRows({ rows: posted, existing, pid, XLSX: require('xlsx'), confirm: true })
+    const resource = (req.originalUrl || '').split('?')[0]
+    const audit = (action, entityId, before, after) => conn.query(
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, resource, ip, before_value, after_value)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [req.user?.id ?? null, action, 'purchase_order', entityId, pid, resource, req.ip ?? null,
+       before ? JSON.stringify(before) : null, after ? JSON.stringify(after) : null])
+
+    let created = 0, replaced = 0, skipped = 0
     const errors = []
-
-    for (const r of rows) {
-      if (r.rowStatus === 'locked' || r.rowStatus === 'invalid') { skipped++; continue }
-      try {
-        if (r.rowStatus === 'duplicate' && !replace_duplicates) { skipped++; continue }
-        if (r.rowStatus === 'duplicate' && replace_duplicates) {
-          // Replace existing unlocked PO — the lock rule is re-checked here, never taken from the client's rowStatus
-          const [[ex]] = await db.query(
-            'SELECT id, status, is_locked, tender_id FROM purchase_orders WHERE project_id=? AND LOWER(po_number)=LOWER(?)',
-            [pid, r.po_number]
-          )
-          if (ex && bulkLocked(ex)) {
-            skipped++
-            errors.push({ po_number: r.po_number, error: ex.tender_id != null
-              ? `PO ${r.po_number} was generated from a tender award — it can't be replaced by an import`
-              : `PO ${r.po_number} is locked or approved — it can't be replaced by an import` })
-            continue
-          }
-          if (ex) {
-            const before = { ...ex }
-            await db.query(`
-              UPDATE purchase_orders SET description=?,vendor_name=?,group_category=?,
-                currency=?,value=?,incoterms=?,wbs_code=?,ros_date=? WHERE id=?
-            `, [r.description||null, r.vendor_name, r.group_category||null,
-                r.currency||'AUD', r.value||null, r.incoterms||null, r.wbs_code||null,
-                r.ros_date||null, ex.id])
-            audit(req, 'po_replaced', `purchase_orders/${ex.id}`,
-              before, { po_number: r.po_number })
-            replaced++
-            continue
-          }
-        }
-        // Create new PO
-        await db.query(`
-          INSERT INTO purchase_orders
-            (project_id,po_number,description,vendor_name,group_category,currency,value,incoterms,wbs_code,ros_date,status,created_by)
-          VALUES (?,?,?,?,?,?,?,?,?,?,'rfq',?)
-        `, [pid, r.po_number, r.description||null, r.vendor_name, r.group_category||null,
-            r.currency||'AUD', r.value||null, r.incoterms||null, r.wbs_code||null,
-            r.ros_date||null, req.user.id])
-        audit(req, 'po_created_bulk', `procurement/${pid}/pos`,
-          null, { po_number: r.po_number }, 'purchase_order', pid)
-        created++
-      } catch (e) {
-        failed++
-        errors.push({ po_number: r.po_number, error: e.message })
+    for (const r of results) {
+      if (r.rowStatus === 'invalid') { skipped++; errors.push({ po_number: r.po_number, row: r.rowIndex, error: r.errors.join('; ') }); continue }
+      const ex = existing.get(normKey(r.po_number))
+      if (r.rowStatus === 'locked') {
+        skipped++
+        errors.push({ po_number: r.po_number, error: ex.tender_id != null
+          ? `PO ${r.po_number} was generated from a tender award — it can't be replaced by an import`
+          : `PO ${r.po_number} is locked or approved — it can't be replaced by an import` })
+        continue
       }
+      if (r.rowStatus === 'duplicate') {
+        if (!replace_duplicates) { skipped++; continue }
+        await conn.query(`
+          UPDATE purchase_orders SET description=?,vendor_name=?,group_category=?,
+            currency=?,value=?,incoterms=?,wbs_code=?,ros_date=? WHERE id=?
+        `, [r.description || null, r.vendor_name, r.group_category, r.currency, r.value, r.incoterms || null, r.wbs_code || null, r.ros_date, ex.id])
+        await audit('po_replaced', ex.id, { ...ex }, { po_number: r.po_number })
+        replaced++
+        continue
+      }
+      const [ins] = await conn.query(`
+        INSERT INTO purchase_orders
+          (project_id,po_number,description,vendor_name,group_category,currency,value,incoterms,wbs_code,ros_date,status,created_by)
+        VALUES (?,?,?,?,?,?,?,?,?,?,'rfq',?)
+      `, [pid, r.po_number, r.description || null, r.vendor_name, r.group_category, r.currency, r.value, r.incoterms || null, r.wbs_code || null, r.ros_date, req.user.id])
+      await audit('po_created_bulk', ins.insertId, null, { po_number: r.po_number })
+      created++
     }
-
-    res.json({ created, replaced, skipped, failed, errors })
+    await conn.commit()
+    res.json({ created, replaced, skipped, failed: 0, errors })
   } catch (e) {
+    if (conn) { try { await conn.rollback() } catch (_) { /* already rolled back */ } }
     console.error('[procurement:bulk-confirm]', e.message)
     dbError(res, e)
+  } finally {
+    if (conn) conn.release()
   }
 })
 
