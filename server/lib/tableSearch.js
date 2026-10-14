@@ -26,7 +26,11 @@
 // regular expressions below are fixed character classes.
 //
 // likeClause is the non-fuzzy path for large tables (the audit log): SQL LIKE on the
-// fieldMap's columns only, with bound parameters and escapeLike on every value.
+// fieldMap's columns only, with bound parameters and escapeLike on every value. Every
+// LIKE carries ESCAPE '!', so the escape character does not depend on sql_mode.
+//
+// searchIds is the fuzzy path for a route's list (scopes up to `cap` rows): it reads the
+// scope's id and search columns, runs matchRow on each row and returns the matching ids.
 
 const MAX_CHARS = 200
 const MAX_TERMS = 10
@@ -372,11 +376,14 @@ function matchRow(row, parsed, fieldMap) {
 }
 
 // ─── SQL LIKE PATH (no fuzzy matching) ───────────────────────
+// For LIKE ? ESCAPE '!': "!", "%" and "_" get a "!" in front; a backslash stays literal.
 function escapeLike(s) {
   let out = ''
-  for (const ch of String(s == null ? '' : s)) out += (ch === '\\' || ch === '%' || ch === '_') ? '\\' + ch : ch
+  for (const ch of String(s == null ? '' : s)) out += (ch === '!' || ch === '%' || ch === '_') ? '!' + ch : ch
   return out
 }
+
+const LIKE = " LIKE ? ESCAPE '!'"
 
 // Returns { sql, params } (sql '' when there is nothing to filter) or { error }.
 // Column names come only from fieldMap; every value is a bound parameter.
@@ -398,12 +405,12 @@ function likeClause(parsed, fieldMap) {
         const f = resolveField(fieldMap, t.field)
         if (!f.column) return { error: 'Field "' + t.field + '" cannot be searched here' }
         if (f.flag === 'enum') { parts.push(f.column + ' = ?'); params.push(t.value) }
-        else if (f.flag === 'code' && t.value.endsWith('.')) { parts.push(f.column + ' LIKE ?'); params.push(escapeLike(t.value) + '%') }
-        else if (f.flag === 'code') { parts.push('(' + f.column + ' = ? OR ' + f.column + ' LIKE ?)'); params.push(t.value, escapeLike(t.value) + '.%') }
-        else { parts.push(f.column + ' LIKE ?'); params.push('%' + escapeLike(t.value) + '%') }
+        else if (f.flag === 'code' && t.value.endsWith('.')) { parts.push(f.column + LIKE); params.push(escapeLike(t.value) + '%') }
+        else if (f.flag === 'code') { parts.push('(' + f.column + ' = ? OR ' + f.column + LIKE + ')'); params.push(t.value, escapeLike(t.value) + '.%') }
+        else { parts.push(f.column + LIKE); params.push('%' + escapeLike(t.value) + '%') }
       } else {
         if (!anyColumns.length) return { error: 'No searchable columns' }
-        parts.push('(' + anyColumns.map(c => c + ' LIKE ?').join(' OR ') + ')')
+        parts.push('(' + anyColumns.map(c => c + LIKE).join(' OR ') + ')')
         for (let k = 0; k < anyColumns.length; k++) params.push('%' + escapeLike(t.value) + '%')
       }
     }
@@ -412,4 +419,49 @@ function likeClause(parsed, fieldMap) {
   return { sql: groupSql.length === 1 ? groupSql[0] : '(' + groupSql.join(' OR ') + ')', params }
 }
 
-module.exports = { parse, normalise, matchRow, escapeLike, likeClause, MAX_CHARS, MAX_TERMS, FUZZY_MIN }
+// ─── FUZZY PATH FOR A ROUTE (searchIds) ──────────────────────
+// searchIds({ query, idExpr, scopeSql, scopeParams, fieldMap, q, cap, compute })
+//   query(sql, params)  runs a SELECT and resolves to its rows
+//   idExpr              the row id, e.g. 'po.id'
+//   scopeSql            route-built SQL from FROM through WHERE (or GROUP BY) holding the
+//                       route's existing scoping; values only through scopeParams
+//   fieldMap            { alias: { column, flag? } }: column is an SQL expression; an entry
+//                       without a column is filled in by compute (e.g. rag)
+//   compute(rows)       optional; may add keys to the rows before matching
+// Selects idExpr AS id and each column AS its alias, with LIMIT cap+1. Aliases and
+// expressions come only from route code, never from the client. Returns:
+//   null                           q has no terms (no filter)
+//   { error }                      an unknown field (the likeClause message): a 400
+//   { fallback: true }             more than cap rows: the route uses likeClause
+//   { ids, fuzzy: true, queryTruncated }
+// Words without a field match the fieldMap's aliases only, not id or other keys.
+async function searchIds({ query, idExpr, scopeSql, scopeParams = [], fieldMap, q, cap = 5000, compute }) {
+  const parsed = parse(q)
+  if (parsed.groups.length === 0) return null
+  const error = unknownFieldError(parsed, fieldMap)
+  if (error) return { error }
+  if (!Number.isInteger(cap) || cap < 0) throw new Error('searchIds: cap must be a whole number')
+  if (!/^\s*FROM\s/i.test(String(scopeSql))) throw new Error('searchIds: scopeSql must start with FROM')
+  const aliases = Object.keys(fieldMap)
+  const select = ['(' + idExpr + ') AS `id`']
+  const matchMap = {}
+  for (const alias of aliases) {
+    if (alias === 'id' || alias.toLowerCase() !== alias || !isFieldName(alias)) throw new Error('searchIds: bad alias ' + alias)
+    const e = fieldMap[alias]
+    if (e.column) select.push('(' + e.column + ') AS `' + alias + '`')
+    matchMap[alias] = { key: alias, flag: e.flag || null }
+  }
+  const rows = await query('SELECT ' + select.join(', ') + ' ' + scopeSql + ' LIMIT ' + (cap + 1), scopeParams)
+  if (rows.length > cap) return { fallback: true }
+  if (compute) await compute(rows)
+  const ids = []
+  const seen = new Set()
+  for (const r of rows) {
+    const cells = {}
+    for (const alias of aliases) cells[alias] = r[alias]
+    if (matchRow(cells, parsed, matchMap).match && !seen.has(r.id)) { seen.add(r.id); ids.push(r.id) }
+  }
+  return { ids, fuzzy: true, queryTruncated: parsed.truncated }
+}
+
+module.exports = { parse, normalise, matchRow, escapeLike, likeClause, searchIds, MAX_CHARS, MAX_TERMS, FUZZY_MIN }

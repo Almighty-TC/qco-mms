@@ -17,7 +17,8 @@ function evaluate(lib, c) {
   if (c.kind === 'likeClause') {
     const out = lib.likeClause(lib.parse(c.q), fieldMaps[c.fieldMap])
     if (!c.expect.sqlExcludes) return { out, summary: out }
-    const ok = !out.error && c.expect.sqlExcludes.every(s => !out.sql.includes(s)) &&
+    const routeSql = out.error ? '' : out.sql.split(" ESCAPE '!'").join('')   // the fixed ESCAPE text is not user input
+    const ok = !out.error && c.expect.sqlExcludes.every(s => !routeSql.includes(s)) &&
       out.params.length === c.expect.paramCount && out.params[0] === c.expect.firstParam
     return { out, summary: ok ? c.expect : out }
   }
