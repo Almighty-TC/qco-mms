@@ -69,6 +69,7 @@ const blobStore = require('../lib/blobStore')
 const { fileFilter } = require('../utils/upload')
 const { parseImportSheet } = require('../utils/validate')
 const { checkPoRows, poRowsFromSheet, normKey } = require('../lib/poBulk')
+const { searchIds, likeClause, parse: parseSearch } = require('../lib/tableSearch')
 const uploadPoDoc = multer({
   storage: multer.memoryStorage(),
   limits:  { fileSize: 50 * 1024 * 1024 },   // 50 MB
@@ -334,6 +335,33 @@ router.post('/pos/check-duplicates-batch', async (req, res) => {
 // ─── PO LIST ─────────────────────────────────────────────────────────────────
 // GET /api/procurement/:projectId/pos
 // Item 1: Uses project's at_risk_days_threshold for RAG computation.
+// q (table search, server/lib/tableSearch.js) is ANDed with every filter above it, vendor
+// scoping included: matchRow over the grouped list (searchIds; rag computed as for the rows),
+// or SQL LIKE without rag when it has more than 5,000 POs. With q the response adds
+// search: { fuzzy, fellBack, queryTruncated, fields }; an unknown field is a 400.
+// The FROM/JOIN text is shared by the count, the list and the q scope; the GROUP BY by the
+// list and the q scope (byte for byte the text these queries had before).
+const PO_LIST_FROM = `FROM purchase_orders po
+      LEFT JOIN suppliers s   ON s.id   = po.supplier_id
+      LEFT JOIN users     own ON own.id = po.owner_id
+      LEFT JOIN users     exp ON exp.id = po.expeditor_id
+      LEFT JOIN wbs_nodes w   ON w.code = po.wbs_code AND w.project_id = po.project_id
+      LEFT JOIN po_lines  l   ON l.po_id = po.id`
+const PO_LIST_GROUP_BY = `GROUP BY
+        po.id, po.po_number, po.po_name, po.description, po.vendor_name,
+        po.supplier_id, po.currency, po.value, po.incoterms, po.handover_point, po.wbs_code,
+        po.status, po.is_critical_path, po.is_locked, po.group_category,
+        po.owner_id, po.expeditor_id, po.ros_date, po.created_at,
+        own.full_name, exp.full_name, s.name, w.id, w.description,
+        po.milestone_po_date, po.milestone_fat_date, po.milestone_esd_date,
+        po.milestone_eta_date, po.milestone_ros_date`
+const PO_LIST_SEARCH = {
+  po: { column: 'po.po_number' }, name: { column: 'po.po_name' }, vendor: { column: "CONCAT_WS(' ', po.vendor_name, s.name)" },
+  status: { column: 'po.status', flag: 'enum' }, wbs: { column: 'po.wbs_code', flag: 'code' }, desc: { column: 'po.description' },
+  rag: { column: 'MIN(l.cdd)', flag: 'enum' },   // compute() turns MIN(l.cdd) into red/amber/green
+}
+// The LIKE fallback cannot use rag (an aggregate cannot be in a WHERE).
+const PO_LIST_LIKE = Object.fromEntries(Object.entries(PO_LIST_SEARCH).filter(([alias]) => alias !== 'rag'))
 router.get('/:projectId/pos', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
@@ -399,6 +427,30 @@ router.get('/:projectId/pos', async (req, res) => {
       params.push(q, q, q, q)
     }
 
+    let searchInfo = null
+    const qText = typeof req.query.q === 'string' && req.query.q.trim() ? req.query.q : null
+    if (qText) {
+      const parsed = parseSearch(qText)
+      const found = await searchIds({
+        query: (sql, p) => db.query(sql, p).then(([r]) => r),
+        idExpr: 'po.id', scopeSql: `${PO_LIST_FROM} WHERE ${filters.join(' AND ')} ${PO_LIST_GROUP_BY}`, scopeParams: params,
+        fieldMap: PO_LIST_SEARCH, q: qText,
+        compute: list => { for (const r of list) r.rag = computeRag(r.rag, r.status, atRiskDays) },
+      })
+      if (found && found.error) return res.status(400).json({ error: found.error })
+      if (found && found.fallback) {
+        if (parsed.groups.some(g => g.some(t => t.kind === 'field' && t.field === 'rag'))) {
+          return res.status(400).json({ error: 'rag cannot be searched when the list has more than 5,000 rows' })
+        }
+        const like = likeClause(parsed, PO_LIST_LIKE)
+        filters.push(like.sql); params.push(...like.params)
+      } else if (found) {
+        if (found.ids.length) { filters.push('po.id IN (?)'); params.push(found.ids) } else filters.push('1=0')
+      }
+      searchInfo = { fuzzy: !!(found && found.fuzzy), fellBack: !!(found && found.fallback), queryTruncated: parsed.truncated,
+        fields: Object.keys(found && found.fallback ? PO_LIST_LIKE : PO_LIST_SEARCH) }
+    }
+
     const SAFE_SORT = {
       po_number: 'po.po_number', vendor: 's.name', status: 'po.status',
       ros_date: 'po.ros_date', created_at: 'po.created_at',
@@ -417,12 +469,7 @@ router.get('/:projectId/pos', async (req, res) => {
       // COUNT: DISTINCT because WHERE on l.cdd can produce multiple rows per PO
       db.query(`
       SELECT COUNT(DISTINCT po.id) AS total
-      FROM purchase_orders po
-      LEFT JOIN suppliers s   ON s.id   = po.supplier_id
-      LEFT JOIN users     own ON own.id = po.owner_id
-      LEFT JOIN users     exp ON exp.id = po.expeditor_id
-      LEFT JOIN wbs_nodes w   ON w.code = po.wbs_code AND w.project_id = po.project_id
-      LEFT JOIN po_lines  l   ON l.po_id = po.id
+      ${PO_LIST_FROM}
       WHERE ${where}
     `, params),
       db.query(`
@@ -448,21 +495,9 @@ router.get('/:projectId/pos', async (req, res) => {
         MIN(l.ros_date)                     AS earliest_line_ros,
         po.milestone_po_date, po.milestone_fat_date,
         po.milestone_esd_date, po.milestone_eta_date, po.milestone_ros_date
-      FROM purchase_orders po
-      LEFT JOIN suppliers s   ON s.id   = po.supplier_id
-      LEFT JOIN users     own ON own.id = po.owner_id
-      LEFT JOIN users     exp ON exp.id = po.expeditor_id
-      LEFT JOIN wbs_nodes w   ON w.code = po.wbs_code AND w.project_id = po.project_id
-      LEFT JOIN po_lines  l   ON l.po_id = po.id
+      ${PO_LIST_FROM}
       WHERE ${where}
-      GROUP BY
-        po.id, po.po_number, po.po_name, po.description, po.vendor_name,
-        po.supplier_id, po.currency, po.value, po.incoterms, po.handover_point, po.wbs_code,
-        po.status, po.is_critical_path, po.is_locked, po.group_category,
-        po.owner_id, po.expeditor_id, po.ros_date, po.created_at,
-        own.full_name, exp.full_name, s.name, w.id, w.description,
-        po.milestone_po_date, po.milestone_fat_date, po.milestone_esd_date,
-        po.milestone_eta_date, po.milestone_ros_date
+      ${PO_LIST_GROUP_BY}
       ORDER BY ${orderBy} ${orderDir}, po.id ${orderDir}
       LIMIT ? OFFSET ?
     `, [...params, limit, offset]),
@@ -498,7 +533,9 @@ router.get('/:projectId/pos', async (req, res) => {
     })
 
     // ─── ENVELOPE ─── standard { data, total, page, limit } across all paginated endpoints
-    res.json({ data, total: countRows[0].total, page, limit, atRiskDays })
+    const body = { data, total: countRows[0].total, page, limit, atRiskDays }
+    if (searchInfo) body.search = searchInfo
+    res.json(body)
   } catch (e) {
     console.error('[procurement:pos-list]', e.message)
     dbError(res, e)
