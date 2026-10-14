@@ -18,6 +18,7 @@ const { fileNotEmpty, readWorkbook, parseCalendarDate } = require('../utils/vali
 const { validateRevisionFormat, compareRevisions, RevisionError } = require('../lib/revision')
 const { lockKeyRows } = require('../lib/mtoAvailability')
 const { hasPermission } = require('../middleware/permissions')
+const { searchIds, likeClause, parse: parseSearch } = require('../lib/tableSearch')
 
 // ─── AUTH MIDDLEWARE ──────────────────────────────────────────────────────────
 router.use(authenticateToken)
@@ -550,6 +551,14 @@ router.get('/:projectId/:mtoId', async (req, res) => {
 // Returns { data, total, page, limit, counts }. Filter (status/search) + whitelisted
 // sort run across the WHOLE revision (not page-local). `counts` are per-status totals
 // for the revision (drive the filter-tab badges, independent of the active search).
+// q (table search, server/lib/tableSearch.js) is ANDed with status and search: matchRow over
+// the filtered revision (searchIds), or SQL LIKE when it has more than 5,000 lines. With q the
+// response adds search: { fuzzy, fellBack, queryTruncated, fields }; an unknown field is a 400.
+const MTO_LINE_SEARCH = {
+  line: { column: 'line_number' }, wbs: { column: 'wbs_code', flag: 'code' }, desc: { column: 'description' },
+  type: { column: 'item_type', flag: 'enum' }, tag: { column: 'item_ref' }, status: { column: 'status', flag: 'enum' },
+  po: { column: 'po_ref' }, uom: { column: 'uom' },
+}
 router.get('/:projectId/:mtoId/lines', async (req, res) => {
   try {
     const [[mto]] = await db.query(
@@ -574,6 +583,25 @@ router.get('/:projectId/:mtoId/lines', async (req, res) => {
       const q = `%${search}%`
       where.push('(line_number LIKE ? OR description LIKE ? OR wbs_code LIKE ? OR po_ref LIKE ?)')
       params.push(q, q, q, q)
+    }
+    let searchInfo = null
+    const qText = typeof req.query.q === 'string' && req.query.q.trim() ? req.query.q : null
+    if (qText) {
+      const parsed = parseSearch(qText)
+      const found = await searchIds({
+        query: (sql, p) => db.query(sql, p).then(([rows]) => rows),
+        idExpr: 'id', scopeSql: `FROM mto_lines WHERE ${where.join(' AND ')}`, scopeParams: params,
+        fieldMap: MTO_LINE_SEARCH, q: qText,
+      })
+      if (found && found.error) return res.status(400).json({ error: found.error })
+      if (found && found.fallback) {
+        const like = likeClause(parsed, MTO_LINE_SEARCH)
+        where.push(like.sql); params.push(...like.params)
+      } else if (found) {
+        if (found.ids.length) { where.push('id IN (?)'); params.push(found.ids) } else where.push('1=0')
+      }
+      searchInfo = { fuzzy: !!(found && found.fuzzy), fellBack: !!(found && found.fallback),
+        queryTruncated: parsed.truncated, fields: Object.keys(MTO_LINE_SEARCH) }
     }
     const whereSql = where.join(' AND ')
 
@@ -606,7 +634,9 @@ router.get('/:projectId/:mtoId/lines', async (req, res) => {
        LIMIT ? OFFSET ?`,
       [...params, limit, offset]
     )
-    res.json({ data: lines, total, page, limit, counts })
+    const body = { data: lines, total, page, limit, counts }
+    if (searchInfo) body.search = searchInfo
+    res.json(body)
   } catch (e) {
     console.error('GET /mto/:projectId/:mtoId/lines', e.message)
     res.status(500).json({ error: 'Failed to load lines' })
