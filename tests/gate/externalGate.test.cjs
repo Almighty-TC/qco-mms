@@ -3,9 +3,18 @@
 // Tokens are signed here with the same secret the gate verifies with; none is printed.
 const path = require('path')
 const ROOT = path.join(__dirname, '../../server')
-// permissions.js requires ../db: give it a stub so this test never opens a connection.
+// The gate (phase 2) and permissions.js require ../db: a fake answers the gate's users-row
+// lookup with an active, correctly flagged row for each external role's test id (the vendor
+// linked to supplier 5), so this test never opens a connection.
+const ROLE_ID = { vendor: 701, freight_forwarder: 702, site_contractor: 703, subcontractor: 704 }
+let queries = 0
+const fakeDb = { query: async (sql, params = []) => {
+  queries++
+  const role = Object.keys(ROLE_ID).find(r => ROLE_ID[r] === params[0])
+  return [role ? [{ role, is_active: 1, is_external: 1, supplier_id: role === 'vendor' ? 5 : null }] : []]
+} }
 const dbPath = require.resolve(path.join(ROOT, 'db.js'))
-require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: { query: async () => { throw new Error('no database in this test') } } }
+require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: fakeDb }
 const jwt = require(path.join(ROOT, 'node_modules/jsonwebtoken'))
 const { JWT_SECRET } = require(path.join(ROOT, 'middleware/auth'))
 const G = require(path.join(ROOT, 'lib/externalGate'))
@@ -16,21 +25,22 @@ const check = (ok, name) => { if (ok) pass++; else { fail++; console.log('FAIL '
 const EXT = ['vendor', 'freight_forwarder', 'site_contractor', 'subcontractor']
 const INTERNAL = ['admin', 'viewer', 'auditor', 'procurement_officer', 'procurement_manager', 'expeditor', 'expediting_manager', 'project_manager', 'warehouse', 'materials_engineer']
 const sign = (payload, opts = { expiresIn: '10m' }) => jwt.sign(payload, JWT_SECRET, opts)
-const tok = role => sign({ id: 700, email: 'gate@test.invalid', full_name: 'gate', role })
+const tok = role => sign({ id: ROLE_ID[role] || 700, email: 'gate@test.invalid', full_name: 'gate', role })
 
-// Runs the gate once: 'next' when it passes the request on, else the status and body.
+// Runs the gate once (async since phase 2): 'next' when it passes the request on, else the status and body.
 function run(method, url, authorization) {
-  let result = null
-  const req = { method, originalUrl: url, url: url.replace(/^\/api/i, '') || '/', headers: authorization === undefined ? {} : { authorization } }
-  const res = { status(c) { this.code = c; return this }, json(b) { result = { status: this.code, body: b }; return this } }
-  G.externalGate(req, res, () => { result = 'next' })
-  return result
+  return new Promise(resolve => {
+    const req = { method, originalUrl: url, url: url.replace(/^\/api/i, '') || '/', headers: authorization === undefined ? {} : { authorization } }
+    const res = { status(c) { this.code = c; return this }, json(b) { resolve({ status: this.code, body: b }); return this } }
+    Promise.resolve(G.externalGate(req, res, () => resolve('next'))).catch(e => resolve({ status: 'threw', body: e.message }))
+  })
 }
 const asRole = (role, method, url) => run(method, url, 'Bearer ' + tok(role))
 const DENY = { status: 403, body: { error: 'Not available to your role' } }
 const denied = r => r && r !== 'next' && r.status === 403 && JSON.stringify(r.body) === JSON.stringify(DENY.body)
 const allowedFor = (role, method, p) => G.ALLOW.some(e => e.method === method && e.roles.includes(role) && e.re.test(p))
 
+;(async () => {
 // ── the role list matches requireProjectScope's ──
 check(JSON.stringify([...G.EXTERNAL_ROLES].sort()) === JSON.stringify([...P.EXTERNAL_ROLES].sort()), 'EXTERNAL_ROLES equals permissions.EXTERNAL_ROLES')
 
@@ -39,11 +49,11 @@ let entryChecks = 0
 for (const e of G.ALLOW) {
   check(e.re.test(e.example), 'example matches its own pattern ' + e.example)
   for (const role of EXT) {
-    const r = asRole(role, e.method, '/api' + e.example), want = allowedFor(role, e.method, e.example)
+    const r = await asRole(role, e.method, '/api' + e.example), want = allowedFor(role, e.method, e.example)
     check(want ? r === 'next' : denied(r), `${e.method} ${e.example} for ${role}: expected ${want ? 'pass' : '403'}`)
     entryChecks++
   }
-  for (const role of INTERNAL) check(asRole(role, e.method, '/api' + e.example) === 'next', `internal ${role} ${e.method} ${e.example}`)
+  for (const role of INTERNAL) check(await asRole(role, e.method, '/api' + e.example) === 'next', `internal ${role} ${e.method} ${e.example}`)
 }
 
 // ── denied samples (no external role may reach these) ──
@@ -78,13 +88,15 @@ for (const role of EXT) {
   deniedPerRole[role] = 0
   for (const [m, p] of [...DENIED_ALL, ...ROLE_DENIED[role]]) {
     check(!allowedFor(role, m, p.split('?')[0]), `sample is not in ALLOW for ${role}: ${m} ${p}`)
-    check(denied(asRole(role, m, '/api' + p)), `${role} refused ${m} ${p}`); deniedPerRole[role]++
+    check(denied(await asRole(role, m, '/api' + p)), `${role} refused ${m} ${p}`); deniedPerRole[role]++
   }
   check(deniedPerRole[role] >= 40, `at least 40 denied samples for ${role}`)
 }
 // internal roles always pass, allowed and denied samples alike
 let internalChecks = 0
-for (const role of INTERNAL) for (const [m, p] of [...DENIED_ALL, ...Object.values(ROLE_DENIED).flat()]) { check(asRole(role, m, '/api' + p) === 'next', `internal ${role} ${m} ${p}`); internalChecks++ }
+const queriesBefore = queries
+for (const role of INTERNAL) for (const [m, p] of [...DENIED_ALL, ...Object.values(ROLE_DENIED).flat()]) { check(await asRole(role, m, '/api' + p) === 'next', `internal ${role} ${m} ${p}`); internalChecks++ }
+check(queries === queriesBefore, 'internal roles: no users-row query')
 
 // ── tokens: none, malformed, bad signature, expired, no role → passed on to the routers ──
 const passOn = [
@@ -93,13 +105,13 @@ const passOn = [
   ['expired', 'Bearer ' + sign({ id: 1, role: 'vendor' }, { expiresIn: -10 })], ['no role', 'Bearer ' + sign({ id: 1 })],
   ['role null', 'Bearer ' + sign({ id: 1, role: null })], ['role in other case', 'Bearer ' + sign({ id: 1, role: 'Vendor' })],
 ]
-for (const [name, h] of passOn) check(run('GET', '/api/admin/users', h) === 'next', 'passes on: ' + name)
+for (const [name, h] of passOn) check(await run('GET', '/api/admin/users', h) === 'next', 'passes on: ' + name)
 
 // ── open auth routes stay outside the gate even with an external token ──
 for (const role of EXT) {
-  check(asRole(role, 'POST', '/api/auth/login') === 'next', role + ' POST /auth/login passes')
-  check(asRole(role, 'POST', '/api/auth/forgot-password') === 'next', role + ' POST /auth/forgot-password passes')
-  check(denied(asRole(role, 'GET', '/api/auth/login')), role + ' GET /auth/login refused (method)')
+  check(await asRole(role, 'POST', '/api/auth/login') === 'next', role + ' POST /auth/login passes')
+  check(await asRole(role, 'POST', '/api/auth/forgot-password') === 'next', role + ' POST /auth/forgot-password passes')
+  check(denied(await asRole(role, 'GET', '/api/auth/login')), role + ' GET /auth/login refused (method)')
 }
 
 // ── query strings, trailing slashes, methods, case, traversal ──
@@ -116,27 +128,28 @@ const forms = [
   ['GET', '/apiprojects', 'deny'], ['GET', '/projects', 'deny'], ['GET', 'http://host/api/projects', 'deny'],
 ]
 for (const role of EXT) for (const [m, url, want] of forms) {
-  const r = asRole(role, m, url)
+  const r = await asRole(role, m, url)
   check(want === 'next' ? r === 'next' : denied(r), `${role} ${m} ${url} → ${want}`)
 }
-for (const role of INTERNAL.slice(0, 3)) for (const [m, url] of forms) check(asRole(role, m, url) === 'next', `internal ${role} ${m} ${url}`)
+for (const role of INTERNAL.slice(0, 3)) for (const [m, url] of forms) check(await asRole(role, m, url) === 'next', `internal ${role} ${m} ${url}`)
 
 // Forms that would match an ALLOW pattern if the path checks were missing: an allowed path
 // as a suffix (start anchor), and dot or encoded segments where heat/:heat takes any segment.
 for (const [role, m, url] of [['vendor', 'GET', '/api/admin/projects'], ['vendor', 'GET', '/api/admin/auth/me'], ['vendor', 'GET', '/api/x/rfi-meeting/27'],
   ['site_contractor', 'GET', '/api/traceability/27/heat/..'], ['site_contractor', 'GET', '/api/traceability/27/heat/.'],
   ['site_contractor', 'GET', '/api/traceability/27/heat/%2e%2e'], ['site_contractor', 'GET', '/api/traceability/27/heat/%2F'],
-  ['site_contractor', 'GET', '/api/traceability/27/heat/x%00']]) check(denied(asRole(role, m, url)), `${role} ${m} ${url} refused`)
+  ['site_contractor', 'GET', '/api/traceability/27/heat/x%00']]) check(denied(await asRole(role, m, url)), `${role} ${m} ${url} refused`)
 for (const [p, want] of [['/projects//27', true], ['//projects', true], ['/projects\\27', true], ['/projects/%2F27', true], ['/projects/%2e', true],
   ['/projects/%5C', true], ['/projects/27%00', true], ['/projects/./27', true], ['/projects/../admin', true], ['/projects/27', false], ['/traceability/27/heat/H%20123', false]])
   check(G.unsafePath(p) === want, `unsafePath(${p}) === ${want}`)
 
 // ── role-specific spot checks ──
-check(asRole('site_contractor', 'GET', '/api/traceability/27/heat/H%20123') === 'next', 'site_contractor heat with an encoded space')
-check(denied(asRole('subcontractor', 'GET', '/api/traceability/27/heat/H1')), 'subcontractor heat refused (no traceability grant)')
-check(asRole('subcontractor', 'GET', '/api/mc/27/stock') === 'next' && asRole('subcontractor', 'POST', '/api/mc/27/fmr') === 'next', 'subcontractor stock and FMR raise')
-check(denied(asRole('vendor', 'POST', '/api/expediting/27/vdrl/upload')), 'vendor bulk VDRL upload refused')
-check(denied(asRole('freight_forwarder', 'GET', '/api/documents/27/download/logistics:4')), 'forwarder logistics document download refused (documents.js)')
+check(await asRole('site_contractor', 'GET', '/api/traceability/27/heat/H%20123') === 'next', 'site_contractor heat with an encoded space')
+check(denied(await asRole('subcontractor', 'GET', '/api/traceability/27/heat/H1')), 'subcontractor heat refused (no traceability grant)')
+check(await asRole('subcontractor', 'GET', '/api/mc/27/stock') === 'next' && await asRole('subcontractor', 'POST', '/api/mc/27/fmr') === 'next', 'subcontractor stock and FMR raise')
+check(denied(await asRole('vendor', 'POST', '/api/expediting/27/vdrl/upload')), 'vendor bulk VDRL upload refused')
+check(denied(await asRole('freight_forwarder', 'GET', '/api/documents/27/download/logistics:4')), 'forwarder logistics document download refused (documents.js)')
 
 console.log(`externalGate: ${pass} passed, ${fail} failed (${G.ALLOW.length} ALLOW entries x ${EXT.length} external roles = ${entryChecks}; denied samples per role ${EXT.map(r => r + ' ' + deniedPerRole[r]).join(', ')}; ${internalChecks} internal-role passes)`)
 process.exit(fail ? 1 : 0)
+})()
