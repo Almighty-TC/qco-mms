@@ -106,6 +106,18 @@ async function forwarderIsCarrier(conn, scnId, userId) {
   return !!scn && scn.forwarder_user_id != null && scn.forwarder_user_id === userId
 }
 
+// READ predicate for one SCN (3T98): a forwarder may read an SCN it is linked to — the
+// assigned CARRIER (forwarder_user_id, as the register lists) or the delegated packer
+// (packaging_delegated_to, as the package routes allow). Pre-migration → carrier only.
+async function forwarderLinkedToScn(conn, scnId, userId) {
+  if (!scnId) return false
+  if (await forwarderIsCarrier(conn, scnId, userId)) return true
+  if (!(await scnHasDelegateCol(conn))) return false
+  const [[scn]] = await conn.query(
+    'SELECT packaging_delegated_to FROM shipment_control_notes WHERE id = ?', [scnId])
+  return !!scn && isPackagingDelegate(scn.packaging_delegated_to, userId)
+}
+
 // DELETE-doc predicate — TIGHTER than upload because DELETE is destructive. A forwarder may
 // delete a document ONLY IF BOTH: (a) they are the SCN's assigned carrier (forwarderIsCarrier)
 // AND (b) THEY uploaded that document (scn_documents.uploaded_by = their id). The own-uploads
@@ -214,6 +226,15 @@ function requireDocDeleteAuth(req, res, next) {
   return forwarderMayDeleteDoc(db, Number(req.params.scnId), Number(req.params.docId), req.user.id)
     .then(ok => ok ? next() : res.status(403).json({ error: 'You can only delete your own uploads on your assigned SCNs.' }))
     .catch(e => { console.error('[doc-del-authz]', e.message); return res.status(500).json({ error: 'Authorization check failed' }) })
+}
+
+// SCN detail read authorization (3T98): internal roles unchanged; a freight_forwarder may
+// GET an SCN only when linked to it (forwarderLinkedToScn). scnId from the URL only.
+function requireScnReadAuth(req, res, next) {
+  if (req.user?.role !== 'freight_forwarder') return next()   // internal roles unchanged
+  return forwarderLinkedToScn(db, Number(req.params.scnId), req.user.id)
+    .then(ok => ok ? next() : res.status(403).json({ error: 'You are not linked to this SCN.' }))
+    .catch(e => { console.error('[scn-read-authz]', e.message); return res.status(500).json({ error: 'Authorization check failed' }) })
 }
 
 // Status + Dates write authorization (forwarder-scoping fix). Same shape as
@@ -475,7 +496,7 @@ router.get('/register/:projectId', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 
 // GET /api/logistics/scn/:scnId
-router.get('/scn/:scnId', async (req, res) => {
+router.get('/scn/:scnId', requireScnReadAuth, async (req, res) => {
   try {
     const scnId = Number(req.params.scnId)
 
