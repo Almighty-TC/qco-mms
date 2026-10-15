@@ -34,6 +34,7 @@ import { ReportsScreen } from './pages/ReportsScreen'
 import { ForcePasswordChange } from './components/ForcePasswordChange'
 import { ChangePasswordModal } from './components/ChangePasswordModal'
 import { AcronymHeaderTitles } from './components/AcronymHeaderTitles'
+import { isExternal, canOpen, externalNavFor, landingPage } from './lib/externalNav'
 import './App.css'
 
 // ─── PAGE ROUTING ───────────────────────────────────────────
@@ -324,6 +325,18 @@ const CRUMB: Record<string, { module: { label: string; page: Page }; leaf?: stri
   'pending-changes':      { module: { label: 'Pending Changes', page: 'pending-changes' } },
 }
 
+// ─── NOT AVAILABLE PANEL (ext-2) ─────────────────────────────
+// Shown instead of any page an external role's table does not allow (deep links included).
+const NotAvailablePanel = ({ dark, onHome }: { dark: boolean; onHome: () => void }) => (
+  <div style={{ padding: '40px 20px', textAlign: 'center', fontSize: 14, color: '#94a3b8' }}>
+    <div style={{ marginBottom: 14 }}>Not available to your role</div>
+    <button onClick={onHome}
+      style={{ padding: '7px 16px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: dark ? '#1e293b' : '#fff', color: dark ? '#f1f5f9' : '#0f172a', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>
+      Back to Home
+    </button>
+  </div>
+)
+
 // Dark-gradient sidebar with logo, nav items, and user chip.
 // activePage and onNavigate enable state-based page routing without
 // a router library. Only items with a page key are clickable.
@@ -338,6 +351,7 @@ const Nav = ({
 }) => {
   const isReadOnly = READ_ONLY_ROLES.has(userRole)
   const isAdmin    = userRole === 'admin'
+  const extNav     = externalNavFor(userRole)   // external roles: the sidebar comes only from this table (lib/externalNav.ts)
   const [foundOpen, setFoundOpen] = useState(true)   // default expanded so WBS/Commodity/Equipment show without a click (user can still collapse)
   const [procOpen,  setProcOpen]  = useState(true)   // Procurement group (Post-Award / Pre-Award) — default expanded, mirrors Foundational
 
@@ -399,12 +413,30 @@ const Nav = ({
 
       {/* Top nav */}
       <div style={{ padding: '8px 8px 4px', flexShrink: 0 }}>
-        {navItem('Dashboard', '🏠', 'dashboard')}
+        {navItem(extNav ? 'Home' : 'Dashboard', '🏠', 'dashboard')}
       </div>
 
       {/* Module nav */}
       <div style={{ padding: '4px 8px', flex: 1, overflowY: 'auto' }}>
         {sectionLabel('Modules')}
+
+        {/* ─── EXTERNAL ROLES (ext-2) ── only the table's entries, once a project is selected;
+            a group (Materials Control, Foundational) shows its allowed children while one is open. */}
+        {extNav ? extNav.filter(e => e.id !== 'dashboard' && selectedProjectId).map(e => (
+          <div key={e.id}>
+            {navItem(e.label, e.icon, e.page as Page)}
+            {e.sub && e.sub.some(s => s.page === activePage) && (
+              <div style={{ paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {e.sub.map(s => (
+                  <button key={s.page} onClick={() => onNavigate(s.page as Page)}
+                    style={{ padding: '5px 12px', textAlign: 'left', background: activePage === s.page ? 'rgba(232,78,15,0.12)' : 'transparent', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, color: activePage === s.page ? '#E84E0F' : '#94a3b8', fontFamily: 'inherit' }}>
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )) : <>
 
         {/* ─── FIX 3: Foundational — collapsible group ──────────────────────────
             Only shown when a project is selected. Three sub-items:
@@ -597,6 +629,7 @@ const Nav = ({
         {/* Meetings & RFIs — all roles hold rfi_meeting.can_view per the C1 matrix
             (backend requirePermission is the real gate); shown to everyone. */}
         {navItem('Meetings & RFIs', '📋', 'rfi-meeting')}
+        </>}
       </div>
 
       {/* ─── SYSTEM SECTION ────────────────────────────────────
@@ -1054,6 +1087,10 @@ function App() {
   const userInitial = userName.charAt(0).toUpperCase()
   const today       = new Date().toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' })
   const criticalCount = projects.filter(p => p.rag === 'red').length
+  // External roles (ext-2): only the pages in their table (lib/externalNav.ts); Home is
+  // the project list, never the project dashboard. Internal roles: false, nothing changes.
+  const externalUser   = isExternal(user?.role)
+  const blockedForRole = externalUser && !canOpen(user?.role, page)
 
   // ─── PASSWORD EXPIRY WARNING ─────────────────────────────
   // Shows a topbar banner when the password expires within 7 days.
@@ -1301,16 +1338,19 @@ function App() {
               </button>
             </div>
           )}
+          {/* ─── EXTERNAL ROLE PAGE GUARD (ext-2) ── a page outside the role's table shows
+              this panel instead of the screen; the screens below render only otherwise. */}
+          {blockedForRole ? <NotAvailablePanel dark={dark} onHome={() => setPage('dashboard')} /> : <>
           {/* Nav option (b): Dashboard = project picker (Home) when no project,
-              the project dashboard once one is selected. */}
-          {page === 'dashboard' && !selectedProjectId && (
+              the project dashboard once one is selected (external roles: always Home). */}
+          {page === 'dashboard' && (!selectedProjectId || externalUser) && (
             <DashboardHome
               projects={projects} loading={loading} error={error} dark={dark}
               containerRef={containerRef} startResize={startResize}
-              onSelectProject={p => { setSelectedProjectId(p.id); setSelectedProjectName(p.name); localStorage.setItem('qmat_last_project', JSON.stringify({ id: p.id, name: p.name })) }}
+              onSelectProject={p => { setSelectedProjectId(p.id); setSelectedProjectName(p.name); localStorage.setItem('qmat_last_project', JSON.stringify({ id: p.id, name: p.name })); if (externalUser) navigate(landingPage(user?.role) as Page) }}
             />
           )}
-          {page === 'dashboard' && selectedProjectId && (
+          {page === 'dashboard' && selectedProjectId && !externalUser && (
             <DashboardProjectScreen
               dark={dark} projectId={selectedProjectId} projectName={selectedProjectName} userRole={user?.role ?? ''}
               onBack={() => { setSelectedProjectId(null); setSelectedProjectName('') }}
@@ -1524,6 +1564,7 @@ function App() {
               onLeaf={setCrumbLeaf}
             />
           )}
+          </>}
         </div>
       </div>
     </div>
