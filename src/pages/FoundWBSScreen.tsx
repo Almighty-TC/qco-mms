@@ -32,6 +32,8 @@ const ColResizeHandle = ({ onMouseDown, dark }: { onMouseDown: (e: React.MouseEv
 }
 
 import { API } from '../lib/api'
+import { useCurrentUser } from '../hooks/useCurrentUser'
+import { isExternal } from '../lib/externalNav'
 import { downloadFile } from '../lib/fileAccess'   // authed blob fetch → anchor (never window.open on a JWT-gated route → 401)
 
 // ─── TYPES ──────────────────────────────────────────────────
@@ -550,7 +552,7 @@ const ReallocateLineRow = ({ line, projectId, dark, excludeCode, value, onChange
 
 // ─── WBS ROW (recursive) ─────────────────────────────────────
 // Checkbox visibility controlled by CSS hover on parent tr.
-const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRowEnter, onRowLeave, focusMode, onFocusClick, selected, onSelect, searchMatch, filterVisible, onOpenReadiness }: {
+const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRowEnter, onRowLeave, focusMode, onFocusClick, selected, onSelect, searchMatch, filterVisible, onOpenReadiness, readOnly = false }: {
   node: WBSNode; depth: number; dark: boolean
   expanded: Set<number>; onToggle: (id: number) => void
   onEdit: (n: WBSNode) => void; onDelete: (n: WBSNode) => void
@@ -563,6 +565,7 @@ const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRow
   searchMatch: boolean
   filterVisible: boolean
   onOpenReadiness?: (n: WBSNode) => void
+  readOnly?: boolean   // ext-2b: external roles — notes as plain text, no delete
 }) => {
   const [hovered, setHovered] = useState(false)
   const hasChildren = node.children && node.children.length > 0
@@ -632,11 +635,13 @@ const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRow
         {/* NOTES */}
         {!focusMode && (
           <td style={{ padding: '9px 12px', maxWidth: 180 }}>
+            {readOnly ? <span style={{ color: node.notes ? col : '#94a3b8', fontSize: 12 }}>{node.notes ? `${node.notes.slice(0, 40)}${node.notes.length > 40 ? '…' : ''}` : '—'}</span> : (
             <button onClick={e => { e.stopPropagation(); onOpenReadiness ? onOpenReadiness(node) : onEdit(node) }}
               style={{ background: 'none', border: 'none', cursor: 'pointer', color: node.notes ? '#2563eb' : '#94a3b8', fontSize: 12, fontFamily: 'inherit', textAlign: 'left', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block', padding: 0 }}
               title={node.notes ?? 'Click to view readiness'}>
               {node.notes ? `${node.notes.slice(0, 40)}${node.notes.length > 40 ? '…' : ''}` : '+ Add note'}
             </button>
+            )}
           </td>
         )}
 
@@ -656,9 +661,9 @@ const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRow
 
         {/* Delete */}
         <td style={{ padding: '9px 8px', textAlign: 'center', width: 36 }}>
-          <button onClick={e => { e.stopPropagation(); onDelete(node) }}
+          {!readOnly && <button onClick={e => { e.stopPropagation(); onDelete(node) }}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: hovered ? '#ef4444' : 'transparent', fontSize: 14, transition: 'color 150ms', padding: '2px 4px', lineHeight: 1 }}
-            title="Delete node">🗑</button>
+            title="Delete node">🗑</button>}
         </td>
       </tr>
 
@@ -669,7 +674,7 @@ const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRow
           onRowEnter={onRowEnter} onRowLeave={onRowLeave}
           focusMode={focusMode} onFocusClick={onFocusClick}
           selected={selected} onSelect={onSelect}
-          searchMatch={false} filterVisible={filterVisible}
+          searchMatch={false} filterVisible={filterVisible} readOnly={readOnly}
           onOpenReadiness={onOpenReadiness} />
       ))}
     </>
@@ -917,9 +922,10 @@ const WBSTooltip = ({ node, projectId, cursorX, cursorY }: { node: WBSNode; proj
 
 // ─── FOCUS MODE PANEL ────────────────────────────────────────
 // Right-side panel shown when focusMode is active and a row is clicked.
-const FocusPanel = ({ node, projectId, dark, onClose, onEditNode }: {
+const FocusPanel = ({ node, projectId, dark, onClose, onEditNode, readOnly = false }: {
   node: WBSNode; projectId: number; dark: boolean; onClose: () => void
   onEditNode: (n: WBSNode) => void
+  readOnly?: boolean   // ext-2b: external roles — no materials/PO fetches (gate-refused), no edit
 }) => {
   const [materials, setMaterials] = useState<TooltipData | null>(null)
   const [pos, setPos] = useState<{id:number; po_number:string; vendor:string; status:string; total_value:number; currency:string}[]>([])
@@ -936,9 +942,10 @@ const FocusPanel = ({ node, projectId, dark, onClose, onEditNode }: {
   }
 
   useEffect(() => {
+    if (readOnly) return
     axios.get<TooltipData>(`${API}/foundational/${projectId}/wbs/${node.id}/materials`).then(r => setMaterials(r.data)).catch(() => {})
     axios.get(`${API}/foundational/${projectId}/wbs/${node.id}/pos`).then(r => setPos(r.data)).catch(() => {})
-  }, [node.id, projectId])
+  }, [node.id, projectId, readOnly])
 
   const ragColor = node.rag ? RAG_COLORS[node.rag] : '#94a3b8'
 
@@ -1002,6 +1009,7 @@ const FocusPanel = ({ node, projectId, dark, onClose, onEditNode }: {
           </>
         )}
 
+        {!readOnly && <>
         {/* COMMODITIES */}
         <div style={subLabel as React.CSSProperties}>Commodities ({materials?.commodities.length ?? '…'})</div>
         {!materials ? (
@@ -1061,15 +1069,16 @@ const FocusPanel = ({ node, projectId, dark, onClose, onEditNode }: {
             ))}
           </div>
         )}
+        </>}
       </div>
 
       {/* FOOTER */}
-      <div style={{ padding: '12px 20px', borderTop: bd, flexShrink: 0, display: 'flex', gap: 8 }}>
+      {!readOnly && <div style={{ padding: '12px 20px', borderTop: bd, flexShrink: 0, display: 'flex', gap: 8 }}>
         <button onClick={() => onEditNode(node)}
           style={{ flex: 1, padding: '7px 12px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
           ✎ Edit node
         </button>
-      </div>
+      </div>}
     </div>
   )
 }
@@ -1526,6 +1535,9 @@ const WBSReadinessModal = ({ node, projectId, dark, onClose, onNoteSaved }: {
 export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
   dark: boolean; projectId: number; projectName: string; onBack: () => void
 }) => {
+  // ext-2b: external roles see the WBS read-only (the gate allows only GET wbs for them).
+  const { user } = useCurrentUser()
+  const readOnly = isExternal(user?.role)
   const [nodes, setNodes]             = useState<WBSNode[]>([])
   const [tree, setTree]               = useState<WBSNode[]>([])
   const [expanded, setExpanded]       = useState<Set<number>>(new Set())
@@ -1781,10 +1793,10 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
             </div>
           </>}
           <button onClick={() => { setFocusMode(f => !f); setFocusNode(null) }} style={{ ...secBtn, color: focusMode ? '#E84E0F' : '#64748b' }}>⛶ Focus</button>
-          <button onClick={downloadTemplate} style={secBtn}>↓ Template</button>
-          <button onClick={() => setShowUpload(true)} style={secBtn}>↑ Upload Excel/CSV</button>
+          {!readOnly && <button onClick={downloadTemplate} style={secBtn}>↓ Template</button>}
+          {!readOnly && <button onClick={() => setShowUpload(true)} style={secBtn}>↑ Upload Excel/CSV</button>}
           <HelpButton screenName="WBS" sections={WBS_HELP} dark={dark} />
-          {wbsView === 'tree' && <button onClick={() => setShowAdd(true)} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>+ Add node</button>}
+          {wbsView === 'tree' && !readOnly && <button onClick={() => setShowAdd(true)} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>+ Add node</button>}
         </div>
       </div>
 
@@ -1833,7 +1845,7 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
             maxDepth={ganttDepth}
             expanded={expanded}
             onToggle={toggleExpand}
-            onNodeClick={node => { setEditNode(node) }}
+            onNodeClick={node => { if (!readOnly) setEditNode(node) }}   // ext-2b: no edit for external roles
           />
           {/* ── Gantt legend (bottom) — reflects what the chart ACTUALLY draws:
               schedule bars (planned/forecast/actual), the ROS milestone diamond,
@@ -1925,13 +1937,14 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
                   <WBSRow key={node.id} node={node} depth={0} dark={dark}
                     expanded={expanded} onToggle={toggleExpand}
                     onEdit={setEditNode} onDelete={setDeleteNode}
-                    onRowEnter={handleRowEnter} onRowLeave={handleRowLeave}
+                    onRowEnter={readOnly ? undefined : handleRowEnter} onRowLeave={handleRowLeave}
                     focusMode={focusMode} onFocusClick={n => setFocusNode(n)}
                     selected={selectedNodes.has(node.id)}
                     onSelect={handleSelectNode}
                     searchMatch={searchMatchIds ? searchMatchIds.has(node.id) : false}
                     filterVisible={visibleIds ? visibleIds.has(node.id) : true}
-                    onOpenReadiness={setReadinessNode}
+                    onOpenReadiness={readOnly ? undefined : setReadinessNode}
+                    readOnly={readOnly}
                   />
                 ))}
               </tbody>
@@ -1943,7 +1956,7 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
         {focusMode && focusNode && (
           <FocusPanel node={focusNode} projectId={projectId} dark={dark}
             onClose={() => setFocusNode(null)}
-            onEditNode={n => setEditNode(n)} />
+            onEditNode={n => setEditNode(n)} readOnly={readOnly} />
         )}
       </div>}  {/* end wbsView==='tree' */}
 
@@ -2025,8 +2038,8 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
       {/* Tooltip (normal mode only) */}
       {!focusMode && tooltip && <WBSTooltip node={tooltip.node} projectId={projectId} cursorX={tooltip.x} cursorY={tooltip.y} />}
 
-      {/* ── Bulk operations floating bar ── */}
-      {selectedNodes.size > 0 && (
+      {/* ── Bulk operations floating bar ── (internal roles only: every action is gate-refused for externals) */}
+      {selectedNodes.size > 0 && !readOnly && (
         <div style={{ position: 'fixed', bottom: 24, left: 244, right: 24, zIndex: 9200, background: dark ? '#1e293b' : '#fff', border: `1px solid #2563eb`, borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10, boxShadow: '0 8px 28px rgba(37,99,235,0.25)', fontFamily: 'IBM Plex Sans, sans-serif' }}>
           <span style={{ fontSize: 13, fontWeight: 600, color: '#2563eb', whiteSpace: 'nowrap' }}>{selectedNodes.size} node{selectedNodes.size !== 1 ? 's' : ''} selected</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, flexWrap: 'wrap' }}>

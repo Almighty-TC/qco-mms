@@ -36,6 +36,7 @@ const STOCK_MIN_SUB  = [70, 140, 60, 70, 60, 50, 80, 90]
 const ellipsisCell: React.CSSProperties = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
 
 import { API } from '../lib/api'
+import { isExternal } from '../lib/externalNav'
 
 type GroupBy = 'warehouse' | 'wbs' | 'item'
 
@@ -99,7 +100,8 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
   dark: boolean; projectId: number; projectName: string; onBack: () => void
 }) => {
   const { addToast } = useToast()
-  const { isSubcontractor } = useCurrentUser()
+  const { isSubcontractor, user } = useCurrentUser()
+  const external = isExternal(user?.role)   // ext-2b: Resolve and Move are internal-only (gate-refused)
   const col    = dark ? '#f1f5f9' : '#0f172a'
   const cardBg = dark ? '#1e293b' : '#fff'
   const bg     = dark ? '#0f172a' : '#f4f7fb'
@@ -123,11 +125,13 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
   const normHeat = (h?: string | null) => (h || '').trim().toUpperCase()
 
   // Heat/Lot P5 — load the per-heat cert-status map once (read-only join feed).
+  // ext-2b: subcontractors have no traceability grant (the gate refuses it) — skipped.
   useEffect(() => {
+    if (isSubcontractor) return
     axios.get(`${API}/traceability/${projectId}/heat-status`)
       .then(({ data }) => setHeatStatus(data.data || {}))
       .catch(() => setHeatStatus({}))
-  }, [projectId])
+  }, [projectId, isSubcontractor])
 
   // Debounce search so we don't hit the server on every keystroke.
   useEffect(() => {
@@ -306,9 +310,9 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                                 <span style={{ fontFamily: 'JetBrains Mono, monospace', color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', alignSelf: 'stretch' }} title={item.heat_number}>{item.heat_number}</span>
                                 {(() => { const b = certBadge(heatStatus[normHeat(item.heat_number)]?.status)
                                   return (
-                                    <span onClick={e => { e.stopPropagation(); setHeatLink(item.heat_number!) }}
-                                      title="View this heat's certificates"
-                                      style={{ fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 6, background: b.bg, color: b.color, cursor: 'pointer', whiteSpace: 'nowrap' }}>{b.label}</span>
+                                    <span onClick={isSubcontractor ? undefined : e => { e.stopPropagation(); setHeatLink(item.heat_number!) }}
+                                      title={isSubcontractor ? undefined : "View this heat's certificates"}
+                                      style={{ fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 6, background: b.bg, color: b.color, cursor: isSubcontractor ? 'default' : 'pointer', whiteSpace: 'nowrap' }}>{b.label}</span>
                                   ) })()}
                               </div>
                             ) : <span style={{ color: sub }}>—</span>}
@@ -331,14 +335,14 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                               <div style={{ display: 'flex', gap: 6 }}>
                                 {item.condition_status === 'quarantine' ? (
                                   // Quarantined stock: resolve (release / reject) instead of move.
-                                  <button onClick={() => setResolveItem(item)}
+                                  !external && <button onClick={() => setResolveItem(item)}
                                     style={{ padding: '4px 10px', borderRadius: 5, border: 'none', background: '#f59e0b', color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}>⚠ Resolve</button>
                                 ) : (
                                   <>
                                     <button onClick={() => setDocsItem(item)}
                                       style={{ padding: '4px 10px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap' }}>📎 Docs</button>
-                                    <button onClick={() => setMoveItem(item)}
-                                      style={{ padding: '4px 10px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap' }}>→ Move</button>
+                                    {!external && <button onClick={() => setMoveItem(item)}
+                                      style={{ padding: '4px 10px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap' }}>→ Move</button>}
                                   </>
                                 )}
                               </div>

@@ -17,6 +17,7 @@ import { ToastContainer } from '../components/Toast'
 import { RFI_MEETING_HELP } from '../helpContent'
 
 import { API } from '../lib/api'
+import { isExternal as isExternalRole } from '../lib/externalNav'
 
 interface RfiRow {
   id: number; record_type: 'rfi' | 'meeting'; ref: string; title: string; status: string; priority: string
@@ -106,8 +107,12 @@ function MeetingRFIInner({ dark, projectId, projectName, userRole, userId, onBac
       }).catch(() => {})
   }, [projectId])
 
-  // Full user list for the create form's Assignee dropdown.
-  useEffect(() => { axios.get(`${API}/rfi-meeting/${projectId}/users`).then(({ data }) => setUsers(data)).catch(() => {}) }, [projectId])
+  // Full user list for the create form's Assignee dropdown (internal roles only: the gate
+  // refuses /users for external roles, who cannot create records anyway).
+  useEffect(() => {
+    if (isExternalRole(userRole)) return
+    axios.get(`${API}/rfi-meeting/${projectId}/users`).then(({ data }) => setUsers(data)).catch(() => {})
+  }, [projectId, userRole])
 
   const openCreate = (rt: 'rfi' | 'meeting') => {
     setCForm({ title: '', description: '', priority: 'normal', due_date: '', assigned_to: '' }); setCErr(''); setCreateType(rt)
@@ -325,11 +330,15 @@ function RecordDrawer({ recordId, projectId, dark, userRole, userId, onClose, on
     }).catch(() => addToast('error', 'Could not load record'))
   }, [projectId, recordId, addToast])
   useEffect(() => { load() }, [load])
-  useEffect(() => { axios.get(`${API}/rfi-meeting/${projectId}/users`).then(({ data }) => setUsers(data)).catch(() => {}) }, [projectId])
+  // users and link-options are refused by the gate for external roles (ext-2b): skipped.
   useEffect(() => {
-    if (linkType === 'project') { setLinkOpts([]); return }
+    if (isExternalRole(userRole)) return
+    axios.get(`${API}/rfi-meeting/${projectId}/users`).then(({ data }) => setUsers(data)).catch(() => {})
+  }, [projectId, userRole])
+  useEffect(() => {
+    if (linkType === 'project' || isExternalRole(userRole)) { setLinkOpts([]); return }
     axios.get(`${API}/rfi-meeting/${projectId}/link-options/${linkType}`).then(({ data }) => setLinkOpts(data)).catch(() => {})
-  }, [linkType, projectId])
+  }, [linkType, projectId, userRole])
 
   if (!rec) return null
   const isExternal = EXTERNAL_ROLES.has(userRole)
@@ -426,9 +435,9 @@ function RecordDrawer({ recordId, projectId, dark, userRole, userId, onClose, on
           </div>
         )}
 
-        {/* ── Link picker ── */}
+        {/* ── Link picker ── (external roles: plain text; the gate refuses link changes) */}
         {sectionLabel('Linked to')}
-        {canAct ? (
+        {canAct && !isExternalRole(userRole) ? (
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <select value={linkType} onChange={e => { setLinkType(e.target.value); setLinkId('') }} style={{ ...inp, width: 120 }}>
               {['project', 'wbs', 'po', 'scn'].map(t => <option key={t} value={t}>{t === 'project' ? 'Project' : t.toUpperCase()}</option>)}

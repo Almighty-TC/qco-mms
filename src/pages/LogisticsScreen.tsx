@@ -22,6 +22,7 @@ const LOG_MIN = [36, 80, 70, 90, 80, 100, 60, 70, 70, 50, 60, 90, 40]
 import { usePagedList } from '../hooks/usePagedList'
 
 import { API } from '../lib/api'
+import { isExternal, EXTERNAL_LOGISTICS_DOC_DOWNLOAD } from '../lib/externalNav'
 import { containerDimViolations, containerDimMessage } from '../lib/packaging'
 
 // ─── TYPES ────────────────────────────────────────────────────
@@ -160,7 +161,8 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
   dark: boolean; projectId: number; projectName: string; onBack: () => void
 }) => {
   const { addToast } = useToast()
-  const { isForwarder } = useCurrentUser()
+  const { isForwarder, user } = useCurrentUser()
+  const external = isExternal(user?.role)   // ext-2b: the critical-path toggle is internal-only
 
   const col    = dark ? '#f1f5f9' : '#0f172a'
   const cardBg = dark ? '#1e293b' : '#fff'
@@ -395,8 +397,8 @@ const LogisticsScreenInner = ({ dark, projectId, projectName, onBack }: {
                       onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = dark ? '#1e293b' : '#f8fafc'}
                       onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}>
                       {/* ★ */}
-                      <td data-col="ctr" style={{ padding: '8px 10px' }} onClick={e => toggleCritical(scn, e)}>
-                        <span style={{ cursor: 'pointer', color: scn.is_critical_path ? '#E84E0F' : '#cbd5e1', fontSize: 14 }}>★</span>
+                      <td data-col="ctr" style={{ padding: '8px 10px' }} onClick={e => external ? e.stopPropagation() : toggleCritical(scn, e)}>
+                        <span style={{ cursor: external ? 'default' : 'pointer', color: scn.is_critical_path ? '#E84E0F' : '#cbd5e1', fontSize: 14 }}>★</span>
                       </td>
                       <td data-col="ctr" style={{ padding: '8px 10px' }}>
                         <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600 }}>{scn.scn_ref}</span>
@@ -965,6 +967,8 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
   const bd     = `1px solid ${dark ? '#334155' : '#dde3ed'}`
   const sub    = '#94a3b8'
   const theadBg = dark ? '#162032' : '#f8fafc'
+  const { user } = useCurrentUser()
+  const externalUser = isExternal(user?.role)   // ext-2b: package delete is internal-only (the gate refuses it)
 
   // B-fix: forwarder leaf packages carry per-line contents (scn_line_id + qty), mirroring
   // the wizard's container-first contents model. description holds the package TYPE (the
@@ -1252,9 +1256,9 @@ const PackagesTab = ({ dark, scn, onRefresh, addToast, readOnly = false }: {
                       )}
                       <button onClick={() => { setAdding(false); setEditingId(p.id); setOriginalSeal(p.seal_no||''); setForm({ description: p.description||'', length_mm: String(p.length_mm||''), width_mm: String(p.width_mm||''), height_mm: String(p.height_mm||''), gross_weight_kg: String(p.gross_weight_kg||''), net_weight_kg: String(p.net_weight_kg||''), is_dangerous_goods: !!p.is_dangerous_goods, dg_class: p.dg_class||'', dg_un_number: p.dg_un_number||'', marks_numbers: p.marks_numbers||'', container_type_id: p.container_type_id||'', parent_package_id: p.parent_package_id||'', container_no: p.container_no||'', seal_no: p.seal_no||'', seal_reason: '' }) }}
                         style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 13 }}>✎</button>
-                      <button onClick={() => onDeleteClick(p.id, isContainer)}
+                      {!externalUser && <button onClick={() => onDeleteClick(p.id, isContainer)}
                         title={isContainer ? 'Delete container (asks about sub-packages)' : 'Delete package'}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 13 }}>🗑</button>
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 13 }}>🗑</button>}
                     </div>
                     )}
                   </td>
@@ -1612,7 +1616,7 @@ const DocumentsTab = ({ dark, scn, projectId, onRefresh, addToast }: {
                 <td style={{ padding: '7px 10px', color: sub }}>{d.notes || '—'}</td>
                 <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
                   {/* Authed Download + View (blob-aware dual-read resolver). Never window.open(apiURL). */}
-                  {d.file_name && (() => { const url = `${API}/documents/${projectId}/download/logistics:${d.id}`; return (<>
+                  {d.file_name && (!isExternal(user?.role) || EXTERNAL_LOGISTICS_DOC_DOWNLOAD) && (() => { const url = `${API}/documents/${projectId}/download/logistics:${d.id}`; return (<>
                     <button onClick={() => viewFile(url, d.file_name || undefined).catch(() => addToast('error', 'Failed to open document'))} title="View"
                       style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 14, marginRight: 8 }}>👁</button>
                     <button onClick={() => downloadFile(url, d.file_name || undefined).catch(() => addToast('error', 'Failed to download document'))} title="Download"
@@ -1748,11 +1752,14 @@ const PocTab = ({ dark, scn, projectId, onRefresh, addToast }: {
                 <td style={{ padding: '7px 10px', color: sub }}>{d.uploaded_by_name || '—'}</td>
                 <td style={{ padding: '7px 10px', color: sub, whiteSpace: 'nowrap' }}>{fmtFull(d.uploaded_at)}</td>
                 <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
-                  {/* Consistency: in-browser View alongside the existing Download (both authed). */}
+                  {/* Consistency: in-browser View alongside the existing Download (both authed).
+                      ext-2b: hidden for external roles until EXTERNAL_LOGISTICS_DOC_DOWNLOAD (ext-1b). */}
+                  {(!isExternal(user?.role) || EXTERNAL_LOGISTICS_DOC_DOWNLOAD) && <>
                   <button onClick={() => viewFile(`${API}/documents/${projectId}/download/logistics:${d.id}`, d.file_name || undefined).catch(() => addToast('error', 'Failed to open document'))} title="View"
                     style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 14, marginRight: 8 }}>👁</button>
                   <button onClick={() => downloadDoc(d.id, d.file_name)} title="Download"
                     style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#16a34a', fontSize: 14, marginRight: 8 }}>↓</button>
+                  </>}
                   {canDeletePoc(d) && (
                     <button onClick={() => deleteDoc(d.id)} title="Delete"
                       style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 14 }}>🗑</button>
