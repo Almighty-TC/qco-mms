@@ -411,6 +411,8 @@ router.get('/users', async (req, res) => {
               IFNULL(u.phone, '')    AS phone,
               u.is_active                                    AS isActive,
               u.is_external                                  AS isExternal,
+              u.supplier_id                                  AS supplierId,
+              s.name                                         AS supplierName,
               DATE_FORMAT(u.contract_start, '%Y-%m-%d')     AS contractStart,
               DATE_FORMAT(u.contract_end,   '%Y-%m-%d')     AS contractEnd,
               u.last_login                                   AS lastLogin,
@@ -421,6 +423,7 @@ router.get('/users', async (req, res) => {
                FROM user_permission_overrides
                WHERE user_id = u.id) AS hasCustomPermissions
        FROM users u
+       LEFT JOIN suppliers s ON s.id = u.supplier_id
        WHERE ${where}
        ORDER BY u.full_name
        LIMIT ? OFFSET ?`,
@@ -492,6 +495,33 @@ router.get('/users/:id', async (req, res) => {
   } catch (err) { dbError(res, err) }
 })
 
+// ─── SUPPLIER LINK AND EXTERNAL FLAG (P2a) ──────────────────
+// supplierId links a vendor user to the supplier it acts for (users.supplier_id).
+// A vendor with no supplier stays allowed: phase 2 scoping fails closed for it.
+// The four external roles (EXTERNAL_ROLES, the set the access gate uses) need
+// External = yes and every other role External = no.
+function externalMismatch(role, isExternal) {
+  const needs = EXTERNAL_ROLES.has(role)
+  return needs === Boolean(isExternal) ? null : `Role ${role} requires External = ${needs ? 'yes' : 'no'}`
+}
+
+// supplierId from the body: absent → { present: false }; null or '' → clears
+// ({ present: true, value: null }); otherwise a positive integer id, vendors only.
+function parseSupplierId(body, role) {
+  if (!Object.prototype.hasOwnProperty.call(body, 'supplierId') || body.supplierId === undefined) return { present: false }
+  const v = body.supplierId
+  if (v === null || v === '') return { present: true, value: null }
+  if (role !== 'vendor') return { error: 'Only vendor users link to a supplier' }
+  const ok = (typeof v === 'number' && Number.isInteger(v) && v > 0) || (typeof v === 'string' && /^\d+$/.test(v.trim()) && Number(v) > 0)
+  if (!ok) return { error: 'Unknown supplier' }
+  return { present: true, value: Number(v) }
+}
+
+async function supplierExists(id) {
+  const [[row]] = await db.query('SELECT id FROM suppliers WHERE id = ?', [id])
+  return !!row
+}
+
 // ─── CREATE USER ────────────────────────────────────────────
 // Single-admin workflow: any admin can create any user (internal or
 // external) immediately. The account is active from the moment of
@@ -505,6 +535,10 @@ router.post('/users', async (req, res) => {
   if (!fullName?.trim())      return res.status(400).json({ error: 'Full name is required' })
   if (!email?.trim())         return res.status(400).json({ error: 'Email is required' })
   if (!VALID_ROLES.has(role)) return res.status(400).json({ error: 'Invalid role' })
+  const mismatch = externalMismatch(role, isExternal)
+  if (mismatch) return res.status(400).json({ error: mismatch })
+  const supplier = parseSupplierId(req.body, role)
+  if (supplier.error) return res.status(400).json({ error: supplier.error })
 
   // ─── ACTIVE FLAG ──────────────────────────────────────────────
   // External users are treated the same as internal — active unless
@@ -517,16 +551,19 @@ router.post('/users', async (req, res) => {
   const tempPass  = generate()
 
   try {
+    if (supplier.value != null && !(await supplierExists(supplier.value))) {
+      return res.status(400).json({ error: 'Unknown supplier' })
+    }
     const hash = await bcrypt.hash(tempPass, 12)
     const [r]  = await db.query(
       `INSERT INTO users
          (full_name, email, password_hash, role, company, staff_id, phone,
-          is_active, is_external, contract_start, contract_end,
+          is_active, is_external, supplier_id, contract_start, contract_end,
           force_password_change, password_expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
       [fullName.trim(), email.trim().toLowerCase(), hash, role,
        company?.trim() || null, staffId?.trim() || null, phone?.trim() || null,
-       active ? 1 : 0, isExternal ? 1 : 0,
+       active ? 1 : 0, isExternal ? 1 : 0, supplier.value ?? null,
        contractStart || null, contractEnd || null, expiresAt]
     )
 
@@ -650,31 +687,46 @@ router.put('/users/:id', async (req, res) => {
   if (!fullName?.trim())      return res.status(400).json({ error: 'Full name is required' })
   if (!email?.trim())         return res.status(400).json({ error: 'Email is required' })
   if (!VALID_ROLES.has(role)) return res.status(400).json({ error: 'Invalid role' })
+  const mismatch = externalMismatch(role, isExternal)
+  if (mismatch) return res.status(400).json({ error: mismatch })
+  const supplier = parseSupplierId(req.body, role)
+  if (supplier.error) return res.status(400).json({ error: supplier.error })
 
   try {
     const [[current]] = await db.query(
-      'SELECT full_name, email, role, is_active, is_external FROM users WHERE id=?', [id]
+      'SELECT full_name, email, role, is_active, is_external, supplier_id FROM users WHERE id=?', [id]
     )
     if (!current) return res.status(404).json({ error: 'User not found' })
+    if (supplier.value != null && !(await supplierExists(supplier.value))) {
+      return res.status(400).json({ error: 'Unknown supplier' })
+    }
+
+    // supplier_id is written when supplierId is sent, and cleared when the role
+    // changes away from vendor; otherwise the column is left untouched.
+    const leftVendor  = current.role === 'vendor' && role !== 'vendor'
+    const setSupplier = supplier.present || leftVendor
+    const supplierId  = supplier.present ? supplier.value : null
+    const supSql  = setSupplier ? ',supplier_id=?' : ''
+    const supArgs = setSupplier ? [supplierId] : []
 
     if (password) {
       const hash = await bcrypt.hash(password, 10)
       await db.query(
         `UPDATE users SET full_name=?,email=?,password_hash=?,role=?,company=?,staff_id=?,phone=?,
-                          is_active=?,is_external=?,contract_start=?,contract_end=?
+                          is_active=?,is_external=?${supSql},contract_start=?,contract_end=?
          WHERE id=?`,
         [fullName.trim(), email.trim().toLowerCase(), hash, role,
          company?.trim()||null, staffId?.trim()||null, phone?.trim()||null,
-         isActive?1:0, isExternal?1:0, contractStart||null, contractEnd||null, id]
+         isActive?1:0, isExternal?1:0, ...supArgs, contractStart||null, contractEnd||null, id]
       )
     } else {
       await db.query(
         `UPDATE users SET full_name=?,email=?,role=?,company=?,staff_id=?,phone=?,
-                          is_active=?,is_external=?,contract_start=?,contract_end=?
+                          is_active=?,is_external=?${supSql},contract_start=?,contract_end=?
          WHERE id=?`,
         [fullName.trim(), email.trim().toLowerCase(), role,
          company?.trim()||null, staffId?.trim()||null, phone?.trim()||null,
-         isActive?1:0, isExternal?1:0, contractStart||null, contractEnd||null, id]
+         isActive?1:0, isExternal?1:0, ...supArgs, contractStart||null, contractEnd||null, id]
       )
     }
 
@@ -684,6 +736,7 @@ router.put('/users/:id', async (req, res) => {
     if (current.email !== email.trim().toLowerCase())  changes.push(`email: "${current.email}"→"${email.trim().toLowerCase()}"`)
     if (current.role !== role)                         changes.push(`role: ${current.role}→${role}`)
     if (Number(current.is_active) !== (isActive?1:0)) changes.push(`active: ${current.is_active}→${isActive?1:0}`)
+    if (setSupplier && (current.supplier_id ?? null) !== supplierId) changes.push(`supplier: ${current.supplier_id ?? 'none'}→${supplierId ?? 'none'}`)
     audit(req, 'user.update',
       `id=${id} by=${req.user.id}(${req.user.email})` + (changes.length ? ` changes=[${changes.join(', ')}]` : '')
     )
