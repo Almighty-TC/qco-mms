@@ -13,6 +13,7 @@ const { dbError } = require('../utils/dbError')
 const { authenticateToken } = require('../middleware/auth')
 const { requirePermission } = require('../middleware/permissions')
 const { sealCheckpoint, verifyChain } = require('../lib/auditChain')
+const { likeClause, parse: parseSearch } = require('../lib/tableSearch')
 
 router.use(authenticateToken)
 
@@ -53,6 +54,15 @@ const SAFE_SORT = {
   user: 'u.full_name', project: 'p.name', entity_id: 'a.entity_id',
 }
 
+// ─── TABLE SEARCH (q) ── server/lib/tableSearch.js, SQL LIKE path only (no fuzzy
+// matching: the log is large and growing). ANDed with every filter and the old search;
+// an unknown field is a 400. Both queries below join users u and projects p.
+const AUDIT_SEARCH = {
+  action: { column: 'a.action' }, entity: { column: 'a.entity_type' }, user: { column: 'u.full_name' },
+  resource: { column: 'a.resource' }, reason: { column: "CONCAT_WS(' ', a.reason_category, a.reason_detail)" },
+  project: { column: "CONCAT_WS(' ', p.code, p.name)" },
+}
+
 // ─── GET /api/audit ──────────────────────────────────────────
 // Paginated, filtered, sorted list. Envelope { data, total, page, limit }.
 // Read-only — no writes to audit_log anywhere in this handler.
@@ -80,6 +90,15 @@ router.get('/', requirePermission('audit', 'can_view'), async (req, res) => {
       const q = `%${search}%`
       where.push('(a.resource LIKE ? OR a.reason_detail LIKE ? OR a.reason_category LIKE ? OR a.action LIKE ? OR a.entity_type LIKE ?)')
       params.push(q, q, q, q, q)
+    }
+    let searchInfo = null
+    const qText = typeof req.query.q === 'string' && req.query.q.trim() ? req.query.q : null
+    if (qText) {
+      const parsed = parseSearch(qText)
+      const like = likeClause(parsed, AUDIT_SEARCH)
+      if (like.error) return res.status(400).json({ error: like.error })
+      if (like.sql) { where.push(like.sql); params.push(...like.params) }
+      searchInfo = { fuzzy: false, fellBack: false, queryTruncated: parsed.truncated, fields: Object.keys(AUDIT_SEARCH) }
     }
     const whereSql = where.join(' AND ')
 
@@ -123,7 +142,9 @@ router.get('/', requirePermission('audit', 'can_view'), async (req, res) => {
        LIMIT ? OFFSET ?`,
       [...params, limit, offset]
     )
-    res.json({ data: rows, total, page, limit })
+    const body = { data: rows, total, page, limit }
+    if (searchInfo) body.search = searchInfo
+    res.json(body)
   } catch (e) {
     console.error('[audit:list]', e.message)
     dbError(res, e)
