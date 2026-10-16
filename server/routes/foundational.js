@@ -527,7 +527,7 @@ router.get('/:projectId/wbs/:nodeId/pos', async (req, res) => {
     if (!node) return res.status(404).json({ error: 'Node not found' })
 
     const [pos] = await db.query(
-      `SELECT id, po_number, vendor, status, total_value, currency
+      `SELECT id, po_number, vendor_name AS vendor, status, value AS total_value, currency
        FROM purchase_orders
        WHERE project_id=? AND wbs_code=?
        ORDER BY po_number`,
