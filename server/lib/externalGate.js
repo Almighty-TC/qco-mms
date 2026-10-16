@@ -63,6 +63,7 @@ const ALLOW = [
   { roles: FF, method: 'PUT',    re: re(`/logistics/scn/${ID}/packaging/complete`), example: '/logistics/scn/12/packaging/complete' }, // packer
   { roles: FF, method: 'POST',   re: re(`/logistics/scn/${ID}/documents`), example: '/logistics/scn/12/documents' },   // carrier
   { roles: FF, method: 'DELETE', re: re(`/logistics/scn/${ID}/documents/${ID}`), example: '/logistics/scn/12/documents/4' }, // carrier, own upload
+  { roles: FF, method: 'GET',    re: re(`/documents/${ID}/download/logistics:${ID}`), example: '/documents/27/download/logistics:4' }, // ext-1b: carrier or packer (documents.js)
   // ── site_contractor and subcontractor: stock and FMRs (subcontractor stock is WBS-scoped) ──
   { roles: SC, method: 'GET',  re: re(`/foundational/${ID}/wbs`), example: '/foundational/27/wbs' },
   { roles: CONTRACTORS, method: 'GET',  re: re(`/mc/${ID}/stock`), example: '/mc/27/stock' },

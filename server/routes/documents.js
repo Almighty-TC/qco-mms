@@ -12,6 +12,7 @@ const fs      = require('fs')
 const blobStore = require('../lib/blobStore')   // blob migration: dual-read fallback
 const { authenticateToken } = require('../middleware/auth')
 const { requireProjectScope } = require('../middleware/permissions')
+const { isPackagingDelegate } = require('./logistics')   // ext-1b: the shared delegate predicate (no drift)
 
 router.use(authenticateToken)
 router.param('projectId', requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects (closes the docs cross-project leak)
@@ -463,12 +464,24 @@ const RESOLVERS = {
     const base = path.basename(c.filename)   // stored as a bare filename
     return { absPath: path.join(UPLOADS.foundational, base), baseDir: UPLOADS.foundational, name: base.replace(/^\d+-/, ''), mime: null }
   },
-  async logistics(id, pid) {
+  async logistics(id, pid, user) {
     const [[d]] = await db.query(
       `SELECT d.file_name, d.file_path FROM scn_documents d
        JOIN shipment_control_notes s ON s.id = d.scn_id
        WHERE d.id=? AND s.project_id=?`, [id, pid])
     if (!d) return { code: 'not_found' }
+    // ext-1b: a freight_forwarder downloads only documents of an SCN it is linked to — the
+    // carrier (forwarder_user_id) or the delegated packer (packaging_delegated_to), as
+    // logistics.js forwarderLinkedToScn allows. Other roles are unchanged (no extra query).
+    if (user?.role === 'freight_forwarder') {
+      const [[s]] = await db.query(
+        `SELECT s.forwarder_user_id, s.packaging_delegated_to FROM scn_documents d
+         JOIN shipment_control_notes s ON s.id = d.scn_id WHERE d.id=?`, [id])
+      const carrier = !!s && s.forwarder_user_id != null && s.forwarder_user_id === user.id
+      if (!carrier && !(s && isPackagingDelegate(s.packaging_delegated_to, user.id))) {
+        return { code: 'forbidden', error: 'You are not linked to this SCN.' }
+      }
+    }
     if (!d.file_path) return { code: 'no_file' }
     return { absPath: path.resolve(SERVER_ROOT, d.file_path), baseDir: UPLOADS.logistics, name: d.file_name, mime: null }
   },
@@ -525,8 +538,9 @@ router.get('/:projectId/download/:docId', async (req, res) => {
     // Virtual/aggregated rows (Material Control receipt+issue notes) own no file.
     if (!resolver || !Number.isInteger(id)) return res.status(404).json({ error: 'No downloadable file for this document' })
 
-    const r = await resolver(id, pid)
+    const r = await resolver(id, pid, req.user)
     if (r.code === 'not_found') return res.status(404).json({ error: 'Document not found in this project' })
+    if (r.code === 'forbidden') return res.status(403).json({ error: r.error })
     if (r.code === 'no_file')   return res.status(404).json({ error: 'No file is stored for this document yet' })
 
     const safeName = (r.name || 'document').replace(/[\r\n"]/g, '')

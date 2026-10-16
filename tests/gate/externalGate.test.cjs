@@ -67,7 +67,7 @@ const DENIED_ALL = [
   ['GET', '/procurement/pos/5/documents/2/download'], ['GET', '/procurement/27/stats'], ['GET', '/procurement/users/list'],
   ['POST', '/procurement/27/pos'], ['PUT', '/procurement/pos/5'], ['GET', '/dashboard/27'], ['GET', '/dashboard/27/exceptions'],
   ['GET', '/admin/users'], ['POST', '/admin/users'], ['GET', '/admin/suppliers'], ['GET', '/reports/27/datasets'], ['GET', '/audit'],
-  ['GET', '/documents/27'], ['GET', '/documents/27/summary'], ['GET', '/documents/27/export'], ['GET', '/documents/27/download/logistics:4'],
+  ['GET', '/documents/27'], ['GET', '/documents/27/summary'], ['GET', '/documents/27/export'],
   ['GET', '/documents/27/download/vdrl:9'], ['GET', '/mto/27'], ['GET', '/mto/27/1/lines'], ['GET', '/pre-award/27/tenders'],
   ['POST', '/pending-changes/27/submit'], ['GET', '/traceability/27/summary'], ['POST', '/traceability/27/cert'],
   ['POST', '/rfi-meeting/27'], ['GET', '/rfi-meeting/27/users'], ['GET', '/rfi-meeting/27/link-options/po'], ['PATCH', '/rfi-meeting/27/5'],
@@ -78,10 +78,10 @@ const DENIED_ALL = [
   ['POST', '/projects'], ['DELETE', '/projects/27'], ['GET', '/projects/27/pos'],
 ]
 const ROLE_DENIED = {
-  vendor: [['GET', '/logistics/register/27'], ['GET', '/mc/27/stock'], ['POST', '/mc/27/fmr'], ['GET', '/foundational/27/wbs'], ['GET', '/traceability/27/heat-status']],
+  vendor: [['GET', '/logistics/register/27'], ['GET', '/mc/27/stock'], ['POST', '/mc/27/fmr'], ['GET', '/foundational/27/wbs'], ['GET', '/traceability/27/heat-status'], ['GET', '/documents/27/download/logistics:4']],
   freight_forwarder: [['GET', '/mc/27/stock'], ['POST', '/mc/27/fmr'], ['GET', '/foundational/27/wbs'], ['GET', '/traceability/27/heat/H1']],
-  site_contractor: [['GET', '/logistics/register/27'], ['GET', '/logistics/scn/12'], ['POST', '/logistics/scn/12/documents']],
-  subcontractor: [['GET', '/traceability/27/heat-status'], ['GET', '/traceability/27/heat/H1'], ['GET', '/foundational/27/wbs'], ['GET', '/logistics/scn/12']],
+  site_contractor: [['GET', '/logistics/register/27'], ['GET', '/logistics/scn/12'], ['POST', '/logistics/scn/12/documents'], ['GET', '/documents/27/download/logistics:4']],
+  subcontractor: [['GET', '/traceability/27/heat-status'], ['GET', '/traceability/27/heat/H1'], ['GET', '/foundational/27/wbs'], ['GET', '/logistics/scn/12'], ['GET', '/documents/27/download/logistics:4']],
 }
 const deniedPerRole = {}
 for (const role of EXT) {
@@ -148,7 +148,16 @@ check(await asRole('site_contractor', 'GET', '/api/traceability/27/heat/H%20123'
 check(denied(await asRole('subcontractor', 'GET', '/api/traceability/27/heat/H1')), 'subcontractor heat refused (no traceability grant)')
 check(await asRole('subcontractor', 'GET', '/api/mc/27/stock') === 'next' && await asRole('subcontractor', 'POST', '/api/mc/27/fmr') === 'next', 'subcontractor stock and FMR raise')
 check(denied(await asRole('vendor', 'POST', '/api/expediting/27/vdrl/upload')), 'vendor bulk VDRL upload refused')
-check(denied(await asRole('freight_forwarder', 'GET', '/api/documents/27/download/logistics:4')), 'forwarder logistics document download refused (documents.js)')
+// ext-1b: the forwarder may download logistics documents (documents.js checks the carrier or packer);
+// only the exact form 'logistics:' followed by digits; every other module and form is refused.
+for (const url of ['/api/documents/27/download/logistics:4', '/api/documents/27/download/logistics:4/', '/api/documents/27/download/logistics:1978?x=1', '/api/Documents/27/Download/LOGISTICS:4'])
+  check(await asRole('freight_forwarder', 'GET', url) === 'next', `forwarder ${url} passes the gate`)
+for (const url of ['/api/documents/27/download/vdrl:4', '/api/documents/27/download/traceability:4', '/api/documents/27/download/procurement:4', '/api/documents/27/download/logistics:',
+  '/api/documents/27/download/logistics:4x', '/api/documents/27/download/logistics:-4', '/api/documents/27/download/logistics::4', '/api/documents/27/download/logistics:4:5',
+  '/api/documents/27/download/logistics%3A4', '/api/documents/27/download/logistics:4%00', '/api/documents/27/download/../download/logistics:4', '/api/documents/27/download//logistics:4',
+  '/api/documents/27/download/logistics:4/..', '/api/documents/x/download/logistics:4', '/api/documents/27/download/logistics:4/file', '/api/documents/27', '/api/documents/27/summary'])
+  check(denied(await asRole('freight_forwarder', 'GET', url)), `forwarder ${url} refused`)
+for (const m of ['POST', 'PUT', 'DELETE', 'PATCH', 'HEAD']) check(denied(await asRole('freight_forwarder', m, '/api/documents/27/download/logistics:4')), `forwarder ${m} logistics download refused`)
 
 console.log(`externalGate: ${pass} passed, ${fail} failed (${G.ALLOW.length} ALLOW entries x ${EXT.length} external roles = ${entryChecks}; denied samples per role ${EXT.map(r => r + ' ' + deniedPerRole[r]).join(', ')}; ${internalChecks} internal-role passes)`)
 process.exit(fail ? 1 : 0)
