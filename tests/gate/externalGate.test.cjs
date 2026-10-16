@@ -59,18 +59,14 @@ for (const e of G.ALLOW) {
 // ── denied samples (no external role may reach these) ──
 const DENIED_ALL = [
   ['GET', '/procurement/pos/check-duplicate?po_number=X&project_id=1'], ['GET', '/expediting/forwarders'],
-  ['POST', '/traceability/cert/5/version'], ['GET', '/traceability/cert/5/file'], ['POST', '/traceability/hold/3/chase'],
-  ['POST', '/expediting/27/vdrl/packages'], ['POST', '/expediting/27/vdrl/documents'], ['POST', '/expediting/27/vdrl/documents/9/file'],
-  ['POST', '/expediting/27/vdrl/upload'], ['PUT', '/expediting/27/vdrl/documents/9'], ['GET', '/expediting/27/vdrl/packages'],
-  ['GET', '/expediting/27/vdrl/documents'], ['GET', '/expediting/27/register'], ['GET', '/expediting/27/action-log'],
-  ['GET', '/procurement/27/pos'], ['GET', '/procurement/pos/5'], ['GET', '/procurement/pos/5/documents'],
-  ['GET', '/procurement/pos/5/documents/2/download'], ['GET', '/procurement/27/stats'], ['GET', '/procurement/users/list'],
+  ['POST', '/traceability/hold/3/chase'],
+  ['POST', '/expediting/27/vdrl/packages'], ['POST', '/expediting/27/vdrl/documents'],   ['POST', '/expediting/27/vdrl/upload'], ['PUT', '/expediting/27/vdrl/documents/9'],   ['GET', '/expediting/27/register'], ['GET', '/expediting/27/action-log'],
+    ['GET', '/procurement/27/stats'], ['GET', '/procurement/users/list'],
   ['POST', '/procurement/27/pos'], ['PUT', '/procurement/pos/5'], ['GET', '/dashboard/27'], ['GET', '/dashboard/27/exceptions'],
   ['GET', '/admin/users'], ['POST', '/admin/users'], ['GET', '/admin/suppliers'], ['GET', '/reports/27/datasets'], ['GET', '/audit'],
   ['GET', '/documents/27'], ['GET', '/documents/27/summary'], ['GET', '/documents/27/export'],
-  ['GET', '/documents/27/download/vdrl:9'], ['GET', '/mto/27'], ['GET', '/mto/27/1/lines'], ['GET', '/pre-award/27/tenders'],
-  ['POST', '/pending-changes/27/submit'], ['GET', '/traceability/27/summary'], ['POST', '/traceability/27/cert'],
-  ['POST', '/rfi-meeting/27'], ['GET', '/rfi-meeting/27/users'], ['GET', '/rfi-meeting/27/link-options/po'], ['PATCH', '/rfi-meeting/27/5'],
+  ['GET', '/mto/27'], ['GET', '/mto/27/1/lines'], ['GET', '/pre-award/27/tenders'],
+  ['POST', '/pending-changes/27/submit'],   ['POST', '/rfi-meeting/27'], ['GET', '/rfi-meeting/27/users'], ['GET', '/rfi-meeting/27/link-options/po'], ['PATCH', '/rfi-meeting/27/5'],
   ['PATCH', '/rfi-meeting/27/5/link'], ['POST', '/rfi-meeting/27/5/actions'], ['POST', '/rfi-meeting/27/5/attendees'],
   ['DELETE', '/rfi-meeting/27/5/attendees/2'], ['PUT', '/logistics/scn/12/critical-path'], ['DELETE', '/logistics/scn/12/packages/3'],
   ['GET', '/mc/27/receipting'], ['GET', '/mc/27/transfers'], ['PUT', '/mc/27/fmr/8/approve'], ['POST', '/mc/27/fmr/8/issue'],
@@ -83,6 +79,10 @@ const ROLE_DENIED = {
   site_contractor: [['GET', '/logistics/register/27'], ['GET', '/logistics/scn/12'], ['POST', '/logistics/scn/12/documents'], ['GET', '/documents/27/download/logistics:4']],
   subcontractor: [['GET', '/traceability/27/heat-status'], ['GET', '/traceability/27/heat/H1'], ['GET', '/foundational/27/wbs'], ['GET', '/logistics/scn/12'], ['GET', '/documents/27/download/logistics:4']],
 }
+// P2f: these are vendor routes now (the ALLOW loop above proves each is allowed for the vendor);
+// they stay refused for the three other external roles.
+const VENDOR_ROUTES = [['POST', '/traceability/cert/5/version'], ['GET', '/traceability/cert/5/file'], ['POST', '/expediting/27/vdrl/documents/9/file'], ['GET', '/expediting/27/vdrl/packages'], ['GET', '/expediting/27/vdrl/documents'], ['GET', '/procurement/27/pos'], ['GET', '/procurement/pos/5'], ['GET', '/procurement/pos/5/documents'], ['GET', '/procurement/pos/5/documents/2/download'], ['GET', '/documents/27/download/vdrl:9'], ['GET', '/traceability/27/summary'], ['POST', '/traceability/27/cert']]
+for (const r of ['freight_forwarder', 'site_contractor', 'subcontractor']) ROLE_DENIED[r].push(...VENDOR_ROUTES)
 const deniedPerRole = {}
 for (const role of EXT) {
   deniedPerRole[role] = 0

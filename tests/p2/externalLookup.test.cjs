@@ -88,7 +88,7 @@ async function suite(gateSrc, authSrc) {
   check(x.r === 'next' && same(x.req.externalScope, { userId: 801, role: 'vendor', supplierId: 5 }), 'linked vendor: scope { userId, role, supplierId }')
   check(queries.length === 1 && queries[0].sql === 'SELECT role, is_active, is_external, supplier_id FROM users WHERE id = ?' && same(queries[0].params, [801]), 'one query, exact SQL and params')
   check(x.user && x.user.supplier_id === 5 && x.authResult === 'next', 'forged claim 99 replaced by the row value 5')
-  x = await go('GET', '/api/procurement/27/pos', tok(801, 'vendor'))
+  x = await go('GET', '/api/procurement/pos/5/notes', tok(801, 'vendor'))
   check(err(x.r, 403, 'Not available to your role') && queries.length === 1, 'linked vendor, denied path: allowlist 403 after the lookup')
   x = await go('GET', '/api/projects/../admin', tok(801, 'vendor'))
   check(err(x.r, 403, 'Not available to your role'), 'linked vendor, unsafe path: 403')

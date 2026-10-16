@@ -14,7 +14,8 @@
 //
 // ALLOW is a subset of each role's role_permissions grants, except the freight_forwarder's
 // package and SCN-document writes, which logistics.js authorises by delegation or carrier
-// (not by the matrix). Vendors get only the common entries until phase 2 (supplier scoping).
+// (not by the matrix). Vendors (P2f) get their own POs, VDRL and certificates: the routers scope
+// every one of those requests to the vendor's supplier (req.user.supplier_id from the lookup).
 //
 // Phase 2 (P2b): a request from an external role is checked against its users row before
 // the allowlist, so a disabled user is refused even on a denied path: no row or inactive →
@@ -34,6 +35,7 @@ const ALL = ['vendor', 'freight_forwarder', 'site_contractor', 'subcontractor']
 const FF = ['freight_forwarder']
 const SC = ['site_contractor']
 const CONTRACTORS = ['site_contractor', 'subcontractor']
+const V = ['vendor']
 const re = s => new RegExp('^' + s + '/?$', 'i')
 const ID = '\\d+'
 
@@ -73,6 +75,27 @@ const ALLOW = [
   { roles: CONTRACTORS, method: 'POST', re: re(`/mc/${ID}/fmr`), example: '/mc/27/fmr' },
   { roles: SC, method: 'GET',  re: re(`/traceability/${ID}/heat-status`), example: '/traceability/27/heat-status' },
   { roles: SC, method: 'GET',  re: re(`/traceability/${ID}/heat/[^/]+`), example: '/traceability/27/heat/H123' },
+  // ── vendor (P2f): its own supplier's POs, VDRL and certificates (scoped in the routers, P2c–P2e) ──
+  { roles: V, method: 'GET',  re: re(`/procurement/${ID}/pos`), example: '/procurement/27/pos' },
+  { roles: V, method: 'GET',  re: re(`/procurement/pos/${ID}`), example: '/procurement/pos/5' },
+  { roles: V, method: 'GET',  re: re(`/procurement/pos/${ID}/itp`), example: '/procurement/pos/5/itp' },
+  { roles: V, method: 'GET',  re: re(`/procurement/pos/${ID}/variations`), example: '/procurement/pos/5/variations' },
+  { roles: V, method: 'GET',  re: re(`/procurement/pos/${ID}/documents`), example: '/procurement/pos/5/documents' },
+  { roles: V, method: 'GET',  re: re(`/procurement/pos/${ID}/documents/${ID}/download`), example: '/procurement/pos/5/documents/2/download' },
+  { roles: V, method: 'GET',  re: re(`/expediting/${ID}/vdrl/packages`), example: '/expediting/27/vdrl/packages' },
+  { roles: V, method: 'GET',  re: re(`/expediting/${ID}/vdrl/documents`), example: '/expediting/27/vdrl/documents' },
+  { roles: V, method: 'GET',  re: re(`/expediting/${ID}/vdrl/stats`), example: '/expediting/27/vdrl/stats' },
+  { roles: V, method: 'GET',  re: re(`/expediting/${ID}/vdrl/po-list`), example: '/expediting/27/vdrl/po-list' },
+  { roles: V, method: 'POST', re: re(`/expediting/${ID}/vdrl/documents/${ID}/file`), example: '/expediting/27/vdrl/documents/9/file' },  // own rows, allowed statuses
+  { roles: V, method: 'GET',  re: re(`/documents/${ID}/download/vdrl:${ID}`), example: '/documents/27/download/vdrl:9' },
+  { roles: V, method: 'GET',  re: re(`/traceability/${ID}/summary`), example: '/traceability/27/summary' },
+  { roles: V, method: 'GET',  re: re(`/traceability/${ID}/vdrl`), example: '/traceability/27/vdrl' },
+  { roles: V, method: 'GET',  re: re(`/traceability/${ID}/tags`), example: '/traceability/27/tags' },                       // [] for vendors
+  { roles: V, method: 'GET',  re: re(`/traceability/${ID}/cert/${ID}`), example: '/traceability/27/cert/5' },             // the certificate and its versions
+  { roles: V, method: 'POST', re: re(`/traceability/${ID}/cert`), example: '/traceability/27/cert' },
+  { roles: V, method: 'POST', re: re(`/traceability/cert/${ID}/version`), example: '/traceability/cert/5/version' },
+  { roles: V, method: 'GET',  re: re(`/traceability/cert/${ID}/file`), example: '/traceability/cert/5/file' },
+  { roles: V, method: 'GET',  re: re(`/documents/${ID}/download/traceability:${ID}`), example: '/documents/27/download/traceability:5' },
 ]
 
 // Unauthenticated auth routes stay outside the gate even when a token is sent.
