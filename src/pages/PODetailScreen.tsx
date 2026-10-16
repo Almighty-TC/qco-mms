@@ -18,6 +18,7 @@ const POL_W   = [60, 240, 70, 60, 90, 90, 100, 110, 100, 100, 100, 110, 60]
 const POL_MIN = [50, 120, 50, 50, 70, 70, 80, 80, 70, 80, 80, 80, 50]
 
 import { API } from '../lib/api'
+import { viewFile } from '../lib/fileAccess'   // authed in-browser View (consistency)
 import { StatusLegend } from '../components/StatusLegend'
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
@@ -49,6 +50,7 @@ interface POLine {
   ros_date: string | null; cdd: string | null; wbs_code: string | null
   heat_number_required: number; status: string; tag_number: string | null
   vdrl_required: number; cert_required: string | null
+  source_mto_line_id?: number | null  // set only on lines generated from a tender award — qty/uom frozen, not deletable
 }
 
 interface POApproval {
@@ -424,13 +426,19 @@ const LineItemsTab = ({ po, dark, onRefresh }: { po: PO; dark: boolean; onRefres
                   }
                 </td>
                 <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>
-                  {editMode
+                  {editMode && l.source_mto_line_id == null
                     ? <input type="number" value={l.qty ?? ''} onChange={e => updateLine(i, 'qty', e.target.value ? Number(e.target.value) : null)} style={{ ...inp(dark), width: 70, textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }} />
-                    : (l.qty ?? '—')
+                    : <>
+                        {l.qty ?? '—'}
+                        {editMode && (
+                          <div data-tender-locked="" title="Awarded tender quantity — quantity and unit cannot be changed"
+                            style={{ fontSize: 9, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.04em', textTransform: 'uppercase' }}>Tender · locked</div>
+                        )}
+                      </>
                   }
                 </td>
                 <td style={tdStyle}>
-                  {editMode
+                  {editMode && l.source_mto_line_id == null
                     ? <select value={l.uom} onChange={e => updateLine(i, 'uom', e.target.value)} style={{ ...inp(dark), width: 70 }}>
                         {['EA','M','M2','M3','KG','T','LT','SET','LOT'].map(u => <option key={u} value={u}>{u}</option>)}
                       </select>
@@ -471,7 +479,7 @@ const LineItemsTab = ({ po, dark, onRefresh }: { po: PO; dark: boolean; onRefres
                 </td>
                 {editMode && (
                   <td style={{ ...tdStyle, textAlign: 'center' }}>
-                    {lines.length > 1 && (
+                    {lines.length > 1 && l.source_mto_line_id == null && (
                       <button onClick={() => deleteLine(l)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 2 }}>×</button>
                     )}
                   </td>
@@ -788,6 +796,7 @@ const DocumentsTab = ({ po, dark }: { po: PO; dark: boolean }) => {
               <span style={{ flex: 1, fontSize: 13, color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={doc.file_name}>{doc.file_name}</span>
               <span style={{ fontSize: 11, color: '#94a3b8', whiteSpace: 'nowrap' }}>v{doc.version} · {formatBytes(doc.file_size_bytes)} · {doc.uploaded_by_name}</span>
               <span style={{ fontSize: 11, color: '#94a3b8', whiteSpace: 'nowrap' }}>{fmtDate(doc.uploaded_at)}</span>
+              <button onClick={() => viewFile(`${API}/procurement/pos/${po.id}/documents/${doc.id}/download`, doc.file_name).catch(() => addToast('error', 'Failed to open document'))} style={{ padding: '4px 10px', borderRadius: 5, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: col, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>👁 View</button>
               <button onClick={() => download(doc)} style={{ padding: '4px 10px', borderRadius: 5, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: col, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>↓ Download</button>
               {doc.is_current ? <span style={{ fontSize: 10, fontWeight: 700, color: '#15803d' }}>CURRENT</span> : <span style={{ fontSize: 10, color: '#94a3b8' }}>v{doc.version}</span>}
             </div>
@@ -1108,7 +1117,7 @@ const PODetailInner = ({ dark, poId, projectName, onBack, onLeaf }: PODetailInne
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
           <HelpButton screenName="PO Detail" sections={PO_DETAIL_HELP} dark={dark} />
-          {!po.isLocked && (
+          {!po.isLocked && po.status !== 'closed' && po.status !== 'cancelled' && (
             <button onClick={() => setApprove(true)} style={{ padding: '8px 18px', borderRadius: 6, border: 'none', background: '#15803d', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
               🔒 Approve & Lock PO
             </button>

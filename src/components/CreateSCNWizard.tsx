@@ -8,6 +8,8 @@ import axios from 'axios'
 // Success/error feedback is handled by the parent via onCreated/onError props.
 
 import { API } from '../lib/api'
+import { containerDimViolations, containerDimMessage } from '../lib/packaging'
+import { dateOrder } from '../lib/dateOrder'
 
 // ─── TYPES ────────────────────────────────────────────────────
 interface Props {
@@ -22,16 +24,21 @@ interface Props {
 type Step = 1 | 2 | 3 | 4 | 5 | 6
 
 interface SelectedLineVal { checked: boolean; qty: string }
-interface AdditionalItem  { desc: string; qty: string; uom: string; parentLineId: string } // parentLineId REQUIRED — off-PO variation must name its parent PO line
+interface AdditionalItem  { desc: string; qty: string; uom: string; parentLineId: string; ros: string } // parentLineId REQUIRED — off-PO variation must name its parent PO line; ros user-supplied (Q3)
 interface PkgContent { lineRef: string; qty: string }   // which allocatable line + how much is in this box
 interface PackageRow {
+  id: string                 // Q2: stable client ref for nesting (sent to backend as `ref`)
+  parentId: string           // Q2: id of the container this nests under ('' = top-level)
+  kind: 'container' | 'package'   // D5.1 container-first: 'container' = top-level typed container (holds sub-packages, no items); 'package' = leaf (sub-package or loose) that holds items
   type: string; customType?: string; qty: string
   length: string; width: string; height: string; weight: string
   is_dg: boolean
   contents: PkgContent[]   // Stage 2: itemized packing list. Non-empty → this is ONE physical box.
+  containerTypeId?: number | ''   // Q4: ISO container type — set on 'container' rows
+  containerNo?: string; sealNo?: string   // Q4: optional on a container row at creation (seal routes through governance)
 }
 // Heat/Lot P1: one declared heat for the shipment (heat_number required; grade/cert optional).
-interface HeatRow { heat_number: string; grade: string; cert: string }
+interface HeatRow { heat_number: string; grade: string; cert: string; packageRef?: string }   // 3a: optional package link (client ref)
 
 // ─── CONSTANTS ────────────────────────────────────────────────
 const STEP_LABELS = ['Select lines', 'SCN details', 'Packages', 'Heats', 'Documents', 'Confirm']
@@ -103,11 +110,22 @@ export const CreateSCNWizard: React.FC<Props> = ({
   const [eta, setEta]                         = useState('')
   const [transportMode, setTransportMode]     = useState('')
   const [transportError, setTransportError]   = useState('')
+  // Item 2 (multi-modal): constituent legs + free-text leg detail. ⚠ Persistence is
+  // FLAGGED — shipment_control_notes.mode has no 'multi' value and there's no column for
+  // the legs; storage approach is pending TC's schema decision (not wired to create yet).
+  const [multiModes, setMultiModes]           = useState<string[]>([])
+  const [multiNotes, setMultiNotes]           = useState('')
   const [forwarder, setForwarder]             = useState('')
   const [incoterms, setIncoterms]             = useState('')
 
   // ─── STEP 3: Packages ─────────────────────────────────────
   const [packages, setPackages] = useState<PackageRow[]>([])
+  // Q4/D5: who physically packs this SCN. 'forwarder' delegates packing to a freight
+  // forwarder (picked below) and lets the SCN be created with packaging UNFINISHED.
+  const [packedByType, setPackedByType] = useState<'internal'|'vendor'|'forwarder'>('internal')
+  const [forwarderUserId, setForwarderUserId] = useState<number | ''>('')
+  const [forwarders, setForwarders] = useState<{ id: number; full_name: string; company?: string }[]>([])
+  const [containerTypes, setContainerTypes] = useState<{ id: number; code: string; description: string; inner_length_mm?: number; inner_width_mm?: number; inner_height_mm?: number; capacity_m3?: number | null; max_payload_kg?: number | null }[]>([])
 
   // ─── STEP 4: Heats (Heat/Lot P1) ──────────────────────────
   const [heats, setHeats] = useState<HeatRow[]>([])
@@ -150,6 +168,10 @@ export const CreateSCNWizard: React.FC<Props> = ({
     axios.get(`${API}/expediting/${projectId}/warehouses`)
       .then(r => setWarehouses(r.data))
       .catch(() => {})
+
+    // D5: active freight forwarders (delegation picker) + ISO container types (Q4 picker).
+    axios.get(`${API}/expediting/forwarders`).then(r => setForwarders(r.data || [])).catch(() => {})
+    axios.get(`${API}/logistics/container-types`).then(r => setContainerTypes(r.data || [])).catch(() => {})
   }, [poId, projectId, preSelectedLineId])
 
   // ─── LINE SELECTION HELPERS ───────────────────────────────
@@ -181,19 +203,39 @@ export const CreateSCNWizard: React.FC<Props> = ({
 
   // ─── ADDITIONAL ITEMS ─────────────────────────────────────
   const addAdditional = () =>
-    setAdditionalItems(prev => [...prev, { desc: '', qty: '1', uom: 'EA', parentLineId: '' }])
+    setAdditionalItems(prev => [...prev, { desc: '', qty: '1', uom: 'EA', parentLineId: '', ros: '' }])
   const updateAdditional = (i: number, field: keyof AdditionalItem, val: string) =>
     setAdditionalItems(prev => prev.map((it, idx) => idx === i ? { ...it, [field]: val } : it))
   const removeAdditional = (i: number) =>
     setAdditionalItems(prev => prev.filter((_, idx) => idx !== i))
 
-  // ─── PACKAGES ─────────────────────────────────────────────
-  const addPackage = () =>
-    setPackages(prev => [...prev, { type: 'Pallet', qty: '1', length: '', width: '', height: '', weight: '', is_dg: false, contents: [] }])
+  // ─── PACKAGES (D5.1 container-first) ──────────────────────
+  // A CONTAINER is a top-level typed object you create first (pick ISO type), then add
+  // packages INTO it. A LOOSE PACKAGE is a top-level leaf that holds items directly. A
+  // SUB-PACKAGE is a leaf nested under a container. Items live in leaves only.
+  const newPkgId = () => `p${Date.now()}${Math.floor(Math.random() * 1000)}`
+  const blankLeaf = (parentId: string): PackageRow => ({ id: newPkgId(), parentId, kind: 'package', type: 'Pallet', qty: '1', length: '', width: '', height: '', weight: '', is_dg: false, contents: [], containerTypeId: '' })
+  const addContainer = () =>
+    setPackages(prev => [...prev, { id: newPkgId(), parentId: '', kind: 'container', type: 'Container', qty: '1', length: '', width: '', height: '', weight: '', is_dg: false, contents: [], containerTypeId: '', containerNo: '', sealNo: '' }])
+  const addLoosePackage = () => setPackages(prev => [...prev, blankLeaf('')])
+  const addPackageInto = (containerId: string) => setPackages(prev => [...prev, blankLeaf(containerId)])
   const updatePkg = (i: number, field: keyof PackageRow, val: any) =>
     setPackages(prev => prev.map((p, idx) => idx === i ? { ...p, [field]: val } : p))
+  // Removing a container also removes its sub-packages (a container can't outlive… nor
+  // strand… its contents); removing a leaf just drops it.
   const removePkg = (i: number) =>
-    setPackages(prev => prev.filter((_, idx) => idx !== i))
+    setPackages(prev => {
+      const removed = prev[i]
+      if (!removed) return prev
+      return prev.filter((_, idx) => idx !== i).filter(p => p.parentId !== removed.id)
+    })
+
+  // ─── HIERARCHY HELPERS ────────────────────────────────────
+  const containerRows = () => packages.filter(p => p.kind === 'container')
+  const looseRows = () => packages.filter(p => p.kind === 'package' && !p.parentId)
+  const subRows = (containerId: string) => packages.filter(p => p.parentId === containerId)
+  const pkgIndex = (id: string) => packages.findIndex(p => p.id === id)
+  const ctById = (id?: number | '') => containerTypes.find(c => c.id === id)
 
   // ─── PACKAGE CONTENTS (Stage 2 — D1 per-package picker) ────
   const addContent = (pi: number) =>
@@ -237,17 +279,63 @@ export const CreateSCNWizard: React.FC<Props> = ({
 
   // ─── HEATS (Heat/Lot P1) ──────────────────────────────────
   const addHeat = () =>
-    setHeats(prev => [...prev, { heat_number: '', grade: '', cert: '' }])
+    setHeats(prev => [...prev, { heat_number: '', grade: '', cert: '', packageRef: '' }])
+  // 3a: short label for a package in the heat→package picker.
+  const pkgLabel = (p: PackageRow) => {
+    if (p.kind === 'container') { const ct = ctById(p.containerTypeId); return `📦 Container${ct ? ` ${ct.code}` : ''}` }
+    const parent = p.parentId ? packages.find(x => x.id === p.parentId) : null
+    return parent ? `↳ ${p.type} in ${ctById(parent.containerTypeId)?.code || 'container'}` : `${p.type} (loose)`
+  }
   const updateHeat = (i: number, field: keyof HeatRow, val: string) =>
     setHeats(prev => prev.map((h, idx) => idx === i ? { ...h, [field]: val } : h))
   const removeHeat = (i: number) =>
     setHeats(prev => prev.filter((_, idx) => idx !== i))
 
   // ─── NAVIGATION GUARDS ────────────────────────────────────
+  // Step 2 now requires BOTH a transport mode AND a destination warehouse.
   const canNext =
     step === 1 ? countSelected() > 0
-    : step === 2 ? !!transportMode
+    : step === 2 ? (!!transportMode && !!warehouseId)
     : true
+
+  // Packaging-completeness gate (Pass 1): only 'We pack (internal)' must fully allocate
+  // every selected line into packages before creating. 'Vendor' and 'Freight forwarder'
+  // packing may be left UNFINISHED — the expeditor/forwarder enters packages later.
+  const requiresFullAllocation = packedByType === 'internal'
+  const untypedContainerExists = packages.some(p => p.kind === 'container' && !p.containerTypeId)
+  // Fix 3: a sub-package that exceeds its container's inner dims (Pass-2 containerDimViolations,
+  // per-type relaxation — open-top relaxes height, flat-rack carries out-of-gauge) is a real
+  // block. Computed once here so canCreate, the Confirm banner, and the button tooltip all
+  // agree (was: enforced only as a click-time toast, so the banner couldn't explain it). The
+  // returned `num` is the 1-based position among leaf packages, for the user-facing message.
+  const dimViolations = () => {
+    const out: { num: number; msg: string }[] = []
+    let leafNum = 0
+    packages.forEach(p => {
+      if (p.kind !== 'package') return
+      leafNum++
+      if (!p.parentId) return
+      const parent = packages.find(c => c.id === p.parentId)
+      const ct = ctById(parent?.containerTypeId)
+      if (!ct) return
+      const v = containerDimViolations(
+        { length_mm: (Number(p.length) || 0) * 10, width_mm: (Number(p.width) || 0) * 10, height_mm: (Number(p.height) || 0) * 10 },
+        ct as any)
+      if (v) out.push({ num: leafNum, msg: containerDimMessage(v, ct as any) })
+    })
+    return out
+  }
+  // Date-ordering block (frontend feedback; backend dateOrder stays authoritative).
+  // Same rule/order as the create route: CRD ≤ CCD ≤ ETD ≤ ETA over whatever subset
+  // is present. Surfaced inline at the fields, in the Confirm banner, and gated below —
+  // so illogical dates disable Create with a reason instead of a post-submit toast.
+  const dateOrderError = dateOrder([['CRD', crd], ['CCD', ccd], ['ETD', etd], ['ETA', eta]])
+  const canCreate = !creating
+    && (!requiresFullAllocation || allFullyAllocated())
+    && !(packedByType === 'forwarder' && !forwarderUserId)
+    && !untypedContainerExists
+    && dimViolations().length === 0
+    && !dateOrderError
 
   // ─── SUBMIT ───────────────────────────────────────────────
   // Posts SCN to backend; shows toast and calls parent callback.
@@ -258,7 +346,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
     const itemVariations = additionalItems
       .map((it, i) => ({ it, i }))
       .filter(({ it }) => it.desc.trim() || it.parentLineId)
-      .map(({ it, i }) => ({ line_ref: `add:${i}`, parent_po_line_id: Number(it.parentLineId) || null, description: it.desc.trim(), qty: Number(it.qty) || 1, uom: it.uom }))
+      .map(({ it, i }) => ({ line_ref: `add:${i}`, parent_po_line_id: Number(it.parentLineId) || null, description: it.desc.trim(), qty: Number(it.qty) || 1, uom: it.uom, ros_date: it.ros || null }))
     const childVariations = Object.entries(selectedChildren)
       .filter(([, c]) => c.checked)
       .map(([id, c]) => ({ line_ref: `child:${id}`, parent_po_line_id: c.parentLineId, description: c.description, qty: Number(c.qty) || 1, uom: c.uom }))
@@ -267,8 +355,24 @@ export const CreateSCNWizard: React.FC<Props> = ({
       if (!v.parent_po_line_id) { onToast?.('Each off-PO variation must select a parent PO line.', 'error'); return }
       if (!v.description)       { onToast?.('Each off-PO variation needs a description.', 'error'); return }
     }
-    // D2: every selected line must be fully allocated into packages before creating.
-    if (!allFullyAllocated()) { onToast?.('Allocate every selected line fully into packages before creating the SCN.', 'error'); return }
+    // Pass 1: ONLY 'We pack (internal)' must fully allocate before creating. Vendor and
+    // forwarder packing may be created with packaging unfinished (entered later).
+    if (requiresFullAllocation && !allFullyAllocated()) { onToast?.('Allocate every selected line fully into packages before creating the SCN.', 'error'); return }
+    // If delegating, a forwarder must be chosen.
+    if (packedByType === 'forwarder' && !forwarderUserId) { onToast?.('Pick the freight forwarder to delegate packing to.', 'error'); return }
+    // Q4: every container must declare its ISO container type.
+    const untypedContainer = packages.find(p => p.kind === 'container' && !p.containerTypeId)
+    if (untypedContainer) { onToast?.('Select an ISO container type for each container.', 'error'); return }
+    // Item 1: a sub-package must FIT its container's inner dims (per-type relaxation —
+    // open-top relaxes height, flat-rack carries out-of-gauge). Wizard dims are cm → mm.
+    for (const p of packages) {
+      if (p.kind !== 'package' || !p.parentId) continue
+      const parent = packages.find(c => c.id === p.parentId)
+      const ct = ctById(parent?.containerTypeId)
+      if (!ct) continue
+      const v = containerDimViolations({ length_mm: (Number(p.length) || 0) * 10, width_mm: (Number(p.width) || 0) * 10, height_mm: (Number(p.height) || 0) * 10 }, ct as any)
+      if (v) { onToast?.(containerDimMessage(v, ct as any), 'error'); return }
+    }
 
     const poLines = po?.po_lines || []
     setCreating(true)
@@ -288,17 +392,43 @@ export const CreateSCNWizard: React.FC<Props> = ({
         etd: etd || null,
         eta: eta || null,
         transport_mode: transportMode || null,
+        // Item 2 (multi-modal): send constituent legs + leg notes when Multi-modal.
+        transport_modes: transportMode === 'multi' ? multiModes : undefined,
+        transport_mode_notes: transportMode === 'multi' ? (multiNotes || null) : undefined,
         forwarder_name: forwarder || null,
         incoterms: incoterms || null,
+        // D5: who packs. 'forwarder' → delegate packing to the picked freight forwarder
+        // (backend validates: forwarder requires an active FF; internal/vendor forbid it).
+        packed_by_type: packedByType,
+        packaging_delegated_to: packedByType === 'forwarder' ? (forwarderUserId || null) : null,
+        // Q2: send ref + parent_ref so the backend persists the hierarchy. Order
+        // parents BEFORE children at any depth (backend resolves ids single-pass).
         // Itemized package → qty forced to 1 (one physical box); contents carry the packing list.
-        packages: packages.map(p => ({
-          type: p.type === 'Others' ? ((p.customType || '').trim() || 'Other') : p.type,
-          qty: p.contents.length ? 1 : (Number(p.qty) || 1),
-          length: p.length, width: p.width, height: p.height, weight: p.weight, is_dg: p.is_dg,
-          contents: p.contents
-            .filter(c => c.lineRef && Number(c.qty) > 0)
-            .map(c => ({ line_ref: c.lineRef, qty: Number(c.qty), uom: allocatableLines().find(l => l.ref === c.lineRef)?.uom || null })),
-        })),
+        packages: (() => {
+          const byParent: Record<string, PackageRow[]> = {}
+          packages.forEach(p => { (byParent[p.parentId || ''] = byParent[p.parentId || ''] || []).push(p) })
+          const ordered: PackageRow[] = []
+          const seen = new Set<string>()
+          const walk = (pid: string) => (byParent[pid] || []).forEach(p => { if (seen.has(p.id)) return; seen.add(p.id); ordered.push(p); walk(p.id) })
+          walk('')
+          packages.forEach(p => { if (!seen.has(p.id)) ordered.push(p) })   // orphans → append
+          return ordered
+        })()
+          .map(p => ({
+            ref: p.id,
+            parent_ref: p.parentId || undefined,
+            type: p.kind === 'container' ? 'Container' : (p.type === 'Others' ? ((p.customType || '').trim() || 'Other') : p.type),
+            qty: p.contents.length ? 1 : (Number(p.qty) || 1),
+            // Q4: a typed container carries its ISO container_type_id + optional
+            // container_no/seal_no. seal_no routes through governance in the create txn.
+            container_type_id: p.kind === 'container' ? (p.containerTypeId || undefined) : undefined,
+            container_no: p.kind === 'container' ? ((p.containerNo || '').trim() || undefined) : undefined,
+            seal_no: p.kind === 'container' ? ((p.sealNo || '').trim() || undefined) : undefined,
+            length: p.length, width: p.width, height: p.height, weight: p.weight, is_dg: p.is_dg,
+            contents: p.contents
+              .filter(c => c.lineRef && Number(c.qty) > 0)
+              .map(c => ({ line_ref: c.lineRef, qty: Number(c.qty), uom: allocatableLines().find(l => l.ref === c.lineRef)?.uom || null })),
+          })),
         // Heat/Lot P1: declared heats for this shipment (optional — empty is fine).
         heats: heats
           .filter(h => h.heat_number.trim())
@@ -306,6 +436,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
             heat_number: h.heat_number.trim(),
             material_grade: h.grade.trim() || null,
             mill_cert_ref: h.cert.trim() || null,
+            package_ref: h.packageRef || undefined,   // 3a: optional heat→package link (resolved server-side)
           })),
         notify_forwarder: notifyForwarder,
       }
@@ -475,13 +606,33 @@ export const CreateSCNWizard: React.FC<Props> = ({
           </div>
           {showAdditional && (
             <>
-              {additionalItems.map((item, i) => (
-                <div key={i} style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+              {additionalItems.map((item, i) => {
+                // Q3: the child inherits the parent line's identity + WBS (read-only context).
+                // Blocked at create if the parent is unlinked or has no WBS (backend 422 surfaced).
+                const parent = (po?.po_lines || []).find((l: any) => String(l.id) === String(item.parentLineId))
+                const parentIdentity = parent ? (parent.tag_number || parent.equipment_tag || (parent.commodity_name ? `commodity ${parent.commodity_name}` : (parent.commodity_id ? `commodity #${parent.commodity_id}` : null))) : null
+                const parentWbs = parent ? (parent.wbs_code_snapshot || null) : null
+                const unlinked = parent && !parentIdentity
+                const noWbs = parent && !parentWbs
+                return (
+                <div key={i} style={{ marginTop: 8, borderTop: i ? '1px dashed #fde68a' : undefined, paddingTop: i ? 8 : 0 }}>
+                {/* Fix 3: single row — compact field widths (and a shrinkable desc) keep every
+                    field, including the ROS date, on ONE line within the modal (no wrap). */}
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                   <select
                     value={item.parentLineId}
-                    onChange={e => updateAdditional(i, 'parentLineId', e.target.value)}
+                    onChange={e => {
+                      // Fix 1: pre-fill ROS from the parent line's ROS as an EDITABLE default
+                      // (only when ROS is still blank, so a user override is never clobbered).
+                      const pid = e.target.value
+                      const pl = (po?.po_lines || []).find((l: any) => String(l.id) === String(pid))
+                      const inheritedRos = pl?.ros_date ? String(pl.ros_date).slice(0, 10)
+                        : (po?.ros_date ? String(po.ros_date).slice(0, 10) : '')
+                      setAdditionalItems(prev => prev.map((it, idx) => idx === i
+                        ? { ...it, parentLineId: pid, ros: it.ros || inheritedRos } : it))
+                    }}
                     title="Parent PO line (required)"
-                    style={{ ...inputStyle, width: 200, borderColor: item.parentLineId ? undefined : '#f59e0b' }}
+                    style={{ ...inputStyle, width: 150, borderColor: item.parentLineId ? undefined : '#f59e0b' }}
                   >
                     <option value="">— parent PO line (required) —</option>
                     {(po?.po_lines || []).map((l: any) => (
@@ -491,23 +642,31 @@ export const CreateSCNWizard: React.FC<Props> = ({
                   <input
                     value={item.desc}
                     onChange={e => updateAdditional(i, 'desc', e.target.value)}
-                    placeholder="Variation description (e.g. specialised crate for P-101)"
-                    style={{ ...inputStyle, flex: 1 }}
+                    placeholder="Off-PO item (e.g. fridge door handle)"
+                    style={{ ...inputStyle, flex: 1, minWidth: 90 }}
                   />
                   <input
                     type="number"
                     value={item.qty}
                     onChange={e => updateAdditional(i, 'qty', e.target.value)}
-                    style={{ ...inputStyle, width: 70 }}
+                    style={{ ...inputStyle, width: 52 }}
                     min={1}
                   />
                   <select
                     value={item.uom}
                     onChange={e => updateAdditional(i, 'uom', e.target.value)}
-                    style={{ ...inputStyle, width: 80 }}
+                    style={{ ...inputStyle, width: 64 }}
                   >
                     {UOM_OPTIONS.map(u => <option key={u}>{u}</option>)}
                   </select>
+                  <label style={{ fontSize: 10, color: '#64748b', whiteSpace: 'nowrap' }}>ROS</label>
+                  <input
+                    type="date"
+                    value={item.ros}
+                    onChange={e => updateAdditional(i, 'ros', e.target.value)}
+                    title="Required-on-site date — defaults from the parent line's ROS, editable"
+                    style={{ ...inputStyle, width: 132, flexShrink: 0 }}
+                  />
                   <button
                     onClick={() => removeAdditional(i)}
                     style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 16, cursor: 'pointer', padding: '0 4px' }}
@@ -515,7 +674,21 @@ export const CreateSCNWizard: React.FC<Props> = ({
                     ×
                   </button>
                 </div>
-              ))}
+                {/* Inherited identity + WBS (read-only) / block warning */}
+                {parent && (
+                  unlinked || noWbs ? (
+                    <div style={{ marginTop: 4, marginLeft: 2, fontSize: 11, color: '#dc2626' }}>
+                      ⚠ Line {parent.line_number} {unlinked ? 'has no commodity/tag link' : 'has no WBS'} — {unlinked ? 'link a commodity/tag' : 'set its WBS'} before adding an off-PO item under it.
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: 4, marginLeft: 2, fontSize: 11, color: '#64748b' }}>
+                      Inherits from line {parent.line_number}: <span style={{ color: '#475569' }}>{parentIdentity}</span> · WBS <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#475569' }}>{parentWbs}</span> <span style={{ color: '#94a3b8' }}>(read-only)</span>
+                    </div>
+                  )
+                )}
+                </div>
+                )
+              })}
               <button
                 onClick={addAdditional}
                 style={{
@@ -563,11 +736,11 @@ export const CreateSCNWizard: React.FC<Props> = ({
           )}
         </div>
         <div>
-          <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>Destination warehouse</label>
+          <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>Destination warehouse *</label>
           <select
             value={warehouseId}
             onChange={e => setWarehouseId(Number(e.target.value) || '')}
-            style={{ ...inputStyle, width: '100%' }}
+            style={{ ...inputStyle, width: '100%', borderColor: warehouseId ? undefined : '#f59e0b' }}
           >
             <option value="">— Select warehouse</option>
             {warehouses.map((w: any) => (
@@ -585,12 +758,15 @@ export const CreateSCNWizard: React.FC<Props> = ({
           />
         </div>
         <div>
-          <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>Contract delivery date (CDD) <span style={{ color: '#94a3b8', fontWeight: 400 }}>· from PO line (editable)</span></label>
+          <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>Contract delivery date (CDD) <span style={{ color: '#94a3b8', fontWeight: 400 }}>· from PO line (read-only)</span></label>
+          {/* Pass 1: CDD is inherited from the PO line and NOT editable here. */}
           <input
             type="date"
             value={cdd}
-            onChange={e => setCdd(e.target.value)}
-            style={{ ...inputStyle, width: '100%' }}
+            readOnly
+            disabled
+            title="Inherited from the PO line — not editable on the SCN"
+            style={{ ...inputStyle, width: '100%', background: '#f1f5f9', color: '#64748b', cursor: 'not-allowed' }}
           />
         </div>
         <div>
@@ -626,10 +802,21 @@ export const CreateSCNWizard: React.FC<Props> = ({
             type="date"
             value={eta}
             onChange={e => setEta(e.target.value)}
-            style={{ ...inputStyle, width: '100%' }}
+            style={{ ...inputStyle, width: '100%', ...(dateOrderError ? { borderColor: '#dc2626' } : {}) }}
           />
         </div>
       </div>
+
+      {/* Date-ordering feedback — earliest, in-place (mirrors backend dateOrder;
+          also gates Create + shown in the Confirm banner). CRD ≤ CCD ≤ ETD ≤ ETA. */}
+      {dateOrderError && (
+        <div style={{
+          background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6,
+          padding: '8px 12px', marginBottom: 14, fontSize: 12, color: '#b91c1c',
+        }}>
+          ⚠ {dateOrderError}
+        </div>
+      )}
 
       {/* Transport mode cards */}
       <div style={{ marginBottom: 14 }}>
@@ -652,6 +839,25 @@ export const CreateSCNWizard: React.FC<Props> = ({
             </button>
           ))}
         </div>
+        {/* Item 2: multi-modal → constituent legs + leg notes. (Persistence pending TC schema.) */}
+        {transportMode === 'multi' && (
+          <div style={{ marginTop: 10, border: '1px solid #c7d2fe', background: 'rgba(37,99,235,0.04)', borderRadius: 8, padding: '10px 12px' }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#1d4ed8', marginBottom: 6 }}>CONSTITUENT MODES</div>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
+              {['sea', 'air', 'road', 'rail', 'courier'].map(m => (
+                <label key={m} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#374151', cursor: 'pointer', textTransform: 'capitalize' }}>
+                  <input type="checkbox" checked={multiModes.includes(m)}
+                    onChange={e => setMultiModes(prev => e.target.checked ? [...prev, m] : prev.filter(x => x !== m))} />
+                  {m}
+                </label>
+              ))}
+            </div>
+            <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Leg detail (optional)</label>
+            <textarea value={multiNotes} onChange={e => setMultiNotes(e.target.value)} rows={2}
+              placeholder="e.g. Sea to Singapore, road to site"
+              style={{ ...inputStyle, width: '100%', resize: 'vertical', fontFamily: 'inherit' }} />
+          </div>
+        )}
         {/* ─── TRANSPORT ERROR ──────────────────────────────── */}
         {transportError && (
           <p style={{ color: '#ef4444', fontSize: 12, marginTop: 4, marginBottom: 0 }}>
@@ -662,13 +868,24 @@ export const CreateSCNWizard: React.FC<Props> = ({
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <div>
-          <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>Forwarder name</label>
-          <input
+          <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>Forwarder</label>
+          {/* Item 4: dropdown of project freight forwarders (same source as the delegation
+              picker). Writes forwarder_name — the field the register/detail display use. */}
+          <select
             value={forwarder}
-            onChange={e => setForwarder(e.target.value)}
-            placeholder="e.g. Toll Group"
+            onChange={e => {
+              // Fix 4: keep the Packages-step delegation picker in sync — resolve the chosen
+              // forwarder to its user id so 'Freight forwarder packs' pre-fills (no double-pick).
+              const val = e.target.value
+              setForwarder(val)
+              const m = forwarders.find(f => (f.company ? `${f.full_name} · ${f.company}` : f.full_name) === val)
+              setForwarderUserId(m ? m.id : '')
+            }}
             style={{ ...inputStyle, width: '100%' }}
-          />
+          >
+            <option value="">— Select forwarder</option>
+            {forwarders.map(f => <option key={f.id} value={f.company ? `${f.full_name} · ${f.company}` : f.full_name}>{f.full_name}{f.company ? ` · ${f.company}` : ''}</option>)}
+          </select>
         </div>
         <div>
           <label style={{ fontSize: 11, color: '#64748b', display: 'block', marginBottom: 4 }}>Incoterms</label>
@@ -687,147 +904,209 @@ export const CreateSCNWizard: React.FC<Props> = ({
 
   // ─── STEP 3: PACKAGES ─────────────────────────────────────
   // Add one or more package rows with dimensions and weight.
+  // Leaf-package body (dims + DG + contents) — shared by sub-packages and loose packages.
+  const renderLeafBody = (pkg: PackageRow, i: number) => (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px', gap: 8, marginBottom: 8 }}>
+        <div>
+          <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Type</label>
+          <select value={pkg.type} onChange={e => updatePkg(i, 'type', e.target.value)} style={{ ...inputStyle, width: '100%' }}>
+            {PKG_TYPES.map(t => <option key={t}>{t}</option>)}
+          </select>
+          {pkg.type === 'Others' && (
+            <input value={pkg.customType || ''} onChange={e => updatePkg(i, 'customType', e.target.value)} placeholder="Specify package type *"
+              style={{ ...inputStyle, width: '100%', marginTop: 6, borderColor: (pkg.customType || '').trim() ? undefined : '#f59e0b' }} />
+          )}
+        </div>
+        <div>
+          {/* Fix 2: a leaf package is an itemized box — qty is locked to 1 and greyed from
+              the START (was: editable then jumped to 1 once contents were added, which looked
+              broken). Bundle-of-N-units is a future redesign (docs/MAP_BUNDLE_QTY_REDESIGN). */}
+          <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Qty (itemized)</label>
+          <input type="number" value="1" disabled
+            title="Itemized package = one physical box (bundle-of-N is a future redesign)"
+            style={{ ...inputStyle, width: '100%', background: '#f1f5f9', color: '#94a3b8' }} />
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8, marginBottom: 8 }}>
+        {(['length', 'width', 'height'] as const).map(dim => (
+          <div key={dim}>
+            <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3, textTransform: 'capitalize' }}>{dim} (cm)</label>
+            <input type="number" min={0} value={pkg[dim]} onChange={e => updatePkg(i, dim, e.target.value)} style={{ ...inputStyle, width: '100%' }} />
+          </div>
+        ))}
+        <div>
+          <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Weight (kg)</label>
+          <input type="number" min={0} value={pkg.weight} onChange={e => updatePkg(i, 'weight', e.target.value)} style={{ ...inputStyle, width: '100%' }} />
+        </div>
+      </div>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#374151', cursor: 'pointer' }}>
+        <input type="checkbox" checked={pkg.is_dg} onChange={e => updatePkg(i, 'is_dg', e.target.checked)} style={{ accentColor: '#ef4444' }} />
+        Dangerous goods (DG)
+      </label>
+      {/* Contents (packing list) — items go in leaf packages. */}
+      <div style={{ marginTop: 12, borderTop: '1px dashed #e2e8f0', paddingTop: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 6 }}>Contents (packing list)</div>
+        {pkg.contents.map((c, ci) => {
+          const line = allocatableLines().find(l => l.ref === c.lineRef)
+          const allocatedAll = line ? allocatedFor(c.lineRef) : 0
+          const over = !!line && allocatedAll > line.scnQty + 1e-9
+          const thisRowQty = Number(c.qty) || 0
+          const lineRemaining = line ? Math.max(0, line.scnQty - allocatedAll) : 0
+          const rowCap = line ? Math.max(0, line.scnQty - (allocatedAll - thisRowQty)) : 0
+          return (
+            <div key={ci} style={{ marginBottom: 6 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px 24px', gap: 6, alignItems: 'center' }}>
+                <select value={c.lineRef} onChange={e => updateContent(i, ci, 'lineRef', e.target.value)} style={{ ...inputStyle, width: '100%' }}>
+                  <option value="">Select line…</option>
+                  {/* Item 5: only show lines not yet fully packed (+ this row's own line),
+                      labelled with the BALANCE available to pack (reuses allocatedFor). */}
+                  {allocatableLines().filter(l => {
+                    const avail = l.scnQty - allocatedFor(l.ref) + (l.ref === c.lineRef ? (Number(c.qty) || 0) : 0)
+                    return avail > 1e-9 || l.ref === c.lineRef
+                  }).map(l => {
+                    const avail = Math.max(0, l.scnQty - allocatedFor(l.ref) + (l.ref === c.lineRef ? (Number(c.qty) || 0) : 0))
+                    return <option key={l.ref} value={l.ref}>{l.label} — {avail} {l.uom} to pack</option>
+                  })}
+                </select>
+                <input type="number" min={0} value={c.qty} placeholder="qty"
+                  onChange={e => updateContent(i, ci, 'qty', e.target.value)}
+                  title={line ? `${lineRemaining} ${line.uom} still unallocated on this line` : ''}
+                  style={{ ...inputStyle, width: '100%', borderColor: over ? '#ef4444' : '#dde3ed' }} />
+                <button onClick={() => removeContent(i, ci)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 15, cursor: 'pointer' }}>×</button>
+              </div>
+              {line && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, marginLeft: 2 }}>
+                  <button onClick={() => updateContent(i, ci, 'qty', String(rowCap))} disabled={lineRemaining <= 0 && !over}
+                    title={lineRemaining > 0 ? `Fill the remaining ${lineRemaining} ${line.uom} into this row` : over ? 'Over-allocated — reduce qty' : 'Line already fully allocated'}
+                    style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontFamily: 'inherit', border: '1px solid #93c5fd',
+                      background: (lineRemaining > 0 || over) ? '#eff6ff' : '#f1f5f9', color: (lineRemaining > 0 || over) ? '#2563eb' : '#94a3b8',
+                      cursor: (lineRemaining > 0 || over) ? 'pointer' : 'not-allowed' }}>+ Balance</button>
+                  <span style={{ fontSize: 11, color: over ? '#ef4444' : lineRemaining > 0 ? '#d97706' : '#16a34a' }}>
+                    {over ? `Over by ${(allocatedAll - line.scnQty)} ${line.uom}` : `Remaining: ${lineRemaining} ${line.uom}`}
+                  </span>
+                </div>
+              )}
+            </div>
+          )
+        })}
+        <button onClick={() => addContent(i)} style={{ fontSize: 11, color: '#2563eb', background: 'none', border: '1px dashed #93c5fd', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontFamily: 'inherit' }}>+ add content</button>
+      </div>
+    </div>
+  )
+
   const Step3 = () => (
     <div>
       <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>Packages</div>
       <div style={{ fontSize: 12, color: '#64748b', marginBottom: 16 }}>
-        Optional — add package details for freight booking.
+        Build the shipment container-first — add a container and pack into it, or add loose packages.
       </div>
 
-      {packages.map((pkg, i) => (
-        <div key={i} style={{
-          border: '1px solid #dde3ed', borderRadius: 8, padding: '14px 16px', marginBottom: 12,
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>Package {i + 1}</span>
-            <button onClick={() => removePkg(i)}
-              style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 16, cursor: 'pointer' }}>×</button>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px', gap: 8, marginBottom: 8 }}>
-            <div>
-              <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Type</label>
-              <select
-                value={pkg.type}
-                onChange={e => updatePkg(i, 'type', e.target.value)}
-                style={{ ...inputStyle, width: '100%' }}
-              >
-                {PKG_TYPES.map(t => <option key={t}>{t}</option>)}
-              </select>
-              {pkg.type === 'Others' && (
-                <input
-                  value={pkg.customType || ''}
-                  onChange={e => updatePkg(i, 'customType', e.target.value)}
-                  placeholder="Specify package type *"
-                  style={{ ...inputStyle, width: '100%', marginTop: 6, borderColor: (pkg.customType || '').trim() ? undefined : '#f59e0b' }}
-                />
-              )}
-            </div>
-            <div>
-              <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>
-                {pkg.contents.length > 0 ? 'Qty (itemized)' : 'Qty'}
-              </label>
-              <input
-                type="number" min={1}
-                value={pkg.contents.length > 0 ? '1' : pkg.qty}
-                disabled={pkg.contents.length > 0}
-                title={pkg.contents.length > 0 ? 'Itemized package = one physical box' : undefined}
-                onChange={e => updatePkg(i, 'qty', e.target.value)}
-                style={{ ...inputStyle, width: '100%', background: pkg.contents.length > 0 ? '#f1f5f9' : '#fff', color: pkg.contents.length > 0 ? '#94a3b8' : '#0f172a' }}
-              />
-            </div>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8, marginBottom: 8 }}>
-            {(['length', 'width', 'height'] as const).map(dim => (
-              <div key={dim}>
-                <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3, textTransform: 'capitalize' }}>
-                  {dim} (cm)
-                </label>
-                <input
-                  type="number" min={0}
-                  value={pkg[dim]}
-                  onChange={e => updatePkg(i, dim, e.target.value)}
-                  style={{ ...inputStyle, width: '100%' }}
-                />
-              </div>
-            ))}
-            <div>
-              <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Weight (kg)</label>
-              <input
-                type="number" min={0}
-                value={pkg.weight}
-                onChange={e => updatePkg(i, 'weight', e.target.value)}
-                style={{ ...inputStyle, width: '100%' }}
-              />
-            </div>
-          </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#374151', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={pkg.is_dg}
-              onChange={e => updatePkg(i, 'is_dg', e.target.checked)}
-              style={{ accentColor: '#ef4444' }}
-            />
-            Dangerous goods (DG)
-          </label>
-
-          {/* Contents (Stage 2 — D1 per-package picker). Adding any content makes this
-              ONE physical box (qty locked to 1). Draws from the SCN's selected lines. */}
-          <div style={{ marginTop: 12, borderTop: '1px dashed #e2e8f0', paddingTop: 10 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 6 }}>Contents (packing list)</div>
-            {pkg.contents.map((c, ci) => {
-              const line = allocatableLines().find(l => l.ref === c.lineRef)
-              const allocatedAll = line ? allocatedFor(c.lineRef) : 0          // packed across ALL rows (incl. this one)
-              const over = !!line && allocatedAll > line.scnQty + 1e-9
-              const thisRowQty = Number(c.qty) || 0
-              // Line-level remaining = SCN qty still unpacked across every row → the "Remaining" read-out (→ 0 when full).
-              const lineRemaining = line ? Math.max(0, line.scnQty - allocatedAll) : 0
-              // Row capacity = most THIS row may hold without the line exceeding its SCN qty (D3).
-              // "+ Balance" SETS the row to this so the line lands exactly full (never adds → never overshoots).
-              const rowCap = line ? Math.max(0, line.scnQty - (allocatedAll - thisRowQty)) : 0
-              return (
-                <div key={ci} style={{ marginBottom: 6 }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px 24px', gap: 6, alignItems: 'center' }}>
-                    <select value={c.lineRef} onChange={e => updateContent(i, ci, 'lineRef', e.target.value)} style={{ ...inputStyle, width: '100%' }}>
-                      <option value="">Select line…</option>
-                      {allocatableLines().map(l => <option key={l.ref} value={l.ref}>{l.label} ({l.scnQty} {l.uom})</option>)}
-                    </select>
-                    <input type="number" min={0} value={c.qty} placeholder="qty"
-                      onChange={e => updateContent(i, ci, 'qty', e.target.value)}
-                      title={line ? `${lineRemaining} ${line.uom} still unallocated on this line` : ''}
-                      style={{ ...inputStyle, width: '100%', borderColor: over ? '#ef4444' : '#dde3ed' }} />
-                    <button onClick={() => removeContent(i, ci)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 15, cursor: 'pointer' }}>×</button>
-                  </div>
-                  {/* "+ Balance" sets THIS row to the line's full remaining (capped at SCN qty, D3),
-                      with a live line-level remaining read-out. Only shown once a line is selected. */}
-                  {line && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, marginLeft: 2 }}>
-                      <button
-                        onClick={() => updateContent(i, ci, 'qty', String(rowCap))}
-                        disabled={lineRemaining <= 0 && !over}
-                        title={lineRemaining > 0 ? `Fill the remaining ${lineRemaining} ${line.uom} into this row` : over ? 'Over-allocated — reduce qty' : 'Line already fully allocated'}
-                        style={{
-                          fontSize: 10, padding: '2px 8px', borderRadius: 4, fontFamily: 'inherit',
-                          border: '1px solid #93c5fd', background: (lineRemaining > 0 || over) ? '#eff6ff' : '#f1f5f9',
-                          color: (lineRemaining > 0 || over) ? '#2563eb' : '#94a3b8',
-                          cursor: (lineRemaining > 0 || over) ? 'pointer' : 'not-allowed',
-                        }}>
-                        + Balance
-                      </button>
-                      <span style={{ fontSize: 11, color: over ? '#ef4444' : lineRemaining > 0 ? '#d97706' : '#16a34a' }}>
-                        {over ? `Over by ${(allocatedAll - line.scnQty)} ${line.uom}` : `Remaining: ${lineRemaining} ${line.uom}`}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-            <button onClick={() => addContent(i)}
-              style={{ fontSize: 11, color: '#2563eb', background: 'none', border: '1px dashed #93c5fd', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontFamily: 'inherit' }}>
-              + add content
+      {/* D5: who physically packs this SCN. 'Freight forwarder' delegates packing to a
+          chosen forwarder and lets you create the SCN with packaging unfinished. */}
+      <div style={{ border: '1px solid #dde3ed', borderRadius: 8, padding: '12px 14px', marginBottom: 16, background: '#f8fafc' }}>
+        <label style={{ fontSize: 11, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 8 }}>WHO PACKS THIS SHIPMENT?</label>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {([['internal','We pack (internal)'],['vendor','Vendor packs'],['forwarder','Freight forwarder packs']] as const).map(([val, lbl]) => (
+            <button key={val} type="button" onClick={() => setPackedByType(val)}
+              style={{ padding: '6px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                border: packedByType === val ? '1.5px solid #2563eb' : '1px solid #cbd5e1',
+                background: packedByType === val ? '#eff6ff' : '#fff', color: packedByType === val ? '#1d4ed8' : '#475569' }}>
+              {lbl}
             </button>
-          </div>
+          ))}
         </div>
-      ))}
+        {packedByType === 'forwarder' && (
+          <div style={{ marginTop: 12 }}>
+            <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Delegate packing to *</label>
+            <select value={forwarderUserId} onChange={e => {
+                // Fix 4: two-way sync — reflect the delegate back onto the SCN-details Forwarder.
+                const id = e.target.value ? Number(e.target.value) : ''
+                setForwarderUserId(id)
+                const f = forwarders.find(x => x.id === id)
+                if (f) setForwarder(f.company ? `${f.full_name} · ${f.company}` : f.full_name)
+              }}
+              style={{ ...inputStyle, width: '100%', borderColor: forwarderUserId ? undefined : '#f59e0b' }}>
+              <option value="">— Select a freight forwarder —</option>
+              {forwarders.map(f => <option key={f.id} value={f.id}>{f.full_name}{f.company ? ` · ${f.company}` : ''}</option>)}
+            </select>
+            <div style={{ fontSize: 11, color: '#7c3aed', marginTop: 8, lineHeight: 1.4 }}>
+              📦 The forwarder will pack and seal this shipment. You can create the SCN now with packaging <strong>unfinished</strong> — they’ll complete it.
+            </div>
+          </div>
+        )}
+        {packedByType === 'vendor' && (
+          <div style={{ fontSize: 11, color: '#64748b', marginTop: 8 }}>Vendor-packed — enter the packages yourself below (the vendor doesn’t log in).</div>
+        )}
+      </div>
+
+      {/* Containers (top-level, typed) — pack sub-packages INTO each. */}
+      {containerRows().map(cont => {
+        const ci = pkgIndex(cont.id)
+        const ct = ctById(cont.containerTypeId)
+        const subs = subRows(cont.id)
+        return (
+        <div key={cont.id} style={{ border: '1.5px solid #c4b5fd', borderRadius: 10, padding: '14px 16px', marginBottom: 14, background: 'rgba(124,58,237,0.04)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: '#6d28d9', display: 'flex', alignItems: 'center', gap: 6 }}>📦 Container{ct ? ` · ${ct.code}` : ''}</span>
+            <button onClick={() => removePkg(ci)} title="Remove container + its packages" style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 16, cursor: 'pointer' }}>×</button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+            <div>
+              <label style={{ fontSize: 10, color: '#7c3aed', fontWeight: 700, display: 'block', marginBottom: 3 }}>Container type *</label>
+              <select value={cont.containerTypeId ?? ''} onChange={e => updatePkg(ci, 'containerTypeId', e.target.value ? Number(e.target.value) : '')}
+                style={{ ...inputStyle, width: '100%', borderColor: cont.containerTypeId ? '#c4b5fd' : '#f59e0b' }}>
+                <option value="">— Select ISO container type —</option>
+                {containerTypes.map(t => <option key={t.id} value={t.id}>{t.code} · {t.description}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Inner dimensions (reference)</label>
+              <div style={{ ...inputStyle, width: '100%', background: '#f1f5f9', color: '#475569', display: 'flex', alignItems: 'center', minHeight: 30 }}>
+                {ct ? `${ct.inner_length_mm} × ${ct.inner_width_mm} × ${ct.inner_height_mm} mm${ct.capacity_m3 ? ` · ${ct.capacity_m3} m3` : ''}` : '—'}
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+            <div>
+              <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Container No. (optional)</label>
+              <input value={cont.containerNo || ''} onChange={e => updatePkg(ci, 'containerNo', e.target.value)} placeholder="e.g. MSKU1234567" style={{ ...inputStyle, width: '100%' }} />
+            </div>
+            <div>
+              <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Seal No. (optional)</label>
+              <input value={cont.sealNo || ''} onChange={e => updatePkg(ci, 'sealNo', e.target.value)} placeholder={packedByType === 'forwarder' ? 'Forwarder seals on packing' : 'Seal number'} style={{ ...inputStyle, width: '100%' }} />
+            </div>
+          </div>
+          {subs.map(sub => {
+            const si = pkgIndex(sub.id)
+            return (
+              <div key={sub.id} style={{ border: '1px solid #dde3ed', borderRadius: 8, padding: '12px 14px', marginBottom: 8, background: '#fff', marginLeft: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: '#374151' }}>↳ Package in container</span>
+                  <button onClick={() => removePkg(si)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 15, cursor: 'pointer' }}>×</button>
+                </div>
+                {renderLeafBody(sub, si)}
+              </div>
+            )
+          })}
+          <button onClick={() => addPackageInto(cont.id)} style={{ fontSize: 11, color: '#7c3aed', background: 'none', border: '1px dashed #c4b5fd', borderRadius: 6, padding: '6px 12px', cursor: 'pointer', fontFamily: 'inherit', marginLeft: 12 }}>+ Add package into this container</button>
+        </div>
+        )
+      })}
+
+      {/* Loose packages (top-level leaves that hold items directly). */}
+      {looseRows().map(lp => {
+        const li = pkgIndex(lp.id)
+        return (
+          <div key={lp.id} style={{ border: '1px solid #dde3ed', borderRadius: 8, padding: '14px 16px', marginBottom: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>📦 Loose package</span>
+              <button onClick={() => removePkg(li)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 16, cursor: 'pointer' }}>×</button>
+            </div>
+            {renderLeafBody(lp, li)}
+          </div>
+        )
+      })}
 
       {/* Reconciliation (D2) — every selected line must be fully packed before Confirm. */}
       {allocatableLines().length > 0 && (
@@ -852,17 +1131,16 @@ export const CreateSCNWizard: React.FC<Props> = ({
         </div>
       )}
 
-      <button
-        onClick={addPackage}
-        style={{
-          width: '100%', padding: '10px',
-          border: '1px dashed #2563eb', borderRadius: 8,
-          background: 'none', color: '#2563eb',
-          cursor: 'pointer', fontFamily: 'inherit', fontSize: 12,
-        }}
-      >
-        + Add package
-      </button>
+      <div style={{ display: 'flex', gap: 10 }}>
+        <button onClick={addContainer}
+          style={{ flex: 1, padding: '10px', border: '1px dashed #7c3aed', borderRadius: 8, background: 'rgba(124,58,237,0.04)', color: '#6d28d9', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600 }}>
+          📦 + Add container
+        </button>
+        <button onClick={addLoosePackage}
+          style={{ flex: 1, padding: '10px', border: '1px dashed #2563eb', borderRadius: 8, background: 'none', color: '#2563eb', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600 }}>
+          + Add loose package
+        </button>
+      </div>
     </div>
   )
 
@@ -887,7 +1165,7 @@ export const CreateSCNWizard: React.FC<Props> = ({
             <button onClick={() => removeHeat(i)}
               style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 16, cursor: 'pointer' }}>×</button>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: packages.length ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr', gap: 8 }}>
             <div>
               <label style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>
                 Heat number <span style={{ color: '#ef4444' }}>*</span>
@@ -917,6 +1195,16 @@ export const CreateSCNWizard: React.FC<Props> = ({
                 style={{ ...inputStyle, width: '100%' }}
               />
             </div>
+            {/* 3a: optionally link this heat to a package built in step 3. */}
+            {packages.length > 0 && (
+              <div>
+                <label style={{ fontSize: 10, color: '#7c3aed', display: 'block', marginBottom: 3 }}>In package</label>
+                <select value={h.packageRef || ''} onChange={e => updateHeat(i, 'packageRef', e.target.value)} style={{ ...inputStyle, width: '100%' }}>
+                  <option value="">— Not linked</option>
+                  {packages.map(p => <option key={p.id} value={p.id}>{pkgLabel(p)}</option>)}
+                </select>
+              </div>
+            )}
           </div>
         </div>
       ))}
@@ -1004,39 +1292,71 @@ export const CreateSCNWizard: React.FC<Props> = ({
     const warehouseName = warehouses.find((w: any) => w.id === warehouseId)?.name || '—'
     const modeName = MODES.find(m => m.id === transportMode)?.label || '—'
 
-    // ─── D2 GATE EXPLANATION ──────────────────────────────────
-    // Why "Create SCN" is disabled: list the lines that aren't exactly allocated
-    // (under = needs more packing; over = remove some) so the user knows what to fix.
-    const allocIssues = allocatableLines()
-      .map(l => ({ l, done: allocatedFor(l.ref) }))
-      .filter(({ l, done }) => Math.abs(done - l.scnQty) >= 1e-9)
+    // ─── DISABLE-REASON EXPLANATION (Fix A) ───────────────────
+    // The Confirm screen must ALWAYS explain why Create is disabled — and never give a
+    // FALSE reason. Allocation is required ONLY for 'We pack (internal)', so allocIssues
+    // are scoped to that scenario (vendor/forwarder may create with packaging unfinished).
+    // The other real gates — an untyped container, or a forwarder not yet picked — are
+    // surfaced too (previously only allocation was ever shown, so these blocks looked like
+    // a dead button with no reason).
+    const allocIssues = requiresFullAllocation
+      ? allocatableLines()
+          .map(l => ({ l, done: allocatedFor(l.ref) }))
+          .filter(({ l, done }) => Math.abs(done - l.scnQty) >= 1e-9)
+      : []
+    const containers = packages.filter(p => p.kind === 'container')
+    const untypedContainers = containers
+      .map((p, i) => ({ num: i + 1 }))
+      .filter((_, i) => !containers[i].containerTypeId)
+    const forwarderMissing = packedByType === 'forwarder' && !forwarderUserId
+    const dimIssues = dimViolations()   // Fix 3: package-exceeds-container dimension blocks
+    // Item #16: date-ordering block, surfaced here alongside the other gates (mirrors
+    // backend dateOrder; also shown inline on the SCN-details step + gates canCreate).
+    const hasBlock = allocIssues.length > 0 || untypedContainers.length > 0 || forwarderMissing || dimIssues.length > 0 || !!dateOrderError
 
     return (
       <div>
         <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>Confirm SCN</div>
         <div style={{ fontSize: 12, color: '#64748b', marginBottom: 16 }}>Review details before creating the shipment control note.</div>
 
-        {/* Disabled-reason banner — explains the D2 gate on the Create button below. */}
-        {allocIssues.length > 0 && (
+        {/* Disabled-reason banner — explains every real gate on the Create button below. */}
+        {hasBlock && (
           <div style={{
             background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 8,
             padding: '10px 14px', marginBottom: 16, fontSize: 12, color: '#92400e',
           }}>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>
-              ⚠ Cannot create — {allocIssues.length} line{allocIssues.length !== 1 ? 's' : ''} not fully allocated into packages
-            </div>
-            {allocIssues.map(({ l, done }) => {
-              const over = done > l.scnQty + 1e-9
-              return (
-                <div key={l.ref} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
-                  <span>{l.label}</span>
-                  <span style={{ fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, color: over ? '#dc2626' : '#b45309' }}>
-                    {done}/{l.scnQty} {l.uom} {over ? '⚠ over' : '— under'}
-                  </span>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>⚠ Cannot create — fix the following:</div>
+            {forwarderMissing && (
+              <div style={{ padding: '2px 0' }}>• Select a freight forwarder to delegate packing to.</div>
+            )}
+            {untypedContainers.map(({ num }) => (
+              <div key={num} style={{ padding: '2px 0' }}>• Container {num} needs an ISO container type selected.</div>
+            ))}
+            {dimIssues.map(({ num, msg }) => (
+              <div key={`dim-${num}`} style={{ padding: '2px 0' }}>• Package {num} exceeds its container — {msg}</div>
+            ))}
+            {dateOrderError && (
+              <div style={{ padding: '2px 0' }}>• {dateOrderError} <span style={{ color: '#b45309' }}>(fix on the <strong>SCN details</strong> step)</span></div>
+            )}
+            {allocIssues.length > 0 && (
+              <>
+                <div style={{ fontWeight: 600, marginTop: (forwarderMissing || untypedContainers.length) ? 6 : 0 }}>
+                  {allocIssues.length} line{allocIssues.length !== 1 ? 's' : ''} not fully allocated into packages:
                 </div>
-              )
-            })}
-            <div style={{ marginTop: 6, color: '#b45309' }}>Go back to <strong>Packages</strong> and use <strong>+ Balance</strong> to finish allocating.</div>
+                {allocIssues.map(({ l, done }) => {
+                  const over = done > l.scnQty + 1e-9
+                  return (
+                    <div key={l.ref} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
+                      <span>{l.label}</span>
+                      <span style={{ fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, color: over ? '#dc2626' : '#b45309' }}>
+                        {done}/{l.scnQty} {l.uom} {over ? '⚠ over' : '— under'}
+                      </span>
+                    </div>
+                  )
+                })}
+                <div style={{ marginTop: 6, color: '#b45309' }}>Go back to <strong>Packages</strong> and use <strong>+ Balance</strong> to finish allocating.</div>
+              </>
+            )}
           </div>
         )}
 
@@ -1175,11 +1495,15 @@ export const CreateSCNWizard: React.FC<Props> = ({
                     setTransportError('Please select a transport mode to continue')
                     return
                   }
+                  if (step === 2 && !warehouseId) {
+                    setTransportError('Please select a destination warehouse to continue')
+                    return
+                  }
                   setTransportError('')
                   setStep(s => (s + 1) as Step)
                 }}
-                disabled={step === 1 && !canNext}
-                style={{ ...blueBtn, opacity: (step === 1 && !canNext) ? 0.5 : 1, cursor: (step === 1 && !canNext) ? 'not-allowed' : 'pointer' }}
+                disabled={!canNext}
+                style={{ ...blueBtn, opacity: !canNext ? 0.5 : 1, cursor: !canNext ? 'not-allowed' : 'pointer' }}
               >
                 {step === 1
                   ? `Next — ${countSelected()} item${countSelected() !== 1 ? 's' : ''} →`
@@ -1188,9 +1512,15 @@ export const CreateSCNWizard: React.FC<Props> = ({
             ) : (
               <button
                 onClick={handleCreate}
-                disabled={creating || !allFullyAllocated()}
-                title={!allFullyAllocated() ? 'Allocate every selected line fully into packages first' : undefined}
-                style={{ ...greenBtn, opacity: (creating || !allFullyAllocated()) ? 0.5 : 1, cursor: (creating || !allFullyAllocated()) ? 'not-allowed' : 'pointer' }}
+                disabled={!canCreate}
+                title={
+                  requiresFullAllocation && !allFullyAllocated() ? 'Allocate every selected line fully into packages first'
+                  : packedByType === 'forwarder' && !forwarderUserId ? 'Select the freight forwarder to delegate packing to'
+                  : untypedContainerExists ? 'Select an ISO container type for each container'
+                  : dimViolations().length > 0 ? 'A package exceeds its container dimensions — use a flat rack / open top, or resize'
+                  : undefined
+                }
+                style={{ ...greenBtn, opacity: canCreate ? 1 : 0.5, cursor: canCreate ? 'pointer' : 'not-allowed' }}
               >
                 {creating ? 'Creating…' : '✓ Create SCN'}
               </button>

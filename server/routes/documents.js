@@ -9,6 +9,7 @@ const router  = express.Router()
 const db      = require('../db')
 const path    = require('path')
 const fs      = require('fs')
+const blobStore = require('../lib/blobStore')   // blob migration: dual-read fallback
 const { authenticateToken } = require('../middleware/auth')
 const { requireProjectScope } = require('../middleware/permissions')
 
@@ -527,11 +528,24 @@ router.get('/:projectId/download/:docId', async (req, res) => {
     const r = await resolver(id, pid)
     if (r.code === 'not_found') return res.status(404).json({ error: 'Document not found in this project' })
     if (r.code === 'no_file')   return res.status(404).json({ error: 'No file is stored for this document yet' })
+
+    const safeName = (r.name || 'document').replace(/[\r\n"]/g, '')
+    // DUAL-READ FALLBACK (blob migration): try blob first — the key is <module>/<basename>,
+    // derived from the resolved path (basename is invariant across blob-key / legacy disk
+    // shapes, and strips any traversal so the key is safe by construction). On null (blob
+    // disabled / absent), fall through to the existing on-disk read below — unchanged.
+    const blobStream = await blobStore.getFile(blobStore.keyFor(moduleKey, r.absPath))
+    if (blobStream) {
+      auditDownload(req, pid, moduleKey, id, r.name)
+      res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`)
+      res.setHeader('Content-Type', r.mime || 'application/octet-stream')
+      return blobStream.pipe(res)
+    }
+
     if (!within(r.baseDir, r.absPath)) return res.status(400).json({ error: 'Invalid file reference' })
     if (!fs.existsSync(r.absPath)) return res.status(404).json({ error: 'File is recorded but missing on the server' })
 
     auditDownload(req, pid, moduleKey, id, r.name)
-    const safeName = (r.name || 'document').replace(/[\r\n"]/g, '')
     res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`)
     res.setHeader('Content-Type', r.mime || 'application/octet-stream')
     fs.createReadStream(r.absPath).pipe(res)

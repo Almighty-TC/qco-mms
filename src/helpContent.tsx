@@ -116,8 +116,8 @@ export const WBS_HELP: HelpSection[] = [
       {Steps([
         <>Click <strong>↓ Template</strong> to download the XLSX template.</>,
         <>Fill in the columns: {Code('code')}, {Code('description')}, {Code('parent_string')}, {Code('ros')}. Parents must appear before their children.</>,
-        <>Click <strong>↑ Upload XER/Excel</strong> and select your file.</>,
-        <>The validation preview shows ✅ / ⚠️ / ❌ per row. Fix any ❌ errors and re-upload.</>,
+        <>Click <strong>↑ Upload Excel/CSV</strong> and select your file (.xlsx, .xls or .csv).</>,
+        <>The validation preview shows ✅ / ⚠️ / ❌ per row. Fix any ❌ errors and re-upload. An import is refused as a whole if any row has an error; nothing is imported.</>,
         <>Click <strong>↑ Import</strong> to confirm.</>
       ])}
     </>,

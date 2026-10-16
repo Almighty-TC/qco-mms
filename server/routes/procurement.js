@@ -20,6 +20,7 @@ router.use(require('../middleware/permissions').enforce((p, req) => {
 }))
 router.param('projectId', require('../middleware/permissions').requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects
 const db      = require('../db')       // connection pool — never createConnection
+const vendorView = require('../lib/vendorView') // P2c: what a vendor sees of its own POs
 
 // ─── PO PROJECT-SCOPE GUARD (close /pos/:id cross-project leak) ───
 // The /pos/:id* family carries no :projectId in the path, so the projectId param
@@ -30,14 +31,19 @@ const db      = require('../db')       // connection pool — never createConnec
 // so it covers EVERY /pos/:id route (read AND mutation) in one place. On denial:
 // 403 + no data (never leak the PO). A non-existent id falls through to the
 // handler's normal 404. (/pos/check-duplicate(s) are literal routes with no :id.)
+// Phase 2 (P2c): a vendor reaches only its own supplier's POs (req.user.supplier_id,
+// set from the users row by the external gate); a vendor with no supplier, or a PO of
+// another supplier, gets 403 "Access denied".
 const { EXTERNAL_ROLES } = require('../middleware/permissions')
 async function requirePoScope(req, res, next, id) {
   const role = req.user?.role
   if (!role) return res.status(401).json({ error: 'Not authenticated' })
   if (role === 'admin' || !EXTERNAL_ROLES.has(role)) return next() // internals bypass — mirrors requireProjectScope
+  if (role === 'vendor' && req.user.supplier_id == null) return res.status(403).json({ error: 'Access denied' })
   try {
-    const [[po]] = await db.query('SELECT project_id FROM purchase_orders WHERE id = ?', [Number(id)])
+    const [[po]] = await db.query('SELECT project_id, supplier_id FROM purchase_orders WHERE id = ?', [Number(id)])
     if (!po) return next() // no such PO → handler returns its normal 404 (no data leaked)
+    if (role === 'vendor' && Number(po.supplier_id) !== Number(req.user.supplier_id)) return res.status(403).json({ error: 'Access denied' })
     const [rows] = await db.query(
       'SELECT id FROM user_wbs_access WHERE user_id = ? AND project_id = ? LIMIT 1',
       [req.user.id, po.project_id]
@@ -62,23 +68,16 @@ const multer  = require('multer')
 const uploadDir = path.join(__dirname, '..', 'uploads', 'po_documents')
 fs.mkdirSync(uploadDir, { recursive: true })
 
-const poDocStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const dir = path.join(uploadDir, String(req.params.id || 'tmp'))
-    fs.mkdirSync(dir, { recursive: true })
-    cb(null, dir)
-  },
-  filename: (req, file, cb) => {
-    // Prefix with timestamp to avoid collisions
-    const ts   = Date.now()
-    const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')
-    cb(null, `${ts}_${safe}`)
-  },
-})
+// Blob migration: memoryStorage (buffer) → blobStore.persist in the handler (which keeps
+// the per-poId subdir + timestamped-name shape for the disk-fallback path). No disk file is
+// written until AFTER the role + PO-exists checks, so rejections need no file cleanup.
+const blobStore = require('../lib/blobStore')
 const { fileFilter } = require('../utils/upload')
-const { fileNotEmpty } = require('../utils/validate')
+const { parseImportSheet } = require('../utils/validate')
+const { checkPoRows, poRowsFromSheet, normKey } = require('../lib/poBulk')
+const { searchIds, likeClause, parse: parseSearch } = require('../lib/tableSearch')
 const uploadPoDoc = multer({
-  storage: poDocStorage,
+  storage: multer.memoryStorage(),
   limits:  { fileSize: 50 * 1024 * 1024 },   // 50 MB
   fileFilter: fileFilter('document'),
 })
@@ -342,6 +341,33 @@ router.post('/pos/check-duplicates-batch', async (req, res) => {
 // ─── PO LIST ─────────────────────────────────────────────────────────────────
 // GET /api/procurement/:projectId/pos
 // Item 1: Uses project's at_risk_days_threshold for RAG computation.
+// q (table search, server/lib/tableSearch.js) is ANDed with every filter above it, vendor
+// scoping included: matchRow over the grouped list (searchIds; rag computed as for the rows),
+// or SQL LIKE without rag when it has more than 5,000 POs. With q the response adds
+// search: { fuzzy, fellBack, queryTruncated, fields }; an unknown field is a 400.
+// The FROM/JOIN text is shared by the count, the list and the q scope; the GROUP BY by the
+// list and the q scope (byte for byte the text these queries had before).
+const PO_LIST_FROM = `FROM purchase_orders po
+      LEFT JOIN suppliers s   ON s.id   = po.supplier_id
+      LEFT JOIN users     own ON own.id = po.owner_id
+      LEFT JOIN users     exp ON exp.id = po.expeditor_id
+      LEFT JOIN wbs_nodes w   ON w.code = po.wbs_code AND w.project_id = po.project_id
+      LEFT JOIN po_lines  l   ON l.po_id = po.id`
+const PO_LIST_GROUP_BY = `GROUP BY
+        po.id, po.po_number, po.po_name, po.description, po.vendor_name,
+        po.supplier_id, po.currency, po.value, po.incoterms, po.handover_point, po.wbs_code,
+        po.status, po.is_critical_path, po.is_locked, po.group_category,
+        po.owner_id, po.expeditor_id, po.ros_date, po.created_at,
+        own.full_name, exp.full_name, s.name, w.id, w.description,
+        po.milestone_po_date, po.milestone_fat_date, po.milestone_esd_date,
+        po.milestone_eta_date, po.milestone_ros_date`
+const PO_LIST_SEARCH = {
+  po: { column: 'po.po_number' }, name: { column: 'po.po_name' }, vendor: { column: "CONCAT_WS(' ', po.vendor_name, s.name)" },
+  status: { column: 'po.status', flag: 'enum' }, wbs: { column: 'po.wbs_code', flag: 'code' }, desc: { column: 'po.description' },
+  rag: { column: 'MIN(l.cdd)', flag: 'enum' },   // compute() turns MIN(l.cdd) into red/amber/green
+}
+// The LIKE fallback cannot use rag (an aggregate cannot be in a WHERE).
+const PO_LIST_LIKE = Object.fromEntries(Object.entries(PO_LIST_SEARCH).filter(([alias]) => alias !== 'rag'))
 router.get('/:projectId/pos', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
@@ -359,10 +385,11 @@ router.get('/:projectId/pos', async (req, res) => {
     const params  = [pid]
     const filters = ['po.project_id = ?']
 
-    // Vendor sees only their POs
-    if (req.user.role === 'vendor' && req.user.supplier_id) {
-      filters.push('po.supplier_id = ?')
-      params.push(req.user.supplier_id)
+    // Vendor sees only their POs (P2c: none without a supplier — fails closed)
+    const isVendor = req.user.role === 'vendor'
+    if (isVendor) {
+      if (req.user.supplier_id != null) { filters.push('po.supplier_id = ?'); params.push(Number(req.user.supplier_id)) }
+      else filters.push('1=0')
     }
 
     // ── Status tab filter ─────────────────────────────────────────────────────
@@ -394,10 +421,11 @@ router.get('/:projectId/pos', async (req, res) => {
       filters.push(`l.cdd IS NOT NULL AND l.cdd >= CURDATE() AND DATEDIFF(l.cdd, CURDATE()) <= ${atRiskDays}`)
     }
 
-    if (supplier_id)        { filters.push('po.supplier_id = ?');    params.push(Number(supplier_id)) }
-    if (wbs_id)             { filters.push('w.id = ?');              params.push(Number(wbs_id)) }
-    if (is_critical_path === '1') { filters.push('po.is_critical_path = 1') }
-    if (expeditor_id)       { filters.push('po.expeditor_id = ?');   params.push(Number(expeditor_id)) }
+    // P2c: vendors cannot filter by supplier, WBS node, critical path or expeditor (ignored).
+    if (supplier_id && !isVendor)        { filters.push('po.supplier_id = ?');    params.push(Number(supplier_id)) }
+    if (wbs_id && !isVendor)             { filters.push('w.id = ?');              params.push(Number(wbs_id)) }
+    if (is_critical_path === '1' && !isVendor) { filters.push('po.is_critical_path = 1') }
+    if (expeditor_id && !isVendor)       { filters.push('po.expeditor_id = ?');   params.push(Number(expeditor_id)) }
     if (cdd_from)           { filters.push('l.cdd >= ?');            params.push(cdd_from) }
     if (cdd_to)             { filters.push('l.cdd <= ?');            params.push(cdd_to) }
 
@@ -407,13 +435,39 @@ router.get('/:projectId/pos', async (req, res) => {
       params.push(q, q, q, q)
     }
 
+    let searchInfo = null
+    const qText = typeof req.query.q === 'string' && req.query.q.trim() ? req.query.q : null
+    if (qText) {
+      const parsed = parseSearch(qText)
+      const found = await searchIds({
+        query: (sql, p) => db.query(sql, p).then(([r]) => r),
+        idExpr: 'po.id', scopeSql: `${PO_LIST_FROM} WHERE ${filters.join(' AND ')} ${PO_LIST_GROUP_BY}`, scopeParams: params,
+        fieldMap: PO_LIST_SEARCH, q: qText,
+        compute: list => { for (const r of list) r.rag = computeRag(r.rag, r.status, atRiskDays) },
+      })
+      if (found && found.error) return res.status(400).json({ error: found.error })
+      if (found && found.fallback) {
+        if (parsed.groups.some(g => g.some(t => t.kind === 'field' && t.field === 'rag'))) {
+          return res.status(400).json({ error: 'rag cannot be searched when the list has more than 5,000 rows' })
+        }
+        const like = likeClause(parsed, PO_LIST_LIKE)
+        filters.push(like.sql); params.push(...like.params)
+      } else if (found) {
+        if (found.ids.length) { filters.push('po.id IN (?)'); params.push(found.ids) } else filters.push('1=0')
+      }
+      searchInfo = { fuzzy: !!(found && found.fuzzy), fellBack: !!(found && found.fallback), queryTruncated: parsed.truncated,
+        fields: Object.keys(found && found.fallback ? PO_LIST_LIKE : PO_LIST_SEARCH) }
+    }
+
     const SAFE_SORT = {
       po_number: 'po.po_number', vendor: 's.name', status: 'po.status',
       ros_date: 'po.ros_date', created_at: 'po.created_at',
       cdd: 'MIN(l.cdd)', value: 'po.value', wbs: 'po.wbs_code',
       expeditor: 'exp.full_name', owner: 'own.full_name',
     }
-    const orderBy  = SAFE_SORT[sort_col] ?? 'po.created_at'
+    // P2c: vendors cannot sort by internal names (owner, expeditor): the default column instead.
+    const VENDOR_HIDDEN_SORTS = new Set(['owner', 'expeditor'])
+    const orderBy  = (isVendor && VENDOR_HIDDEN_SORTS.has(sort_col) ? undefined : SAFE_SORT[sort_col]) ?? 'po.created_at'
     const orderDir = sort_dir?.toLowerCase() === 'asc' ? 'ASC' : 'DESC'
     const where    = filters.join(' AND ')
 
@@ -425,12 +479,7 @@ router.get('/:projectId/pos', async (req, res) => {
       // COUNT: DISTINCT because WHERE on l.cdd can produce multiple rows per PO
       db.query(`
       SELECT COUNT(DISTINCT po.id) AS total
-      FROM purchase_orders po
-      LEFT JOIN suppliers s   ON s.id   = po.supplier_id
-      LEFT JOIN users     own ON own.id = po.owner_id
-      LEFT JOIN users     exp ON exp.id = po.expeditor_id
-      LEFT JOIN wbs_nodes w   ON w.code = po.wbs_code AND w.project_id = po.project_id
-      LEFT JOIN po_lines  l   ON l.po_id = po.id
+      ${PO_LIST_FROM}
       WHERE ${where}
     `, params),
       db.query(`
@@ -456,21 +505,9 @@ router.get('/:projectId/pos', async (req, res) => {
         MIN(l.ros_date)                     AS earliest_line_ros,
         po.milestone_po_date, po.milestone_fat_date,
         po.milestone_esd_date, po.milestone_eta_date, po.milestone_ros_date
-      FROM purchase_orders po
-      LEFT JOIN suppliers s   ON s.id   = po.supplier_id
-      LEFT JOIN users     own ON own.id = po.owner_id
-      LEFT JOIN users     exp ON exp.id = po.expeditor_id
-      LEFT JOIN wbs_nodes w   ON w.code = po.wbs_code AND w.project_id = po.project_id
-      LEFT JOIN po_lines  l   ON l.po_id = po.id
+      ${PO_LIST_FROM}
       WHERE ${where}
-      GROUP BY
-        po.id, po.po_number, po.po_name, po.description, po.vendor_name,
-        po.supplier_id, po.currency, po.value, po.incoterms, po.handover_point, po.wbs_code,
-        po.status, po.is_critical_path, po.is_locked, po.group_category,
-        po.owner_id, po.expeditor_id, po.ros_date, po.created_at,
-        own.full_name, exp.full_name, s.name, w.id, w.description,
-        po.milestone_po_date, po.milestone_fat_date, po.milestone_esd_date,
-        po.milestone_eta_date, po.milestone_ros_date
+      ${PO_LIST_GROUP_BY}
       ORDER BY ${orderBy} ${orderDir}, po.id ${orderDir}
       LIMIT ? OFFSET ?
     `, [...params, limit, offset]),
@@ -506,7 +543,11 @@ router.get('/:projectId/pos', async (req, res) => {
     })
 
     // ─── ENVELOPE ─── standard { data, total, page, limit } across all paginated endpoints
-    res.json({ data, total: countRows[0].total, page, limit, atRiskDays })
+    const body = isVendor
+      ? { data: data.map(vendorView.poListRow), total: countRows[0].total, page, limit }   // P2c: no atRiskDays
+      : { data, total: countRows[0].total, page, limit, atRiskDays }
+    if (searchInfo) body.search = searchInfo
+    res.json(body)
   } catch (e) {
     console.error('[procurement:pos-list]', e.message)
     dbError(res, e)
@@ -535,7 +576,7 @@ router.get('/pos/:id', async (req, res) => {
     po.expeditor_names = po.expeditor_names_all ? po.expeditor_names_all.split('||')
       : (po.expeditor_name ? [po.expeditor_name] : [])
     delete po.expeditor_names_all
-    if (req.user.role === 'vendor' && po.supplier_id !== req.user.supplier_id) {
+    if (req.user.role === 'vendor' && (req.user.supplier_id == null || Number(po.supplier_id) !== Number(req.user.supplier_id))) {
       return res.status(403).json({ error: 'Access denied' })
     }
 
@@ -549,8 +590,9 @@ router.get('/pos/:id', async (req, res) => {
       WHERE l.po_id = ? ORDER BY l.line_number
     `, [id])
 
-    // Fetch approvals chain
-    const [approvals] = await db.query(`
+    // Fetch approvals chain (not for vendors: P2c)
+    const isVendor = req.user.role === 'vendor'
+    const [approvals] = isVendor ? [[]] : await db.query(`
       SELECT a.*, u.full_name AS approver_name
       FROM po_approvals a JOIN users u ON u.id = a.approver_id
       WHERE a.po_id = ? ORDER BY a.approval_level, a.created_at
@@ -567,6 +609,9 @@ router.get('/pos/:id', async (req, res) => {
 
     const minCdd = lines.reduce((m, l) => !m || (l.cdd && l.cdd < m) ? l.cdd : m, null)
 
+    if (isVendor) {
+      return res.json(vendorView.poDetail({ ...po, statusLabel: STATUS_LABELS[po.status] ?? po.status, cdd: minCdd }, lines, docs[0] ?? null))
+    }
     res.json({
       ...po,
       statusLabel:    STATUS_LABELS[po.status] ?? po.status,
@@ -806,6 +851,10 @@ router.patch('/pos/:id/approve', async (req, res) => {
       'SELECT id, po_number, value, currency, status, project_id FROM purchase_orders WHERE id=?', [id]
     )
     if (!po) return res.status(404).json({ error: 'PO not found' })
+    // A closed (complete) or cancelled PO is finished — approving it would lock it as po-raised again. Every other
+    // status behaves as before on all three paths (active and po-raised POs can still be approved and locked).
+    if (po.status === 'closed' || po.status === 'cancelled')
+      return res.status(409).json({ error: `A ${po.status} PO can't be approved` })
 
     const { threshold1, threshold2 } = await getProjectSettings(po.project_id)
     const poValue = po.value ?? 0
@@ -919,6 +968,9 @@ router.patch('/pos/:id/approve', async (req, res) => {
 
 // ─── REJECT PO ────────────────────────────────────────────────────────────────
 // Item 10D: Any approver can reject with a reason. PO reverts to draft.
+// Only a PO awaiting approval can be rejected — the two states the approve route's multi-level path puts it in.
+// Anything else (rfq, po-raised, active, closed, cancelled, loa) is refused (409): a reject there would silently
+// unlock it, undo an approval, or reopen a closed or cancelled PO.
 router.patch('/pos/:id/reject', async (req, res) => {
   try {
     const id = Number(req.params.id)
@@ -929,6 +981,8 @@ router.patch('/pos/:id/reject', async (req, res) => {
       'SELECT id, po_number, status, owner_id FROM purchase_orders WHERE id=?', [id]
     )
     if (!po) return res.status(404).json({ error: 'PO not found' })
+    if (!['pending_approval', 'pending_director_approval'].includes(po.status))
+      return res.status(409).json({ error: `Only a PO awaiting approval can be rejected (status '${po.status}')` })
 
     await db.query("UPDATE purchase_orders SET status='rfq', is_locked=0 WHERE id=?", [id])
     await db.query(
@@ -956,15 +1010,14 @@ router.patch('/pos/:id/reject', async (req, res) => {
 router.post('/pos/:id/documents', uploadPoDoc.single('file'), async (req, res) => {
   try {
     const id = Number(req.params.id)
+    // memoryStorage: no disk file exists yet on these rejection paths — nothing to clean up.
     if (!DOC_UPLOAD_ROLES.has(req.user.role)) {
-      if (req.file) fs.unlinkSync(req.file.path)
       return res.status(403).json({ error: 'Your role cannot upload PO documents' })
     }
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
 
     const [[po]] = await db.query('SELECT id, po_number FROM purchase_orders WHERE id=?', [id])
     if (!po) {
-      fs.unlinkSync(req.file.path)
       return res.status(404).json({ error: 'PO not found' })
     }
 
@@ -981,11 +1034,15 @@ router.post('/pos/:id/documents', uploadPoDoc.single('file'), async (req, res) =
       [id]
     )
 
-    // Insert new document record
-    const relativePath = path.relative(
-      path.join(__dirname, '..'),
-      req.file.path
-    )
+    // Blob migration: persist to blob (key) or disk (legacy relative shape under the per-poId
+    // subdir). storedName + diskAbsPath replicate the old diskStorage destination/filename.
+    const storedName = `${Date.now()}_${req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+    const diskAbsPath = path.join(uploadDir, String(id), storedName)
+    const { value: relativePath } = await blobStore.persist({
+      key: blobStore.keyFor('procurement', storedName),   // module key matches documents.js RESOLVERS
+      diskAbsPath, buffer: req.file.buffer, contentType: req.file.mimetype,
+      diskValue: path.relative(path.join(__dirname, '..'), diskAbsPath),
+    })
     await db.query(`
       INSERT INTO po_documents
         (po_id, doc_type, file_name, file_path, file_size_bytes, mime_type,
@@ -1017,6 +1074,16 @@ router.get('/pos/:id/documents/:docId/download', async (req, res) => {
     )
     if (!doc) return res.status(404).json({ error: 'Document not found' })
 
+    // DUAL-READ FALLBACK (blob migration): blob first, then existing disk read.
+    const blobStream = await blobStore.getFile(blobStore.keyFor('procurement', doc.file_path))
+    if (blobStream) {
+      audit(req, 'signed_po_downloaded', `purchase_orders/${poId}/documents/${docId}`,
+        null, { file: doc.file_name, version: doc.version })
+      res.setHeader('Content-Disposition', `attachment; filename="${doc.file_name}"`)
+      res.setHeader('Content-Type', doc.mime_type)
+      return blobStream.pipe(res)
+    }
+
     // Resolve absolute path — never expose file_path in response
     const absPath = path.join(__dirname, '..', doc.file_path)
     if (!fs.existsSync(absPath)) {
@@ -1036,124 +1103,30 @@ router.get('/pos/:id/documents/:docId/download', async (req, res) => {
 })
 
 // ─── BULK UPLOAD ─────────────────────────────────────────────────────────────
+// The preview reads the file (any .xlsx, .xls or CSV saved as UTF-8) and checks every row; the confirm
+// takes the rows back from the client, checks every one again on the server and ignores the client's
+// rowStatus, recomputes new, duplicate and locked from the database inside one transaction, and never
+// inserts an invalid row (skipped and reported in errors). The checks: server/lib/poBulk.js.
+
+// The purchase orders with the rows' PO numbers, in any project (po_number is unique across projects).
+async function bulkExisting(q, rows, forUpdate) {
+  const keys = [...new Set(rows.map(r => normKey(r.cells.po_number)).filter(Boolean))]
+  if (!keys.length) return new Map()
+  const [found] = await q.query(
+    `SELECT id, project_id, po_number, status, is_locked, tender_id FROM purchase_orders
+      WHERE TRIM(LOWER(po_number)) IN (${keys.map(() => '?').join(',')})${forUpdate ? ' FOR UPDATE' : ''}`, keys)
+  return new Map(found.map(p => [normKey(p.po_number), p]))
+}
+
 // Item 6: Parse CSV/XLSX upload, return preview with validation results.
 router.post('/:projectId/pos/bulk-upload', uploadBulk.single('file'), async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
-    { const fe = fileNotEmpty(req.file); if (fe) return res.status(400).json({ error: fe }) }
-
-    const ExcelJS = require('exceljs')
-    const rows = []
-
-    if (req.file.originalname.endsWith('.xlsx')) {
-      const wb = new ExcelJS.Workbook()
-      await wb.xlsx.load(req.file.buffer)
-      const ws = wb.worksheets[0]
-      if (!ws) return res.status(400).json({ error: 'No worksheet found in file' })
-
-      // First row = headers
-      let headers = []
-      ws.eachRow((row, rIdx) => {
-        if (rIdx === 1) {
-          headers = row.values.slice(1).map(v => String(v ?? '').trim().toLowerCase())
-        } else {
-          const obj = {}
-          row.values.slice(1).forEach((val, i) => { obj[headers[i]] = val })
-          rows.push(obj)
-        }
-      })
-    } else {
-      // CSV: simple parser
-      const text = req.file.buffer.toString('utf8')
-      const lines = text.split(/\r?\n/).filter(l => l.trim())
-      if (lines.length < 2) return res.status(400).json({ error: 'File is empty or has no data rows' })
-      const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, '').toLowerCase())
-      for (let i = 1; i < lines.length; i++) {
-        const vals = lines[i].split(',').map(v => v.trim().replace(/^"|"$/g, ''))
-        const obj  = {}
-        headers.forEach((h, idx) => { obj[h] = vals[idx] ?? '' })
-        rows.push(obj)
-      }
-    }
-
-    if (!rows.length) return res.status(400).json({ error: 'The file has a header row but no data rows.' })
-
-    // ── Map flexible column names ──────────────────────────────────────────────
-    const FIELD_MAP = {
-      'po number': 'po_number', 'po ref': 'po_number', 'po_number': 'po_number',
-      'description': 'description',
-      'supplier': 'vendor_name', 'vendor': 'vendor_name', 'vendor name': 'vendor_name',
-      'group': 'group_category', 'category': 'group_category', 'group/category': 'group_category',
-      'currency': 'currency', 'ccy': 'currency',
-      'value': 'value', 'po value': 'value', 'amount': 'value',
-      'incoterms': 'incoterms', 'inco terms': 'incoterms',
-      'wbs': 'wbs_code', 'wbs code': 'wbs_code',
-      'ros date': 'ros_date', 'ros': 'ros_date', 'required on site': 'ros_date',
-      'owner': 'owner_name',
-    }
-
-    const normalised = rows.map((r, idx) => {
-      const mapped = {}
-      for (const [rawKey, val] of Object.entries(r)) {
-        const normKey = FIELD_MAP[rawKey.toLowerCase()] ?? rawKey.toLowerCase()
-        mapped[normKey] = val
-      }
-      return { rowIndex: idx + 2, ...mapped }
-    }).filter(r => Object.values(r).some(v => v && String(v).trim()))
-
-    // ── Validate + duplicate check ─────────────────────────────────────────────
-    const poNumbers  = normalised.map(r => r.po_number).filter(Boolean)
-    const [existing] = await db.query(
-      poNumbers.length
-        ? `SELECT po_number, status, is_locked, id FROM purchase_orders WHERE project_id=? AND TRIM(LOWER(po_number)) IN (${poNumbers.map(() => 'TRIM(LOWER(?))').join(',')})`
-        : 'SELECT NULL LIMIT 0',
-      poNumbers.length ? [pid, ...poNumbers] : []
-    )
-    const existingMap = {}
-    for (const e of existing) existingMap[e.po_number.toLowerCase()] = e
-
-    // Detect within-file duplicates
-    const seenInFile = {}
-    for (const r of normalised) {
-      const key = (r.po_number ?? '').toLowerCase().trim()
-      if (key) seenInFile[key] = (seenInFile[key] ?? 0) + 1
-    }
-
-    const preview = normalised.map(r => {
-      const errors  = []
-      const key     = (r.po_number ?? '').toLowerCase().trim()
-      const found   = existingMap[key]
-      const inFileDup = key && seenInFile[key] > 1
-
-      if (!r.po_number?.trim()) errors.push('PO Number is required')
-      if (!r.vendor_name?.trim() && !r.supplier_id) errors.push('Supplier/Vendor is required')
-      if (inFileDup)            errors.push('Duplicate within this upload file')
-
-      let rowStatus = errors.length > 0 ? 'invalid' : 'new'
-      if (!inFileDup && found) {
-        const isLocked = !!found.is_locked || ['po-raised','approved','pending_director_approval'].includes(found.status)
-        rowStatus = isLocked ? 'locked' : 'duplicate'
-      }
-
-      return {
-        rowIndex:   r.rowIndex,
-        po_number:  r.po_number,
-        description: r.description,
-        vendor_name: r.vendor_name,
-        group_category: r.group_category,
-        currency:   r.currency || 'AUD',
-        value:      r.value ? Number(String(r.value).replace(/[^0-9.-]/g, '')) : null,
-        incoterms:  r.incoterms,
-        wbs_code:   r.wbs_code,
-        ros_date:   r.ros_date || null,
-        owner_name: r.owner_name,
-        rowStatus,   // 'new' | 'duplicate' | 'locked' | 'invalid'
-        errors,
-        existingStatus: found?.status ?? null,
-      }
-    })
-
-    res.json({ preview, totalRows: preview.length })
+    const parsed = parseImportSheet(req.file, [])
+    if (parsed.error) return res.status(400).json({ error: parsed.error })
+    const rows = poRowsFromSheet(parsed)
+    const { results } = checkPoRows({ rows, existing: await bulkExisting(db, rows, false), pid, XLSX: require('xlsx') })
+    res.json({ preview: results, totalRows: results.length })
   } catch (e) {
     console.error('[procurement:bulk-upload]', e.message)
     dbError(res, e)
@@ -1163,59 +1136,63 @@ router.post('/:projectId/pos/bulk-upload', uploadBulk.single('file'), async (req
 // ─── BULK UPLOAD CONFIRM ──────────────────────────────────────────────────────
 // Item 6: Confirm bulk import after user reviews preview.
 router.post('/:projectId/pos/bulk-confirm', async (req, res) => {
+  let conn
   try {
     const pid  = Number(req.params.projectId)
     const { rows, replace_duplicates = false } = req.body
     if (!Array.isArray(rows)) return res.status(400).json({ error: 'rows array required' })
+    const posted = rows.map((r, i) => ({ row: Number(r?.rowIndex) || i + 1, cells: r && typeof r === 'object' ? r : {} }))
 
-    let created = 0, replaced = 0, skipped = 0, failed = 0
+    conn = await db.getConnection()
+    await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+    await conn.beginTransaction()
+    const existing = await bulkExisting(conn, posted, true)   // locks the existing rows
+    const { results } = checkPoRows({ rows: posted, existing, pid, XLSX: require('xlsx'), confirm: true })
+    const resource = (req.originalUrl || '').split('?')[0]
+    const audit = (action, entityId, before, after) => conn.query(
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, resource, ip, before_value, after_value)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [req.user?.id ?? null, action, 'purchase_order', entityId, pid, resource, req.ip ?? null,
+       before ? JSON.stringify(before) : null, after ? JSON.stringify(after) : null])
+
+    let created = 0, replaced = 0, skipped = 0
     const errors = []
-
-    for (const r of rows) {
-      if (r.rowStatus === 'locked' || r.rowStatus === 'invalid') { skipped++; continue }
-      try {
-        if (r.rowStatus === 'duplicate' && !replace_duplicates) { skipped++; continue }
-        if (r.rowStatus === 'duplicate' && replace_duplicates) {
-          // Replace existing unlocked PO
-          const [[ex]] = await db.query(
-            'SELECT id, status FROM purchase_orders WHERE project_id=? AND LOWER(po_number)=LOWER(?)',
-            [pid, r.po_number]
-          )
-          if (ex) {
-            const before = { ...ex }
-            await db.query(`
-              UPDATE purchase_orders SET description=?,vendor_name=?,group_category=?,
-                currency=?,value=?,incoterms=?,wbs_code=?,ros_date=? WHERE id=?
-            `, [r.description||null, r.vendor_name, r.group_category||null,
-                r.currency||'AUD', r.value||null, r.incoterms||null, r.wbs_code||null,
-                r.ros_date||null, ex.id])
-            audit(req, 'po_replaced', `purchase_orders/${ex.id}`,
-              before, { po_number: r.po_number })
-            replaced++
-            continue
-          }
-        }
-        // Create new PO
-        await db.query(`
-          INSERT INTO purchase_orders
-            (project_id,po_number,description,vendor_name,group_category,currency,value,incoterms,wbs_code,ros_date,status,created_by)
-          VALUES (?,?,?,?,?,?,?,?,?,?,'rfq',?)
-        `, [pid, r.po_number, r.description||null, r.vendor_name, r.group_category||null,
-            r.currency||'AUD', r.value||null, r.incoterms||null, r.wbs_code||null,
-            r.ros_date||null, req.user.id])
-        audit(req, 'po_created_bulk', `procurement/${pid}/pos`,
-          null, { po_number: r.po_number }, 'purchase_order', pid)
-        created++
-      } catch (e) {
-        failed++
-        errors.push({ po_number: r.po_number, error: e.message })
+    for (const r of results) {
+      if (r.rowStatus === 'invalid') { skipped++; errors.push({ po_number: r.po_number, row: r.rowIndex, error: r.errors.join('; ') }); continue }
+      const ex = existing.get(normKey(r.po_number))
+      if (r.rowStatus === 'locked') {
+        skipped++
+        errors.push({ po_number: r.po_number, error: ex.tender_id != null
+          ? `PO ${r.po_number} was generated from a tender award — it can't be replaced by an import`
+          : `PO ${r.po_number} is locked or approved — it can't be replaced by an import` })
+        continue
       }
+      if (r.rowStatus === 'duplicate') {
+        if (!replace_duplicates) { skipped++; continue }
+        await conn.query(`
+          UPDATE purchase_orders SET description=?,vendor_name=?,group_category=?,
+            currency=?,value=?,incoterms=?,wbs_code=?,ros_date=? WHERE id=?
+        `, [r.description || null, r.vendor_name, r.group_category, r.currency, r.value, r.incoterms || null, r.wbs_code || null, r.ros_date, ex.id])
+        await audit('po_replaced', ex.id, { ...ex }, { po_number: r.po_number })
+        replaced++
+        continue
+      }
+      const [ins] = await conn.query(`
+        INSERT INTO purchase_orders
+          (project_id,po_number,description,vendor_name,group_category,currency,value,incoterms,wbs_code,ros_date,status,created_by)
+        VALUES (?,?,?,?,?,?,?,?,?,?,'rfq',?)
+      `, [pid, r.po_number, r.description || null, r.vendor_name, r.group_category, r.currency, r.value, r.incoterms || null, r.wbs_code || null, r.ros_date, req.user.id])
+      await audit('po_created_bulk', ins.insertId, null, { po_number: r.po_number })
+      created++
     }
-
-    res.json({ created, replaced, skipped, failed, errors })
+    await conn.commit()
+    res.json({ created, replaced, skipped, failed: 0, errors })
   } catch (e) {
+    if (conn) { try { await conn.rollback() } catch (_) { /* already rolled back */ } }
     console.error('[procurement:bulk-confirm]', e.message)
     dbError(res, e)
+  } finally {
+    if (conn) conn.release()
   }
 })
 
@@ -1527,6 +1504,8 @@ router.put('/pos/:id/replace', async (req, res) => {
       'SELECT * FROM purchase_orders WHERE id=?', [id]
     )
     if (!existing) return res.status(404).json({ error: 'PO not found' })
+    if (existing.tender_id != null)
+      return res.status(409).json({ error: `PO ${existing.po_number} was generated from a tender award — its header can't be replaced` })
     const locked = !!existing.is_locked || ['po-raised','approved','pending_director_approval'].includes(existing.status)
     if (locked) return res.status(400).json({ error: 'Cannot replace an approved or locked PO. Use a variation order instead.' })
 
@@ -1612,7 +1591,7 @@ router.post('/:projectId/pos', async (req, res) => {
 router.put('/pos/:id', async (req, res) => {
   try {
     const id = Number(req.params.id)
-    const [[existing]] = await db.query('SELECT id,po_number,is_locked FROM purchase_orders WHERE id=?', [id])
+    const [[existing]] = await db.query('SELECT id,po_number,is_locked,tender_id,vendor_name,supplier_id,value,currency FROM purchase_orders WHERE id=?', [id])
     if (!existing) return res.status(404).json({ error: 'PO not found' })
     if (existing.is_locked) return res.status(400).json({ error: 'This PO is locked and cannot be edited' })
 
@@ -1622,6 +1601,22 @@ router.put('/pos/:id', async (req, res) => {
       milestone_po_date, milestone_fat_date, milestone_esd_date,
       milestone_eta_date, milestone_ros_date,
     } = req.body
+
+    // A PO generated from a tender award keeps the award's supplier, value, currency and number. Each is compared
+    // as this route would WRITE it (so leaving one out, which would clear or default it, counts as a change too);
+    // value numerically. Every other header field stays editable.
+    if (existing.tender_id != null) {
+      const sameNum = (a, b) => (a == null || b == null) ? (a == null && b == null) : Math.round(Number(a) * 100) === Math.round(Number(b) * 100)
+      const changed = [
+        po_number !== existing.po_number && 'po_number',
+        vendor_name !== existing.vendor_name && 'vendor_name',
+        !sameNum(supplier_id || null, existing.supplier_id) && 'supplier_id',
+        !sameNum(value || null, existing.value) && 'value',
+        (currency || 'AUD') !== existing.currency && 'currency',
+      ].filter(Boolean)
+      if (changed.length)
+        return res.status(409).json({ error: `PO ${existing.po_number} was generated from a tender award — its ${changed.join(', ')} can't be changed` })
+    }
 
     await db.query(`
       UPDATE purchase_orders SET
@@ -1646,11 +1641,18 @@ router.put('/pos/:id', async (req, res) => {
 })
 
 // ─── DELETE PO ────────────────────────────────────────────────────────────────
+// A PO generated from a Pre-Award tender (tender_id set) is refused (409): it is the record of
+// that award, and its po_lines are the MTO quantity the award consumed — deleting them would
+// silently free that quantity (getAvailableQty) while the tender's reservations stay 'converted'.
 router.delete('/pos/:id', async (req, res) => {
   try {
     const id = Number(req.params.id)
-    const [[existing]] = await db.query('SELECT id,po_number,is_locked FROM purchase_orders WHERE id=?', [id])
+    const [[existing]] = await db.query(
+      `SELECT po.id, po.po_number, po.is_locked, po.tender_id, t.ref AS tender_ref
+         FROM purchase_orders po LEFT JOIN tender_packages t ON t.id = po.tender_id WHERE po.id=?`, [id])
     if (!existing) return res.status(404).json({ error: 'PO not found' })
+    if (existing.tender_id != null)
+      return res.status(409).json({ error: `PO ${existing.po_number} was generated from tender ${existing.tender_ref} and cannot be deleted — it is the record of that award. Voiding or cancelling a PO is not currently available in the system.` })
     if (existing.is_locked) return res.status(400).json({ error: 'Locked POs cannot be deleted' })
     await db.query('DELETE FROM po_lines WHERE po_id=?', [id])
     await db.query('DELETE FROM purchase_orders WHERE id=?', [id])
@@ -1678,14 +1680,24 @@ router.post('/pos/:id/lines', async (req, res) => {
   }
 })
 
+// Both line routes resolve the line against the PO in the URL (404 if it isn't on that PO) —
+// never acting on a line id alone. A line generated from a tender award (source_mto_line_id set)
+// carries the awarded MTO quantity that getAvailableQty counts as consumed: its qty and uom can't
+// change and it can't be deleted (409). Every other field, and every other line, is unaffected.
+const sameQty = (a, b) => (a == null || b == null) ? (a == null && b == null) : Math.round(Number(a) * 1000) === Math.round(Number(b) * 1000)
+
 router.put('/pos/:id/lines/:lineId', async (req, res) => {
   try {
-    const lineId = Number(req.params.lineId)
+    const poId = Number(req.params.id); const lineId = Number(req.params.lineId)
     const { line_number, description, qty, uom, uom_id, unit_price, ros_date, cdd } = req.body
+    const [[existing]] = await db.query('SELECT id, line_number, qty, uom, source_mto_line_id FROM po_lines WHERE id=? AND po_id=?', [lineId, poId])
+    if (!existing) return res.status(404).json({ error: 'PO line not found on this PO' })
+    if (existing.source_mto_line_id != null && (!sameQty(qty || null, existing.qty) || (uom || 'EA') !== existing.uom))
+      return res.status(409).json({ error: `Line ${existing.line_number} was generated from a tender award — its quantity and unit are the awarded MTO quantity and cannot be changed` })
     await db.query(`
       UPDATE po_lines SET line_number=?,description=?,qty=?,uom=?,uom_id=?,unit_price=?,ros_date=?,cdd=?
-      WHERE id=?
-    `, [line_number, description, qty||null, uom||'EA', uom_id||null, unit_price||null, ros_date||null, cdd||null, lineId])
+      WHERE id=? AND po_id=?
+    `, [line_number, description, qty||null, uom||'EA', uom_id||null, unit_price||null, ros_date||null, cdd||null, lineId, poId])
     const [[line]] = await db.query('SELECT * FROM po_lines WHERE id=?', [lineId])
     res.json(line)
   } catch (e) {
@@ -1695,7 +1707,12 @@ router.put('/pos/:id/lines/:lineId', async (req, res) => {
 
 router.delete('/pos/:id/lines/:lineId', async (req, res) => {
   try {
-    await db.query('DELETE FROM po_lines WHERE id=?', [Number(req.params.lineId)])
+    const poId = Number(req.params.id); const lineId = Number(req.params.lineId)
+    const [[existing]] = await db.query('SELECT id, line_number, source_mto_line_id FROM po_lines WHERE id=? AND po_id=?', [lineId, poId])
+    if (!existing) return res.status(404).json({ error: 'PO line not found on this PO' })
+    if (existing.source_mto_line_id != null)
+      return res.status(409).json({ error: `Line ${existing.line_number} was generated from a tender award — it carries the awarded MTO quantity and cannot be deleted` })
+    await db.query('DELETE FROM po_lines WHERE id=? AND po_id=?', [lineId, poId])
     res.json({ ok: true })
   } catch (e) {
     dbError(res, e)
@@ -1750,7 +1767,7 @@ router.get('/pos/:id/variations', async (req, res) => {
       WHERE v.po_id = ?
       ORDER BY v.created_at DESC
     `, [id])
-    res.json(rows)
+    res.json(req.user.role === 'vendor' ? vendorView.variations(rows) : rows)
   } catch (e) { dbError(res, e) }
 })
 
@@ -1792,7 +1809,7 @@ router.get('/pos/:id/itp', async (req, res) => {
       )
       req_.items = items
     }
-    res.json(reqs)
+    res.json(req.user.role === 'vendor' ? vendorView.itp(reqs) : reqs)
   } catch (e) { dbError(res, e) }
 })
 
@@ -1871,7 +1888,7 @@ router.get('/pos/:id/documents', async (req, res) => {
       WHERE pd.po_id = ?
       ORDER BY pd.doc_type, pd.version DESC
     `, [id])
-    res.json(docs)
+    res.json(req.user.role === 'vendor' ? vendorView.documents(docs) : docs)
   } catch (e) { dbError(res, e) }
 })
 

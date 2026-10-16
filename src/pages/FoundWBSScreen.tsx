@@ -32,6 +32,9 @@ const ColResizeHandle = ({ onMouseDown, dark }: { onMouseDown: (e: React.MouseEv
 }
 
 import { API } from '../lib/api'
+import { useCurrentUser } from '../hooks/useCurrentUser'
+import { isExternal } from '../lib/externalNav'
+import { downloadFile } from '../lib/fileAccess'   // authed blob fetch → anchor (never window.open on a JWT-gated route → 401)
 
 // ─── TYPES ──────────────────────────────────────────────────
 interface WBSNode {
@@ -549,7 +552,7 @@ const ReallocateLineRow = ({ line, projectId, dark, excludeCode, value, onChange
 
 // ─── WBS ROW (recursive) ─────────────────────────────────────
 // Checkbox visibility controlled by CSS hover on parent tr.
-const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRowEnter, onRowLeave, focusMode, onFocusClick, selected, onSelect, searchMatch, filterVisible, onOpenReadiness }: {
+const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRowEnter, onRowLeave, focusMode, onFocusClick, selected, onSelect, searchMatch, filterVisible, onOpenReadiness, readOnly = false }: {
   node: WBSNode; depth: number; dark: boolean
   expanded: Set<number>; onToggle: (id: number) => void
   onEdit: (n: WBSNode) => void; onDelete: (n: WBSNode) => void
@@ -562,6 +565,7 @@ const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRow
   searchMatch: boolean
   filterVisible: boolean
   onOpenReadiness?: (n: WBSNode) => void
+  readOnly?: boolean   // ext-2b: external roles — notes as plain text, no delete
 }) => {
   const [hovered, setHovered] = useState(false)
   const hasChildren = node.children && node.children.length > 0
@@ -631,11 +635,13 @@ const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRow
         {/* NOTES */}
         {!focusMode && (
           <td style={{ padding: '9px 12px', maxWidth: 180 }}>
+            {readOnly ? <span style={{ color: node.notes ? col : '#94a3b8', fontSize: 12 }}>{node.notes ? `${node.notes.slice(0, 40)}${node.notes.length > 40 ? '…' : ''}` : '—'}</span> : (
             <button onClick={e => { e.stopPropagation(); onOpenReadiness ? onOpenReadiness(node) : onEdit(node) }}
               style={{ background: 'none', border: 'none', cursor: 'pointer', color: node.notes ? '#2563eb' : '#94a3b8', fontSize: 12, fontFamily: 'inherit', textAlign: 'left', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block', padding: 0 }}
               title={node.notes ?? 'Click to view readiness'}>
               {node.notes ? `${node.notes.slice(0, 40)}${node.notes.length > 40 ? '…' : ''}` : '+ Add note'}
             </button>
+            )}
           </td>
         )}
 
@@ -655,9 +661,9 @@ const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRow
 
         {/* Delete */}
         <td style={{ padding: '9px 8px', textAlign: 'center', width: 36 }}>
-          <button onClick={e => { e.stopPropagation(); onDelete(node) }}
+          {!readOnly && <button onClick={e => { e.stopPropagation(); onDelete(node) }}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: hovered ? '#ef4444' : 'transparent', fontSize: 14, transition: 'color 150ms', padding: '2px 4px', lineHeight: 1 }}
-            title="Delete node">🗑</button>
+            title="Delete node">🗑</button>}
         </td>
       </tr>
 
@@ -668,7 +674,7 @@ const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRow
           onRowEnter={onRowEnter} onRowLeave={onRowLeave}
           focusMode={focusMode} onFocusClick={onFocusClick}
           selected={selected} onSelect={onSelect}
-          searchMatch={false} filterVisible={filterVisible}
+          searchMatch={false} filterVisible={filterVisible} readOnly={readOnly}
           onOpenReadiness={onOpenReadiness} />
       ))}
     </>
@@ -676,8 +682,9 @@ const WBSRow = ({ node, depth, dark, expanded, onToggle, onEdit, onDelete, onRow
 }
 
 // ─── UPLOAD VALIDATION MODAL ─────────────────────────────────
-interface ValidationRow { row: number; code: string; description: string; parent: string; ros: string; status: 'ok'|'warning'|'error'; errors: string[]; warnings: string[] }
+interface ValidationRow { row: number; code: string; description: string; parent: string; ros: string; rosDate?: string | null; status: 'ok'|'warning'|'error'; errors: string[]; warnings: string[] }
 interface ValidationResult { results: ValidationRow[]; summary: { total: number; ready: number; warnings: number; errors: number } }
+interface RefusedRow { row: number; code: string; errors: string[] }
 
 const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: number; dark: boolean; onClose: () => void; onImported: () => void }) => {
   const [file, setFile] = useState<File | null>(null)
@@ -685,11 +692,15 @@ const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: numb
   const [loading, setLoading] = useState(false)
   const [ackWarn, setAckWarn] = useState(false)
   const [importing, setImporting] = useState(false)
+  const importingRef = useRef(false)   // one import in flight, even for two clicks before a re-render
   const [err, setErr] = useState('')
+  const [refusal, setRefusal] = useState<{ status: number; error: string; rows: RefusedRow[] } | null>(null)   // the import's 400 or 409
+  const [showAllRefused, setShowAllRefused] = useState(false)
+  const [done, setDone] = useState<{ imported: number; expected: number } | null>(null)
   const col = dark ? '#f1f5f9' : '#0f172a'
 
   const validate = async (f: File) => {
-    setLoading(true); setErr(''); setResult(null)
+    setLoading(true); setErr(''); setResult(null); setAckWarn(false); setRefusal(null); setShowAllRefused(false); setDone(null)   // a new file needs its own acknowledgement
     const fd = new FormData(); fd.append('file', f)
     try {
       const { data } = await axios.post<ValidationResult>(`${API}/foundational/${projectId}/wbs/validate`, fd)
@@ -700,22 +711,30 @@ const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: numb
     } finally { setLoading(false) }
   }
 
+  const toImport = result ? result.summary.ready + result.summary.warnings : 0   // warning rows are imported too
+
   const doImport = async () => {
-    if (!file) return
-    setImporting(true)
+    if (!file || importingRef.current) return
+    importingRef.current = true
+    setImporting(true); setErr(''); setRefusal(null); setShowAllRefused(false); setDone(null)
+    const expected = toImport
     const fd = new FormData(); fd.append('file', file)
     try {
-      const { data } = await axios.post(`${API}/foundational/${projectId}/wbs/import`, fd)
+      const { data } = await axios.post<{ ok: boolean; imported: number }>(`${API}/foundational/${projectId}/wbs/import`, fd)
+      setDone({ imported: data.imported, expected })
       onImported()
-      onClose()
-      alert(`✓ Imported ${data.imported} nodes successfully`)
     } catch (e: unknown) {
-      const er = e as { response?: { data?: { error?: string } } }
-      setErr(er.response?.data?.error ?? 'Import failed')
-    } finally { setImporting(false) }
+      const er = e as { response?: { status?: number; data?: { error?: string; rows?: RefusedRow[] } } }
+      const status = er.response?.status, body = er.response?.data
+      if ((status === 400 || status === 409) && body?.error) setRefusal({ status, error: body.error, rows: Array.isArray(body.rows) ? body.rows : [] })
+      else setErr(body?.error ?? 'Import failed')
+    } finally {
+      importingRef.current = false
+      setImporting(false)
+    }
   }
 
-  const canImport = result && result.summary.errors === 0 && (result.summary.warnings === 0 || ackWarn)
+  const canImport = result && !done && result.summary.errors === 0 && (result.summary.warnings === 0 || ackWarn)   // no second import until a new file is chosen
   const STATUS_ICON: Record<string, string> = { ok: '✅', warning: '⚠️', error: '❌' }
   const STATUS_COLOR: Record<string, string> = { ok: '#22c55e', warning: '#f59e0b', error: '#ef4444' }
 
@@ -726,7 +745,7 @@ const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: numb
           <div style={{ fontSize: 16, fontWeight: 700, color: col }}>↑ Upload WBS File</div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer' }}>×</button>
         </div>
-        <input type="file" accept=".xlsx,.xls,.csv,.xer,.xml" onChange={e => { const f = e.target.files?.[0] ?? null; setFile(f); setResult(null); if (f) validate(f) }}
+        <input type="file" accept=".xlsx,.xls,.csv" disabled={importing} onChange={e => { const f = e.target.files?.[0] ?? null; setFile(f); setResult(null); if (f) validate(f) }}
           style={{ border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, borderRadius: 6, padding: '6px 10px', fontSize: 12, color: col, background: dark ? '#0f172a' : '#f8fafc', fontFamily: 'inherit', marginBottom: 16 }} />
         {loading && <div style={{ textAlign: 'center', color: '#94a3b8', padding: '24px 0' }}>Validating file…</div>}
         {err && <div style={{ marginBottom: 12, fontSize: 12, color: '#ef4444' }}>{err}</div>}
@@ -755,7 +774,7 @@ const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: numb
                       <td style={{ padding: '5px 10px', fontFamily: 'JetBrains Mono, monospace', color: col }}>{r.code}</td>
                       <td style={{ padding: '5px 10px', color: col, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.description}</td>
                       <td style={{ padding: '5px 10px', fontFamily: 'JetBrains Mono, monospace', color: '#94a3b8' }}>{r.parent || '—'}</td>
-                      <td style={{ padding: '5px 10px', fontFamily: 'JetBrains Mono, monospace', color: '#94a3b8' }}>{r.ros || '—'}</td>
+                      <td style={{ padding: '5px 10px', fontFamily: 'JetBrains Mono, monospace', color: '#94a3b8' }}>{'rosDate' in r ? (r.rosDate ?? '— (blank)') : (r.ros || '—')}</td>
                       <td style={{ padding: '5px 10px', color: STATUS_COLOR[r.status] }}>{[...r.errors, ...r.warnings].join('; ') || '—'}</td>
                     </tr>
                   ))}
@@ -770,11 +789,35 @@ const UploadModal = ({ projectId, dark, onClose, onImported }: { projectId: numb
             )}
           </div>
         )}
+        {refusal && (
+          <div data-wbs-error="" style={{ marginTop: 12, flexShrink: 0, maxHeight: 180, overflowY: 'auto', fontSize: 12, color: '#ef4444', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+            {refusal.status === 409 && <div style={{ fontWeight: 600, marginBottom: 4 }}>The project's WBS changed while importing. Nothing was imported; check the file again.</div>}
+            <div>{refusal.error}</div>
+            {refusal.rows.length > 0 && (
+              <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                {(showAllRefused ? refusal.rows : refusal.rows.slice(0, 20)).map(r => (
+                  <li key={r.row}>Row {r.row} · {r.code || '—'}: {r.errors.join('; ')}</li>
+                ))}
+              </ul>
+            )}
+            {!showAllRefused && refusal.rows.length > 20 && (
+              <div style={{ marginTop: 4 }}>and {refusal.rows.length - 20} more · <button type="button" onClick={() => setShowAllRefused(true)}
+                style={{ background: 'none', border: 'none', padding: 0, color: '#2563eb', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textDecoration: 'underline' }}>Show all</button></div>
+            )}
+          </div>
+        )}
+        {done && (
+          <div data-wbs-imported="" style={{ marginTop: 12, flexShrink: 0, fontSize: 12, color: done.imported === done.expected ? '#22c55e' : '#ef4444', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+            Imported {done.imported} of {done.expected} rows
+            {done.imported < done.expected && ` — ${done.expected - done.imported} row${done.expected - done.imported !== 1 ? 's were' : ' was'} not imported.`}
+            {done.imported > done.expected && ' — more than the check counted; check the WBS tree.'}
+          </div>
+        )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16, flexShrink: 0 }}>
           <button onClick={onClose} style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
           <button onClick={doImport} disabled={!canImport || importing}
             style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: canImport ? '#2563eb' : '#94a3b8', color: '#fff', fontSize: 12, fontWeight: 600, cursor: canImport ? 'pointer' : 'not-allowed', fontFamily: 'inherit', opacity: importing ? 0.7 : 1 }}>
-            {importing ? 'Importing…' : `↑ Import ${result?.summary.ready ?? 0} rows`}
+            {importing ? 'Importing…' : result && result.summary.errors > 0 ? `↑ Import (fix ${result.summary.errors} error(s) first)` : `↑ Import ${toImport} rows`}
           </button>
         </div>
       </div>
@@ -879,9 +922,10 @@ const WBSTooltip = ({ node, projectId, cursorX, cursorY }: { node: WBSNode; proj
 
 // ─── FOCUS MODE PANEL ────────────────────────────────────────
 // Right-side panel shown when focusMode is active and a row is clicked.
-const FocusPanel = ({ node, projectId, dark, onClose, onEditNode }: {
+const FocusPanel = ({ node, projectId, dark, onClose, onEditNode, readOnly = false }: {
   node: WBSNode; projectId: number; dark: boolean; onClose: () => void
   onEditNode: (n: WBSNode) => void
+  readOnly?: boolean   // ext-2b: external roles — no materials/PO fetches (gate-refused), no edit
 }) => {
   const [materials, setMaterials] = useState<TooltipData | null>(null)
   const [pos, setPos] = useState<{id:number; po_number:string; vendor:string; status:string; total_value:number; currency:string}[]>([])
@@ -898,9 +942,10 @@ const FocusPanel = ({ node, projectId, dark, onClose, onEditNode }: {
   }
 
   useEffect(() => {
+    if (readOnly) return
     axios.get<TooltipData>(`${API}/foundational/${projectId}/wbs/${node.id}/materials`).then(r => setMaterials(r.data)).catch(() => {})
     axios.get(`${API}/foundational/${projectId}/wbs/${node.id}/pos`).then(r => setPos(r.data)).catch(() => {})
-  }, [node.id, projectId])
+  }, [node.id, projectId, readOnly])
 
   const ragColor = node.rag ? RAG_COLORS[node.rag] : '#94a3b8'
 
@@ -964,6 +1009,7 @@ const FocusPanel = ({ node, projectId, dark, onClose, onEditNode }: {
           </>
         )}
 
+        {!readOnly && <>
         {/* COMMODITIES */}
         <div style={subLabel as React.CSSProperties}>Commodities ({materials?.commodities.length ?? '…'})</div>
         {!materials ? (
@@ -1023,15 +1069,16 @@ const FocusPanel = ({ node, projectId, dark, onClose, onEditNode }: {
             ))}
           </div>
         )}
+        </>}
       </div>
 
       {/* FOOTER */}
-      <div style={{ padding: '12px 20px', borderTop: bd, flexShrink: 0, display: 'flex', gap: 8 }}>
+      {!readOnly && <div style={{ padding: '12px 20px', borderTop: bd, flexShrink: 0, display: 'flex', gap: 8 }}>
         <button onClick={() => onEditNode(node)}
           style={{ flex: 1, padding: '7px 12px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
           ✎ Edit node
         </button>
-      </div>
+      </div>}
     </div>
   )
 }
@@ -1488,6 +1535,9 @@ const WBSReadinessModal = ({ node, projectId, dark, onClose, onNoteSaved }: {
 export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
   dark: boolean; projectId: number; projectName: string; onBack: () => void
 }) => {
+  // ext-2b: external roles see the WBS read-only (the gate allows only GET wbs for them).
+  const { user } = useCurrentUser()
+  const readOnly = isExternal(user?.role)
   const [nodes, setNodes]             = useState<WBSNode[]>([])
   const [tree, setTree]               = useState<WBSNode[]>([])
   const [expanded, setExpanded]       = useState<Set<number>>(new Set())
@@ -1627,7 +1677,11 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
 
   const exportSelected = () => {
     const ids = [...selectedNodes].join(',')
-    window.open(`${API}/foundational/${projectId}/wbs/export?ids=${ids}`, '_blank')
+    // Authed blob download — the export route is JWT-gated, so a raw window.open(apiURL)
+    // would 401 (no Authorization header). downloadFile fetches via axios (JWT attached)
+    // then saves. XLSX → download, not view. Mirrors the foundational-fix pattern.
+    downloadFile(`${API}/foundational/${projectId}/wbs/export?ids=${ids}`, 'WBS_Export.xlsx')
+      .catch(() => showToast('❌ Export failed'))
   }
 
   const deleteSelected = async () => {
@@ -1739,10 +1793,10 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
             </div>
           </>}
           <button onClick={() => { setFocusMode(f => !f); setFocusNode(null) }} style={{ ...secBtn, color: focusMode ? '#E84E0F' : '#64748b' }}>⛶ Focus</button>
-          <button onClick={downloadTemplate} style={secBtn}>↓ Template</button>
-          <button onClick={() => setShowUpload(true)} style={secBtn}>↑ Upload XER/Excel</button>
+          {!readOnly && <button onClick={downloadTemplate} style={secBtn}>↓ Template</button>}
+          {!readOnly && <button onClick={() => setShowUpload(true)} style={secBtn}>↑ Upload Excel/CSV</button>}
           <HelpButton screenName="WBS" sections={WBS_HELP} dark={dark} />
-          {wbsView === 'tree' && <button onClick={() => setShowAdd(true)} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>+ Add node</button>}
+          {wbsView === 'tree' && !readOnly && <button onClick={() => setShowAdd(true)} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>+ Add node</button>}
         </div>
       </div>
 
@@ -1791,7 +1845,7 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
             maxDepth={ganttDepth}
             expanded={expanded}
             onToggle={toggleExpand}
-            onNodeClick={node => { setEditNode(node) }}
+            onNodeClick={node => { if (!readOnly) setEditNode(node) }}   // ext-2b: no edit for external roles
           />
           {/* ── Gantt legend (bottom) — reflects what the chart ACTUALLY draws:
               schedule bars (planned/forecast/actual), the ROS milestone diamond,
@@ -1883,13 +1937,14 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
                   <WBSRow key={node.id} node={node} depth={0} dark={dark}
                     expanded={expanded} onToggle={toggleExpand}
                     onEdit={setEditNode} onDelete={setDeleteNode}
-                    onRowEnter={handleRowEnter} onRowLeave={handleRowLeave}
+                    onRowEnter={readOnly ? undefined : handleRowEnter} onRowLeave={handleRowLeave}
                     focusMode={focusMode} onFocusClick={n => setFocusNode(n)}
                     selected={selectedNodes.has(node.id)}
                     onSelect={handleSelectNode}
                     searchMatch={searchMatchIds ? searchMatchIds.has(node.id) : false}
                     filterVisible={visibleIds ? visibleIds.has(node.id) : true}
-                    onOpenReadiness={setReadinessNode}
+                    onOpenReadiness={readOnly ? undefined : setReadinessNode}
+                    readOnly={readOnly}
                   />
                 ))}
               </tbody>
@@ -1901,7 +1956,7 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
         {focusMode && focusNode && (
           <FocusPanel node={focusNode} projectId={projectId} dark={dark}
             onClose={() => setFocusNode(null)}
-            onEditNode={n => setEditNode(n)} />
+            onEditNode={n => setEditNode(n)} readOnly={readOnly} />
         )}
       </div>}  {/* end wbsView==='tree' */}
 
@@ -1983,8 +2038,8 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
       {/* Tooltip (normal mode only) */}
       {!focusMode && tooltip && <WBSTooltip node={tooltip.node} projectId={projectId} cursorX={tooltip.x} cursorY={tooltip.y} />}
 
-      {/* ── Bulk operations floating bar ── */}
-      {selectedNodes.size > 0 && (
+      {/* ── Bulk operations floating bar ── (internal roles only: every action is gate-refused for externals) */}
+      {selectedNodes.size > 0 && !readOnly && (
         <div style={{ position: 'fixed', bottom: 24, left: 244, right: 24, zIndex: 9200, background: dark ? '#1e293b' : '#fff', border: `1px solid #2563eb`, borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10, boxShadow: '0 8px 28px rgba(37,99,235,0.25)', fontFamily: 'IBM Plex Sans, sans-serif' }}>
           <span style={{ fontSize: 13, fontWeight: 600, color: '#2563eb', whiteSpace: 'nowrap' }}>{selectedNodes.size} node{selectedNodes.size !== 1 ? 's' : ''} selected</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, flexWrap: 'wrap' }}>

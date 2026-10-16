@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "typecheck": "tsc -b",
+    "typecheck": "node scripts/typecheck-guard.cjs",
     "lint": "eslint .",
     "preview": "vite preview"
   },

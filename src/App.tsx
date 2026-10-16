@@ -13,6 +13,8 @@ import { PODetailScreen } from './pages/PODetailScreen'
 import { FoundWBSScreen } from './pages/FoundWBSScreen'
 import { FoundCommodityScreen } from './pages/FoundCommodityScreen'
 import { FoundEquipmentScreen } from './pages/FoundEquipmentScreen'
+import { PreAwardTendersScreen } from './pages/PreAwardTendersScreen'
+import { PreAwardDetailScreen } from './pages/PreAwardDetailScreen'
 import { ExpeditingScreen } from './pages/ExpeditingScreen'
 import { ExpPODetailScreen } from './pages/ExpPODetailScreen'
 import { MTOListScreen } from './pages/MTOListScreen'
@@ -32,6 +34,7 @@ import { ReportsScreen } from './pages/ReportsScreen'
 import { ForcePasswordChange } from './components/ForcePasswordChange'
 import { ChangePasswordModal } from './components/ChangePasswordModal'
 import { AcronymHeaderTitles } from './components/AcronymHeaderTitles'
+import { isExternal, canOpen, externalNavFor, landingPage } from './lib/externalNav'
 import './App.css'
 
 // ─── PAGE ROUTING ───────────────────────────────────────────
@@ -39,7 +42,7 @@ import './App.css'
 // 'admin' enforces role === 'admin'; 'procurement' is project-scoped.
 // ─── ROUTING — state-based, no router library ─────────────────────────────────
 // 'po-detail' is Phase 3 PO Detail Screen — full dedicated screen.
-type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers' | 'traceability' | 'documents' | 'pending-changes' | 'audit' | 'rfi-meeting' | 'reports'
+type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'pre-award-tenders' | 'pre-award-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers' | 'traceability' | 'documents' | 'pending-changes' | 'audit' | 'rfi-meeting' | 'reports'
 
 // ─── DEEP-LINK PARSING ───────────────────────────────────────
 // Maps a URL path segment (/project/:id/<segment>) to an internal Page,
@@ -47,7 +50,7 @@ type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'foundational-
 // hard load / refresh of a deep link resolves the right screen AND the
 // active project (the :id in the same path — see parseDeepLink).
 const PAGE_SEGMENTS: Record<string, Page> = {
-  procurement: 'procurement', 'po-detail': 'po-detail',
+  procurement: 'procurement', 'po-detail': 'po-detail', 'pre-award-tenders': 'pre-award-tenders', 'pre-award-detail': 'pre-award-detail',
   expediting: 'expediting', 'expediting-po-detail': 'expediting-po-detail',
   'mto-list': 'mto-list', 'mto-detail': 'mto-detail',
   logistics: 'logistics', traceability: 'traceability', documents: 'documents', reports: 'reports',
@@ -57,6 +60,7 @@ const PAGE_SEGMENTS: Record<string, Page> = {
   'material-control/receipting': 'mc-receipting', 'material-control/fmr': 'mc-fmr',
   'material-control/stock': 'mc-stock', 'material-control/transfers': 'mc-transfers',
   'foundational/wbs': 'foundational-wbs', 'foundational/commodities': 'foundational-commodities', 'foundational/equipment': 'foundational-equipment',
+  'pre-award/tenders': 'pre-award-tenders',
 }
 // Reads /project/:projectId/:segment from the current URL so a hard load
 // hydrates both the active project and the page in one pass.
@@ -298,8 +302,10 @@ const REPORTS_VIEW_ROLES = new Set(['admin', 'auditor', 'ceo', 'director', 'engi
 // Project-scoped pages also get the project segment (added by the builder). Global
 // pages (dashboard/admin/audit) are handled directly in the builder.
 const CRUMB: Record<string, { module: { label: string; page: Page }; leaf?: string }> = {
-  procurement:            { module: { label: 'Procurement', page: 'procurement' } },
-  'po-detail':            { module: { label: 'Procurement', page: 'procurement' }, leaf: 'PO Detail' },
+  procurement:            { module: { label: 'Procurement — Post-Award', page: 'procurement' } },
+  'po-detail':            { module: { label: 'Procurement — Post-Award', page: 'procurement' }, leaf: 'PO Detail' },
+  'pre-award-tenders':    { module: { label: 'Procurement — Pre-Award', page: 'pre-award-tenders' } },
+  'pre-award-detail':     { module: { label: 'Procurement — Pre-Award', page: 'pre-award-tenders' }, leaf: 'Tender' },
   expediting:             { module: { label: 'Expediting', page: 'expediting' } },
   'expediting-po-detail': { module: { label: 'Expediting', page: 'expediting' }, leaf: 'PO Detail' },
   'mto-list':             { module: { label: 'MTO Register', page: 'mto-list' } },
@@ -319,6 +325,18 @@ const CRUMB: Record<string, { module: { label: string; page: Page }; leaf?: stri
   'pending-changes':      { module: { label: 'Pending Changes', page: 'pending-changes' } },
 }
 
+// ─── NOT AVAILABLE PANEL (ext-2) ─────────────────────────────
+// Shown instead of any page an external role's table does not allow (deep links included).
+const NotAvailablePanel = ({ dark, onHome }: { dark: boolean; onHome: () => void }) => (
+  <div style={{ padding: '40px 20px', textAlign: 'center', fontSize: 14, color: '#94a3b8' }}>
+    <div style={{ marginBottom: 14 }}>Not available to your role</div>
+    <button onClick={onHome}
+      style={{ padding: '7px 16px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: dark ? '#1e293b' : '#fff', color: dark ? '#f1f5f9' : '#0f172a', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>
+      Back to Home
+    </button>
+  </div>
+)
+
 // Dark-gradient sidebar with logo, nav items, and user chip.
 // activePage and onNavigate enable state-based page routing without
 // a router library. Only items with a page key are clickable.
@@ -333,7 +351,9 @@ const Nav = ({
 }) => {
   const isReadOnly = READ_ONLY_ROLES.has(userRole)
   const isAdmin    = userRole === 'admin'
+  const extNav     = externalNavFor(userRole)   // external roles: the sidebar comes only from this table (lib/externalNav.ts)
   const [foundOpen, setFoundOpen] = useState(true)   // default expanded so WBS/Commodity/Equipment show without a click (user can still collapse)
+  const [procOpen,  setProcOpen]  = useState(true)   // Procurement group (Post-Award / Pre-Award) — default expanded, mirrors Foundational
 
   const navItem = (label: string, icon: string, page?: Page, badge?: number) => {
     const active = page != null && page === activePage
@@ -393,12 +413,30 @@ const Nav = ({
 
       {/* Top nav */}
       <div style={{ padding: '8px 8px 4px', flexShrink: 0 }}>
-        {navItem('Dashboard', '🏠', 'dashboard')}
+        {navItem(extNav ? 'Home' : 'Dashboard', '🏠', 'dashboard')}
       </div>
 
       {/* Module nav */}
       <div style={{ padding: '4px 8px', flex: 1, overflowY: 'auto' }}>
         {sectionLabel('Modules')}
+
+        {/* ─── EXTERNAL ROLES (ext-2) ── only the table's entries, once a project is selected;
+            a group (Materials Control, Foundational) shows its allowed children while one is open. */}
+        {extNav ? extNav.filter(e => e.id !== 'dashboard' && selectedProjectId).map(e => (
+          <div key={e.id}>
+            {navItem(e.label, e.icon, e.page as Page)}
+            {e.sub && e.sub.some(s => s.page === activePage) && (
+              <div style={{ paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {e.sub.map(s => (
+                  <button key={s.page} onClick={() => onNavigate(s.page as Page)}
+                    style={{ padding: '5px 12px', textAlign: 'left', background: activePage === s.page ? 'rgba(232,78,15,0.12)' : 'transparent', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, color: activePage === s.page ? '#E84E0F' : '#94a3b8', fontFamily: 'inherit' }}>
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )) : <>
 
         {/* ─── FIX 3: Foundational — collapsible group ──────────────────────────
             Only shown when a project is selected. Three sub-items:
@@ -468,7 +506,67 @@ const Nav = ({
             QCO team: full nav */}
         {userRole !== 'subcontractor' && userRole !== 'freight_forwarder' && <>
           {navItem('MTO Register', '📋', 'mto-list')}
-          {navItem('Procurement', '🧾', 'procurement')}
+
+          {/* ─── Procurement — collapsible group ──────────────────────────────
+              Parent is a pure expand/collapse toggle (not itself navigable,
+              mirroring Foundational). Post-Award routes to the existing,
+              unchanged Procurement screen ('procurement'); it stays highlighted
+              across the register AND its po-detail drill-down. Pre-Award is the
+              new module; its child appears only when a project is selected. */}
+          <div style={{ marginBottom: 1 }}>
+            {/* ── Parent toggle ────────────────────────────────────────────── */}
+            <div
+              onClick={() => collapsed ? null : setProcOpen(o => !o)}
+              title={collapsed ? 'Procurement' : undefined}
+              style={{
+                display: 'flex', alignItems: 'center', gap: collapsed ? 0 : 9,
+                padding: collapsed ? '6px 0' : '6px 8px',
+                justifyContent: collapsed ? 'center' : 'flex-start',
+                borderRadius: 6, fontSize: 13, userSelect: 'none', cursor: 'pointer',
+                background: 'transparent', color: '#94a3b8', transition: 'all 150ms ease',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = '#e2e8f0' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#94a3b8' }}>
+              <span style={{ width: collapsed ? 20 : 15, textAlign: 'center', fontSize: collapsed ? 16 : 12, opacity: 0.65, flexShrink: 0 }}>🧾</span>
+              {!collapsed && <span style={{ flex: 1 }}>Procurement</span>}
+              {!collapsed && <span style={{ fontSize: 10, opacity: 0.5, transition: 'transform 200ms', display: 'inline-block', transform: procOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>}
+            </div>
+            {/* ── Child items ──────────────────────────────────────────────── */}
+            {(procOpen || collapsed) && (
+              <div style={{ paddingLeft: collapsed ? 0 : 22 }}>
+                {[
+                  ...(selectedProjectId ? [{ label: 'Pre-Award', icon: '📑', page: 'pre-award-tenders' as Page, activePages: ['pre-award-tenders', 'pre-award-detail'] as Page[] }] : []),
+                  { label: 'Post-Award', icon: '🧾', page: 'procurement' as Page, activePages: ['procurement', 'po-detail'] as Page[] },
+                ].map(item => {
+                  const active = item.activePages.includes(activePage)
+                  return (
+                  <div
+                    key={item.label}
+                    onClick={() => onNavigate(item.page)}
+                    title={collapsed ? item.label : undefined}
+                    style={{
+                      display: 'flex', alignItems: 'center',
+                      gap: collapsed ? 0 : 9,
+                      padding: collapsed ? '5px 0' : '5px 8px',
+                      justifyContent: collapsed ? 'center' : 'flex-start',
+                      borderRadius: 6, fontSize: 12, marginBottom: 1, userSelect: 'none',
+                      cursor: 'pointer',
+                      color: active ? '#E84E0F' : '#64748b',
+                      background: active ? 'rgba(232,78,15,0.10)' : 'transparent',
+                      border: `1px solid ${active ? 'rgba(232,78,15,0.25)' : 'transparent'}`,
+                      ...(!collapsed ? { borderLeft: active ? undefined : '1px solid rgba(255,255,255,0.08)', marginLeft: 4, paddingLeft: 12 } : {}),
+                      transition: 'all 150ms',
+                    }}
+                    onMouseEnter={e => { if (!active) { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = '#e2e8f0' } }}
+                    onMouseLeave={e => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#64748b' } }}>
+                    <span style={{ fontSize: collapsed ? 16 : 11, flexShrink: 0 }}>{item.icon}</span>
+                    {!collapsed && <span>{item.label}</span>}
+                  </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
           <div
             key="expediting"
             onClick={() => onNavigate('expediting')}
@@ -531,6 +629,7 @@ const Nav = ({
         {/* Meetings & RFIs — all roles hold rfi_meeting.can_view per the C1 matrix
             (backend requirePermission is the real gate); shown to everyone. */}
         {navItem('Meetings & RFIs', '📋', 'rfi-meeting')}
+        </>}
       </div>
 
       {/* ─── SYSTEM SECTION ────────────────────────────────────
@@ -859,6 +958,7 @@ function App() {
   // ─── PO Detail Screen (Phase 3) ─────────────────────────────────────────
   // selectedPOId tracks which PO the user navigated to in Phase 3.
   const [selectedPOId,    setSelectedPOId]    = useState<number | null>(null)
+  const [selectedTenderId, setSelectedTenderId] = useState<number | null>(null)  // Pre-Award tender detail drill-down
   const [selectedMTOId,   setSelectedMTOId]   = useState<number | null>(null)
   const [selectedExpPOId, setSelectedExpPOId] = useState<number | null>(null)
   // Breadcrumb leaf — the current detail entity's ref (e.g. a PO/MTO ref). Detail
@@ -987,6 +1087,10 @@ function App() {
   const userInitial = userName.charAt(0).toUpperCase()
   const today       = new Date().toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' })
   const criticalCount = projects.filter(p => p.rag === 'red').length
+  // External roles (ext-2): only the pages in their table (lib/externalNav.ts); Home is
+  // the project list, never the project dashboard. Internal roles: false, nothing changes.
+  const externalUser   = isExternal(user?.role)
+  const blockedForRole = externalUser && !canOpen(user?.role, page)
 
   // ─── PASSWORD EXPIRY WARNING ─────────────────────────────
   // Shows a topbar banner when the password expires within 7 days.
@@ -1234,16 +1338,19 @@ function App() {
               </button>
             </div>
           )}
+          {/* ─── EXTERNAL ROLE PAGE GUARD (ext-2) ── a page outside the role's table shows
+              this panel instead of the screen; the screens below render only otherwise. */}
+          {blockedForRole ? <NotAvailablePanel dark={dark} onHome={() => setPage('dashboard')} /> : <>
           {/* Nav option (b): Dashboard = project picker (Home) when no project,
-              the project dashboard once one is selected. */}
-          {page === 'dashboard' && !selectedProjectId && (
+              the project dashboard once one is selected (external roles: always Home). */}
+          {page === 'dashboard' && (!selectedProjectId || externalUser) && (
             <DashboardHome
               projects={projects} loading={loading} error={error} dark={dark}
               containerRef={containerRef} startResize={startResize}
-              onSelectProject={p => { setSelectedProjectId(p.id); setSelectedProjectName(p.name); localStorage.setItem('qmat_last_project', JSON.stringify({ id: p.id, name: p.name })) }}
+              onSelectProject={p => { setSelectedProjectId(p.id); setSelectedProjectName(p.name); localStorage.setItem('qmat_last_project', JSON.stringify({ id: p.id, name: p.name })); if (externalUser) navigate(landingPage(user?.role) as Page) }}
             />
           )}
-          {page === 'dashboard' && selectedProjectId && (
+          {page === 'dashboard' && selectedProjectId && !externalUser && (
             <DashboardProjectScreen
               dark={dark} projectId={selectedProjectId} projectName={selectedProjectName} userRole={user?.role ?? ''}
               onBack={() => { setSelectedProjectId(null); setSelectedProjectName('') }}
@@ -1331,6 +1438,18 @@ function App() {
           {page === 'foundational-equipment' && selectedProjectId && (
             <FoundEquipmentScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
               onBack={() => setPage('dashboard')} />
+          )}
+
+          {page === 'pre-award-tenders' && selectedProjectId && (
+            <PreAwardTendersScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
+              userRole={user?.role ?? ''}
+              onBack={() => setPage('dashboard')}
+              onOpenTender={(id: number) => { setSelectedTenderId(id); setPage('pre-award-detail') }} />
+          )}
+
+          {page === 'pre-award-detail' && selectedProjectId && selectedTenderId && (
+            <PreAwardDetailScreen dark={dark} projectId={selectedProjectId} projectName={selectedProjectName}
+              tenderId={selectedTenderId} userRole={user?.role ?? ''} userId={user?.id ?? 0} onBack={() => setPage('pre-award-tenders')} onLeaf={setCrumbLeaf} />
           )}
 
           {/* ─── EXPEDITING (includes VDRL Register tab) ────────
@@ -1445,6 +1564,7 @@ function App() {
               onLeaf={setCrumbLeaf}
             />
           )}
+          </>}
         </div>
       </div>
     </div>
