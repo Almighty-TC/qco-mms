@@ -16,6 +16,10 @@ const COLS = {
   po_variations: 'id po_id variation_number reason value_impact schedule_impact_days requested_by approved_by status approved_at created_at updated_at',
   itp_requirements: 'id po_id description inspection_type is_mandatory created_by created_at item_number timing witness_required certificate_required planned_date forecast_date status completion_date completion_notes po_line_id is_deleted notes',
   itp_items: 'id requirement_id item_number description status actioned_by actioned_at notes created_at',
+  vdrl_packages: 'id project_id po_id package_ref name vendor_name po_number status total_docs submitted overdue abf_total abf_cleared progress_pct supplier_user_id created_by created_at updated_at',
+  traceability_certs: 'id project_id category po_id po_ref vendor_name tag document_name cert_type item_scope heat_ref applies_to issue_date due_date received_date is_required uploader file_name file_size status priority uploaded_by uploaded_date verified_by verified_date reject_reason notes created_at file_path mime_type',
+  traceability_cert_versions: 'id cert_id rev heat_ref applies_to file_name file_size status created_by created_by_name created_date verified_by_name verified_date',
+  vdrl_documents: 'id package_id doc_number title doc_type discipline revision purpose status required_date promised_date submitted_date abf_required abf_cleared cert_required mdr_required review_days transmittal_ref spec_reference tag_number po_line_ref notes created_by created_at updated_at file_path file_name file_size mime_type source_po_line_id',
 }
 const LIST_ALIASES = 'statusLabel isCriticalPath isLocked owner_name expeditor_name expeditor_ids expeditor_names expeditor_names_all supplier_name supplier_code wbs_node_id wbs_name line_count earliest_cdd earliest_line_ros cdd atRiskDays approvals'
 const fake = (cols, extra = '') => Object.fromEntries([...cols.split(' '), ...extra.split(' ').filter(Boolean), 'zz_new_column'].map(k => [k, 'S:' + k]))
@@ -29,7 +33,18 @@ const EXPECT = {
   item: 'id item_number description status',
   variation: 'id variation_number value_impact schedule_impact_days status reason approved_at',
   document: 'id doc_type file_name file_size_bytes mime_type version is_current uploaded_at uploaded_by_name',
+  vdrlPackage: 'id package_ref name status po_id po_number vendor_name doc_count submitted_count overdue_count created_at',
+  vdrlDocument: 'id package_id package_name po_number doc_number title doc_type revision status required_date promised_date submitted_date days_overdue file_name abf_required abf_cleared tag_number po_line_ref',
+  vdrlStats: 'total_docs submitted_count submitted_pct overdue_count abf_cleared_count progress_pct',
+  vdrlPoRow: 'id po_number po_name vendor_name package_count total_docs submitted_count overdue_count progress_pct',
 }
+const CERT_EXPECT = {
+  certRow: 'cert_id po_ref document_name cert_type heat_ref applies_to tag is_required file_name status issue_date due_date received_date uploaded_date verified_date verified_by reject_reason',
+  certVersion: 'id rev heat_ref applies_to file_name status uploaded_date verified_date verified_by',
+  certSummary: 'vdrl_received vdrl_pending vdrl_overdue active_holds',
+}
+const CERT_NEVER = 'vendor_name item_scope priority file_size uploaded_by file_path notes uploader project_id po_id category created_at mime_type created_by created_by_name created_date verified_by_name cert_id_internal zz_new_column'.split(' ')
+const VDRL_NEVER = 'file_path notes created_by review_days transmittal_ref spec_reference supplier_user_id project_id discipline purpose cert_required mdr_required source_po_line_id mime_type file_size updated_at total_docs submitted overdue abf_total progress_pct'.split(' ')
 const NEVER = 'owner_id owner_name expeditor_id expeditor_name expeditor_ids expeditor_names expeditor_names_all is_critical_path isCriticalPath critical_path_set_by critical_path_set_at is_locked isLocked tender_id approvals file_path notes created_by created_by_name actioned_by actioned_by_name requested_by requested_by_name approved_by approved_by_name qty_allocated qty_assigned source_mto_line_id commodity_id atRiskDays zz_new_column supplier_id project_id'.split(' ')
 
 function load(src) {
@@ -81,6 +96,26 @@ function suite(src) {
   check(dr.length === 2, 'documents: every row'); dr.forEach((d, k) => { keysAre(d, EXPECT.document, `document ${k}`); neverIn(d, `document ${k}`) })
   sentinels(dr[0], EXPECT.document.split(' '), 'document')
 
+  // VDRL (P2d): packages, documents, stats, the PO list
+  const vneverIn = (o, keys, name) => { const bad = [...NEVER, ...VDRL_NEVER].filter(k => !keys.includes(k) && Object.prototype.hasOwnProperty.call(o, k)); check(bad.length === 0, `${name}: none of the hidden fields (${bad.join(', ') || 'none'})`) }
+  const vp = V.vdrlPackage(fake(COLS.vdrl_packages, 'doc_count submitted_count overdue_count'))
+  keysAre(vp, EXPECT.vdrlPackage, 'vdrlPackage'); sentinels(vp, EXPECT.vdrlPackage.split(' '), 'vdrlPackage'); vneverIn(vp, EXPECT.vdrlPackage.split(' '), 'vdrlPackage')
+  const vd = V.vdrlDocument(fake(COLS.vdrl_documents, 'package_name po_number vendor_name days_overdue'))
+  keysAre(vd, EXPECT.vdrlDocument, 'vdrlDocument'); sentinels(vd, EXPECT.vdrlDocument.split(' '), 'vdrlDocument'); vneverIn(vd, EXPECT.vdrlDocument.split(' '), 'vdrlDocument')
+  const vs = V.vdrlStats({ ...fake(EXPECT.vdrlStats, 'internal_hint') })
+  keysAre(vs, EXPECT.vdrlStats, 'vdrlStats'); sentinels(vs, EXPECT.vdrlStats.split(' '), 'vdrlStats')
+  const vr2 = V.vdrlPoRow(fake(COLS.purchase_orders, 'package_count total_docs submitted_count overdue_count progress_pct'))
+  keysAre(vr2, EXPECT.vdrlPoRow, 'vdrlPoRow'); sentinels(vr2, EXPECT.vdrlPoRow.split(' '), 'vdrlPoRow'); neverIn(vr2, 'vdrlPoRow')
+
+  // Certificates (P2e): rows, versions, the summary
+  const cneverIn = (o, keys, name) => { const bad = CERT_NEVER.filter(k => !keys.includes(k) && Object.prototype.hasOwnProperty.call(o, k)); check(bad.length === 0, `${name}: none of the hidden fields (${bad.join(', ') || 'none'})`) }
+  const cr = V.certRow(fake(COLS.traceability_certs, 'cert_id'))
+  keysAre(cr, CERT_EXPECT.certRow, 'certRow'); sentinels(cr, CERT_EXPECT.certRow.split(' '), 'certRow'); cneverIn(cr, CERT_EXPECT.certRow.split(' '), 'certRow')
+  const cv = V.certVersion(fake(COLS.traceability_cert_versions, 'uploaded_date uploaded_by verified_by'))
+  keysAre(cv, CERT_EXPECT.certVersion, 'certVersion'); sentinels(cv, CERT_EXPECT.certVersion.split(' '), 'certVersion'); cneverIn(cv, CERT_EXPECT.certVersion.split(' '), 'certVersion')
+  const cs = V.certSummary(fake(CERT_EXPECT.certSummary, 'vdrl_rejected'))
+  keysAre(cs, CERT_EXPECT.certSummary, 'certSummary'); sentinels(cs, CERT_EXPECT.certSummary.split(' '), 'certSummary')
+
   // pick: null for a missing key, a new object, never the row's other keys; frozen lists
   const p = V.pick({ a: 1, b: 2 }, ['a', 'c'])
   check(JSON.stringify(p) === '{"a":1,"c":null}' && p.c === null, 'pick: null for a missing key, nothing else')
@@ -110,6 +145,13 @@ const MUTANTS = [
   ['document file_path shown', s => s.replace("'is_current', 'uploaded_at', 'uploaded_by_name'])", "'is_current', 'uploaded_at', 'uploaded_by_name', 'file_path'])")],
   ['documents not projected', s => s.replace('const documents = rows => (rows || []).map(r => pick(r, DOCUMENT))', 'const documents = rows => rows || []')],
   ['list not frozen', s => s.replace('const PO_LIST_ROW = Object.freeze([', 'const PO_LIST_ROW = ([')],
+  ['vdrl document file_path shown', s => s.replace("'abf_required', 'abf_cleared', 'tag_number', 'po_line_ref',", "'abf_required', 'abf_cleared', 'tag_number', 'po_line_ref', 'file_path',")],
+  ['vdrl document review_days shown', s => s.replace("'abf_required', 'abf_cleared', 'tag_number', 'po_line_ref',", "'abf_required', 'abf_cleared', 'tag_number', 'po_line_ref', 'review_days',")],
+  ['vdrl package created_by shown', s => s.replace("'doc_count', 'submitted_count', 'overdue_count', 'created_at'])", "'doc_count', 'submitted_count', 'overdue_count', 'created_at', 'created_by'])")],
+  ['cert vendor_name shown', s => s.replace("'issue_date', 'due_date', 'received_date', 'uploaded_date', 'verified_date', 'verified_by', 'reject_reason',", "'issue_date', 'due_date', 'received_date', 'uploaded_date', 'verified_date', 'verified_by', 'reject_reason', 'vendor_name',")],
+  ['cert reject_reason hidden', s => s.replace("'verified_date', 'verified_by', 'reject_reason',\n])", "'verified_date', 'verified_by',\n])")],
+  ['version file_size shown', s => s.replace("'status', 'uploaded_date', 'verified_date', 'verified_by'])", "'status', 'uploaded_date', 'verified_date', 'verified_by', 'file_size'])")],
+  ['vdrl document not projected', s => s.replace('const vdrlDocument = row => pick(row, VDRL_DOCUMENT)', 'const vdrlDocument = row => row')],
 ]
 
 const r = suite(SOURCE)

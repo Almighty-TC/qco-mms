@@ -655,11 +655,33 @@ router.put('/:projectId/po/:poId/lines/:lineId/link', async (req, res) => {
   }
 })
 
+// ─── VENDOR SCOPE (P2d) ───────────────────────────────────────
+// Vendors see only the VDRL of their own supplier's POs (req.user.supplier_id, set from the
+// users row by the external gate; none without a supplier) and only attach files to existing
+// rows. Internal roles are unchanged: every vendor fragment below is empty for them.
+const vendorView = require('../lib/vendorView')
+const VENDOR_UPLOAD_STATUSES = ['Not submitted', 'Overdue', 'Resubmit']
+const isVendor = req => req.user?.role === 'vendor'
+// A vendor with no supplier gets the empty result without any SQL (3T130); the reads check
+// this first, so vendorSupplier is only built for a vendor with a supplier.
+const vendorWithoutSupplier = req => isVendor(req) && req.user.supplier_id == null
+function vendorSupplier(req) {
+  return { sql: ' AND po.supplier_id = ?', params: [Number(req.user.supplier_id)] }
+}
+function refuseVendorWrites(req, res, next) {
+  if (isVendor(req)) return res.status(403).json({ error: 'Vendors attach files to existing rows' })
+  next()
+}
+
 // ─── VDRL STATS ───────────────────────────────────────────────
 // Summary counts for VDRL KPI strip on ExpeditingScreen.
 router.get('/:projectId/vdrl/stats', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
+    if (vendorWithoutSupplier(req)) {
+      return res.json(vendorView.vdrlStats({ total_docs: 0, submitted_count: 0, submitted_pct: 0, overdue_count: 0, abf_cleared_count: 0, progress_pct: 0 }))
+    }
+    const v = isVendor(req) ? vendorSupplier(req) : null
     const [[stats]] = await db.query(`
       SELECT
         COUNT(d.id) AS total_docs,
@@ -667,19 +689,20 @@ router.get('/:projectId/vdrl/stats', async (req, res) => {
         SUM(CASE WHEN d.status='Overdue' THEN 1 ELSE 0 END) AS overdue_count,
         SUM(CASE WHEN d.abf_required=1 AND d.abf_cleared=1 THEN 1 ELSE 0 END) AS abf_cleared_count
       FROM vdrl_documents d
-      JOIN vdrl_packages p ON p.id = d.package_id
-      WHERE p.project_id = ?
-    `, [pid])
+      JOIN vdrl_packages p ON p.id = d.package_id${v ? '\n      JOIN purchase_orders po ON po.id = p.po_id' : ''}
+      WHERE p.project_id = ?${v ? v.sql : ''}
+    `, [pid, ...(v ? v.params : [])])
     const total = stats.total_docs || 0
     const submitted = stats.submitted_count || 0
-    res.json({
+    const body = {
       total_docs: total,
       submitted_count: submitted,
       submitted_pct: total ? Math.round(submitted / total * 100) : 0,
       overdue_count: stats.overdue_count || 0,
       abf_cleared_count: stats.abf_cleared_count || 0,
       progress_pct: total ? Math.round(submitted / total * 100) : 0,
-    })
+    }
+    res.json(v ? vendorView.vdrlStats(body) : body)
   } catch (e) { dbError(res, e) }
 })
 
@@ -688,25 +711,27 @@ router.get('/:projectId/vdrl/stats', async (req, res) => {
 router.get('/:projectId/vdrl/packages', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
+    if (vendorWithoutSupplier(req)) return res.json([])
+    const v = isVendor(req) ? vendorSupplier(req) : null   // P2d: INNER JOIN on the PO for vendors
     const [pkgs] = await db.query(`
       SELECT p.*, po.po_number, po.vendor_name,
         COUNT(d.id) AS doc_count,
         SUM(CASE WHEN d.submitted_date IS NOT NULL THEN 1 ELSE 0 END) AS submitted_count,
         SUM(CASE WHEN d.status='overdue' THEN 1 ELSE 0 END) AS overdue_count
       FROM vdrl_packages p
-      LEFT JOIN purchase_orders po ON po.id = p.po_id
+      ${v ? 'JOIN' : 'LEFT JOIN'} purchase_orders po ON po.id = p.po_id
       LEFT JOIN vdrl_documents d ON d.package_id = p.id
-      WHERE p.project_id = ?
+      WHERE p.project_id = ?${v ? v.sql : ''}
       GROUP BY p.id
       ORDER BY p.created_at DESC
-    `, [pid])
-    res.json(pkgs)
+    `, [pid, ...(v ? v.params : [])])
+    res.json(v ? pkgs.map(vendorView.vdrlPackage) : pkgs)
   } catch (e) { dbError(res, e) }
 })
 
 // ─── VDRL PACKAGE CREATE ──────────────────────────────────────
 // Creates a new VDRL package for the given project.
-router.post('/:projectId/vdrl/packages', async (req, res) => {
+router.post('/:projectId/vdrl/packages', refuseVendorWrites, async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
     const { name, po_id } = req.body
@@ -731,6 +756,17 @@ router.get('/:projectId/vdrl/documents', async (req, res) => {
 
     let where = 'p.project_id = ?'
     const params = [pid]
+    if (vendorWithoutSupplier(req)) return res.json([])
+    const v = isVendor(req) ? vendorSupplier(req) : null   // P2d: own supplier's packages only
+    if (v) {
+      where += v.sql; params.push(...v.params)
+      if (package_id) {
+        const [[own]] = await db.query(
+          `SELECT p.id FROM vdrl_packages p JOIN purchase_orders po ON po.id = p.po_id
+           WHERE p.id = ? AND p.project_id = ?${v.sql}`, [Number(package_id), pid, ...v.params])
+        if (!own) return res.status(403).json({ error: 'Access denied' })
+      }
+    }
     if (package_id) { where += ' AND d.package_id = ?'; params.push(package_id) }
     if (status)     { where += ' AND d.status = ?';     params.push(status) }
     if (doc_type)   { where += ' AND d.doc_type = ?';   params.push(doc_type) }
@@ -747,17 +783,17 @@ router.get('/:projectId/vdrl/documents', async (req, res) => {
         DATEDIFF(CURDATE(), d.required_date) AS days_overdue
       FROM vdrl_documents d
       JOIN vdrl_packages p ON p.id = d.package_id
-      LEFT JOIN purchase_orders po ON po.id = p.po_id
+      ${v ? 'JOIN' : 'LEFT JOIN'} purchase_orders po ON po.id = p.po_id
       WHERE ${where}
       ORDER BY d.doc_number
     `, params)
-    res.json(docs)
+    res.json(v ? docs.map(vendorView.vdrlDocument) : docs)
   } catch (e) { dbError(res, e) }
 })
 
 // ─── VDRL DOCUMENT CREATE ─────────────────────────────────────
 // Adds a new document to a VDRL package.
-router.post('/:projectId/vdrl/documents', async (req, res) => {
+router.post('/:projectId/vdrl/documents', refuseVendorWrites, async (req, res) => {
   try {
     const { package_id, doc_number, title, doc_type, discipline, revision,
             required_date, promised_date, notes, status } = req.body
@@ -781,6 +817,11 @@ router.post('/:projectId/vdrl/documents', async (req, res) => {
 router.put('/:projectId/vdrl/documents/:docId', async (req, res) => {
   try {
     const docId = Number(req.params.docId)
+    // P2d (§15 (cb)): the document must be in the URL's project, for every role.
+    const [[inProject]] = await db.query(
+      `SELECT d.id FROM vdrl_documents d JOIN vdrl_packages p ON p.id = d.package_id
+       WHERE d.id=? AND p.project_id=?`, [docId, Number(req.params.projectId)])
+    if (!inProject) return res.status(404).json({ error: 'VDRL document not found in this project' })
     const fields = ['title','doc_type','discipline','revision','required_date','promised_date','submitted_date','status','abf_required','abf_cleared','notes','owner']
     const sets = [], vals = []
     for (const f of fields) {
@@ -808,7 +849,33 @@ const uploadVdrlFile = require('multer')({
   limits: { fileSize: 25 * 1024 * 1024 },
   fileFilter: fileFilter('document'),
 })
-router.post('/:projectId/vdrl/documents/:docId/file', uploadVdrlFile.single('file'), async (req, res) => {
+// P2d: a vendor attaches a file only to a document on its own supplier's PO in this project,
+// and only while it is Not submitted, Overdue or Resubmit — checked before the upload is read.
+async function vendorVdrlFileGate(req, res, next) {
+  if (!isVendor(req)) return next()
+  if (req.user.supplier_id == null) return res.status(403).json({ error: 'Access denied' })
+  try {
+    const [[doc]] = await db.query(
+      `SELECT d.status FROM vdrl_documents d JOIN vdrl_packages p ON p.id = d.package_id
+       JOIN purchase_orders po ON po.id = p.po_id
+       WHERE d.id = ? AND p.project_id = ? AND po.supplier_id = ?`,
+      [Number(req.params.docId), Number(req.params.projectId), Number(req.user.supplier_id)])
+    if (!doc) return res.status(403).json({ error: 'Access denied' })
+    if (!VENDOR_UPLOAD_STATUSES.includes(doc.status)) return res.status(409).json({ error: `A file cannot be uploaded while the document is ${doc.status}` })
+    next()
+  } catch (e) { dbError(res, e) }
+}
+// Removes a file stored by blobStore.persist when a vendor's conditional UPDATE changed no row
+// (blobStore has no delete): disk → unlink; blob → deleteIfExists in the same container.
+async function removeStoredVdrlFile(where, value, diskAbs) {
+  try {
+    if (where === 'disk') { fsVdrl.unlinkSync(diskAbs); return }
+    const { BlobServiceClient } = require('@azure/storage-blob')
+    await BlobServiceClient.fromConnectionString(process.env.AZURE_STORAGE_CONNECTION_STRING)
+      .getContainerClient(blobStoreVdrl.CONTAINER).getBlockBlobClient(value).deleteIfExists()
+  } catch (e) { console.error('[expediting:vdrl-file] could not remove the stored file:', e.message) }
+}
+router.post('/:projectId/vdrl/documents/:docId/file', vendorVdrlFileGate, uploadVdrlFile.single('file'), async (req, res) => {
   try {
     const pid   = Number(req.params.projectId)
     const docId = Number(req.params.docId)
@@ -829,18 +896,61 @@ router.post('/:projectId/vdrl/documents/:docId/file', uploadVdrlFile.single('fil
     // Blob migration: persist to blob (key) or disk (legacy relative shape — unchanged).
     const vdrlStoredName = `${Date.now()}-${req.file.originalname.replace(/[^a-zA-Z0-9._-]+/g, '_')}`
     const vdrlDiskAbs = pathVdrl.join(vdrlFileDir, vdrlStoredName)
-    const { value: relPath } = await blobStoreVdrl.persist({
+    const { value: relPath, where: storedWhere } = await blobStoreVdrl.persist({
       key: blobStoreVdrl.keyFor('vdrl', vdrlStoredName),   // module key matches documents.js RESOLVERS
       diskAbsPath: vdrlDiskAbs, buffer: req.file.buffer, contentType: req.file.mimetype,
       diskValue: pathVdrl.relative(pathVdrl.join(__dirname, '..'), vdrlDiskAbs),  // uploads/vdrl-documents/<stored>
     })
-    await db.query(
-      `UPDATE vdrl_documents
-         SET file_name=?, file_path=?, file_size=?, mime_type=?,
-             status=CASE WHEN status IN ('Not submitted','Overdue') THEN 'Under review' ELSE status END,
-             submitted_date=COALESCE(submitted_date, CURDATE()), updated_at=NOW()
-       WHERE id=?`,
-      [req.file.originalname, relPath, req.file.size, req.file.mimetype, docId])
+    if (isVendor(req)) {
+      // P2d: the conditional UPDATE (the status may have changed since the check; the document
+      // becomes Under review) and the projected answer run in one transaction, so any failure
+      // leaves the row unchanged and the stored file is removed before answering (3T130).
+      let conn, vd
+      try {
+        conn = await db.getConnection()
+        await conn.beginTransaction()
+        const [upd] = await conn.query(
+          `UPDATE vdrl_documents
+             SET file_name=?, file_path=?, file_size=?, mime_type=?, status='Under review',
+                 submitted_date=COALESCE(submitted_date, CURDATE()), updated_at=NOW()
+           WHERE id=? AND status IN (?,?,?)`,
+          [req.file.originalname, relPath, req.file.size, req.file.mimetype, docId, ...VENDOR_UPLOAD_STATUSES])
+        if (!upd.affectedRows) {
+          await conn.rollback()
+          await removeStoredVdrlFile(storedWhere, relPath, vdrlDiskAbs)
+          const [[now]] = await db.query('SELECT status FROM vdrl_documents WHERE id=?', [docId])
+          return res.status(409).json({ error: `A file cannot be uploaded while the document is ${now ? now.status : 'changed'}` })
+        }
+        ;[[vd]] = await conn.query(
+          `SELECT d.*, p.name AS package_name, po.po_number, po.vendor_name,
+             DATEDIFF(CURDATE(), d.required_date) AS days_overdue
+           FROM vdrl_documents d JOIN vdrl_packages p ON p.id = d.package_id
+           LEFT JOIN purchase_orders po ON po.id = p.po_id WHERE d.id=?`, [docId])
+        await conn.commit()
+      } catch (err) {
+        if (conn) { try { await conn.rollback() } catch (_) { /* already rolled back */ } }
+        await removeStoredVdrlFile(storedWhere, relPath, vdrlDiskAbs)
+        return dbError(res, err)
+      } finally {
+        if (conn) conn.release()
+      }
+      db.query(
+        `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, after_value, resource, ip)
+         VALUES (?,?,?,?,?,?,?,?)`,
+        [req.user.id, 'vdrl_file_attached', 'vdrl_document', docId, pid,
+         JSON.stringify({ file: req.file.originalname }),
+         (req.originalUrl || '').split('?')[0].replace(/^\/api(?=\/)/, ''), req.ip]
+      ).catch(e => console.error('[expediting:vdrl-file audit]', e.message))
+      return res.status(201).json(vendorView.vdrlDocument(vd))
+    } else {
+      await db.query(
+        `UPDATE vdrl_documents
+           SET file_name=?, file_path=?, file_size=?, mime_type=?,
+               status=CASE WHEN status IN ('Not submitted','Overdue') THEN 'Under review' ELSE status END,
+               submitted_date=COALESCE(submitted_date, CURDATE()), updated_at=NOW()
+         WHERE id=?`,
+        [req.file.originalname, relPath, req.file.size, req.file.mimetype, docId])
+    }
 
     db.query(
       `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, after_value, resource, ip)
@@ -1360,6 +1470,8 @@ router.put('/:projectId/scn/:scnId/packages/:packageId/identifiers', async (req,
 router.get('/:projectId/vdrl/po-list', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
+    if (vendorWithoutSupplier(req)) return res.json([])
+    const v = isVendor(req) ? vendorSupplier(req) : null   // P2d: own supplier's POs only
     const [rows] = await db.query(`
       SELECT
         po.id, po.po_number, po.po_name, po.vendor_name,
@@ -1371,10 +1483,10 @@ router.get('/:projectId/vdrl/po-list', async (req, res) => {
       FROM purchase_orders po
       JOIN vdrl_packages pkg ON pkg.po_id = po.id AND pkg.project_id = ?
       LEFT JOIN vdrl_documents d ON d.package_id = pkg.id
-      WHERE po.project_id = ? AND po.is_locked = 1
+      WHERE po.project_id = ? AND po.is_locked = 1${v ? v.sql : ''}
       GROUP BY po.id
       ORDER BY po.po_number
-    `, [pid, pid])
+    `, [pid, pid, ...(v ? v.params : [])])
     // ─── CAST NUMERIC FIELDS ──────────────────────────────────────
     // MySQL node driver returns COUNT/SUM columns as strings; cast to
     // numbers here so the frontend reduce() sums correctly.
@@ -1388,7 +1500,7 @@ router.get('/:projectId/vdrl/po-list', async (req, res) => {
         ? Math.round((parseInt(r.submitted_count) || 0) / (parseInt(r.total_docs) || 1) * 100)
         : 0,
     }))
-    res.json(cast)
+    res.json(v ? cast.map(vendorView.vdrlPoRow) : cast)
   } catch (e) { console.error(e); dbError(res, e) }
 })
 
@@ -1549,7 +1661,7 @@ async function vdrlLookups(pid, refs) {
   return { pos, existingDocs }
 }
 
-router.post('/:projectId/vdrl/upload', uploadVDRL.single('file'), async (req, res) => {
+router.post('/:projectId/vdrl/upload', refuseVendorWrites, uploadVDRL.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file provided' })
   const pid = Number(req.params.projectId)
   const dryRun = req.query.dryRun === 'true'

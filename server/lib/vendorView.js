@@ -31,6 +31,24 @@ const ITP_REQUIREMENT = Object.freeze([
 const ITP_ITEM = Object.freeze(['id', 'item_number', 'description', 'status'])
 const VARIATION = Object.freeze(['id', 'variation_number', 'value_impact', 'schedule_impact_days', 'status', 'reason', 'approved_at'])
 const DOCUMENT = Object.freeze(['id', 'doc_type', 'file_name', 'file_size_bytes', 'mime_type', 'version', 'is_current', 'uploaded_at', 'uploaded_by_name'])
+// VDRL (P2d; TC's answers of 2026-10-16, 3T126). Never file_path, notes, created_by, review
+// days, transmittal or spec references.
+const VDRL_PACKAGE = Object.freeze(['id', 'package_ref', 'name', 'status', 'po_id', 'po_number', 'vendor_name', 'doc_count', 'submitted_count', 'overdue_count', 'created_at'])
+const VDRL_DOCUMENT = Object.freeze([
+  'id', 'package_id', 'package_name', 'po_number', 'doc_number', 'title', 'doc_type', 'revision', 'status',
+  'required_date', 'promised_date', 'submitted_date', 'days_overdue', 'file_name',
+  'abf_required', 'abf_cleared', 'tag_number', 'po_line_ref',
+])
+const VDRL_STATS = Object.freeze(['total_docs', 'submitted_count', 'submitted_pct', 'overdue_count', 'abf_cleared_count', 'progress_pct'])
+const VDRL_PO_ROW = Object.freeze(['id', 'po_number', 'po_name', 'vendor_name', 'package_count', 'total_docs', 'submitted_count', 'overdue_count', 'progress_pct'])
+// Certificates (P2e; 3T126 and 3T129). verified_by is the verifier's name. Never vendor_name,
+// item_scope, priority, file_size, uploaded_by, file_path or notes.
+const CERT_ROW = Object.freeze([
+  'cert_id', 'po_ref', 'document_name', 'cert_type', 'heat_ref', 'applies_to', 'tag', 'is_required', 'file_name', 'status',
+  'issue_date', 'due_date', 'received_date', 'uploaded_date', 'verified_date', 'verified_by', 'reject_reason',
+])
+const CERT_VERSION = Object.freeze(['id', 'rev', 'heat_ref', 'applies_to', 'file_name', 'status', 'uploaded_date', 'verified_date', 'verified_by'])
+const CERT_SUMMARY = Object.freeze(['vdrl_received', 'vdrl_pending', 'vdrl_overdue', 'active_holds'])
 
 // A new object with exactly `keys` (null where the row has no such key).
 function pick(row, keys) {
@@ -60,8 +78,17 @@ function itp(reqs) {
 
 const variations = rows => (rows || []).map(r => pick(r, VARIATION))
 const documents = rows => (rows || []).map(r => pick(r, DOCUMENT))
+const vdrlPackage = row => pick(row, VDRL_PACKAGE)
+const vdrlDocument = row => pick(row, VDRL_DOCUMENT)
+const vdrlStats = row => pick(row, VDRL_STATS)
+const vdrlPoRow = row => pick(row, VDRL_PO_ROW)
+const certRow = row => pick(row, CERT_ROW)
+const certVersion = row => pick(row, CERT_VERSION)
+const certSummary = row => pick(row, CERT_SUMMARY)
 
 module.exports = {
-  pick, poListRow, poDetail, itp, variations, documents,
-  KEYS: Object.freeze({ PO_LIST_ROW, PO_DETAIL, PO_LINE, SIGNED_DOC, ITP_REQUIREMENT, ITP_ITEM, VARIATION, DOCUMENT }),
+  pick, poListRow, poDetail, itp, variations, documents, vdrlPackage, vdrlDocument, vdrlStats, vdrlPoRow,
+  certRow, certVersion, certSummary,
+  KEYS: Object.freeze({ PO_LIST_ROW, PO_DETAIL, PO_LINE, SIGNED_DOC, ITP_REQUIREMENT, ITP_ITEM, VARIATION, DOCUMENT, VDRL_PACKAGE, VDRL_DOCUMENT, VDRL_STATS, VDRL_PO_ROW,
+    CERT_ROW, CERT_VERSION, CERT_SUMMARY }),
 }

@@ -485,11 +485,18 @@ const RESOLVERS = {
     if (!d.file_path) return { code: 'no_file' }
     return { absPath: path.resolve(SERVER_ROOT, d.file_path), baseDir: UPLOADS.logistics, name: d.file_name, mime: null }
   },
-  async traceability(id, pid) {
+  async traceability(id, pid, user) {
     if (!(await fileColumns()).has('traceability_certs.file_path')) return { code: 'no_file' }
     const [[c]] = await db.query(
       `SELECT file_name, file_path, mime_type FROM traceability_certs WHERE id=? AND project_id=?`, [id, pid])
     if (!c) return { code: 'not_found' }
+    // P2e: a vendor downloads only certificates on its own supplier's POs (none without a PO).
+    if (user?.role === 'vendor') {
+      const [[o]] = user.supplier_id == null ? [[]] : await db.query(
+        `SELECT c.id FROM traceability_certs c JOIN purchase_orders po ON po.id = c.po_id
+         WHERE c.id=? AND po.supplier_id=?`, [id, Number(user.supplier_id)])
+      if (!o) return { code: 'forbidden', error: 'Access denied' }
+    }
     if (!c.file_path) return { code: 'no_file' }
     return { absPath: path.resolve(SERVER_ROOT, c.file_path), baseDir: UPLOADS.traceability, name: c.file_name, mime: c.mime_type }
   },
@@ -503,13 +510,20 @@ const RESOLVERS = {
     if (!r.file_path) return { code: 'no_file' }
     return { absPath: path.resolve(SERVER_ROOT, r.file_path), baseDir: UPLOADS.mto, name: r.file_name, mime: r.mime_type }
   },
-  async vdrl(id, pid) {
+  async vdrl(id, pid, user) {
     if (!(await fileColumns()).has('vdrl_documents.file_path')) return { code: 'no_file' }
     const [[d]] = await db.query(
       `SELECT d.file_name, d.file_path, d.mime_type FROM vdrl_documents d
        JOIN vdrl_packages p ON p.id = d.package_id
        WHERE d.id=? AND p.project_id=?`, [id, pid])
     if (!d) return { code: 'not_found' }
+    // P2d: a vendor downloads only VDRL documents on its own supplier's POs. Other roles unchanged.
+    if (user?.role === 'vendor') {
+      const [[o]] = user.supplier_id == null ? [[]] : await db.query(
+        `SELECT po.supplier_id FROM vdrl_documents d JOIN vdrl_packages p ON p.id = d.package_id
+         JOIN purchase_orders po ON po.id = p.po_id WHERE d.id=?`, [id])
+      if (!o || Number(o.supplier_id) !== Number(user.supplier_id)) return { code: 'forbidden', error: 'Access denied' }
+    }
     if (!d.file_path) return { code: 'no_file' }
     return { absPath: path.resolve(SERVER_ROOT, d.file_path), baseDir: UPLOADS.vdrl, name: d.file_name, mime: d.mime_type }
   },
