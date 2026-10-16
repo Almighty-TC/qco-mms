@@ -20,6 +20,7 @@ router.use(require('../middleware/permissions').enforce((p, req) => {
 }))
 router.param('projectId', require('../middleware/permissions').requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects
 const db      = require('../db')       // connection pool — never createConnection
+const vendorView = require('../lib/vendorView') // P2c: what a vendor sees of its own POs
 
 // ─── PO PROJECT-SCOPE GUARD (close /pos/:id cross-project leak) ───
 // The /pos/:id* family carries no :projectId in the path, so the projectId param
@@ -30,14 +31,19 @@ const db      = require('../db')       // connection pool — never createConnec
 // so it covers EVERY /pos/:id route (read AND mutation) in one place. On denial:
 // 403 + no data (never leak the PO). A non-existent id falls through to the
 // handler's normal 404. (/pos/check-duplicate(s) are literal routes with no :id.)
+// Phase 2 (P2c): a vendor reaches only its own supplier's POs (req.user.supplier_id,
+// set from the users row by the external gate); a vendor with no supplier, or a PO of
+// another supplier, gets 403 "Access denied".
 const { EXTERNAL_ROLES } = require('../middleware/permissions')
 async function requirePoScope(req, res, next, id) {
   const role = req.user?.role
   if (!role) return res.status(401).json({ error: 'Not authenticated' })
   if (role === 'admin' || !EXTERNAL_ROLES.has(role)) return next() // internals bypass — mirrors requireProjectScope
+  if (role === 'vendor' && req.user.supplier_id == null) return res.status(403).json({ error: 'Access denied' })
   try {
-    const [[po]] = await db.query('SELECT project_id FROM purchase_orders WHERE id = ?', [Number(id)])
+    const [[po]] = await db.query('SELECT project_id, supplier_id FROM purchase_orders WHERE id = ?', [Number(id)])
     if (!po) return next() // no such PO → handler returns its normal 404 (no data leaked)
+    if (role === 'vendor' && Number(po.supplier_id) !== Number(req.user.supplier_id)) return res.status(403).json({ error: 'Access denied' })
     const [rows] = await db.query(
       'SELECT id FROM user_wbs_access WHERE user_id = ? AND project_id = ? LIMIT 1',
       [req.user.id, po.project_id]
@@ -379,10 +385,11 @@ router.get('/:projectId/pos', async (req, res) => {
     const params  = [pid]
     const filters = ['po.project_id = ?']
 
-    // Vendor sees only their POs
-    if (req.user.role === 'vendor' && req.user.supplier_id) {
-      filters.push('po.supplier_id = ?')
-      params.push(req.user.supplier_id)
+    // Vendor sees only their POs (P2c: none without a supplier — fails closed)
+    const isVendor = req.user.role === 'vendor'
+    if (isVendor) {
+      if (req.user.supplier_id != null) { filters.push('po.supplier_id = ?'); params.push(Number(req.user.supplier_id)) }
+      else filters.push('1=0')
     }
 
     // ── Status tab filter ─────────────────────────────────────────────────────
@@ -414,10 +421,11 @@ router.get('/:projectId/pos', async (req, res) => {
       filters.push(`l.cdd IS NOT NULL AND l.cdd >= CURDATE() AND DATEDIFF(l.cdd, CURDATE()) <= ${atRiskDays}`)
     }
 
-    if (supplier_id)        { filters.push('po.supplier_id = ?');    params.push(Number(supplier_id)) }
-    if (wbs_id)             { filters.push('w.id = ?');              params.push(Number(wbs_id)) }
-    if (is_critical_path === '1') { filters.push('po.is_critical_path = 1') }
-    if (expeditor_id)       { filters.push('po.expeditor_id = ?');   params.push(Number(expeditor_id)) }
+    // P2c: vendors cannot filter by supplier, WBS node, critical path or expeditor (ignored).
+    if (supplier_id && !isVendor)        { filters.push('po.supplier_id = ?');    params.push(Number(supplier_id)) }
+    if (wbs_id && !isVendor)             { filters.push('w.id = ?');              params.push(Number(wbs_id)) }
+    if (is_critical_path === '1' && !isVendor) { filters.push('po.is_critical_path = 1') }
+    if (expeditor_id && !isVendor)       { filters.push('po.expeditor_id = ?');   params.push(Number(expeditor_id)) }
     if (cdd_from)           { filters.push('l.cdd >= ?');            params.push(cdd_from) }
     if (cdd_to)             { filters.push('l.cdd <= ?');            params.push(cdd_to) }
 
@@ -457,7 +465,9 @@ router.get('/:projectId/pos', async (req, res) => {
       cdd: 'MIN(l.cdd)', value: 'po.value', wbs: 'po.wbs_code',
       expeditor: 'exp.full_name', owner: 'own.full_name',
     }
-    const orderBy  = SAFE_SORT[sort_col] ?? 'po.created_at'
+    // P2c: vendors cannot sort by internal names (owner, expeditor): the default column instead.
+    const VENDOR_HIDDEN_SORTS = new Set(['owner', 'expeditor'])
+    const orderBy  = (isVendor && VENDOR_HIDDEN_SORTS.has(sort_col) ? undefined : SAFE_SORT[sort_col]) ?? 'po.created_at'
     const orderDir = sort_dir?.toLowerCase() === 'asc' ? 'ASC' : 'DESC'
     const where    = filters.join(' AND ')
 
@@ -533,7 +543,9 @@ router.get('/:projectId/pos', async (req, res) => {
     })
 
     // ─── ENVELOPE ─── standard { data, total, page, limit } across all paginated endpoints
-    const body = { data, total: countRows[0].total, page, limit, atRiskDays }
+    const body = isVendor
+      ? { data: data.map(vendorView.poListRow), total: countRows[0].total, page, limit }   // P2c: no atRiskDays
+      : { data, total: countRows[0].total, page, limit, atRiskDays }
     if (searchInfo) body.search = searchInfo
     res.json(body)
   } catch (e) {
@@ -564,7 +576,7 @@ router.get('/pos/:id', async (req, res) => {
     po.expeditor_names = po.expeditor_names_all ? po.expeditor_names_all.split('||')
       : (po.expeditor_name ? [po.expeditor_name] : [])
     delete po.expeditor_names_all
-    if (req.user.role === 'vendor' && po.supplier_id !== req.user.supplier_id) {
+    if (req.user.role === 'vendor' && (req.user.supplier_id == null || Number(po.supplier_id) !== Number(req.user.supplier_id))) {
       return res.status(403).json({ error: 'Access denied' })
     }
 
@@ -578,8 +590,9 @@ router.get('/pos/:id', async (req, res) => {
       WHERE l.po_id = ? ORDER BY l.line_number
     `, [id])
 
-    // Fetch approvals chain
-    const [approvals] = await db.query(`
+    // Fetch approvals chain (not for vendors: P2c)
+    const isVendor = req.user.role === 'vendor'
+    const [approvals] = isVendor ? [[]] : await db.query(`
       SELECT a.*, u.full_name AS approver_name
       FROM po_approvals a JOIN users u ON u.id = a.approver_id
       WHERE a.po_id = ? ORDER BY a.approval_level, a.created_at
@@ -596,6 +609,9 @@ router.get('/pos/:id', async (req, res) => {
 
     const minCdd = lines.reduce((m, l) => !m || (l.cdd && l.cdd < m) ? l.cdd : m, null)
 
+    if (isVendor) {
+      return res.json(vendorView.poDetail({ ...po, statusLabel: STATUS_LABELS[po.status] ?? po.status, cdd: minCdd }, lines, docs[0] ?? null))
+    }
     res.json({
       ...po,
       statusLabel:    STATUS_LABELS[po.status] ?? po.status,
@@ -1751,7 +1767,7 @@ router.get('/pos/:id/variations', async (req, res) => {
       WHERE v.po_id = ?
       ORDER BY v.created_at DESC
     `, [id])
-    res.json(rows)
+    res.json(req.user.role === 'vendor' ? vendorView.variations(rows) : rows)
   } catch (e) { dbError(res, e) }
 })
 
@@ -1793,7 +1809,7 @@ router.get('/pos/:id/itp', async (req, res) => {
       )
       req_.items = items
     }
-    res.json(reqs)
+    res.json(req.user.role === 'vendor' ? vendorView.itp(reqs) : reqs)
   } catch (e) { dbError(res, e) }
 })
 
@@ -1872,7 +1888,7 @@ router.get('/pos/:id/documents', async (req, res) => {
       WHERE pd.po_id = ?
       ORDER BY pd.doc_type, pd.version DESC
     `, [id])
-    res.json(docs)
+    res.json(req.user.role === 'vendor' ? vendorView.documents(docs) : docs)
   } catch (e) { dbError(res, e) }
 })
 
