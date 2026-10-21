@@ -1052,3 +1052,15 @@ export const REPORTS_HELP: HelpSection[] = [
     </>,
   },
 ]
+
+// ─── MY POs (vendor, ext-2c) ──────────────────────────────────
+export const VENDOR_PO_HELP: HelpSection[] = [
+  {
+    title: 'My POs',
+    content: <>
+      {P(<>Lists the purchase orders placed with your company in this project. Search by PO number or description, then click a row to open it.</>)}
+      {P(<>The PO opens on {B('Header')}; the other tabs show {B('Lines')}, {B('ITP')}, {B('Variations')} and {B('Documents')}. Use {B('View')} or {B('Download')} for the signed PO and other documents.</>)}
+      {Tip('This screen is read-only. To change anything on a PO, contact the QCO buyer or expeditor.')}
+    </>,
+  },
+]

@@ -31,6 +31,7 @@ import { DocumentsScreen } from './pages/DocumentsScreen'
 import { ConfirmerQueueScreen } from './pages/ConfirmerQueueScreen'
 import { AuditViewerScreen } from './pages/AuditViewerScreen'
 import { ReportsScreen } from './pages/ReportsScreen'
+import { VendorPOScreen } from './pages/VendorPOScreen'
 import { ForcePasswordChange } from './components/ForcePasswordChange'
 import { ChangePasswordModal } from './components/ChangePasswordModal'
 import { AcronymHeaderTitles } from './components/AcronymHeaderTitles'
@@ -42,7 +43,7 @@ import './App.css'
 // 'admin' enforces role === 'admin'; 'procurement' is project-scoped.
 // ─── ROUTING — state-based, no router library ─────────────────────────────────
 // 'po-detail' is Phase 3 PO Detail Screen — full dedicated screen.
-type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'pre-award-tenders' | 'pre-award-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers' | 'traceability' | 'documents' | 'pending-changes' | 'audit' | 'rfi-meeting' | 'reports'
+type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'pre-award-tenders' | 'pre-award-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers' | 'traceability' | 'documents' | 'pending-changes' | 'audit' | 'rfi-meeting' | 'reports' | 'vendor-pos'
 
 // ─── DEEP-LINK PARSING ───────────────────────────────────────
 // Maps a URL path segment (/project/:id/<segment>) to an internal Page,
@@ -61,6 +62,7 @@ const PAGE_SEGMENTS: Record<string, Page> = {
   'material-control/stock': 'mc-stock', 'material-control/transfers': 'mc-transfers',
   'foundational/wbs': 'foundational-wbs', 'foundational/commodities': 'foundational-commodities', 'foundational/equipment': 'foundational-equipment',
   'pre-award/tenders': 'pre-award-tenders',
+  'vendor-pos': 'vendor-pos',
 }
 // Reads /project/:projectId/:segment from the current URL so a hard load
 // hydrates both the active project and the page in one pass.
@@ -323,6 +325,7 @@ const CRUMB: Record<string, { module: { label: string; page: Page }; leaf?: stri
   reports:                { module: { label: 'Reports', page: 'reports' } },
   'rfi-meeting':          { module: { label: 'Meetings & RFIs', page: 'rfi-meeting' } },
   'pending-changes':      { module: { label: 'Pending Changes', page: 'pending-changes' } },
+  'vendor-pos':           { module: { label: 'My POs', page: 'vendor-pos' } },
 }
 
 // ─── NOT AVAILABLE PANEL (ext-2) ─────────────────────────────
@@ -334,6 +337,14 @@ const NotAvailablePanel = ({ dark, onHome }: { dark: boolean; onHome: () => void
       style={{ padding: '7px 16px', borderRadius: 6, border: `1px solid ${dark ? '#334155' : '#dde3ed'}`, background: dark ? '#1e293b' : '#fff', color: dark ? '#f1f5f9' : '#0f172a', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>
       Back to Home
     </button>
+  </div>
+)
+
+// ─── NOT LINKED PANEL (ext-2c) ───────────────────────────────
+// Home for a vendor whose GET /projects is refused because no supplier is linked yet.
+const NotLinkedPanel = () => (
+  <div style={{ padding: '40px 20px', textAlign: 'center', fontSize: 14, color: '#94a3b8' }}>
+    Your account is not linked to a supplier yet. Contact your QCO administrator.
   </div>
 )
 
@@ -882,6 +893,7 @@ function App() {
   const [projects,      setProjects]      = useState<Project[]>([])
   const [loading,       setLoading]       = useState(false)
   const [error,         setError]         = useState('')
+  const [notLinked,     setNotLinked]     = useState(false)   // ext-2c: vendor without a supplier (403 from GET /projects)
   const [sidebarOpen,      setSidebarOpen]      = useState(true)
   // ─── SIDEBAR COLLAPSED STATE ────────────────────────────────
   // Collapsed = icons only (56px); expanded = full labels (224px).
@@ -1020,6 +1032,7 @@ function App() {
     if (!token) return
     setLoading(true)
     setError('')
+    setNotLinked(false)
     try {
       const response = await axios.get(`${API}/projects`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -1035,7 +1048,13 @@ function App() {
       // Active-project reconciliation now lives in a dedicated effect keyed on
       // `projects` (see below) so it can validate a URL-derived :projectId too.
     } catch (err: unknown) {
-      const e = err as { response?: { data?: { error?: string } }; message?: string }
+      const e = err as { response?: { status?: number; data?: { error?: string } }; message?: string }
+      // ext-2c: a vendor without a supplier (the gate's 403 "not linked") gets the not-linked
+      // panel on Home: no project, so the sidebar shows Home only. Other 403s keep the banner.
+      if (e.response?.status === 403 && user?.role === 'vendor' && /not linked to a supplier/i.test(e.response?.data?.error ?? '')) {
+        setNotLinked(true); setSelectedProjectId(null); setSelectedProjectName(''); setPage('dashboard')
+        return
+      }
       setError(e.response?.data?.error ?? e.message ?? 'Unable to load projects')
     } finally {
       setLoading(false)
@@ -1088,9 +1107,10 @@ function App() {
   const today       = new Date().toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' })
   const criticalCount = projects.filter(p => p.rag === 'red').length
   // External roles (ext-2): only the pages in their table (lib/externalNav.ts); Home is
-  // the project list, never the project dashboard. Internal roles: false, nothing changes.
+  // the project list, never the project dashboard. Internal roles: blocked only on the
+  // vendor-only pages (ext-2c), every other page as before.
   const externalUser   = isExternal(user?.role)
-  const blockedForRole = externalUser && !canOpen(user?.role, page)
+  const blockedForRole = !canOpen(user?.role, page)
 
   // ─── PASSWORD EXPIRY WARNING ─────────────────────────────
   // Shows a topbar banner when the password expires within 7 days.
@@ -1343,7 +1363,8 @@ function App() {
           {blockedForRole ? <NotAvailablePanel dark={dark} onHome={() => setPage('dashboard')} /> : <>
           {/* Nav option (b): Dashboard = project picker (Home) when no project,
               the project dashboard once one is selected (external roles: always Home). */}
-          {page === 'dashboard' && (!selectedProjectId || externalUser) && (
+          {page === 'dashboard' && notLinked && <NotLinkedPanel />}
+          {page === 'dashboard' && !notLinked && (!selectedProjectId || externalUser) && (
             <DashboardHome
               projects={projects} loading={loading} error={error} dark={dark}
               containerRef={containerRef} startResize={startResize}
@@ -1539,6 +1560,16 @@ function App() {
               projectName={selectedProjectName}
               onBack={() => setPage('dashboard')}
               onViewMTO={id => { setSelectedMTOId(id); setPage('mto-detail') }}
+            />
+          )}
+          {/* ─── MY POs (ext-2c) ── the vendor's own POs; vendors only (canOpen refuses it to every other role).
+              Waits for the vendor's project list, so a deep link makes no PO call before GET /projects answers. */}
+          {page === 'vendor-pos' && selectedProjectId && user?.role === 'vendor' && projects.some(p => p.id === selectedProjectId) && (
+            <VendorPOScreen
+              dark={dark}
+              projectId={selectedProjectId}
+              projectName={selectedProjectName}
+              onBack={() => setPage('dashboard')}
             />
           )}
           {page === 'rfi-meeting' && selectedProjectId && (

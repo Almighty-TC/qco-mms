@@ -30,11 +30,14 @@ const STOCK_FMR: ExternalNavEntry = {
   id: 'materials-control', label: 'Materials Control', icon: '📦', page: 'mc-stock',
   sub: [{ page: 'mc-stock', label: 'Stock Register' }, { page: 'mc-fmr', label: 'FMR Register' }],
 }
+// ext-2c: the vendor's own screens (VendorPOScreen); never opened by any other role.
+const MY_POS: ExternalNavEntry = { id: 'vendor-pos', label: 'My POs', icon: '🧾', page: 'vendor-pos' }
+const VENDOR_ONLY_PAGES: ReadonlySet<string> = new Set([MY_POS.page])
 
 // One table per role (phase 1). Order is the sidebar order; the first entry after
 // Home is where an external user lands after choosing a project.
 export const EXTERNAL_NAV: Record<ExternalRole, ExternalNavEntry[]> = {
-  vendor:            [HOME, RFI],
+  vendor:            [HOME, MY_POS, RFI],
   freight_forwarder: [HOME, LOGISTICS, RFI],
   site_contractor:   [HOME, WBS, STOCK_FMR, RFI],
   subcontractor:     [HOME, STOCK_FMR, RFI],
@@ -50,10 +53,11 @@ export function externalNavFor(role: string | null | undefined): ExternalNavEntr
 }
 
 // True when the role may open pageId (and, for a group, the child subId).
-// Internal roles may open everything this check covers (their own guards still apply).
+// Internal roles may open everything this check covers except the vendor-only pages
+// (their own guards still apply).
 export function canOpen(role: string | null | undefined, pageId: string, subId?: string): boolean {
   const nav = externalNavFor(role)
-  if (!nav) return true
+  if (!nav) return !VENDOR_ONLY_PAGES.has(pageId)
   if (subId !== undefined) return nav.some(e => e.id === pageId && !!e.sub?.some(s => s.page === subId))
   return nav.some(e => (e.sub ? e.sub.some(s => s.page === pageId) : e.page === pageId))
 }
