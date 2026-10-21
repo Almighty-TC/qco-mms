@@ -35,7 +35,7 @@ const ALL_ROLES = [
 type Role = typeof ALL_ROLES[number]
 
 const ALL_MODULES = [
-  'dashboard', 'procurement', 'expediting', 'vdrl', 'logistics',
+  'dashboard', 'procurement', 'pre_award', 'expediting', 'vdrl', 'logistics',
   'material_control', 'traceability', 'document_inbox', 'audit', 'admin',
 ] as const
 type Module = typeof ALL_MODULES[number]
@@ -47,6 +47,7 @@ type AdminUser = {
   id: number; fullName: string; email: string; role: string; company: string
   staffId: string; phone: string
   isActive: number; isExternal: number
+  supplierId: number | null; supplierName: string | null   // vendor → supplier link (users.supplier_id)
   contractStart: string; contractEnd: string
   lastLogin: string | null
   projectCount: number
@@ -336,12 +337,14 @@ type UserForm = {
   fullName: string; email: string; role: string; company: string
   staffId: string; phone: string
   isActive: boolean; isExternal: boolean; contractStart: string; contractEnd: string
+  supplierId: number | null   // sent only for vendors (see save)
 }
 // contractEnd is intentionally empty — internal staff have no end date
 const EMPTY_USER: UserForm = {
   fullName: '', email: '', role: 'viewer', company: '',
   staffId: '', phone: '',
   isActive: true, isExternal: false, contractStart: '', contractEnd: '',
+  supplierId: null,
 }
 
 // ─── ERROR MESSAGE MAP ───────────────────────────────────────
@@ -457,6 +460,13 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
   const [formErr,   setFormErr]   = useState('')
   const [saving,    setSaving]    = useState(false)
   const [showHelp,    setShowHelp]    = useState(false)
+  const [suppliers,   setSuppliers]   = useState<{ id: number; name: string }[]>([])
+
+  // ─── SUPPLIERS (vendor → supplier select) ────────────────────
+  // Loaded once; only the modal's Supplier select (role vendor) uses them.
+  useEffect(() => {
+    axios.get(`${API}/suppliers`).then(r => setSuppliers(Array.isArray(r.data) ? r.data : [])).catch(() => {})
+  }, [])
 
   // ─── DEACTIVATE MODAL STATE ──────────────────────────────────
   // Uses SimpleConfirmModal — reversible action, no reason required.
@@ -529,6 +539,7 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
       isActive: !!u.isActive, isExternal: !!u.isExternal,
       contractStart: u.contractStart?.slice(0, 10) ?? '',
       contractEnd: u.contractEnd?.slice(0, 10) ?? '',
+      supplierId: u.supplierId ?? null,
     })
     setEditId(u.id); setFormErr(''); setShowForm(true)
   }
@@ -551,10 +562,14 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
       }
     } catch { /* if check fails, let the server reject it with a clear error */ }
     setSaving(true); setFormErr('')
+    // supplierId is sent only for a vendor (a number, or null when not linked); every
+    // other role's body is the form without it, as before.
+    const { supplierId: _supplierId, ...rest } = form
+    const body = form.role === 'vendor' ? form : rest
     try {
       editId != null
-        ? await axios.put(`${API}/users/${editId}`, form)
-        : await axios.post(`${API}/users`, form)
+        ? await axios.put(`${API}/users/${editId}`, body)
+        : await axios.post(`${API}/users`, body)
       setShowForm(false); load(); onSave?.()
       addToast('success', editId != null ? `User ${form.fullName} updated successfully` : `User ${form.fullName} created successfully`)
     } catch (e: unknown) {
@@ -644,6 +659,12 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
 
   const f = (k: keyof UserForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(p => ({ ...p, [k]: e.target.type === 'checkbox' ? (e.target as HTMLInputElement).checked : e.target.value }))
+  // External follows the role (the four external roles on, every other role off), and the
+  // supplier link is kept only while the role is vendor.
+  const onRole = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const role = e.target.value
+    setForm(p => ({ ...p, role, isExternal: EXTERNAL_ROLE_SET.has(role), supplierId: role === 'vendor' ? p.supplierId : null }))
+  }
 
   return (
     <>
@@ -703,10 +724,13 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
             <AdminCell muted title={u.email}>{u.email}</AdminCell>
             {/* ─── ROLE (with Custom badge if overrides exist) */}
             <td style={{ padding: '0 12px', height: 44, boxSizing: 'border-box', verticalAlign: 'middle', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} title={u.role === 'vendor' && u.supplierId != null ? (u.supplierName ?? undefined) : undefined}>
                 <RoleBadge role={u.role} />
                 {!!u.hasCustomPermissions && (
                   <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 3, background: 'rgba(232,78,15,0.12)', color: '#E84E0F', letterSpacing: '0.04em' }}>Custom</span>
+                )}
+                {u.role === 'vendor' && u.supplierId == null && (
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 3, background: 'rgba(239,68,68,0.10)', color: '#dc2626', letterSpacing: '0.04em' }}>not linked</span>
                 )}
               </div>
             </td>
@@ -785,10 +809,20 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
           <Field label="Email *"><input type="email" value={form.email} onChange={f('email')} placeholder="jane@example.com" style={inp(dark)} /></Field>
           <Field label="Staff ID (optional)"><input value={form.staffId} onChange={f('staffId')} placeholder="e.g. EMP-0042" style={inp(dark)} /></Field>
           <Field label="Role">
-            <select value={form.role} onChange={f('role')} style={inp(dark)}>
+            <select value={form.role} onChange={onRole} style={inp(dark)}>
               {ALL_ROLES.map(r => <option key={r} value={r}>{r.replace(/_/g, ' ')}</option>)}
             </select>
           </Field>
+          {/* Vendors only: the supplier this vendor acts for; "— Not linked —" sends null. */}
+          {form.role === 'vendor' && (
+            <Field label="Supplier">
+              <select value={form.supplierId ?? ''} onChange={e => { const v = e.target.value; setForm(p => ({ ...p, supplierId: v ? Number(v) : null })) }} style={inp(dark)}>
+                <option value="">— Not linked —</option>
+                {form.supplierId != null && !suppliers.some(s => s.id === form.supplierId) && <option value={form.supplierId}>Supplier #{form.supplierId}</option>}
+                {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </Field>
+          )}
           <Field label="Company"><input value={form.company} onChange={f('company')} placeholder="Company name" style={inp(dark)} /></Field>
           <Field label="Phone (Optional)"><input value={form.phone} onChange={f('phone')} placeholder="e.g. +61 4XX XXX XXX" style={inp(dark)} /></Field>
           <Field label="Contract Start Date (optional)"><input type="date" value={form.contractStart} onChange={f('contractStart')} style={inp(dark)} /></Field>
@@ -807,9 +841,9 @@ function UsersTab({ dark, onSave }: { dark: boolean; onSave?: () => void }) {
                 <input type="checkbox" checked={form.isActive} onChange={f('isActive')} style={{ accentColor: '#E84E0F' }} />
                 Active (can log in)
               </label>
-              <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', fontSize: 13, color: dark ? '#f1f5f9' : '#0f172a' }}>
-                <input type="checkbox" checked={form.isExternal} onChange={f('isExternal')} style={{ accentColor: '#E84E0F' }} />
-                External user (contractor, vendor, supplier)
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'default', fontSize: 13, color: dark ? '#f1f5f9' : '#0f172a' }}>
+                <input type="checkbox" checked={EXTERNAL_ROLE_SET.has(form.role)} disabled style={{ accentColor: '#E84E0F' }} />
+                External user (set by role)
               </label>
             </div>
           </Field>

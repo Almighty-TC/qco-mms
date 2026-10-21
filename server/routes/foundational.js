@@ -8,6 +8,7 @@ const { authenticateToken } = require('../middleware/auth')
 const multer  = require('multer')
 const { fileFilter } = require('../utils/upload')
 const { parseImportSheet } = require('../utils/validate')
+const { checkWbsRows, existingCodes, normCode, refusal } = require('../lib/wbsImport')
 const path    = require('path')
 const fs      = require('fs')
 const XLSX    = require('xlsx')
@@ -24,18 +25,9 @@ router.use(require('../middleware/permissions').enforce(p =>
 router.use(require('../middleware/permissions').queueGate(/\/foundational\/\d+\/(wbs|commodities|equipment)$/, /\/foundational\/\d+\/(wbs|commodities|equipment)\/\d+$/)) // C-c D1: proposers (project_control) must use approval queue for create/delete; admin direct
 router.param('projectId', require('../middleware/permissions').requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects
 
-// Multer for certificate uploads
-const certStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const dir = path.join(__dirname, '../uploads/certificates')
-    fs.mkdirSync(dir, { recursive: true })
-    cb(null, dir)
-  },
-  filename: (req, file, cb) => {
-    cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`)
-  },
-})
-const uploadCert = multer({ storage: certStorage, limits: { fileSize: 25 * 1024 * 1024 }, fileFilter: fileFilter('document') })
+// Multer for certificate uploads — blob migration: memoryStorage → blobStore.persist.
+const blobStore = require('../lib/blobStore')
+const uploadCert = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 }, fileFilter: fileFilter('document') })
 
 // ─── HELPER: audit ───────────────────────────────────────────────────────────
 // Writes an audit_log row. Fire-and-forget (NOT awaited) so an audit failure can
@@ -399,12 +391,14 @@ router.get('/:projectId/wbs/template', async (req, res) => {
     // ── Main data sheet ───────────────────────────────────────
     const headerStyle = { fill: { fgColor: { rgb: 'E84E0F' } }, font: { bold: true, color: { rgb: 'FFFFFF' } } }
     const headers = ['id','project_id','level','code','description','wbs_string','parent_string','parent_id','WBS Title','wbs.1','wbs.2','wbs.3','wbs.4','wbs.5','wbs.6','wbs.7','wbs.8','ROS']
+    // Example rows: EXAMPLE- codes never collide with a project's codes, and the import refuses them
+    // ("Example row: delete it before uploading"), so a template uploaded unchanged imports nothing.
     const examples = [
-      ['','','1','01','Civil & Structural','01','','','Civil & Structural','01','','','','','','','','2025-06-30'],
-      ['','','2','01.01','Foundations','01.01','01','','Foundations','01','01','','','','','','','2025-03-31'],
-      ['','','3','01.01.01','Piling Works','01.01.01','01.01','','Piling Works','01','01','01','','','','','','2024-12-31'],
-      ['','','4','01.01.01.01','Bored Piles','01.01.01.01','01.01.01','','Bored Piles','01','01','01','01','','','','','2024-10-31'],
-      ['','','5','01.01.01.01.01','Pile Design','01.01.01.01.01','01.01.01.01','','Pile Design','01','01','01','01','01','','','','2024-08-31'],
+      ['','','1','EXAMPLE-01','Civil & Structural','EXAMPLE-01','','','Civil & Structural','EXAMPLE-01','','','','','','','','2025-06-30'],
+      ['','','2','EXAMPLE-01.01','Foundations','EXAMPLE-01.01','EXAMPLE-01','','Foundations','EXAMPLE-01','01','','','','','','','31/03/2025'],
+      ['','','3','EXAMPLE-01.01.01','Piling Works','EXAMPLE-01.01.01','EXAMPLE-01.01','','Piling Works','EXAMPLE-01','01','01','','','','','','31-Dec-2024'],
+      ['','','4','EXAMPLE-01.01.01.01','Bored Piles','EXAMPLE-01.01.01.01','EXAMPLE-01.01.01','','Bored Piles','EXAMPLE-01','01','01','01','','','','','2024-10-31'],
+      ['','','5','EXAMPLE-01.01.01.01.01','Pile Design','EXAMPLE-01.01.01.01.01','EXAMPLE-01.01.01.01','','Pile Design','EXAMPLE-01','01','01','01','01','','','',''],
     ]
     const wsData = [headers, ...examples]
     const ws = XLSX.utils.aoa_to_sheet(wsData)
@@ -419,24 +413,23 @@ router.get('/:projectId/wbs/template', async (req, res) => {
     // ── Instructions sheet ────────────────────────────────────
     const instrData = [
       ['Column', 'Required', 'Description'],
-      ['id', 'No', 'Leave blank — auto-assigned on import'],
-      ['project_id', 'No', 'Leave blank — assigned from project context'],
-      ['level', 'Yes', 'Numeric depth (1=top-level, 2=child, 3=grandchild etc.)'],
-      ['code', 'Yes', 'Dotted WBS code e.g. 01, 01.01, 01.01.01. Must be unique per project.'],
+      ['id', 'No', 'Not used by the import'],
+      ['project_id', 'No', 'Not used by the import (the nodes go into the project you upload to)'],
+      ['level', 'No', 'Not used by the import (the depth follows from parent_string)'],
+      ['code', 'Yes', 'Dotted WBS code e.g. 01, 01.01, 01.01.01 (format the column as Text so zeros are kept)'],
       ['description', 'Yes', 'Node label / name e.g. "Civil & Structural"'],
-      ['wbs_string', 'Yes', 'Same as code — full dotted path'],
-      ['parent_string', 'Yes*', 'Parent\'s code. Leave blank for top-level nodes (level=1).'],
-      ['parent_id', 'No', 'Leave blank — resolved from parent_string on import'],
-      ['WBS Title', 'No', 'Alternate display name (optional)'],
-      ['wbs.1 – wbs.8', 'No', 'Individual code segments split by level (auto-split on import)'],
-      ['ROS', 'No', 'Required On Site date in YYYY-MM-DD format e.g. 2025-06-30'],
+      ['wbs_string', 'No', 'Not used by the import'],
+      ['parent_string', 'Yes*', 'Parent\'s code: a code already in the project or earlier in the file. Leave blank for top-level nodes.'],
+      ['parent_id', 'No', 'Not used by the import: put the parent\'s code in parent_string'],
+      ['WBS Title', 'No', 'Not used by the import'],
+      ['wbs.1 – wbs.8', 'No', 'Not used by the import'],
+      ['ROS', 'No', 'Required On Site date: YYYY-MM-DD, DD/MM/YYYY or D-Mon-YYYY (e.g. 2025-06-30, 30/06/2025, 30-Jun-2025). Two-digit years are refused; a blank cell or text such as TBA stores a blank date.'],
       ['', '', ''],
       ['NOTES', '', ''],
-      ['• One row per WBS node', '', ''],
-      ['• Codes must be in hierarchical order (parents before children)', '', ''],
-      ['• Duplicate codes within a project will cause an error', '', ''],
-      ['• Maximum 8 levels of nesting supported', '', ''],
-      ['• Date format: YYYY-MM-DD', '', ''],
+      ['• Only code, description, parent_string and ROS are used by the import; the other columns are kept for reference.', '', ''],
+      ['• One row per WBS node; a parent must already be in the project or appear earlier in the file.', '', ''],
+      ['• The whole file is refused, and nothing is imported, if any row has an error: for example a code already in the project, a code twice in the file, a parent that is not found, or a date that is not a real date.', '', ''],
+      ['• Delete the EXAMPLE- rows before uploading: any code starting EXAMPLE- is an error.', '', ''],
     ]
     const wsInstr = XLSX.utils.aoa_to_sheet(instrData)
     wsInstr['!cols'] = [{ wch: 20 }, { wch: 10 }, { wch: 60 }]
@@ -458,57 +451,12 @@ router.post('/:projectId/wbs/validate', uploadWBS.single('file'), async (req, re
   try {
     const parsed = parseImportSheet(req.file, ['code', 'description'])
     if (parsed.error) return res.status(400).json({ error: parsed.error })
-    const { headers, dataRows } = parsed
-    const codeIdx = headers.findIndex(h => h === 'code')
-    const descIdx = headers.findIndex(h => h === 'description')
-    const parentIdx = headers.findIndex(h => h === 'parent_string' || h === 'parent_id')
-    const rosIdx  = headers.findIndex(h => h === 'ros')
-    const seenCodes = new Set()
-    const results = []
-
-    for (let i = 0; i < dataRows.length; i++) {
-      const r    = dataRows[i]
-      const code = codeIdx >= 0 ? String(r[codeIdx] || '').trim() : ''
-      const desc = descIdx >= 0 ? String(r[descIdx] || '').trim() : ''
-      const parent = parentIdx >= 0 ? String(r[parentIdx] || '').trim() : ''
-      const ros  = rosIdx  >= 0 ? String(r[rosIdx]  || '').trim() : ''
-      const rowNum = i + 2  // 1-indexed + header
-
-      const errors = []; const warnings = []
-
-      if (!code)  errors.push('Missing WBS code')
-      if (!desc)  errors.push('Missing description')
-      if (code && seenCodes.has(code)) errors.push(`Duplicate code "${code}"`)
-
-      // Parent must appear before child
-      if (parent && !seenCodes.has(parent)) {
-        errors.push(`Parent "${parent}" not yet seen — must appear before this row`)
-      }
-
-      // Circular reference check: code must not start with itself as prefix
-      if (code && parent && (parent === code || parent.startsWith(code + '.'))) {
-        errors.push('Circular reference: parent code is same as or child of this code')
-      }
-
-      // ROS date format
-      if (ros && !/^\d{4}-\d{2}-\d{2}$/.test(ros)) {
-        warnings.push(`ROS date "${ros}" should be YYYY-MM-DD format`)
-      }
-
-      if (code) seenCodes.add(code)
-
-      results.push({
-        row: rowNum, code, description: desc.slice(0, 50), parent, ros,
-        status: errors.length > 0 ? 'error' : warnings.length > 0 ? 'warning' : 'ok',
-        errors, warnings,
-      })
-    }
-
-    const readyCount   = results.filter(r => r.status === 'ok').length
-    const warningCount = results.filter(r => r.status === 'warning').length
-    const errorCount   = results.filter(r => r.status === 'error').length
-
-    res.json({ results, summary: { total: results.length, ready: readyCount, warnings: warningCount, errors: errorCount } })
+    const [nodes] = await db.query('SELECT id, code FROM wbs_nodes WHERE project_id=?', [Number(req.params.projectId)])
+    const { results, summary } = checkWbsRows({ ...parsed, existing: existingCodes(nodes), XLSX })
+    res.json({
+      results: results.map(r => ({ row: r.row, code: r.code, description: r.description.slice(0, 50), parent: r.parent, ros: r.ros, rosDate: r.rosDate, status: r.status, errors: r.errors, warnings: r.warnings })),
+      summary,
+    })
   } catch (e) {
     console.error('[wbs:validate]', e.message)
     dbError(res, e)
@@ -516,38 +464,57 @@ router.post('/:projectId/wbs/validate', uploadWBS.single('file'), async (req, re
 })
 
 // POST /api/foundational/:projectId/wbs/import — import validated file
+// The validate checks run first; any error refuses the whole file (400, nothing written). Then, in
+// one READ COMMITTED transaction with the project row locked, the checks that depend on the
+// project's nodes run again (a conflict now is a 409), every row is inserted in file order (parents
+// from the project's nodes or the rows just inserted), and the audit row is written inside it.
 router.post('/:projectId/wbs/import', uploadWBS.single('file'), async (req, res) => {
+  let conn
   try {
     const pid = Number(req.params.projectId)
     const parsed = parseImportSheet(req.file, ['code', 'description'])
     if (parsed.error) return res.status(400).json({ error: parsed.error })
-    const { headers, dataRows } = parsed
-    const codeIdx  = headers.findIndex(h => h === 'code')
-    const descIdx  = headers.findIndex(h => h === 'description')
-    const parentIdx = headers.findIndex(h => h === 'parent_string')
-    const rosIdx   = headers.findIndex(h => h === 'ros')
-    const codeToId = {}
-    let imported = 0
+    const [nodes] = await db.query('SELECT id, code FROM wbs_nodes WHERE project_id=?', [pid])
+    const first = checkWbsRows({ ...parsed, existing: existingCodes(nodes), XLSX })
+    if (first.summary.errors) return res.status(400).json(refusal(first.results))
 
-    for (const r of dataRows) {
-      const code   = String(r[codeIdx] || '').trim()
-      const desc   = String(r[descIdx] || '').trim()
-      const parent = parentIdx >= 0 ? String(r[parentIdx] || '').trim() : ''
-      const ros    = rosIdx >= 0 ? String(r[rosIdx] || '').trim() : ''
-      if (!code || !desc) continue
+    conn = await db.getConnection()
+    await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+    await conn.beginTransaction()
+    const [[project]] = await conn.query('SELECT id FROM projects WHERE id = ? FOR UPDATE', [pid])
+    if (!project) { await conn.rollback(); return res.status(404).json({ error: 'Project not found' }) }
+    const [locked] = await conn.query('SELECT id, code FROM wbs_nodes WHERE project_id=?', [pid])   // under the lock
+    const existing = existingCodes(locked)
+    const { results, summary } = checkWbsRows({ ...parsed, existing, XLSX })
+    if (summary.errors) { await conn.rollback(); return res.status(409).json(refusal(results)) }
 
-      const parentId = parent && codeToId[parent] ? codeToId[parent] : null
-      const [result] = await db.query(
-        `INSERT IGNORE INTO wbs_nodes (project_id, parent_id, code, description, ros_date) VALUES (?,?,?,?,?)`,
-        [pid, parentId, code, desc, ros || null]
+    const inserted = new Map()   // normalised code → id
+    for (const r of results) {
+      const pkey = r.parent ? normCode(r.parent) : null
+      const parentId = pkey ? (existing.get(pkey) ?? inserted.get(pkey) ?? null) : null
+      const [ins] = await conn.query(
+        `INSERT INTO wbs_nodes (project_id, parent_id, code, description, ros_date) VALUES (?,?,?,?,?)`,
+        [pid, parentId, r.code, r.description, r.rosDate]
       )
-      if (result.insertId) { codeToId[code] = result.insertId; imported++ }
+      inserted.set(normCode(r.code), ins.insertId)
     }
-    audit(req, 'wbs_imported', `projects/${pid}`, {}, { imported })
-    res.json({ ok: true, imported })
+    const codes = results.map(r => r.code)
+    const resource = (req.originalUrl || req.url || '').split('?')[0].replace(/^\/api(?=\/)/, '')   // as audit() does
+    await conn.query(
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, before_value, after_value, resource, ip)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+      [req.user.id, 'wbs_imported', 'projects', pid, pid, JSON.stringify({}),
+       JSON.stringify({ imported: codes.length, codes: codes.slice(0, 200), truncated: codes.length > 200 }),
+       resource, req.ip]
+    )
+    await conn.commit()
+    res.json({ ok: true, imported: codes.length })
   } catch (e) {
+    if (conn) { try { await conn.rollback() } catch (_) { /* already rolled back */ } }
     console.error('[wbs:import]', e.message)
     dbError(res, e)
+  } finally {
+    if (conn) conn.release()
   }
 })
 
@@ -560,7 +527,7 @@ router.get('/:projectId/wbs/:nodeId/pos', async (req, res) => {
     if (!node) return res.status(404).json({ error: 'Node not found' })
 
     const [pos] = await db.query(
-      `SELECT id, po_number, vendor, status, total_value, currency
+      `SELECT id, po_number, vendor_name AS vendor, status, value AS total_value, currency
        FROM purchase_orders
        WHERE project_id=? AND wbs_code=?
        ORDER BY po_number`,
@@ -1068,6 +1035,29 @@ router.delete('/:projectId/equipment/:id', async (req, res) => {
 // CERTIFICATES ENDPOINTS (shared by commodity + equipment)
 // ═══════════════════════════════════════════════════════════════
 
+// GET /api/foundational/:projectId/certificates/:id/download
+// ⚠ MUST be registered BEFORE the /:entityType/:entityId route below — otherwise that
+// generic route shadows this one ('209/download' → entityId='download' → NaN → 500). Express
+// matches in registration order, so the literal-'download' route has to come first.
+router.get('/:projectId/certificates/:id/download', async (req, res) => {
+  try {
+    const [[cert]] = await db.query('SELECT * FROM foundational_certificates WHERE id=?', [Number(req.params.id)])
+    if (!cert?.filename) return res.status(404).json({ error: 'File not found' })
+    const niceName = path.basename(cert.filename).replace(/^\d+-/, '')
+    // DUAL-READ FALLBACK (blob migration): blob first, then existing disk read.
+    const blobStream = await blobStore.getFile(blobStore.keyFor('foundational', cert.filename))
+    if (blobStream) {
+      res.setHeader('Content-Disposition', `attachment; filename="${niceName.replace(/[\r\n"]/g, '')}"`)
+      return blobStream.pipe(res)
+    }
+    const fp = path.join(__dirname, '../uploads/certificates', cert.filename)
+    if (!fs.existsSync(fp)) return res.status(404).json({ error: 'File not on disk' })
+    res.download(fp, niceName)
+  } catch (e) {
+    dbError(res, e)
+  }
+})
+
 // GET /api/foundational/:projectId/certificates/:entityType/:entityId
 router.get('/:projectId/certificates/:entityType/:entityId', async (req, res) => {
   try {
@@ -1093,8 +1083,19 @@ router.post('/:projectId/certificates/:entityType/:entityId', uploadCert.single(
     const { cert_type, ref_number, applies_to, issue_date, status } = req.body
     if (!cert_type) return res.status(400).json({ error: 'Certificate type is required' })
 
-    const filename  = req.file?.filename || null
+    // Blob migration: persist to blob (key) or disk (legacy BARE filename — unchanged).
+    let filename = null
     const file_size = req.file?.size || null
+    if (req.file) {
+      const storedName = `${Date.now()}-${req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+      const certDir = path.join(__dirname, '../uploads/certificates')
+      const { value } = await blobStore.persist({
+        key: blobStore.keyFor('foundational', storedName),
+        diskAbsPath: path.join(certDir, storedName), buffer: req.file.buffer, contentType: req.file.mimetype,
+        diskValue: storedName,   // legacy shape = bare filename
+      })
+      filename = value
+    }
 
     const [r] = await db.query(
       `INSERT INTO foundational_certificates (entity_type, entity_id, project_id, cert_type, ref_number, applies_to, issue_date, filename, file_size, status, uploaded_by)
@@ -1107,6 +1108,10 @@ router.post('/:projectId/certificates/:entityType/:entityId', uploadCert.single(
       `SELECT fc.*, u.full_name AS uploaded_by_name FROM foundational_certificates fc
        LEFT JOIN users u ON u.id=fc.uploaded_by WHERE fc.id=?`, [r.insertId]
     )
+    // Audit-gap fix: record the cert upload (foundational's fire-and-forget audit — mirrors
+    // the commodity_created shape: before {}, after {…}; non-blocking, never affects the response).
+    audit(req, 'certificate_uploaded', `foundational_certificates/${r.insertId}`, {},
+      { entity_type: entityType, entity_id: Number(entityId), cert_type, ref_number: ref_number || null, filename, uploaded_by: req.user.id })
     res.status(201).json(created)
   } catch (e) {
     console.error('[foundational:certs:create]', e.message)
@@ -1136,6 +1141,9 @@ router.delete('/:projectId/certificates/:id', certGate, async (req, res) => {
       fs.unlink(fp, () => {})
     }
     await db.query('DELETE FROM foundational_certificates WHERE id=?', [id])
+    // Audit-gap fix: record the cert deletion (mirrors commodity_deleted: before=row, after={};
+    // `cert` was SELECTed above BEFORE the delete). Fire-and-forget, non-blocking.
+    audit(req, 'certificate_deleted', `foundational_certificates/${id}`, cert, {})
     res.json({ ok: true })
   } catch (e) {
     dbError(res, e)
@@ -1143,18 +1151,6 @@ router.delete('/:projectId/certificates/:id', certGate, async (req, res) => {
 })
 
 // GET /api/foundational/:projectId/certificates/:id/download
-router.get('/:projectId/certificates/:id/download', async (req, res) => {
-  try {
-    const [[cert]] = await db.query('SELECT * FROM foundational_certificates WHERE id=?', [Number(req.params.id)])
-    if (!cert?.filename) return res.status(404).json({ error: 'File not found' })
-    const fp = path.join(__dirname, '../uploads/certificates', cert.filename)
-    if (!fs.existsSync(fp)) return res.status(404).json({ error: 'File not on disk' })
-    res.download(fp, cert.filename.replace(/^\d+-/, ''))
-  } catch (e) {
-    dbError(res, e)
-  }
-})
-
 // ═══════════════════════════════════════════════════════════════
 // COMMODITY VALIDATE + IMPORT
 // ═══════════════════════════════════════════════════════════════

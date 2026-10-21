@@ -65,3 +65,4 @@ server/uploads/
 
 # Local doc backups (kept out of version history)
 docs/_backup_*/
+*-app.zip

@@ -36,6 +36,7 @@ const STOCK_MIN_SUB  = [70, 140, 60, 70, 60, 50, 80, 90]
 const ellipsisCell: React.CSSProperties = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
 
 import { API } from '../lib/api'
+import { isExternal } from '../lib/externalNav'
 
 type GroupBy = 'warehouse' | 'wbs' | 'item'
 
@@ -45,6 +46,27 @@ interface StockItem {
   condition_status: string; trace_hold: number; vendor_name?: string | null
   heat_number?: string | null
   warehouse_id: number; warehouse_name: string; warehouse_code: string
+  is_child?: number; additional_item_id?: number | null   // Q3: off-PO child stock (nests under parent sharing item_code)
+  // 3b-4: trace-back origin — where this holding was received FROM (NULL pre-migration or
+  // when the receipt didn't capture a source package). Followed receipt_line_id → receipt.
+  origin_package_number?: string | number | null
+  origin_container_type_id?: number | null
+  origin_heat_number?: string | null
+  origin_mill_cert_count?: number | null
+}
+
+// Q3: order rows so off-PO children sit directly under the parent sharing their
+// item_code (parents keep their natural order); orphan children fall through at the end.
+function nestStock(rows: StockItem[]): StockItem[] {
+  const out: StockItem[] = []
+  const seen = new Set<number>()
+  rows.forEach(r => {
+    if (r.is_child || seen.has(r.id)) return
+    out.push(r); seen.add(r.id)
+    rows.forEach(c => { if (c.is_child && !seen.has(c.id) && c.item_code === r.item_code) { out.push(c); seen.add(c.id) } })
+  })
+  rows.forEach(r => { if (!seen.has(r.id)) out.push(r) })   // orphan children / leftovers
+  return out
 }
 
 const condPill = (s: string) => {
@@ -78,7 +100,8 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
   dark: boolean; projectId: number; projectName: string; onBack: () => void
 }) => {
   const { addToast } = useToast()
-  const { isSubcontractor } = useCurrentUser()
+  const { isSubcontractor, user } = useCurrentUser()
+  const external = isExternal(user?.role)   // ext-2b: Resolve and Move are internal-only (gate-refused)
   const col    = dark ? '#f1f5f9' : '#0f172a'
   const cardBg = dark ? '#1e293b' : '#fff'
   const bg     = dark ? '#0f172a' : '#f4f7fb'
@@ -102,11 +125,13 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
   const normHeat = (h?: string | null) => (h || '').trim().toUpperCase()
 
   // Heat/Lot P5 — load the per-heat cert-status map once (read-only join feed).
+  // ext-2b: subcontractors have no traceability grant (the gate refuses it) — skipped.
   useEffect(() => {
+    if (isSubcontractor) return
     axios.get(`${API}/traceability/${projectId}/heat-status`)
       .then(({ data }) => setHeatStatus(data.data || {}))
       .catch(() => setHeatStatus({}))
-  }, [projectId])
+  }, [projectId, isSubcontractor])
 
   // Debounce search so we don't hit the server on every keystroke.
   useEffect(() => {
@@ -263,12 +288,15 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                     </tr>
                   </thead>
                   <tbody>
-                    {stock.map(item => {
+                    {nestStock(stock).map(item => {
                       const cond = condPill(item.condition_status)
+                      const isChild = !!item.is_child   // Q3: off-PO child → nested under its parent (shared item_code)
                       return (
-                        <tr key={item.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}` }}>
+                        <tr key={item.id} style={{ borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, background: isChild ? (dark ? 'rgba(124,58,237,0.06)' : 'rgba(124,58,237,0.04)') : undefined }}>
                           {!isSubcontractor && <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: sub, ...ellipsisCell }} title={item.location_code || ''}>{item.location_code || '—'}</td>}
-                          <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600, ...ellipsisCell }} title={item.item_code}>{item.item_code}</td>
+                          <td style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#2563eb', fontWeight: 600, ...ellipsisCell, paddingLeft: isChild ? 28 : 12 }} title={item.item_code}>
+                            {isChild && <span title="Off-PO child item — nested under its parent" style={{ color: '#7c3aed', fontWeight: 700 }}>↳ </span>}{item.item_code}
+                          </td>
                           <td data-align="left" style={{ padding: '8px 12px', color: col, ...ellipsisCell }} title={item.description}>{item.description}</td>
                           <td style={{ padding: '8px 12px', fontSize: 11, overflow: 'hidden', textIndent: 0 }}>
                             {item.heat_number ? (
@@ -282,9 +310,9 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                                 <span style={{ fontFamily: 'JetBrains Mono, monospace', color: col, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', alignSelf: 'stretch' }} title={item.heat_number}>{item.heat_number}</span>
                                 {(() => { const b = certBadge(heatStatus[normHeat(item.heat_number)]?.status)
                                   return (
-                                    <span onClick={e => { e.stopPropagation(); setHeatLink(item.heat_number!) }}
-                                      title="View this heat's certificates"
-                                      style={{ fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 6, background: b.bg, color: b.color, cursor: 'pointer', whiteSpace: 'nowrap' }}>{b.label}</span>
+                                    <span onClick={isSubcontractor ? undefined : e => { e.stopPropagation(); setHeatLink(item.heat_number!) }}
+                                      title={isSubcontractor ? undefined : "View this heat's certificates"}
+                                      style={{ fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 6, background: b.bg, color: b.color, cursor: isSubcontractor ? 'default' : 'pointer', whiteSpace: 'nowrap' }}>{b.label}</span>
                                   ) })()}
                               </div>
                             ) : <span style={{ color: sub }}>—</span>}
@@ -307,14 +335,14 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
                               <div style={{ display: 'flex', gap: 6 }}>
                                 {item.condition_status === 'quarantine' ? (
                                   // Quarantined stock: resolve (release / reject) instead of move.
-                                  <button onClick={() => setResolveItem(item)}
+                                  !external && <button onClick={() => setResolveItem(item)}
                                     style={{ padding: '4px 10px', borderRadius: 5, border: 'none', background: '#f59e0b', color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}>⚠ Resolve</button>
                                 ) : (
                                   <>
                                     <button onClick={() => setDocsItem(item)}
                                       style={{ padding: '4px 10px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap' }}>📎 Docs</button>
-                                    <button onClick={() => setMoveItem(item)}
-                                      style={{ padding: '4px 10px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap' }}>→ Move</button>
+                                    {!external && <button onClick={() => setMoveItem(item)}
+                                      style={{ padding: '4px 10px', borderRadius: 5, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap' }}>→ Move</button>}
                                   </>
                                 )}
                               </div>
@@ -639,6 +667,20 @@ const MoveModal = ({ dark, item, projectId, onClose, onSaved, addToast }: {
         <div style={{ marginBottom: 6 }}>
           <label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>Current location</label>
           <div style={{ fontSize: 12, fontFamily: 'JetBrains Mono, monospace', color: sub }}>{item.location_code || '—'} · {item.warehouse_name}</div>
+        </div>
+        {/* 3b-4: trace-back origin — where this holding was received FROM, followed through
+            the receipt. Graceful "—" when the receipt captured no source package (or pre-migration). */}
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>Origin (trace-back)</label>
+          {item.origin_package_number != null ? (
+            <div style={{ fontSize: 12, fontFamily: 'JetBrains Mono, monospace', color: col, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              <span>📦 Package #{item.origin_package_number}</span>
+              {item.origin_heat_number && <span>🔥 heat {item.origin_heat_number}</span>}
+              {Number(item.origin_mill_cert_count) > 0 && <span>📄 mill cert</span>}
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, fontFamily: 'JetBrains Mono, monospace', color: sub }}>—</div>
+          )}
         </div>
         <div style={{ marginBottom: 16 }}>
           <label style={{ fontSize: 11, color: sub, display: 'block', marginBottom: 4 }}>New location *</label>

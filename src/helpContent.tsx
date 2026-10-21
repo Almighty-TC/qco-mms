@@ -116,8 +116,8 @@ export const WBS_HELP: HelpSection[] = [
       {Steps([
         <>Click <strong>↓ Template</strong> to download the XLSX template.</>,
         <>Fill in the columns: {Code('code')}, {Code('description')}, {Code('parent_string')}, {Code('ros')}. Parents must appear before their children.</>,
-        <>Click <strong>↑ Upload XER/Excel</strong> and select your file.</>,
-        <>The validation preview shows ✅ / ⚠️ / ❌ per row. Fix any ❌ errors and re-upload.</>,
+        <>Click <strong>↑ Upload Excel/CSV</strong> and select your file (.xlsx, .xls or .csv).</>,
+        <>The validation preview shows ✅ / ⚠️ / ❌ per row. Fix any ❌ errors and re-upload. An import is refused as a whole if any row has an error; nothing is imported.</>,
         <>Click <strong>↑ Import</strong> to confirm.</>
       ])}
     </>,
@@ -1049,6 +1049,18 @@ export const REPORTS_HELP: HelpSection[] = [
         result as {B('CSV')}, {B('Excel')} or {B('PDF')} (PDF opens a print-ready view → Save as PDF).</>)}
       {P(<>Drag a column edge to resize and use {B('↺ Reset columns')} to restore defaults.</>)}
       {Tip('You only ever see reports for data your role can access — the catalogue is filtered to your permissions.')}
+    </>,
+  },
+]
+
+// ─── MY POs (vendor, ext-2c) ──────────────────────────────────
+export const VENDOR_PO_HELP: HelpSection[] = [
+  {
+    title: 'My POs',
+    content: <>
+      {P(<>Lists the purchase orders placed with your company in this project. Search by PO number or description, then click a row to open it.</>)}
+      {P(<>The PO opens on {B('Header')}; the other tabs show {B('Lines')}, {B('ITP')}, {B('Variations')} and {B('Documents')}. Use {B('View')} or {B('Download')} for the signed PO and other documents.</>)}
+      {Tip('This screen is read-only. To change anything on a PO, contact the QCO buyer or expeditor.')}
     </>,
   },
 ]
