@@ -29,6 +29,9 @@ function vendorPoScope(req, pid, col = 'po_id') {
   if (req.user.supplier_id == null) return { sql: ' AND 1=0', params: [] }
   return { sql: ` AND ${col} IN (SELECT id FROM purchase_orders WHERE supplier_id = ? AND project_id = ?)`, params: [Number(req.user.supplier_id), Number(pid)] }
 }
+// P2g: a vendor sees its own certificates of these categories (an explicit list; the rejection reasons and
+// verifier names live on 'approval' certificates). Internal roles keep category='vdrl'.
+const VENDOR_CERT_CATEGORIES = "category IN ('vdrl','approval')"
 // The vendor's certificate row (vendorView.certRow): verified_by is the verifier's name.
 const VENDOR_CERT_SELECT = `SELECT c.id AS cert_id, c.po_ref, c.document_name, c.cert_type, c.heat_ref, c.applies_to, c.tag,
          c.is_required, c.file_name, c.status,
@@ -80,11 +83,12 @@ router.get('/:projectId/summary', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
     const v = isVendor(req) ? vendorPoScope(req, pid) : null   // P2e: the vendor's own POs only
+    const cat = v ? VENDOR_CERT_CATEGORIES : "category='vdrl'"   // P2g: vendors count both categories
     const [[counts]] = await db.query(
       `SELECT
-         SUM(category='vdrl' AND status IN ('received','verified')) AS vdrl_received,
-         SUM(category='vdrl' AND status='pending')                  AS vdrl_pending,
-         SUM(category='vdrl' AND status='overdue')                  AS vdrl_overdue
+         SUM(${cat} AND status IN ('received','verified')) AS vdrl_received,
+         SUM(${cat} AND status='pending')                  AS vdrl_pending,
+         SUM(${cat} AND status='overdue')                  AS vdrl_overdue
        FROM traceability_certs WHERE project_id=?${v ? v.sql : ''}`, [pid, ...(v ? v.params : [])])
     // Holds link to certificates (related_cert_id); for vendors only holds on their own certificates.
     const [[holds]] = v
@@ -113,7 +117,7 @@ router.get('/:projectId/vdrl', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
     const { status = 'all', q } = req.query
-    const conds = ['project_id=?', "category='vdrl'"]
+    const conds = ['project_id=?', isVendor(req) ? VENDOR_CERT_CATEGORIES : "category='vdrl'"]   // P2g: vendors list both categories
     const params = [pid]
 
     if (status === 'received') conds.push("status IN ('received','verified')")

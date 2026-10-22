@@ -1,6 +1,7 @@
 // P2e — vendor scoping of certificates in server/routes/traceability.js (summary, list, detail, tags,
 // upload, version, file) and the certificate download in server/routes/documents.js, plus the
-// version-upload storage fix (§15 (cd)). The real routers over a fake db that applies the scoping
+// version-upload storage fix (§15 (cd)); P2g: the vendor's summary and list cover the categories vdrl and approval
+// (§15 (cs)). The real routers over a fake db that applies the scoping, category and status conditions
 // itself; multer, the blob store, the schema check and the Azure SDK are stubbed (no database, no
 // files). Internal roles: answers and queries equal to both files at 4b23db9 (git show; queries
 // compared with whitespace collapsed), except the version upload. Exit code 1 on any failure.
@@ -18,7 +19,13 @@ const TR_BEFORE = show('routes/traceability.js'), DOC_BEFORE = show('routes/docu
 
 // ── fake data: POs 100 (project 27, supplier 5), 200 (27, supplier 9), 300 (28, supplier 5) ──
 const POS = { 100: { project: 27, supplier: 5, po_number: 'PO-100', vendor_name: 'Vendor Five' }, 200: { project: 27, supplier: 9, po_number: 'PO-200', vendor_name: 'Vendor Nine' }, 300: { project: 28, supplier: 5, po_number: 'PO-300', vendor_name: 'Vendor Five' } }
-const CERTS = { 1: [27, 100, 'pending'], 2: [27, 100, 'received'], 3: [27, 100, 'verified'], 4: [27, 100, 'overdue'], 5: [27, 100, 'rejected'], 6: [27, 200, 'pending'], 7: [27, null, 'pending'], 8: [28, 300, 'pending'] }
+// [project, po_id, status, category (vdrl when absent)]; 9 and 10 are approval certificates, 11 an unlisted category.
+const CERTS = { 1: [27, 100, 'pending'], 2: [27, 100, 'received'], 3: [27, 100, 'verified'], 4: [27, 100, 'overdue'], 5: [27, 100, 'rejected'], 6: [27, 200, 'pending'], 7: [27, null, 'pending'], 8: [28, 300, 'pending'],
+  9: [27, 100, 'pending', 'approval'], 10: [27, 100, 'rejected', 'approval'], 11: [27, 100, 'pending', 'mtc'], 12: [27, 200, 'overdue', 'approval'] }
+const catOf = id => CERTS[id][3] || 'vdrl'
+// The category and status conditions in a query, as the database would apply them (null: no condition).
+const catSet = q => { let m = q.match(/category IN \(([^)]*)\)/); if (m) return new Set(m[1].split(',').map(x => x.trim().replace(/'/g, ''))); m = q.match(/category='(\w+)'/); return m ? new Set([m[1]]) : null }
+const statusSet = q => { if (/status IN \('received','verified'\)/.test(q)) return new Set(['received', 'verified']); const m = q.match(/ status='(\w+)'/); return m ? new Set([m[1]]) : null }
 const CERT_COLS = 'id project_id category po_id po_ref vendor_name tag document_name cert_type item_scope heat_ref applies_to issue_date due_date received_date is_required uploader file_name file_size status priority uploaded_by uploaded_date verified_by verified_date reject_reason notes created_at file_path mime_type'.split(' ')
 const certRowOf = id => ({ ...Object.fromEntries(CERT_COLS.map(c => [c, 'S:' + c])), id, project_id: CERTS[id][0], po_id: CERTS[id][1], status: CERTS[id][2], file_path: null })
 const ownPo = (poId, project, supplier) => poId != null && POS[poId] && POS[poId].project === project && POS[poId].supplier === supplier
@@ -32,7 +39,12 @@ const fakeDb = { query: async (sql, params = []) => {
   if ((m = q.match(/^SELECT (\w+) AS allowed FROM role_permissions/))) return [[{ allowed: DENIED[params[0]] && DENIED[params[0]].has(m[1]) ? 0 : 1 }], []]
   if (/^SELECT \w+ AS allowed FROM user_permission_overrides/.test(q)) return [[], []]
   if (/^SELECT id FROM user_wbs_access WHERE user_id = \? AND project_id = \?/.test(q)) return [Number(params[1]) === 27 ? [{ id: 1 }] : [], []]
-  if (/^SELECT SUM\(category='vdrl' AND status IN/.test(q)) return [[{ vdrl_received: '3', vdrl_pending: '2', vdrl_overdue: '1' }], []]
+  if ((m = q.match(/^SELECT SUM\((category(?:='\w+'| IN \([^)]*\))) AND status IN \('received','verified'\)\) AS vdrl_received/))) {
+    const cats = catSet(m[1]), none = / AND 1=0$/.test(q), scoped = /po_id IN \(SELECT id FROM purchase_orders WHERE supplier_id = \? AND project_id = \?\)$/.test(q)
+    const ids = Object.keys(CERTS).map(Number).filter(id => !none && CERTS[id][0] === params[0] && cats.has(catOf(id)) && (!scoped || ownPo(CERTS[id][1], params[2], params[1])))
+    const n = st => String(ids.filter(id => st.includes(CERTS[id][2])).length)
+    return [[{ vdrl_received: n(['received', 'verified']), vdrl_pending: n(['pending']), vdrl_overdue: n(['overdue']) }], []]
+  }
   if (/^SELECT COUNT\(\*\) AS active_holds FROM traceability_holds/.test(q)) return [[{ active_holds: 4 }], []]
   if (/^SELECT c\.id AS cert_id/.test(q)) {
     if (/WHERE c\.id=\?$/.test(q)) return [[{ cert_id: params[0], verified_by: 'Verifier Name', vendor_name_should_not_matter: 1, ...Object.fromEntries(CERT_COLS.filter(c => c !== 'id' && c !== 'verified_by').map(c => [c, 'S:' + c])) }], []]
@@ -40,7 +52,9 @@ const fakeDb = { query: async (sql, params = []) => {
     const scoped = /po_id IN \(SELECT id FROM purchase_orders WHERE supplier_id = \? AND project_id = \?\)\)/.test(q), none = / AND 1=0\)/.test(q)
     const [sup, proj] = scoped ? params.slice(-2) : [null, null]
     const single = /WHERE id=\? AND project_id=\?/.test(q)
-    const ids = Object.keys(CERTS).map(Number).filter(id => !none && (single ? id === params[0] && CERTS[id][0] === params[1] : CERTS[id][0] === params[0]) && scoped && ownPo(CERTS[id][1], proj, sup))
+    const cats = catSet(q), sts = statusSet(q)
+    const ids = Object.keys(CERTS).map(Number).filter(id => !none && (single ? id === params[0] && CERTS[id][0] === params[1] : CERTS[id][0] === params[0]) && scoped && ownPo(CERTS[id][1], proj, sup)
+      && (!cats || cats.has(catOf(id))) && (!sts || sts.has(CERTS[id][2])))
     return [ids.map(id => ({ cert_id: id, verified_by: 'Verifier Name', ...Object.fromEntries(CERT_COLS.filter(c => c !== 'id' && c !== 'verified_by').map(c => [c, 'S:' + c])), status: CERTS[id][2] })), []]
   }
   if (/^SELECT id AS cert_id, po_ref, vendor_name, tag/.test(q)) return [Object.keys(CERTS).map(Number).filter(id => CERTS[id][0] === params[0]).map(id => ({ cert_id: id, po_ref: 'R', vendor_name: 'V', status: CERTS[id][2] })), []]
@@ -123,17 +137,25 @@ async function suite(trSrc, docSrc) {
 
   // summary, list, detail, tags
   let r = await go(V5, 'GET', '/27/summary')
-  let c = q1(/^SELECT SUM\(category='vdrl'/), h = q1(/^SELECT COUNT\(\*\) AS active_holds/)
+  let c = q1(/^SELECT SUM\(category/), h = q1(/^SELECT COUNT\(\*\) AS active_holds/)
   check(r.status === 200 && keysOf(r.body) === K('vdrl_received vdrl_pending vdrl_overdue active_holds'), 'vendor summary projected')
   check(c && /WHERE project_id=\? AND po_id IN \(SELECT id FROM purchase_orders WHERE supplier_id = \? AND project_id = \?\)$/.test(c.q) && JSON.stringify(c.params) === '[27,5,27]', 'vendor summary counts: own POs')
+  check(c && (c.q.match(/category IN \('vdrl','approval'\)/g) || []).length === 3 && !/category='vdrl'/.test(c.q), 'P2g vendor summary: the explicit category list vdrl, approval in all three counts')
+  check(JSON.stringify(r.body) === '{"vdrl_received":2,"vdrl_pending":2,"vdrl_overdue":1,"active_holds":4}', 'P2g vendor summary: both categories counted (pending 1 and 9), the unlisted category (11) and other suppliers (12) not')
   check(h && /JOIN traceability_certs c ON c\.id = h\.related_cert_id/.test(h.q) && /c\.po_id IN \(SELECT id FROM purchase_orders/.test(h.q) && JSON.stringify(h.params) === '[27,5,27]', 'vendor active holds: holds on its own certificates')
-  r = await go(VNULL, 'GET', '/27/summary'); c = q1(/^SELECT SUM\(category='vdrl'/); h = q1(/^SELECT COUNT\(\*\) AS active_holds/)
+  r = await go(VNULL, 'GET', '/27/summary'); c = q1(/^SELECT SUM\(category/); h = q1(/^SELECT COUNT\(\*\) AS active_holds/)
   check(c && / AND 1=0$/.test(c.q) && h && / AND 1=0$/.test(h.q), 'unlinked vendor summary: 1=0')
+  check(r.body.vdrl_received === 0 && r.body.vdrl_pending === 0 && r.body.vdrl_overdue === 0, 'P2g unlinked vendor summary: zero counts')
   r = await go(V5, 'GET', '/27/vdrl')
-  check(r.status === 200 && JSON.stringify(r.body.data.map(x => x.cert_id)) === '[1,2,3,4,5]', 'vendor list: its POs only (no other supplier, no certificate without a PO)')
+  check(r.status === 200 && JSON.stringify(r.body.data.map(x => x.cert_id).sort((a, b) => a - b)) === '[1,2,3,4,5,9,10]', 'P2g vendor list: its POs only, categories vdrl and approval (not 11 of an unlisted category, not 6 or 12 of another supplier, not 7 without a PO)')
+  c = q1(/^SELECT c\.id AS cert_id/); check(c && /category IN \('vdrl','approval'\)/.test(c.q) && !/category='vdrl'/.test(c.q), 'P2g vendor list: the explicit category list in the query')
   check(r.body.data.every(x => keysOf(x) === CERT_KEYS) && r.body.data[0].verified_by === 'Verifier Name', 'vendor list projected (verifier name)')
   r = await go(V5, 'GET', '/27/vdrl?status=pending&q=abc'); c = q1(/^SELECT c\.id AS cert_id/)
   check(c && JSON.stringify(c.params) === '[27,"%abc%","%abc%","%abc%","%abc%",5,27]', 'vendor list: filters kept, scope appended')
+  r = await go(V5, 'GET', '/27/vdrl?status=pending')
+  check(JSON.stringify(r.body.data.map(x => x.cert_id).sort((a, b) => a - b)) === '[1,9]', 'P2g vendor list, status pending: both categories (1 vdrl, 9 approval), not 11')
+  r = await go(V5, 'GET', '/27/vdrl?status=received')
+  check(JSON.stringify(r.body.data.map(x => x.cert_id).sort((a, b) => a - b)) === '[2,3]', 'P2g vendor list, status received: received and verified')
   r = await go(VNULL, 'GET', '/27/vdrl')
   check(r.status === 200 && r.body.data.length === 0, 'unlinked vendor list: nothing')
   r = await go(V5, 'GET', '/27/cert/1')
@@ -264,6 +286,11 @@ const T_MUTANTS = [
   ['received unconditionally', s => s.replace("`UPDATE traceability_certs SET status='received', received_date=? WHERE id=? AND status IN (?,?,?)`,\n        [today(), certId, ...VENDOR_VERSION_STATUSES])", "`UPDATE traceability_certs SET status='received', received_date=? WHERE id=?`,\n        [today(), certId])")],
   ['no date-change entry', s => s.replace("        await writeDateChange(uid, 'traceability_cert', certId, 'received_date', prev ? prev.received_date : null, today(),\n          'Cert received via version upload')", '        void prev')],
   ['no file scope', s => s.replace("requirePermission('traceability', 'can_view'), certScope({ version: false }), async", "requirePermission('traceability', 'can_view'), async")],
+  ['P2g: vdrl only', s => s.replace("const VENDOR_CERT_CATEGORIES = \"category IN ('vdrl','approval')\"", "const VENDOR_CERT_CATEGORIES = \"category='vdrl'\"")],
+  ['P2g: no category filter', s => s.replace("const VENDOR_CERT_CATEGORIES = \"category IN ('vdrl','approval')\"", "const VENDOR_CERT_CATEGORIES = \"1=1\"")],
+  ['P2g: approval only', s => s.replace("const VENDOR_CERT_CATEGORIES = \"category IN ('vdrl','approval')\"", "const VENDOR_CERT_CATEGORIES = \"category='approval'\"")],
+  ['P2g: list keeps vdrl only', s => s.replace("isVendor(req) ? VENDOR_CERT_CATEGORIES : \"category='vdrl'\"]", "\"category='vdrl'\"]")],
+  ['P2g: summary keeps vdrl only', s => s.replace("const cat = v ? VENDOR_CERT_CATEGORIES : \"category='vdrl'\"", "const cat = \"category='vdrl'\"")],
 ]
 const D_MUTANTS = [
   ['download: no vendor certificate check', s => s.replace("    if (user?.role === 'vendor') {\n      const [[o]] = user.supplier_id == null ? [[]] : await db.query(\n        `SELECT c.id FROM traceability_certs c", "    if (false) {\n      const [[o]] = user.supplier_id == null ? [[]] : await db.query(\n        `SELECT c.id FROM traceability_certs c")],
