@@ -1064,3 +1064,15 @@ export const VENDOR_PO_HELP: HelpSection[] = [
     </>,
   },
 ]
+
+// ─── MY VDRL (vendor, ext-2c) ─────────────────────────────────
+export const VENDOR_VDRL_HELP: HelpSection[] = [
+  {
+    title: 'My VDRL',
+    content: <>
+      {P(<>Lists the vendor documents QCO requires on your company's POs in this project. Filter by PO, package or status, or search by document number or title.</>)}
+      {P(<>Use {B('Upload file')} on a document that is {B('Not submitted')}, {B('Overdue')} or {B('Resubmit')}; the document then shows {B('Under review')}. Use {B('View')} or {B('Download')} for a file already uploaded.</>)}
+      {Tip('Documents under review or approved cannot take a new file. To add or change a document, contact the QCO expeditor.')}
+    </>,
+  },
+]
