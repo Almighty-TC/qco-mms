@@ -2,11 +2,11 @@
 // The vendor documents QCO requires on the vendor's own POs in the selected project.
 // Vendors attach files to existing rows only (no create, edit, template or bulk upload).
 // Calls only the routes the external gate allows a vendor (server/lib/externalGate.js, P2f):
-//   GET expediting/:pid/vdrl/stats · packages · documents (package_id, status, search) · po-list
+//   GET expediting/:pid/vdrl/stats · packages · documents (package_id, status, search)
 //   POST expediting/:pid/vdrl/documents/:docId/file (multipart field "file")
 //   GET documents/:pid/download/vdrl:ID (through lib/fileAccess)
 // Every field is a key of the vendor projections in server/lib/vendorView.js (VDRL_STATS,
-// VDRL_PACKAGE, VDRL_DOCUMENT, VDRL_PO_ROW); the server scopes each call to the vendor's
+// VDRL_PACKAGE, VDRL_DOCUMENT); the server scopes each call to the vendor's
 // supplier and accepts a file only while a row is Not submitted, Overdue or Resubmit (else 409).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
@@ -26,7 +26,6 @@ import { viewFile, downloadFile } from '../lib/fileAccess'
 type Num = number | string | null   // SUM/DECIMAL results can arrive as strings
 interface VdrlStats { total_docs: Num; submitted_count: Num; submitted_pct: Num; overdue_count: Num; abf_cleared_count: Num; progress_pct: Num }
 interface VdrlPackage { id: number; package_ref: string | null; name: string | null; status: string | null; po_id: number | null; po_number: string | null; vendor_name: string | null; doc_count: Num; submitted_count: Num; overdue_count: Num; created_at: string | null }
-interface VdrlPoRow { id: number; po_number: string; po_name: string | null; vendor_name: string | null; package_count: Num; total_docs: Num; submitted_count: Num; overdue_count: Num; progress_pct: Num }
 interface VdrlDocument {
   id: number; package_id: number; package_name: string | null; po_number: string | null; doc_number: string | null
   title: string | null; doc_type: string | null; revision: string | null; status: string
@@ -97,7 +96,6 @@ const VendorVdrlInner = ({ dark, projectId, projectName, onBack }: VendorVdrlScr
   const { addToast } = useToast()
   const [stats, setStats] = useState<VdrlStats | null>(null)
   const [packages, setPackages] = useState<VdrlPackage[]>([])
-  const [poList, setPoList] = useState<VdrlPoRow[]>([])
   const [docs, setDocs] = useState<VdrlDocument[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -119,7 +117,6 @@ const VendorVdrlInner = ({ dark, projectId, projectName, onBack }: VendorVdrlScr
   useEffect(() => {
     loadStats()
     axios.get(`${API}/expediting/${projectId}/vdrl/packages`).then(r => setPackages(Array.isArray(r.data) ? r.data : [])).catch(() => setPackages([]))
-    axios.get(`${API}/expediting/${projectId}/vdrl/po-list`).then(r => setPoList(Array.isArray(r.data) ? r.data : [])).catch(() => setPoList([]))
   }, [projectId, loadStats])
 
   useEffect(() => { const id = setTimeout(() => setSearch(input.trim()), 350); return () => clearTimeout(id) }, [input])
@@ -143,6 +140,12 @@ const VendorVdrlInner = ({ dark, projectId, projectName, onBack }: VendorVdrlScr
   const shown = useMemo(() => (poFilter ? docs.filter(d => d.po_number === poFilter) : docs), [docs, poFilter])
   const pageRows = useMemo(() => shown.slice((page - 1) * pageSize, page * pageSize), [shown, page, pageSize])
   const pkgOptions = useMemo(() => (poFilter ? packages.filter(p => p.po_number === poFilter) : packages), [packages, poFilter])
+  // PO filter options from the packages (po_id, po_number): every PO with documents, locked or not.
+  const poOptions = useMemo(() => {
+    const seen = new Map<string, number>()
+    for (const p of packages) if (p.po_number && p.po_id != null && !seen.has(p.po_number)) seen.set(p.po_number, p.po_id)
+    return [...seen].map(([po_number, po_id]) => ({ po_id, po_number })).sort((a, b) => a.po_number.localeCompare(b.po_number))
+  }, [packages])
 
   // ── Upload: one hidden file input; the row is remembered in a ref while the picker is open.
   const pickFile = (d: VdrlDocument) => { targetRef.current = d; fileRef.current?.click() }
@@ -199,7 +202,7 @@ const VendorVdrlInner = ({ dark, projectId, projectName, onBack }: VendorVdrlScr
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
         <select value={poFilter} onChange={e => { setPoFilter(e.target.value); setPackageId('') }} style={sel} title="PO">
           <option value="">All POs</option>
-          {poList.map(p => <option key={p.id} value={p.po_number}>{p.po_number}{p.po_name ? ` — ${p.po_name}` : ''}</option>)}
+          {poOptions.map(p => <option key={p.po_id} value={p.po_number}>{p.po_number}</option>)}
         </select>
         <select value={packageId} onChange={e => setPackageId(e.target.value)} style={sel} title="Package">
           <option value="">All packages</option>

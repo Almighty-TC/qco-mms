@@ -35,24 +35,27 @@ interface Props {
   vdrlRows: VdrlRow[]
   onClose: () => void
   onUploaded: (msg: string) => void
+  // Optional (vendor screens): PO number → PO id. When given, the PO choices are these POs, an ad-hoc
+  // upload also sends po_id, and rejected requirements can be chosen too. Absent: unchanged.
+  poIds?: Record<string, number>
 }
 
 const today = () => new Date().toISOString().slice(0, 10)
 
-export const UploadCertModal: React.FC<Props> = ({ dark, projectId, mode, prefill, vdrlRows, onClose, onUploaded }) => {
+export const UploadCertModal: React.FC<Props> = ({ dark, projectId, mode, prefill, vdrlRows, onClose, onUploaded, poIds }) => {
   const t = tokens(dark)
 
   // ── Global-mode selectors ──────────────────────────────────
-  const poOptions = useMemo(() => Array.from(new Set(vdrlRows.map(r => r.po_ref).filter(Boolean))) as string[], [vdrlRows])
+  const poOptions = useMemo(() => poIds ? Object.keys(poIds) : Array.from(new Set(vdrlRows.map(r => r.po_ref).filter(Boolean))) as string[], [vdrlRows, poIds])
   const [po, setPo] = useState<string>(prefill?.po_ref || '')
   const tagOptions = useMemo(
     () => Array.from(new Set(vdrlRows.filter(r => !po || r.po_ref === po).map(r => r.tag).filter(Boolean))) as string[],
     [vdrlRows, po])
   const [tag, setTag] = useState<string>(prefill?.tag || '')
-  // Open requirements (pending/overdue) the user can satisfy.
+  // Open requirements (pending/overdue; rejected too when poIds is given) the user can satisfy.
   const openReqs = useMemo(
-    () => vdrlRows.filter(r => ['pending', 'overdue'].includes(r.status) && (!po || r.po_ref === po) && (!tag || r.tag === tag)),
-    [vdrlRows, po, tag])
+    () => vdrlRows.filter(r => (poIds ? ['pending', 'overdue', 'rejected'] : ['pending', 'overdue']).includes(r.status) && (!po || r.po_ref === po) && (!tag || r.tag === tag)),
+    [vdrlRows, po, tag, poIds])
   const [reqId, setReqId] = useState<string>(prefill?.document_requirement_id ? String(prefill.document_requirement_id) : '')
   const [freeDoc, setFreeDoc] = useState<string>(prefill?.document_name || '')
 
@@ -91,6 +94,7 @@ export const UploadCertModal: React.FC<Props> = ({ dark, projectId, mode, prefil
         fd.append('document_requirement_id', String(effectiveReqId))
       } else {
         if (po) fd.append('po_ref', po)
+        if (po && poIds && poIds[po] != null) fd.append('po_id', String(poIds[po]))
         if (vendor) fd.append('vendor_name', vendor)
         if (tag) fd.append('tag', tag)
         fd.append('document_name', mode === 'row' ? (prefill?.document_name || 'Ad-hoc certificate') : (freeDoc || 'Ad-hoc certificate'))

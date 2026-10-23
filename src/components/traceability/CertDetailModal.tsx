@@ -26,9 +26,10 @@ interface Props {
   certId: number
   onClose: () => void
   onChanged?: () => void
+  skipHeat?: boolean   // optional (vendor screens): no heat/material lookup. Absent: unchanged.
 }
 
-export const CertDetailModal: React.FC<Props> = ({ dark, projectId, certId, onClose, onChanged }) => {
+export const CertDetailModal: React.FC<Props> = ({ dark, projectId, certId, onClose, onChanged, skipHeat }) => {
   const t = tokens(dark)
   const [cert, setCert] = useState<Cert | null>(null)
   const [versions, setVersions] = useState<Version[]>([])
@@ -61,11 +62,11 @@ export const CertDetailModal: React.FC<Props> = ({ dark, projectId, certId, onCl
   // Heat/Lot P5 — fetch material carrying this cert's heat (normalised join).
   useEffect(() => {
     const h = cert?.heat_ref
-    if (!h || !h.trim()) { setMaterial(null); return }
+    if (skipHeat || !h || !h.trim()) { setMaterial(null); return }
     axios.get(`${API}/traceability/${projectId}/heat/${encodeURIComponent(h.trim())}`)
       .then(({ data }) => setMaterial({ stock: data.stock || [], issues: data.issues || [], transfers: data.transfers || [] }))
       .catch(() => setMaterial(null))
-  }, [cert?.heat_ref, projectId])
+  }, [cert?.heat_ref, projectId, skipHeat])
 
   const addVersion = async () => {
     setVErr('')

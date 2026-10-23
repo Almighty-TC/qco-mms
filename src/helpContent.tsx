@@ -1076,3 +1076,15 @@ export const VENDOR_VDRL_HELP: HelpSection[] = [
     </>,
   },
 ]
+
+// ─── MY CERTIFICATES (vendor, ext-2c) ─────────────────────────
+export const VENDOR_CERT_HELP: HelpSection[] = [
+  {
+    title: 'My certificates',
+    content: <>
+      {P(<>Lists the certificates QCO requires on your company's POs in this project, with their status. Use {B('View')} to see a certificate's versions and add a new version.</>)}
+      {P(<>Use {B('Upload')} on a requirement that is {B('pending')}, {B('overdue')} or {B('rejected')}. To send a certificate that is not on the list, use {B('Upload certificate (not on the list)')} and choose one of your POs.</>)}
+      {Tip('Verified and received certificates cannot take a new upload from here. Contact the QCO quality team if one needs to change.')}
+    </>,
+  },
+]

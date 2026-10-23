@@ -33,6 +33,7 @@ import { AuditViewerScreen } from './pages/AuditViewerScreen'
 import { ReportsScreen } from './pages/ReportsScreen'
 import { VendorPOScreen } from './pages/VendorPOScreen'
 import { VendorVdrlScreen } from './pages/VendorVdrlScreen'
+import { VendorCertScreen } from './pages/VendorCertScreen'
 import { ForcePasswordChange } from './components/ForcePasswordChange'
 import { ChangePasswordModal } from './components/ChangePasswordModal'
 import { AcronymHeaderTitles } from './components/AcronymHeaderTitles'
@@ -44,7 +45,7 @@ import './App.css'
 // 'admin' enforces role === 'admin'; 'procurement' is project-scoped.
 // ─── ROUTING — state-based, no router library ─────────────────────────────────
 // 'po-detail' is Phase 3 PO Detail Screen — full dedicated screen.
-type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'pre-award-tenders' | 'pre-award-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers' | 'traceability' | 'documents' | 'pending-changes' | 'audit' | 'rfi-meeting' | 'reports' | 'vendor-pos' | 'vendor-vdrl'
+type Page = 'dashboard' | 'admin' | 'procurement' | 'po-detail' | 'pre-award-tenders' | 'pre-award-detail' | 'foundational-wbs' | 'foundational-commodities' | 'foundational-equipment' | 'expediting' | 'expediting-po-detail' | 'mto-list' | 'mto-detail' | 'logistics' | 'mc-receipting' | 'mc-stock' | 'mc-fmr' | 'mc-transfers' | 'traceability' | 'documents' | 'pending-changes' | 'audit' | 'rfi-meeting' | 'reports' | 'vendor-pos' | 'vendor-vdrl' | 'vendor-certs'
 
 // ─── DEEP-LINK PARSING ───────────────────────────────────────
 // Maps a URL path segment (/project/:id/<segment>) to an internal Page,
@@ -63,7 +64,7 @@ const PAGE_SEGMENTS: Record<string, Page> = {
   'material-control/stock': 'mc-stock', 'material-control/transfers': 'mc-transfers',
   'foundational/wbs': 'foundational-wbs', 'foundational/commodities': 'foundational-commodities', 'foundational/equipment': 'foundational-equipment',
   'pre-award/tenders': 'pre-award-tenders',
-  'vendor-pos': 'vendor-pos', 'vendor-vdrl': 'vendor-vdrl',
+  'vendor-pos': 'vendor-pos', 'vendor-vdrl': 'vendor-vdrl', 'vendor-certs': 'vendor-certs',
 }
 // Reads /project/:projectId/:segment from the current URL so a hard load
 // hydrates both the active project and the page in one pass.
@@ -328,6 +329,7 @@ const CRUMB: Record<string, { module: { label: string; page: Page }; leaf?: stri
   'pending-changes':      { module: { label: 'Pending Changes', page: 'pending-changes' } },
   'vendor-pos':           { module: { label: 'My POs', page: 'vendor-pos' } },
   'vendor-vdrl':          { module: { label: 'My VDRL', page: 'vendor-vdrl' } },
+  'vendor-certs':         { module: { label: 'My certificates', page: 'vendor-certs' } },
 }
 
 // ─── NOT AVAILABLE PANEL (ext-2) ─────────────────────────────
@@ -1577,6 +1579,15 @@ function App() {
           {/* ─── MY VDRL (ext-2c) ── the vendor's own VDRL documents; same rule as My POs. */}
           {page === 'vendor-vdrl' && selectedProjectId && user?.role === 'vendor' && projects.some(p => p.id === selectedProjectId) && (
             <VendorVdrlScreen
+              dark={dark}
+              projectId={selectedProjectId}
+              projectName={selectedProjectName}
+              onBack={() => setPage('dashboard')}
+            />
+          )}
+          {/* ─── MY CERTIFICATES (ext-2c) ── the vendor's own certificate requirements; same rule as My POs. */}
+          {page === 'vendor-certs' && selectedProjectId && user?.role === 'vendor' && projects.some(p => p.id === selectedProjectId) && (
+            <VendorCertScreen
               dark={dark}
               projectId={selectedProjectId}
               projectName={selectedProjectName}

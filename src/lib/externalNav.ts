@@ -30,15 +30,16 @@ const STOCK_FMR: ExternalNavEntry = {
   id: 'materials-control', label: 'Materials Control', icon: '📦', page: 'mc-stock',
   sub: [{ page: 'mc-stock', label: 'Stock Register' }, { page: 'mc-fmr', label: 'FMR Register' }],
 }
-// ext-2c: the vendor's own screens (VendorPOScreen, VendorVdrlScreen); never opened by any other role.
+// ext-2c: the vendor's own screens (VendorPOScreen, VendorVdrlScreen, VendorCertScreen); never opened by any other role.
 const MY_POS: ExternalNavEntry = { id: 'vendor-pos', label: 'My POs', icon: '🧾', page: 'vendor-pos' }
 const MY_VDRL: ExternalNavEntry = { id: 'vendor-vdrl', label: 'My VDRL', icon: '📑', page: 'vendor-vdrl' }
-const VENDOR_ONLY_PAGES: ReadonlySet<string> = new Set([MY_POS.page, MY_VDRL.page])
+const MY_CERTS: ExternalNavEntry = { id: 'vendor-certs', label: 'My certificates', icon: '📜', page: 'vendor-certs' }
+const VENDOR_ONLY_PAGES: ReadonlySet<string> = new Set([MY_POS.page, MY_VDRL.page, MY_CERTS.page])
 
 // One table per role (phase 1). Order is the sidebar order; the first entry after
 // Home is where an external user lands after choosing a project.
 export const EXTERNAL_NAV: Record<ExternalRole, ExternalNavEntry[]> = {
-  vendor:            [HOME, MY_POS, MY_VDRL, RFI],
+  vendor:            [HOME, MY_POS, MY_VDRL, MY_CERTS, RFI],
   freight_forwarder: [HOME, LOGISTICS, RFI],
   site_contractor:   [HOME, WBS, STOCK_FMR, RFI],
   subcontractor:     [HOME, STOCK_FMR, RFI],
