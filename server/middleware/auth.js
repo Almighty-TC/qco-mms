@@ -10,6 +10,12 @@ function authenticateToken(req, res, next) {
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) return res.status(403).json({ error: 'Invalid or expired token' });
+    // Phase 2 (P2b): a supplier_id claim in a token is never trusted. For external roles
+    // the value comes from the users row, read by the external gate (req.externalScope).
+    if (user && typeof user === 'object') {
+      delete user.supplier_id;
+      if (req.externalScope) user.supplier_id = req.externalScope.supplierId;
+    }
     req.user = user;
     next();
   });

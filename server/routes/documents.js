@@ -9,8 +9,10 @@ const router  = express.Router()
 const db      = require('../db')
 const path    = require('path')
 const fs      = require('fs')
+const blobStore = require('../lib/blobStore')   // blob migration: dual-read fallback
 const { authenticateToken } = require('../middleware/auth')
 const { requireProjectScope } = require('../middleware/permissions')
+const { isPackagingDelegate } = require('./logistics')   // ext-1b: the shared delegate predicate (no drift)
 
 router.use(authenticateToken)
 router.param('projectId', requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects (closes the docs cross-project leak)
@@ -462,20 +464,39 @@ const RESOLVERS = {
     const base = path.basename(c.filename)   // stored as a bare filename
     return { absPath: path.join(UPLOADS.foundational, base), baseDir: UPLOADS.foundational, name: base.replace(/^\d+-/, ''), mime: null }
   },
-  async logistics(id, pid) {
+  async logistics(id, pid, user) {
     const [[d]] = await db.query(
       `SELECT d.file_name, d.file_path FROM scn_documents d
        JOIN shipment_control_notes s ON s.id = d.scn_id
        WHERE d.id=? AND s.project_id=?`, [id, pid])
     if (!d) return { code: 'not_found' }
+    // ext-1b: a freight_forwarder downloads only documents of an SCN it is linked to — the
+    // carrier (forwarder_user_id) or the delegated packer (packaging_delegated_to), as
+    // logistics.js forwarderLinkedToScn allows. Other roles are unchanged (no extra query).
+    if (user?.role === 'freight_forwarder') {
+      const [[s]] = await db.query(
+        `SELECT s.forwarder_user_id, s.packaging_delegated_to FROM scn_documents d
+         JOIN shipment_control_notes s ON s.id = d.scn_id WHERE d.id=?`, [id])
+      const carrier = !!s && s.forwarder_user_id != null && s.forwarder_user_id === user.id
+      if (!carrier && !(s && isPackagingDelegate(s.packaging_delegated_to, user.id))) {
+        return { code: 'forbidden', error: 'You are not linked to this SCN.' }
+      }
+    }
     if (!d.file_path) return { code: 'no_file' }
     return { absPath: path.resolve(SERVER_ROOT, d.file_path), baseDir: UPLOADS.logistics, name: d.file_name, mime: null }
   },
-  async traceability(id, pid) {
+  async traceability(id, pid, user) {
     if (!(await fileColumns()).has('traceability_certs.file_path')) return { code: 'no_file' }
     const [[c]] = await db.query(
       `SELECT file_name, file_path, mime_type FROM traceability_certs WHERE id=? AND project_id=?`, [id, pid])
     if (!c) return { code: 'not_found' }
+    // P2e: a vendor downloads only certificates on its own supplier's POs (none without a PO).
+    if (user?.role === 'vendor') {
+      const [[o]] = user.supplier_id == null ? [[]] : await db.query(
+        `SELECT c.id FROM traceability_certs c JOIN purchase_orders po ON po.id = c.po_id
+         WHERE c.id=? AND po.supplier_id=?`, [id, Number(user.supplier_id)])
+      if (!o) return { code: 'forbidden', error: 'Access denied' }
+    }
     if (!c.file_path) return { code: 'no_file' }
     return { absPath: path.resolve(SERVER_ROOT, c.file_path), baseDir: UPLOADS.traceability, name: c.file_name, mime: c.mime_type }
   },
@@ -489,13 +510,20 @@ const RESOLVERS = {
     if (!r.file_path) return { code: 'no_file' }
     return { absPath: path.resolve(SERVER_ROOT, r.file_path), baseDir: UPLOADS.mto, name: r.file_name, mime: r.mime_type }
   },
-  async vdrl(id, pid) {
+  async vdrl(id, pid, user) {
     if (!(await fileColumns()).has('vdrl_documents.file_path')) return { code: 'no_file' }
     const [[d]] = await db.query(
       `SELECT d.file_name, d.file_path, d.mime_type FROM vdrl_documents d
        JOIN vdrl_packages p ON p.id = d.package_id
        WHERE d.id=? AND p.project_id=?`, [id, pid])
     if (!d) return { code: 'not_found' }
+    // P2d: a vendor downloads only VDRL documents on its own supplier's POs. Other roles unchanged.
+    if (user?.role === 'vendor') {
+      const [[o]] = user.supplier_id == null ? [[]] : await db.query(
+        `SELECT po.supplier_id FROM vdrl_documents d JOIN vdrl_packages p ON p.id = d.package_id
+         JOIN purchase_orders po ON po.id = p.po_id WHERE d.id=?`, [id])
+      if (!o || Number(o.supplier_id) !== Number(user.supplier_id)) return { code: 'forbidden', error: 'Access denied' }
+    }
     if (!d.file_path) return { code: 'no_file' }
     return { absPath: path.resolve(SERVER_ROOT, d.file_path), baseDir: UPLOADS.vdrl, name: d.file_name, mime: d.mime_type }
   },
@@ -524,14 +552,28 @@ router.get('/:projectId/download/:docId', async (req, res) => {
     // Virtual/aggregated rows (Material Control receipt+issue notes) own no file.
     if (!resolver || !Number.isInteger(id)) return res.status(404).json({ error: 'No downloadable file for this document' })
 
-    const r = await resolver(id, pid)
+    const r = await resolver(id, pid, req.user)
     if (r.code === 'not_found') return res.status(404).json({ error: 'Document not found in this project' })
+    if (r.code === 'forbidden') return res.status(403).json({ error: r.error })
     if (r.code === 'no_file')   return res.status(404).json({ error: 'No file is stored for this document yet' })
+
+    const safeName = (r.name || 'document').replace(/[\r\n"]/g, '')
+    // DUAL-READ FALLBACK (blob migration): try blob first — the key is <module>/<basename>,
+    // derived from the resolved path (basename is invariant across blob-key / legacy disk
+    // shapes, and strips any traversal so the key is safe by construction). On null (blob
+    // disabled / absent), fall through to the existing on-disk read below — unchanged.
+    const blobStream = await blobStore.getFile(blobStore.keyFor(moduleKey, r.absPath))
+    if (blobStream) {
+      auditDownload(req, pid, moduleKey, id, r.name)
+      res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`)
+      res.setHeader('Content-Type', r.mime || 'application/octet-stream')
+      return blobStream.pipe(res)
+    }
+
     if (!within(r.baseDir, r.absPath)) return res.status(400).json({ error: 'Invalid file reference' })
     if (!fs.existsSync(r.absPath)) return res.status(404).json({ error: 'File is recorded but missing on the server' })
 
     auditDownload(req, pid, moduleKey, id, r.name)
-    const safeName = (r.name || 'document').replace(/[\r\n"]/g, '')
     res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`)
     res.setHeader('Content-Type', r.mime || 'application/octet-stream')
     fs.createReadStream(r.absPath).pipe(res)

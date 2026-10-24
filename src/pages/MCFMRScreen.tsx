@@ -18,6 +18,7 @@ import { usePagedList } from '../hooks/usePagedList'
 import { useColumnResize } from '../hooks/useColumnResize'
 
 import { API } from '../lib/api'
+import { isExternal } from '../lib/externalNav'
 
 // ─── COLUMN RESIZE ────────────────────────────────────────────
 // Register grid columns persist their widths (localStorage qco_col_widths_fmr_register);
@@ -74,7 +75,8 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
   dark: boolean; projectId: number; projectName: string; onBack: () => void; userRole?: string
 }) => {
   const { addToast } = useToast()
-  const { isSubcontractor } = useCurrentUser()
+  const { isSubcontractor, user } = useCurrentUser()
+  const external = isExternal(user?.role)   // ext-2b: external roles always use the contractor view
   const col    = dark ? '#f1f5f9' : '#0f172a'
   const cardBg = dark ? '#1e293b' : '#fff'
   const bg     = dark ? '#0f172a' : '#f4f7fb'
@@ -82,8 +84,8 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
   const sub    = '#94a3b8'
   const theadBg = dark ? '#162032' : '#f8fafc'
 
-  // Subcontractors always in contractor view; can't switch to MC view
-  const [view, setView]           = useState<View>(isSubcontractor ? 'contractor' : 'mc')
+  // Subcontractors (and every external role) always in contractor view; can't switch to MC view
+  const [view, setView]           = useState<View>(isSubcontractor || external ? 'contractor' : 'mc')
   const [counts, setCounts]       = useState<FMRCounts | null>(null)
   const [search, setSearch]       = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -221,8 +223,8 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
           <BackButton onFallback={onBack} dark={dark} />
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {/* MC / Contractor view toggle — hidden for subcontractors */}
-          {!isSubcontractor && <>
+          {/* MC / Contractor view toggle — hidden for subcontractors and every external role */}
+          {!isSubcontractor && !external && <>
             <button onClick={() => setView('mc')}
               style={{ padding: '5px 14px', borderRadius: '6px 0 0 6px', border: bd, background: 'none', color: view === 'mc' ? col : sub, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', fontWeight: view === 'mc' ? 600 : 400 }}>
               MC view
@@ -1139,6 +1141,8 @@ const FMRDetailModal = ({ dark, projectId, fmr, onClose, addToast }: {
   dark: boolean; projectId: number; fmr: FMRRow; onClose: () => void
   addToast: (t: 'success'|'error', m: string) => void
 }) => {
+  const { user } = useCurrentUser()
+  const external = isExternal(user?.role)   // ext-2b: the pickup-signature view is gate-refused for external roles
   const col    = dark ? '#f1f5f9' : '#0f172a'
   const cardBg = dark ? '#1e293b' : '#fff'
   const bd     = `1px solid ${dark ? '#334155' : '#dde3ed'}`
@@ -1268,7 +1272,7 @@ const FMRDetailModal = ({ dark, projectId, fmr, onClose, addToast }: {
                           </div>
                           {pk.notes && <div style={{ color: col, fontSize: 11, marginTop: 4, fontStyle: 'italic' }}>"{pk.notes}"</div>}
                         </div>
-                        {pk.signature_file ? (
+                        {pk.signature_file && external ? <span style={{ flexShrink: 0, fontSize: 10, color: sub }}>signature on file</span> : pk.signature_file ? (
                           <button onClick={() => viewSignature(pk.id)}
                             style={{ flexShrink: 0, fontSize: 11, color: '#2563eb', background: 'none', cursor: 'pointer', border: bd, borderRadius: 6, padding: '5px 10px', fontWeight: 600 }}>
                             ✍ View signature

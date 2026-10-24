@@ -66,6 +66,12 @@ app.get('/health', (req, res) => {
 const path = require('path')
 app.use('/docs', express.static(path.join(__dirname, '../docs')))
 
+// ─── EXTERNAL ROLE GATE (phase 1) ──────────────────────────
+// Default deny for the four external roles: only the allowlist in lib/externalGate.js
+// passes (login and forgot-password stay open; /health and /docs are outside /api).
+// Internal roles and requests without a valid token pass through to the routers.
+app.use('/api', require('./lib/externalGate').externalGate)
+
 // ─── PUBLIC ROUTES ──────────────────────────────────────────
 // Auth endpoints do not require a JWT — they issue one on login.
 app.use('/api/auth', require('./routes/auth'))
@@ -80,6 +86,11 @@ app.use('/api/projects', authMiddleware, require('./routes/projects'))
 // authenticateToken validates the JWT; the admin router then
 // additionally enforces role === 'admin' on every endpoint.
 app.use('/api/admin', authMiddleware, require('./routes/admin'))
+
+// ─── PRE-AWARD PROCUREMENT ROUTES ────────────────────────────
+// Upstream of Procurement: tenders → prequal → bids → evaluation → award.
+// Auth is applied inside the router (authenticateToken + requireLivePermission).
+app.use('/api/pre-award', require('./routes/preAward'))
 
 // ─── PROCUREMENT ROUTES ──────────────────────────────────────
 // Project-scoped PO management: list, create, approve, line items.

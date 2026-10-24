@@ -9,11 +9,113 @@ const { dbError } = require('../utils/dbError')
 const { authenticateToken } = require('../middleware/auth')
 const { fileFilter } = require('../utils/upload')
 const { dateOrder } = require('../utils/validate')
+const { readVdrlSheet, checkVdrlRows, vdrlRefusal, normKey } = require('../lib/vdrlImport')
+const { setSealNo, setContainerNo, SealGovernanceError } = require('../lib/sealGovernance') // Q4.3 shared seal governance
+
+// ─── Q3 CHILD-STOCK CAPABILITY DETECT ─────────────────────────
+// Did migrate-child-stock.js run? Cached sticky-true (re-checked only while false →
+// self-heals after the migration without a restart). Lets the create path degrade
+// gracefully when the inheritance columns aren't live yet (child created as before,
+// no inherit/block) instead of erroring on a missing column.
+let _childStockCols = false
+async function childStockColsLive() {
+  if (_childStockCols) return true
+  const [[r]] = await db.query(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'scn_additional_items' AND column_name = 'wbs_code_snapshot'`)
+  _childStockCols = r.n > 0
+  return _childStockCols
+}
+
+// Did migrate-delegated-packaging.js run? Cached sticky-true (D3 deploy-tolerance). Lets
+// the SCN-create path degrade gracefully when the delegation columns aren't live yet
+// (SCN created without delegation fields) instead of erroring on a missing column.
+let _delegCols = false
+async function scnDelegationColsLive() {
+  if (_delegCols) return true
+  const [[r]] = await db.query(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'shipment_control_notes' AND column_name = 'packaging_delegated_to'`)
+  _delegCols = r.n > 0
+  return _delegCols
+}
+
+// Did migrate-transport-modes.js run? Cached sticky-true. Lets the create path persist
+// multi-modal legs once live, and degrade gracefully (mode='multi' unsupported) before.
+let _transportCols = false
+async function scnTransportModesLive() {
+  if (_transportCols) return true
+  const [[r]] = await db.query(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'shipment_control_notes' AND column_name = 'transport_modes'`)
+  _transportCols = r.n > 0
+  return _transportCols
+}
+
+// Did migrate-heat-package-links.js run? (Pass 3a) — gates the optional heat→package link
+// so the create path degrades gracefully (heat saved without package_id) pre-migration.
+let _heatPkgCol = false
+async function scnHeatPackageColLive() {
+  if (_heatPkgCol) return true
+  const [[r]] = await db.query(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'scn_heats' AND column_name = 'package_id'`)
+  _heatPkgCol = r.n > 0
+  return _heatPkgCol
+}
+
+// ─── DELEGATION VALIDATION (forwarder-delegated packaging, D3) ─────────────────
+// Pure verdict (uses conn only for the freight_forwarder lookup) — the SCN-create route
+// calls it; exported so the D3 proofs run THIS exact code (no drift).
+//   packed_by_type='forwarder' → packaging_delegated_to MUST be an ACTIVE freight_forwarder
+//     user; on success forwarder_user_id is set to the delegate (visibility scoping) and
+//     packaging_status starts 'pending' (hand-back lifecycle, D4).
+//   packed_by_type='internal'|'vendor' → packaging_delegated_to MUST be empty (NULL) —
+//     no external write access (vendor packages are entered by the expeditor).
+// Returns { ok:true, packedBy, delegateId, packagingStatus, forwarderUserId }
+//      or { ok:false, status, error } (caller maps !ok → status).
+async function resolveDelegation(packed_by_type, packaging_delegated_to, conn) {
+  const PACKED_TYPES = new Set(['internal', 'vendor', 'forwarder'])
+  const packedBy = packed_by_type || 'internal'
+  if (!PACKED_TYPES.has(packedBy)) {
+    return { ok: false, status: 422, error: "packed_by_type must be 'internal', 'vendor', or 'forwarder'." }
+  }
+  if (packedBy === 'forwarder') {
+    const delegateId = Number(packaging_delegated_to) || null
+    if (!delegateId) {
+      return { ok: false, status: 422, error: 'packed_by_type=forwarder requires packaging_delegated_to (an active freight forwarder).' }
+    }
+    const [[ff]] = await conn.query(
+      "SELECT id FROM users WHERE id = ? AND role = 'freight_forwarder' AND is_active = 1", [delegateId])
+    if (!ff) {
+      return { ok: false, status: 422, error: 'packaging_delegated_to must be an active freight_forwarder user.' }
+    }
+    // forwarder_user_id = the delegate → existing forwarder visibility scoping surfaces it.
+    return { ok: true, packedBy, delegateId, packagingStatus: 'pending', forwarderUserId: delegateId }
+  }
+  // internal / vendor → must NOT name a delegate (no external write access).
+  if (packaging_delegated_to != null && packaging_delegated_to !== '') {
+    return { ok: false, status: 422, error: 'packaging_delegated_to must be empty unless packed_by_type=forwarder.' }
+  }
+  return { ok: true, packedBy, delegateId: null, packagingStatus: null, forwarderUserId: null }
+}
 
 router.use(authenticateToken)
 router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/auditor barred from writes
 router.use(require('../middleware/permissions').enforce(p => p.includes('/vdrl') ? 'vdrl' : 'expediting')) // C-b2: vdrl routes→vdrl, else expediting
 router.param('projectId', require('../middleware/permissions').requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects
+
+// GET /api/expediting/forwarders — active freight_forwarder users for the delegation
+// picker (D5). GET → enforce('expediting') can_view (expeditors have it). Read-only,
+// no project param (forwarders aren't project-scoped). Returns id + name + company.
+router.get('/forwarders', async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT id, full_name, company, email FROM users
+       WHERE role = 'freight_forwarder' AND is_active = 1 ORDER BY full_name`)
+    res.json(rows)
+  } catch (e) { dbError(res, e) }
+})
 
 // ─── ACCESS CONTROL ───────────────────────────────────────────
 // Roles that can see all POs; others see only their assigned ones.
@@ -553,11 +655,33 @@ router.put('/:projectId/po/:poId/lines/:lineId/link', async (req, res) => {
   }
 })
 
+// ─── VENDOR SCOPE (P2d) ───────────────────────────────────────
+// Vendors see only the VDRL of their own supplier's POs (req.user.supplier_id, set from the
+// users row by the external gate; none without a supplier) and only attach files to existing
+// rows. Internal roles are unchanged: every vendor fragment below is empty for them.
+const vendorView = require('../lib/vendorView')
+const VENDOR_UPLOAD_STATUSES = ['Not submitted', 'Overdue', 'Resubmit']
+const isVendor = req => req.user?.role === 'vendor'
+// A vendor with no supplier gets the empty result without any SQL (3T130); the reads check
+// this first, so vendorSupplier is only built for a vendor with a supplier.
+const vendorWithoutSupplier = req => isVendor(req) && req.user.supplier_id == null
+function vendorSupplier(req) {
+  return { sql: ' AND po.supplier_id = ?', params: [Number(req.user.supplier_id)] }
+}
+function refuseVendorWrites(req, res, next) {
+  if (isVendor(req)) return res.status(403).json({ error: 'Vendors attach files to existing rows' })
+  next()
+}
+
 // ─── VDRL STATS ───────────────────────────────────────────────
 // Summary counts for VDRL KPI strip on ExpeditingScreen.
 router.get('/:projectId/vdrl/stats', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
+    if (vendorWithoutSupplier(req)) {
+      return res.json(vendorView.vdrlStats({ total_docs: 0, submitted_count: 0, submitted_pct: 0, overdue_count: 0, abf_cleared_count: 0, progress_pct: 0 }))
+    }
+    const v = isVendor(req) ? vendorSupplier(req) : null
     const [[stats]] = await db.query(`
       SELECT
         COUNT(d.id) AS total_docs,
@@ -565,19 +689,20 @@ router.get('/:projectId/vdrl/stats', async (req, res) => {
         SUM(CASE WHEN d.status='Overdue' THEN 1 ELSE 0 END) AS overdue_count,
         SUM(CASE WHEN d.abf_required=1 AND d.abf_cleared=1 THEN 1 ELSE 0 END) AS abf_cleared_count
       FROM vdrl_documents d
-      JOIN vdrl_packages p ON p.id = d.package_id
-      WHERE p.project_id = ?
-    `, [pid])
+      JOIN vdrl_packages p ON p.id = d.package_id${v ? '\n      JOIN purchase_orders po ON po.id = p.po_id' : ''}
+      WHERE p.project_id = ?${v ? v.sql : ''}
+    `, [pid, ...(v ? v.params : [])])
     const total = stats.total_docs || 0
     const submitted = stats.submitted_count || 0
-    res.json({
+    const body = {
       total_docs: total,
       submitted_count: submitted,
       submitted_pct: total ? Math.round(submitted / total * 100) : 0,
       overdue_count: stats.overdue_count || 0,
       abf_cleared_count: stats.abf_cleared_count || 0,
       progress_pct: total ? Math.round(submitted / total * 100) : 0,
-    })
+    }
+    res.json(v ? vendorView.vdrlStats(body) : body)
   } catch (e) { dbError(res, e) }
 })
 
@@ -586,25 +711,27 @@ router.get('/:projectId/vdrl/stats', async (req, res) => {
 router.get('/:projectId/vdrl/packages', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
+    if (vendorWithoutSupplier(req)) return res.json([])
+    const v = isVendor(req) ? vendorSupplier(req) : null   // P2d: INNER JOIN on the PO for vendors
     const [pkgs] = await db.query(`
       SELECT p.*, po.po_number, po.vendor_name,
         COUNT(d.id) AS doc_count,
         SUM(CASE WHEN d.submitted_date IS NOT NULL THEN 1 ELSE 0 END) AS submitted_count,
         SUM(CASE WHEN d.status='overdue' THEN 1 ELSE 0 END) AS overdue_count
       FROM vdrl_packages p
-      LEFT JOIN purchase_orders po ON po.id = p.po_id
+      ${v ? 'JOIN' : 'LEFT JOIN'} purchase_orders po ON po.id = p.po_id
       LEFT JOIN vdrl_documents d ON d.package_id = p.id
-      WHERE p.project_id = ?
+      WHERE p.project_id = ?${v ? v.sql : ''}
       GROUP BY p.id
       ORDER BY p.created_at DESC
-    `, [pid])
-    res.json(pkgs)
+    `, [pid, ...(v ? v.params : [])])
+    res.json(v ? pkgs.map(vendorView.vdrlPackage) : pkgs)
   } catch (e) { dbError(res, e) }
 })
 
 // ─── VDRL PACKAGE CREATE ──────────────────────────────────────
 // Creates a new VDRL package for the given project.
-router.post('/:projectId/vdrl/packages', async (req, res) => {
+router.post('/:projectId/vdrl/packages', refuseVendorWrites, async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
     const { name, po_id } = req.body
@@ -629,6 +756,17 @@ router.get('/:projectId/vdrl/documents', async (req, res) => {
 
     let where = 'p.project_id = ?'
     const params = [pid]
+    if (vendorWithoutSupplier(req)) return res.json([])
+    const v = isVendor(req) ? vendorSupplier(req) : null   // P2d: own supplier's packages only
+    if (v) {
+      where += v.sql; params.push(...v.params)
+      if (package_id) {
+        const [[own]] = await db.query(
+          `SELECT p.id FROM vdrl_packages p JOIN purchase_orders po ON po.id = p.po_id
+           WHERE p.id = ? AND p.project_id = ?${v.sql}`, [Number(package_id), pid, ...v.params])
+        if (!own) return res.status(403).json({ error: 'Access denied' })
+      }
+    }
     if (package_id) { where += ' AND d.package_id = ?'; params.push(package_id) }
     if (status)     { where += ' AND d.status = ?';     params.push(status) }
     if (doc_type)   { where += ' AND d.doc_type = ?';   params.push(doc_type) }
@@ -645,17 +783,17 @@ router.get('/:projectId/vdrl/documents', async (req, res) => {
         DATEDIFF(CURDATE(), d.required_date) AS days_overdue
       FROM vdrl_documents d
       JOIN vdrl_packages p ON p.id = d.package_id
-      LEFT JOIN purchase_orders po ON po.id = p.po_id
+      ${v ? 'JOIN' : 'LEFT JOIN'} purchase_orders po ON po.id = p.po_id
       WHERE ${where}
       ORDER BY d.doc_number
     `, params)
-    res.json(docs)
+    res.json(v ? docs.map(vendorView.vdrlDocument) : docs)
   } catch (e) { dbError(res, e) }
 })
 
 // ─── VDRL DOCUMENT CREATE ─────────────────────────────────────
 // Adds a new document to a VDRL package.
-router.post('/:projectId/vdrl/documents', async (req, res) => {
+router.post('/:projectId/vdrl/documents', refuseVendorWrites, async (req, res) => {
   try {
     const { package_id, doc_number, title, doc_type, discipline, revision,
             required_date, promised_date, notes, status } = req.body
@@ -679,6 +817,11 @@ router.post('/:projectId/vdrl/documents', async (req, res) => {
 router.put('/:projectId/vdrl/documents/:docId', async (req, res) => {
   try {
     const docId = Number(req.params.docId)
+    // P2d (§15 (cb)): the document must be in the URL's project, for every role.
+    const [[inProject]] = await db.query(
+      `SELECT d.id FROM vdrl_documents d JOIN vdrl_packages p ON p.id = d.package_id
+       WHERE d.id=? AND p.project_id=?`, [docId, Number(req.params.projectId)])
+    if (!inProject) return res.status(404).json({ error: 'VDRL document not found in this project' })
     const fields = ['title','doc_type','discipline','revision','required_date','promised_date','submitted_date','status','abf_required','abf_cleared','notes','owner']
     const sets = [], vals = []
     for (const f of fields) {
@@ -700,15 +843,39 @@ router.put('/:projectId/vdrl/documents/:docId', async (req, res) => {
 const fsVdrl   = require('fs')
 const pathVdrl = require('path')
 const vdrlFileDir = pathVdrl.join(__dirname, '../uploads/vdrl-documents')
+const blobStoreVdrl = require('../lib/blobStore')   // blob migration
 const uploadVdrlFile = require('multer')({
-  storage: require('multer').diskStorage({
-    destination: (_req, _file, cb) => { fsVdrl.mkdirSync(vdrlFileDir, { recursive: true }); cb(null, vdrlFileDir) },
-    filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]+/g, '_')}`),
-  }),
+  storage: require('multer').memoryStorage(),   // buffer → blobStore.persist (blob or disk fallback)
   limits: { fileSize: 25 * 1024 * 1024 },
   fileFilter: fileFilter('document'),
 })
-router.post('/:projectId/vdrl/documents/:docId/file', uploadVdrlFile.single('file'), async (req, res) => {
+// P2d: a vendor attaches a file only to a document on its own supplier's PO in this project,
+// and only while it is Not submitted, Overdue or Resubmit — checked before the upload is read.
+async function vendorVdrlFileGate(req, res, next) {
+  if (!isVendor(req)) return next()
+  if (req.user.supplier_id == null) return res.status(403).json({ error: 'Access denied' })
+  try {
+    const [[doc]] = await db.query(
+      `SELECT d.status FROM vdrl_documents d JOIN vdrl_packages p ON p.id = d.package_id
+       JOIN purchase_orders po ON po.id = p.po_id
+       WHERE d.id = ? AND p.project_id = ? AND po.supplier_id = ?`,
+      [Number(req.params.docId), Number(req.params.projectId), Number(req.user.supplier_id)])
+    if (!doc) return res.status(403).json({ error: 'Access denied' })
+    if (!VENDOR_UPLOAD_STATUSES.includes(doc.status)) return res.status(409).json({ error: `A file cannot be uploaded while the document is ${doc.status}` })
+    next()
+  } catch (e) { dbError(res, e) }
+}
+// Removes a file stored by blobStore.persist when a vendor's conditional UPDATE changed no row
+// (blobStore has no delete): disk → unlink; blob → deleteIfExists in the same container.
+async function removeStoredVdrlFile(where, value, diskAbs) {
+  try {
+    if (where === 'disk') { fsVdrl.unlinkSync(diskAbs); return }
+    const { BlobServiceClient } = require('@azure/storage-blob')
+    await BlobServiceClient.fromConnectionString(process.env.AZURE_STORAGE_CONNECTION_STRING)
+      .getContainerClient(blobStoreVdrl.CONTAINER).getBlockBlobClient(value).deleteIfExists()
+  } catch (e) { console.error('[expediting:vdrl-file] could not remove the stored file:', e.message) }
+}
+router.post('/:projectId/vdrl/documents/:docId/file', vendorVdrlFileGate, uploadVdrlFile.single('file'), async (req, res) => {
   try {
     const pid   = Number(req.params.projectId)
     const docId = Number(req.params.docId)
@@ -718,23 +885,72 @@ router.post('/:projectId/vdrl/documents/:docId/file', uploadVdrlFile.single('fil
     const [[doc]] = await db.query(
       `SELECT d.id FROM vdrl_documents d JOIN vdrl_packages p ON p.id = d.package_id
        WHERE d.id=? AND p.project_id=?`, [docId, pid])
-    if (!doc) { fsVdrl.unlinkSync(req.file.path); return res.status(404).json({ error: 'VDRL document not found in this project' }) }
+    if (!doc) { return res.status(404).json({ error: 'VDRL document not found in this project' }) }   // memoryStorage: nothing on disk to clean up
 
     // Storage columns arrive via migrate-document-files.js — fail honestly (not a
     // 500) and discard the upload if the migration hasn't been applied yet.
     if (!(await require('../lib/schemaColumns').fileColumnsReady('vdrl_documents'))) {
-      fsVdrl.unlinkSync(req.file.path)
       return res.status(503).json({ error: 'Document storage is not yet provisioned (pending DB migration)' })
     }
 
-    const relPath = pathVdrl.relative(pathVdrl.join(__dirname, '..'), req.file.path)  // uploads/vdrl-documents/<stored>
-    await db.query(
-      `UPDATE vdrl_documents
-         SET file_name=?, file_path=?, file_size=?, mime_type=?,
-             status=CASE WHEN status IN ('Not submitted','Overdue') THEN 'Under review' ELSE status END,
-             submitted_date=COALESCE(submitted_date, CURDATE()), updated_at=NOW()
-       WHERE id=?`,
-      [req.file.originalname, relPath, req.file.size, req.file.mimetype, docId])
+    // Blob migration: persist to blob (key) or disk (legacy relative shape — unchanged).
+    const vdrlStoredName = `${Date.now()}-${req.file.originalname.replace(/[^a-zA-Z0-9._-]+/g, '_')}`
+    const vdrlDiskAbs = pathVdrl.join(vdrlFileDir, vdrlStoredName)
+    const { value: relPath, where: storedWhere } = await blobStoreVdrl.persist({
+      key: blobStoreVdrl.keyFor('vdrl', vdrlStoredName),   // module key matches documents.js RESOLVERS
+      diskAbsPath: vdrlDiskAbs, buffer: req.file.buffer, contentType: req.file.mimetype,
+      diskValue: pathVdrl.relative(pathVdrl.join(__dirname, '..'), vdrlDiskAbs),  // uploads/vdrl-documents/<stored>
+    })
+    if (isVendor(req)) {
+      // P2d: the conditional UPDATE (the status may have changed since the check; the document
+      // becomes Under review) and the projected answer run in one transaction, so any failure
+      // leaves the row unchanged and the stored file is removed before answering (3T130).
+      let conn, vd
+      try {
+        conn = await db.getConnection()
+        await conn.beginTransaction()
+        const [upd] = await conn.query(
+          `UPDATE vdrl_documents
+             SET file_name=?, file_path=?, file_size=?, mime_type=?, status='Under review',
+                 submitted_date=COALESCE(submitted_date, CURDATE()), updated_at=NOW()
+           WHERE id=? AND status IN (?,?,?)`,
+          [req.file.originalname, relPath, req.file.size, req.file.mimetype, docId, ...VENDOR_UPLOAD_STATUSES])
+        if (!upd.affectedRows) {
+          await conn.rollback()
+          await removeStoredVdrlFile(storedWhere, relPath, vdrlDiskAbs)
+          const [[now]] = await db.query('SELECT status FROM vdrl_documents WHERE id=?', [docId])
+          return res.status(409).json({ error: `A file cannot be uploaded while the document is ${now ? now.status : 'changed'}` })
+        }
+        ;[[vd]] = await conn.query(
+          `SELECT d.*, p.name AS package_name, po.po_number, po.vendor_name,
+             DATEDIFF(CURDATE(), d.required_date) AS days_overdue
+           FROM vdrl_documents d JOIN vdrl_packages p ON p.id = d.package_id
+           LEFT JOIN purchase_orders po ON po.id = p.po_id WHERE d.id=?`, [docId])
+        await conn.commit()
+      } catch (err) {
+        if (conn) { try { await conn.rollback() } catch (_) { /* already rolled back */ } }
+        await removeStoredVdrlFile(storedWhere, relPath, vdrlDiskAbs)
+        return dbError(res, err)
+      } finally {
+        if (conn) conn.release()
+      }
+      db.query(
+        `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, after_value, resource, ip)
+         VALUES (?,?,?,?,?,?,?,?)`,
+        [req.user.id, 'vdrl_file_attached', 'vdrl_document', docId, pid,
+         JSON.stringify({ file: req.file.originalname }),
+         (req.originalUrl || '').split('?')[0].replace(/^\/api(?=\/)/, ''), req.ip]
+      ).catch(e => console.error('[expediting:vdrl-file audit]', e.message))
+      return res.status(201).json(vendorView.vdrlDocument(vd))
+    } else {
+      await db.query(
+        `UPDATE vdrl_documents
+           SET file_name=?, file_path=?, file_size=?, mime_type=?,
+               status=CASE WHEN status IN ('Not submitted','Overdue') THEN 'Under review' ELSE status END,
+               submitted_date=COALESCE(submitted_date, CURDATE()), updated_at=NOW()
+         WHERE id=?`,
+        [req.file.originalname, relPath, req.file.size, req.file.mimetype, docId])
+    }
 
     db.query(
       `INSERT INTO audit_log (user_id, action, entity_type, entity_id, project_id, after_value, resource, ip)
@@ -840,7 +1056,9 @@ router.post('/:projectId/scn', async (req, res) => {
     po_id, selected_lines = [], additional_items = [], variations = [],
     pickup_location, destination_warehouse_id, grid_bay,
     cdd, crd, ccd, etd, eta, transport_mode, forwarder_name, incoterms,
+    transport_modes, transport_mode_notes,   // ── Multi-modal (Pass 2 Item 2) ──
     packages = [], notify_forwarder,
+    packed_by_type, packaging_delegated_to,   // ── Forwarder-delegated packaging (D3) ──
     heats = [],   // ── Heat/Lot P1: per-shipment declared heats (additive) ──
   } = req.body
 
@@ -864,16 +1082,51 @@ router.post('/:projectId/scn', async (req, res) => {
     const [[{ n }]] = await conn.query('SELECT COUNT(*) AS n FROM shipment_control_notes')
     const scnRef = `SCN-${new Date().getFullYear()}-${String(n + 1).padStart(4, '0')}`
 
-    // Insert SCN
+    // ── Forwarder-delegated packaging (D3): validate packed_by_type + delegate ──
+    // Verdict computed by the pure resolveDelegation() (defined + exported below, so the
+    // D3 proofs exercise THIS exact code). 'forwarder' delegates packing to a freight
+    // forwarder (who gets scoped write access via the D2 carve-out) and needs a valid
+    // ACTIVE freight_forwarder; 'vendor'/'internal' must NOT name a delegate.
+    const deleg = await resolveDelegation(packed_by_type, packaging_delegated_to, conn)
+    if (!deleg.ok) { await conn.rollback(); return res.status(deleg.status).json({ error: deleg.error }) }
+    const { packedBy, delegateId, packagingStatus, forwarderUserId } = deleg
+
+    // Multi-modal (Pass 2 Item 2): mode='multi' is the primary indicator; the constituent
+    // legs go in transport_modes ('sea,road') + free-text in transport_mode_notes. Deploy-
+    // tolerant: if the columns aren't live yet, 'multi' isn't a valid enum value, so degrade
+    // to the first constituent leg (or null) rather than failing the insert.
+    const transportLive = await scnTransportModesLive()
+    const legs = Array.isArray(transport_modes) ? transport_modes.filter(Boolean) : []
+    let modeVal = transport_mode || null
+    let transportModesVal = null, transportModeNotesVal = null
+    if (transport_mode === 'multi') {
+      if (transportLive) {
+        transportModesVal = legs.length ? legs.join(',') : null
+        transportModeNotesVal = (transport_mode_notes || '').trim() || null
+      } else {
+        modeVal = legs[0] || null   // pre-migration: 'multi' enum value unavailable → degrade
+      }
+    }
+
+    // Insert SCN (delegation / multi-modal columns appended only when live — deploy-tolerant).
+    const cols = ['scn_ref', 'po_id', 'project_id', 'origin_location', 'destination_warehouse_id',
+      'cargo_ready_date', 'cargo_collection_date', 'etd', 'eta', 'mode', 'forwarder_name', 'incoterms', 'status', 'notes', 'created_by']
+    const vals = [scnRef, po_id, pid, pickup_location || null, destination_warehouse_id || null,
+      crd || null, ccd || null, etd || null, eta || null, modeVal, forwarder_name || null,
+      incoterms || null, 'draft', null, req.user.id]
+    if (transportLive) {
+      cols.push('transport_modes', 'transport_mode_notes')
+      vals.push(transportModesVal, transportModeNotesVal)
+    }
+    if (await scnDelegationColsLive()) {
+      cols.push('forwarder_user_id', 'packed_by_type', 'packaging_delegated_to', 'packaging_status')
+      vals.push(forwarderUserId, packedBy, delegateId, packagingStatus)
+    } else if (packedBy === 'forwarder') {
+      // Can't delegate without the columns live — fail clearly rather than silently dropping it.
+      await conn.rollback(); return res.status(409).json({ error: 'Delegated packaging is unavailable until the delegation migration is applied.' })
+    }
     const [r] = await conn.query(
-      `INSERT INTO shipment_control_notes
-        (scn_ref, po_id, project_id, origin_location, destination_warehouse_id,
-         cargo_ready_date, cargo_collection_date, etd, eta, mode, forwarder_name, incoterms, status, notes, created_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?)`,
-      [scnRef, po_id, pid, pickup_location || null, destination_warehouse_id || null,
-       crd || null, ccd || null, etd || null, eta || null, transport_mode || null, forwarder_name || null,
-       incoterms || null, null, req.user.id]
-    )
+      `INSERT INTO shipment_control_notes (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`, vals)
     const scnId = r.insertId
 
     // Update po_lines qty_assigned for each selected line.
@@ -918,22 +1171,51 @@ router.post('/:projectId/scn', async (req, res) => {
     // ── Off-PO variations (now in the SAME txn — retires the old 2-phase POST) ──
     // Each is a NEW item tied to a parent PO line (is_variation=1), then gets its own
     // scn_lines row so it's allocatable into packages. Validated against this project.
+    // Q3: a child inherits its parent PO line's identity (commodity/tag) + WBS snapshot
+    // at write (immutable). Blocked if the parent is unlinked or has no WBS. Gated on the
+    // child-stock columns being live (pre-migration → old behaviour, no inherit/block).
+    const childCols = await childStockColsLive()
     for (const v of variations) {
       const desc = (v.description || '').trim()
       const parentId = Number(v.parent_po_line_id) || null
       if (!desc) { await conn.rollback(); return res.status(422).json({ error: 'Each off-PO variation needs a description.' }) }
       if (!parentId) { await conn.rollback(); return res.status(422).json({ error: 'Each off-PO variation must name its parent PO line.' }) }
+      // Fetch the parent line's identity + WBS snapshot (for the block guard + inheritance).
       const [[pl]] = await conn.query(
-        'SELECT pl.id FROM po_lines pl JOIN purchase_orders p ON p.id=pl.po_id WHERE pl.id=? AND p.project_id=?',
+        'SELECT pl.id, pl.line_number, pl.commodity_id, pl.equipment_tag, pl.tag_number, pl.wbs_code_snapshot FROM po_lines pl JOIN purchase_orders p ON p.id=pl.po_id WHERE pl.id=? AND p.project_id=?',
         [parentId, pid]
       )
       if (!pl) { await conn.rollback(); return res.status(404).json({ error: `Parent PO line ${parentId} not found in this project` }) }
+
+      // ── BLOCK-ON-UNLINKED (Q3, only when child-stock is live) ──
+      // A child must inherit a real identity + WBS to become tracked stock, so the
+      // parent must be linked (commodity/tag) AND have a WBS. Name the missing field.
+      if (childCols) {
+        const linked = pl.commodity_id != null || (pl.equipment_tag || '').trim() || (pl.tag_number || '').trim()
+        if (!linked) {
+          await conn.rollback()
+          return res.status(422).json({ error: `Cannot add off-PO item under line ${pl.line_number}: that line has no commodity/tag link — link a commodity or equipment tag to it first.` })
+        }
+        if (!(pl.wbs_code_snapshot || '').trim()) {
+          await conn.rollback()
+          return res.status(422).json({ error: `Cannot add off-PO item under line ${pl.line_number}: that line has no WBS — set its WBS first.` })
+        }
+      }
+
       const vqty = Number(v.qty) || 0
-      const [ai] = await conn.query(
-        `INSERT INTO scn_additional_items (scn_id, parent_po_line_id, is_variation, description, qty, uom, notes, created_by)
-         VALUES (?,?,1,?,?,?,?,?)`,
-        [scnId, parentId, desc, vqty || null, v.uom || 'EA', v.notes || null, req.user.id]
-      )
+      const rosDate = (v.ros_date || '').trim() || null   // user-supplied, NOT inherited
+      const [ai] = childCols
+        ? await conn.query(
+            `INSERT INTO scn_additional_items
+               (scn_id, parent_po_line_id, is_variation, description, qty, uom, notes, created_by,
+                commodity_id, equipment_tag, tag_number, wbs_code_snapshot, ros_date)
+             VALUES (?,?,1,?,?,?,?,?,?,?,?,?,?)`,
+            [scnId, parentId, desc, vqty || null, v.uom || 'EA', v.notes || null, req.user.id,
+             pl.commodity_id ?? null, pl.equipment_tag ?? null, pl.tag_number ?? null, pl.wbs_code_snapshot ?? null, rosDate])
+        : await conn.query(
+            `INSERT INTO scn_additional_items (scn_id, parent_po_line_id, is_variation, description, qty, uom, notes, created_by)
+             VALUES (?,?,1,?,?,?,?,?)`,
+            [scnId, parentId, desc, vqty || null, v.uom || 'EA', v.notes || null, req.user.id])
       const [sl] = await conn.query(
         'INSERT INTO scn_lines (scn_id, additional_item_id, qty, uom) VALUES (?,?,?,?)',
         [scnId, ai.insertId, vqty, v.uom || 'EA']
@@ -953,18 +1235,10 @@ router.post('/:projectId/scn', async (req, res) => {
     // ── Heat/Lot P1: record the shipment's declared heats (additive) ──
     // Optional — an empty list is fine (heats may be unknown at SCN creation).
     // The receipting dropdown (P2) reads these scoped by scn_id. source='declared'.
-    for (const h of heats) {
-      const heatNo = (h.heat_number || '').trim()
-      if (!heatNo) continue
-      await conn.query(
-        `INSERT INTO scn_heats (scn_id, heat_number, material_grade, mill_cert_ref, source, po_line_id, created_by)
-         VALUES (?,?,?,?,'declared',?,?)`,
-        [scnId, heatNo,
-         (h.material_grade || '').trim() || null,
-         (h.mill_cert_ref || '').trim() || null,
-         h.po_line_id || null, req.user.id]
-      )
-    }
+    // NOTE: heats are inserted AFTER the package loop (below) so a heat's optional
+    // package_ref can resolve to a real scn_packages.id at INSERT time. scn_heats is
+    // append-only (qmat_app has no UPDATE grant), so package_id must be set on insert,
+    // never via a later UPDATE.
 
     // ── Persist packages declared in the wizard (one row per physical package) ──
     // Previously the wizard collected packages but the create endpoint dropped them,
@@ -973,20 +1247,59 @@ router.post('/:projectId/scn', async (req, res) => {
     const num = v => (v == null || v === '') ? null : Number(v)
     let pkgNum = 0, contentRows = 0
     const allocated = {}   // line_ref → running total packed across all packages (D3 cap)
-    const insertPkg = async (p, n) => {
+    // Q2 hierarchy: a package may carry a client `ref` and a `parent_ref` (the ref of
+    // its container). parent_package_id is persisted ONLY when parent_ref is present —
+    // so flat payloads never touch the new column (deploy-safe pre-migration).
+    const insertPkg = async (p, n, parentId) => {
+      const cols = ['scn_id', 'package_number', 'description', 'length_mm', 'width_mm', 'height_mm', 'gross_weight_kg', 'is_dangerous_goods']
+      const vals = [scnId, String(n).padStart(2, '0'), (p.type || '').trim() || null,
+        num(p.length), num(p.width), num(p.height), num(p.weight), p.is_dg ? 1 : 0]
+      if (parentId != null) { cols.push('parent_package_id'); vals.push(parentId) }   // ⚠ needs the migration applied
+      // Q4: persist the container type when declared. Value-gated like parent_package_id
+      // so flat/Q2 payloads never touch the new column (deploy-safe pre migrate-containers).
+      if (p.container_type_id != null && p.container_type_id !== '') { cols.push('container_type_id'); vals.push(Number(p.container_type_id)) }
+      // D5.1: optional container_no at creation (plain, value-gated).
+      if (p.container_no != null && String(p.container_no).trim() !== '') { cols.push('container_no'); vals.push(String(p.container_no).trim()) }
       const [pr] = await conn.query(
-        `INSERT INTO scn_packages (scn_id, package_number, description, length_mm, width_mm, height_mm, gross_weight_kg, is_dangerous_goods)
-         VALUES (?,?,?,?,?,?,?,?)`,
-        [scnId, String(n).padStart(2, '0'), (p.type || '').trim() || null,
-         num(p.length), num(p.width), num(p.height), num(p.weight), p.is_dg ? 1 : 0])
-      return pr.insertId
+        `INSERT INTO scn_packages (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`, vals)
+      const packageId = pr.insertId
+      // D5.1: optional seal_no at creation → routes through the SAME governance as the
+      // post-creation paths (setSealNo: set-once, reasoned, atomic audit; container-only
+      // enforced inside). In-txn → a seal/audit failure rolls back the whole SCN create.
+      if (p.seal_no != null && String(p.seal_no).trim() !== '') {
+        await setSealNo(conn, { packageId, scnId, newSeal: p.seal_no, reason: p.seal_reason,
+          userId: req.user.id, resource: (req.originalUrl || '').split('?')[0].replace(/^\/api(?=\/)/, ''), ip: req.ip, projectId: pid })
+      }
+      return packageId
     }
+
+    // ── HIERARCHY RULES (Q2 leaf-only EXTENDED to Q4 three-level typed) — payload-level,
+    //    the create txn is the ONLY write path into scn_packages/scn_package_lines
+    //    (census-confirmed), so this is complete. The verdict is computed by the pure
+    //    validatePackageHierarchy() (defined + exported below); a reject rolls back BEFORE
+    //    any insert, so the reject path never touches parent_package_id/container_type_id. ──
+    const hierarchyVerdict = validatePackageHierarchy(packages)
+    if (!hierarchyVerdict.ok) {
+      await conn.rollback()
+      return res.status(422).json({ error: hierarchyVerdict.error })
+    }
+
+    // ── Persist packages. Contract: parents appear BEFORE their children in the payload
+    //    (so parent ids resolve single-pass); the wizard guarantees this ordering. ──
+    const refToPkgId = {}   // client ref → inserted scn_packages.id
     for (const p of (packages || [])) {
+      const parentRef = (p.parent_ref != null && p.parent_ref !== '') ? String(p.parent_ref) : null
+      if (parentRef && refToPkgId[parentRef] === undefined) {
+        await conn.rollback()
+        return res.status(422).json({ error: `Package parent "${parentRef}" must be listed before its sub-packages.` })
+      }
+      const parentId = parentRef ? refToPkgId[parentRef] : null
       const contents = (p.contents || []).filter(c => c && c.line_ref && Number(c.qty) > 0)
       if (contents.length) {
-        // Itemized package = ONE physical box (qty forced to 1); record its contents.
+        // Itemized package (a leaf) = ONE physical box; record its contents.
         pkgNum++
-        const packageId = await insertPkg(p, pkgNum)
+        const packageId = await insertPkg(p, pkgNum, parentId)
+        if (p.ref != null) refToPkgId[String(p.ref)] = packageId
         for (const c of contents) {
           const ref = c.line_ref
           const scnLineId = refToScnLineId[ref]
@@ -1002,10 +1315,15 @@ router.post('/:projectId/scn', async (req, res) => {
             [packageId, scnLineId, q, c.uom || null])
           contentRows++
         }
+      } else if (p.ref != null || parentId != null) {
+        // A container or an empty leaf that participates in the hierarchy → ONE row.
+        pkgNum++
+        const id = await insertPkg(p, pkgNum, parentId)
+        if (p.ref != null) refToPkgId[String(p.ref)] = id
       } else {
-        // Non-itemized: a "qty N" row expands into N numbered package rows (legacy behaviour).
+        // Non-itemized flat package: a "qty N" row expands into N numbered rows (legacy).
         const count = Math.min(500, Math.max(1, Math.floor(Number(p.qty) || 1)))
-        for (let k = 0; k < count; k++) { pkgNum++; await insertPkg(p, pkgNum) }
+        for (let k = 0; k < count; k++) { pkgNum++; await insertPkg(p, pkgNum, null) }
       }
     }
     if (pkgNum > 0) {
@@ -1015,6 +1333,37 @@ router.post('/:projectId/scn', async (req, res) => {
            total_weight_kg = (SELECT COALESCE(SUM(gross_weight_kg),0) FROM scn_packages WHERE scn_id=?)
          WHERE id = ?`, [scnId, scnId, scnId])
     }
+
+    // ── Heat/Lot P1: record the shipment's declared heats (additive) — INSERTED HERE,
+    //    after packages, so a heat's optional package_ref resolves to a real package id at
+    //    insert time (scn_heats is append-only — no post-insert UPDATE). The receipting
+    //    dropdown (P2) reads these scoped by scn_id; source='declared'. ──
+    const heatPkgColLive = await scnHeatPackageColLive()   // 3a: include package_id only when live
+    for (const h of heats) {
+      const heatNo = (h.heat_number || '').trim()
+      if (!heatNo) continue
+      const hcols = ['scn_id', 'heat_number', 'material_grade', 'mill_cert_ref', 'source', 'po_line_id', 'created_by']
+      const hvals = [scnId, heatNo, (h.material_grade || '').trim() || null, (h.mill_cert_ref || '').trim() || null,
+        'declared', h.po_line_id || null, req.user.id]
+      if (heatPkgColLive && h.package_ref != null && h.package_ref !== '' && refToPkgId[String(h.package_ref)] != null) {
+        hcols.push('package_id'); hvals.push(refToPkgId[String(h.package_ref)])
+      }
+      await conn.query(
+        `INSERT INTO scn_heats (${hcols.join(', ')}) VALUES (${hcols.map(() => '?').join(',')})`, hvals)
+    }
+
+    // Seed the SCN's Timeline with its creation event: an scn_status_log row matching the
+    // shape the Logistics status route writes (scn_id, from_status, to_status, changed_by,
+    // notes). 'pending_pickup' is the display status of a freshly-created 'draft' SCN — so
+    // the Timeline starts at creation instead of being empty until a later status/date edit.
+    // In-txn (a committed SCN always carries its creation event) but NON-FATAL — a failure
+    // here must not break SCN creation (mirrors the robustness of the create's direct inserts).
+    try {
+      await conn.query(
+        `INSERT INTO scn_status_log (scn_id, from_status, to_status, changed_by, notes)
+         VALUES (?,?,?,?,?)`,
+        [scnId, null, 'pending_pickup', req.user.id, 'SCN created'])
+    } catch (e) { console.error('[scn:create] timeline seed (non-fatal):', e.message) }
 
     // Commit 2: project-scoped audit of the SCN creation + line assignments (in-txn).
     await conn.query(
@@ -1029,6 +1378,7 @@ router.post('/:projectId/scn', async (req, res) => {
     res.status(201).json({ id: scnId, scn_ref: scnRef, status: 'draft' })
   } catch (e) {
     await conn.rollback()
+    if (e instanceof SealGovernanceError) return res.status(e.status).json({ error: e.message })   // D5.1: governed seal reject → clean 4xx
     console.error('[scn:create]', e.message)
     dbError(res, e)
   } finally {
@@ -1075,11 +1425,53 @@ router.post('/:projectId/scn/:scnId/variation', async (req, res) => {
   }
 })
 
+// ─── EDIT CONTAINER IDENTIFIERS (container_no / seal_no) — Q4.3 ────────────────
+// Both Expediting and Logistics can set a container's number/seal. seal_no is GOVERNED
+// (set-once + reasoned, audited re-seal — atomic) via the SHARED lib/sealGovernance so
+// the two modules cannot drift; container_no is free-edit. The whole edit runs in ONE
+// transaction so the seal change and its audit row commit/rollback together.
+// Body: { container_no?, seal_no?, seal_reason? }. seal_reason is required only when
+// CHANGING an existing seal (enforced inside setSealNo).
+router.put('/:projectId/scn/:scnId/packages/:packageId/identifiers', async (req, res) => {
+  const pid = Number(req.params.projectId)
+  const scnId = Number(req.params.scnId)
+  const packageId = Number(req.params.packageId)
+  const { container_no, seal_no, seal_reason } = req.body
+  const resource = (req.originalUrl || '').split('?')[0].replace(/^\/api(?=\/)/, '')
+  const conn = await db.getConnection()
+  try {
+    await conn.beginTransaction()
+    // Package must belong to an SCN in THIS project (project-scope check the shared lib
+    // can't do). The container-only rule is enforced inside setSealNo/setContainerNo
+    // (the single governance point), so it isn't duplicated here.
+    const [[pkg]] = await conn.query(
+      `SELECT sp.id FROM scn_packages sp
+       JOIN shipment_control_notes s ON s.id = sp.scn_id
+       WHERE sp.id=? AND sp.scn_id=? AND s.project_id=?`, [packageId, scnId, pid])
+    if (!pkg) { await conn.rollback(); return res.status(404).json({ error: 'Container not found on this SCN in this project.' }) }
+
+    const out = {}
+    if (container_no !== undefined) out.container_no = await setContainerNo(conn, { packageId, scnId, newContainerNo: container_no, userId: req.user.id, resource, ip: req.ip, projectId: pid })
+    if (seal_no !== undefined)      out.seal_no      = await setSealNo(conn,      { packageId, scnId, newSeal: seal_no, reason: seal_reason, userId: req.user.id, resource, ip: req.ip, projectId: pid })
+
+    await conn.commit()
+    const [[fresh]] = await db.query('SELECT id, container_no, seal_no FROM scn_packages WHERE id=?', [packageId])
+    res.json({ ...fresh, result: out })
+  } catch (e) {
+    await conn.rollback()
+    if (e instanceof SealGovernanceError) return res.status(e.status).json({ error: e.message })
+    console.error('[scn:identifiers]', e.message)
+    dbError(res, e)
+  } finally { conn.release() }
+})
+
 // ─── VDRL PO LIST ─────────────────────────────────────────────
 // Returns locked POs that have VDRL packages, with doc counts and progress.
 router.get('/:projectId/vdrl/po-list', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
+    if (vendorWithoutSupplier(req)) return res.json([])
+    const v = isVendor(req) ? vendorSupplier(req) : null   // P2d: own supplier's POs only
     const [rows] = await db.query(`
       SELECT
         po.id, po.po_number, po.po_name, po.vendor_name,
@@ -1091,10 +1483,10 @@ router.get('/:projectId/vdrl/po-list', async (req, res) => {
       FROM purchase_orders po
       JOIN vdrl_packages pkg ON pkg.po_id = po.id AND pkg.project_id = ?
       LEFT JOIN vdrl_documents d ON d.package_id = pkg.id
-      WHERE po.project_id = ? AND po.is_locked = 1
+      WHERE po.project_id = ? AND po.is_locked = 1${v ? v.sql : ''}
       GROUP BY po.id
       ORDER BY po.po_number
-    `, [pid, pid])
+    `, [pid, pid, ...(v ? v.params : [])])
     // ─── CAST NUMERIC FIELDS ──────────────────────────────────────
     // MySQL node driver returns COUNT/SUM columns as strings; cast to
     // numbers here so the frontend reduce() sums correctly.
@@ -1108,7 +1500,7 @@ router.get('/:projectId/vdrl/po-list', async (req, res) => {
         ? Math.round((parseInt(r.submitted_count) || 0) / (parseInt(r.total_docs) || 1) * 100)
         : 0,
     }))
-    res.json(cast)
+    res.json(v ? cast.map(vendorView.vdrlPoRow) : cast)
   } catch (e) { console.error(e); dbError(res, e) }
 })
 
@@ -1239,119 +1631,100 @@ router.get('/:projectId/vdrl/template', async (req, res) => {
 })
 
 // ─── VDRL UPLOAD ──────────────────────────────────────────────
-// Parses an uploaded .xlsx file and imports VDRL documents.
-// Supports ?dryRun=true for preview without writing to DB.
+// Imports VDRL documents from the downloaded template (or any sheet with a 'PO Reference' header
+// in its first 10 rows). ?dryRun=true runs every check and writes nothing. The real upload runs
+// the same checks first and refuses the whole file on any error (400, naming the rows), then
+// writes packages and documents in one transaction. Checks: server/lib/vdrlImport.js.
 const uploadVDRL = require('multer')({
   storage: require('multer').memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: fileFilter('spreadsheet'),
 })
 
-router.post('/:projectId/vdrl/upload', uploadVDRL.single('file'), async (req, res) => {
+// The lookups the checks need: the project's locked POs among the file's references, and the
+// document numbers already in each PO's package (the package the import uses: the lowest id).
+async function vdrlLookups(pid, refs) {
+  if (!refs.length) return { pos: new Map(), existingDocs: new Set() }
+  const [poRows] = await db.query(
+    `SELECT id, po_number, po_name FROM purchase_orders WHERE project_id=? AND is_locked=1 AND po_number IN (${refs.map(() => '?').join(',')})`,
+    [pid, ...refs])
+  const pos = new Map()
+  for (const p of poRows) if (!pos.has(normKey(p.po_number))) pos.set(normKey(p.po_number), p)
+  const existingDocs = new Set()
+  if (poRows.length) {
+    const [docs] = await db.query(
+      `SELECT p.po_id, d.doc_number FROM vdrl_documents d JOIN vdrl_packages p ON p.id = d.package_id
+        WHERE p.project_id=? AND p.id IN (SELECT MIN(id) FROM vdrl_packages WHERE project_id=? AND po_id IN (${poRows.map(() => '?').join(',')}) GROUP BY po_id)`,
+      [pid, pid, ...poRows.map(p => p.id)])
+    for (const d of docs) if (d.doc_number) existingDocs.add(`${d.po_id}|${normKey(d.doc_number)}`)
+  }
+  return { pos, existingDocs }
+}
+
+router.post('/:projectId/vdrl/upload', refuseVendorWrites, uploadVDRL.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file provided' })
   const pid = Number(req.params.projectId)
   const dryRun = req.query.dryRun === 'true'
+  let conn
 
   try {
     const XLSX_LIB = require('xlsx')
-    const wb = XLSX_LIB.read(req.file.buffer, { type: 'buffer', cellDates: true })
-    const sheetName = wb.SheetNames.includes('VDRL Documents') ? 'VDRL Documents' : wb.SheetNames[0]
-    const ws = wb.Sheets[sheetName]
-    const rawRows = XLSX_LIB.utils.sheet_to_json(ws, { defval: null })
-
-    function norm(k) { return k.trim().toLowerCase().replace(/\s+/g, '_') }
-
-    const results = []
-    let created = 0, skipped = 0
-
-    for (const [idx, rawRow] of rawRows.entries()) {
-      const row = {}
-      for (const [k, v] of Object.entries(rawRow)) row[norm(k)] = v
-
-      const rowNum = idx + 3 // offset for header rows
-      const poRef  = String(row.po_reference || '').trim()
-      const pkgName = String(row.package_name || row.package || '').trim()
-      const docNum = String(row.doc_number || '').trim()
-      const title  = String(row.document_title || row.title || '').trim()
-      const docType = String(row.document_type || '').trim()
-
-      // Skip example rows
-      if (['CV-MDRA-001', 'CV-DWG-001', 'SS-CERT-001'].includes(docNum)) {
-        results.push({ row: rowNum, status: 'skip', message: 'Example row skipped', poRef, docNum })
-        skipped++; continue
-      }
-
-      // Skip blank rows
-      if (!poRef && !docNum && !title) { skipped++; continue }
-
-      // Validate PO reference
-      if (!poRef) { results.push({ row: rowNum, status: 'error', message: 'PO Reference is required', poRef, docNum }); continue }
-      const [[po]] = await db.query(
-        'SELECT id, po_name, vendor_name FROM purchase_orders WHERE po_number=? AND project_id=? AND is_locked=1',
-        [poRef, pid]
-      )
-      if (!po) { results.push({ row: rowNum, status: 'error', message: `PO ${poRef} not found or not approved`, poRef, docNum }); continue }
-
-      if (!title) { results.push({ row: rowNum, status: 'error', message: 'Document Title is required', poRef, docNum }); continue }
-
-      if (!dryRun) {
-        // Lookup or create package for this PO
-        const finalPkgName = pkgName || `${po.po_name || poRef} VDRL Package`
-        let [[pkg]] = await db.query('SELECT id FROM vdrl_packages WHERE po_id=? AND project_id=?', [po.id, pid])
-        if (!pkg) {
-          const [r] = await db.query(
-            'INSERT INTO vdrl_packages (project_id, po_id, name, status, created_by) VALUES (?,?,?,?,?)',
-            [pid, po.id, finalPkgName, 'active', req.user.id]
-          )
-          pkg = { id: r.insertId }
-        }
-
-        // Check for duplicate doc_number within this package
-        if (docNum) {
-          const [[dup]] = await db.query('SELECT id FROM vdrl_documents WHERE package_id=? AND doc_number=?', [pkg.id, docNum])
-          if (dup) {
-            results.push({ row: rowNum, status: 'skip', message: `Doc number ${docNum} already exists in this package`, poRef, docNum })
-            skipped++; continue
-          }
-        }
-
-        // Parse dd/mm/yyyy or ISO dates
-        const parseDate = (v) => {
-          if (!v) return null
-          if (v instanceof Date) return v.toISOString().slice(0, 10)
-          const s = String(v).trim()
-          if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) { const [d, m, y] = s.split('/'); return `${y}-${m}-${d}` }
-          const p = new Date(s); return isNaN(p.getTime()) ? null : p.toISOString().slice(0, 10)
-        }
-        const abfReq = ['y', 'yes', '1'].includes(String(row.abf_required || '').toLowerCase()) ? 1 : 0
-
-        await db.query(
-          `INSERT INTO vdrl_documents
-            (package_id, doc_number, title, doc_type, discipline, revision,
-             required_date, promised_date, status, abf_required, notes, created_by)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-          [pkg.id, docNum || null, title, docType || null,
-           row.discipline || null, row.revision || 'R0',
-           parseDate(row.required_date), parseDate(row.promised_date),
-           'Not submitted', abfReq, row.notes || null, req.user.id]
-        )
-        created++
-      }
-
-      results.push({ row: rowNum, status: 'ok', message: 'Ready to import', poRef, docNum, title, docType })
-    }
-
+    const sheet = readVdrlSheet(req.file.buffer, req.file.originalname, XLSX_LIB)
+    if (sheet.error) return res.status(400).json({ error: sheet.error })
+    const refs = [...new Set(sheet.rows.map(r => String(r.cells.po_reference ?? '').trim()).filter(Boolean))]
+    const { results, total, skipped, toImport } = checkVdrlRows({ rows: sheet.rows, ...(await vdrlLookups(pid, refs)), XLSX: XLSX_LIB })
     const hasErrors = results.some(r => r.status === 'error')
-    res.json({
-      total: rawRows.length,
-      created: dryRun ? 0 : created,
-      skipped,
-      errors: results.filter(r => r.status === 'error'),
-      preview: results.slice(0, 15),
-      hasErrors,
-      dryRun,
+    const shown = r => ({ row: r.row, status: r.status, message: r.message, poRef: r.poRef, docNum: r.docNum, title: r.title, docType: r.docType })
+    const body = (created, skippedCount) => ({
+      total, created, skipped: skippedCount,
+      errors: results.filter(r => r.status === 'error').map(shown),
+      preview: results.slice(0, 15).map(shown),
+      hasErrors, dryRun,
+      rows: results.map(r => ({ row: r.row, status: r.status, poRef: r.poRef, docNum: r.docNum, errors: r.errors, warnings: r.warnings })),
     })
-  } catch (e) { console.error(e); dbError(res, e) }
+    if (dryRun) return res.json(body(0, skipped))
+    if (hasErrors) return res.status(400).json(vdrlRefusal(results))
+
+    conn = await db.getConnection()
+    await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+    await conn.beginTransaction()
+    const pkgOf = new Map()   // po id → package id
+    let created = 0, skippedNow = skipped
+    for (const r of toImport) {
+      let pkgId = pkgOf.get(r.poId)
+      if (!pkgId) {
+        const [[pkg]] = await conn.query('SELECT id FROM vdrl_packages WHERE po_id=? AND project_id=? ORDER BY id LIMIT 1', [r.poId, pid])
+        if (pkg) pkgId = pkg.id
+        else {
+          const [ins] = await conn.query(
+            'INSERT INTO vdrl_packages (project_id, po_id, name, status, created_by) VALUES (?,?,?,?,?)',
+            [pid, r.poId, r.pkgName || `${r.poName || r.poRef} VDRL Package`, 'active', req.user.id])
+          pkgId = ins.insertId
+        }
+        pkgOf.set(r.poId, pkgId)
+      }
+      if (r.docNum) {   // added since the check (another upload): skipped, as before
+        const [[dup]] = await conn.query('SELECT id FROM vdrl_documents WHERE package_id=? AND doc_number=?', [pkgId, r.docNum])
+        if (dup) { skippedNow++; continue }
+      }
+      await conn.query(
+        `INSERT INTO vdrl_documents
+          (package_id, doc_number, title, doc_type, discipline, revision,
+           required_date, promised_date, status, abf_required, notes, created_by)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [pkgId, r.docNum || null, r.title, r.docType || null, r.discipline, r.revision,
+         r.requiredDate, r.promisedDate, 'Not submitted', r.abf, r.notes, req.user.id])
+      created++
+    }
+    await conn.commit()
+    res.json(body(created, skippedNow))
+  } catch (e) {
+    if (conn) { try { await conn.rollback() } catch (_) { /* already rolled back */ } }
+    if (e.http) return res.status(e.http).json({ error: e.message })
+    console.error(e); dbError(res, e)
+  } finally {
+    if (conn) conn.release()
+  }
 })
 
 // ─── ITP CRUD ─────────────────────────────────────────────────
@@ -1584,4 +1957,48 @@ router.put('/:projectId/po/:poId/lines/:lineId/heat-number', async (req, res) =>
   }
 })
 
+// ─── PACKAGE HIERARCHY GUARD (Q2 leaf-only EXTENDED to Q4 three-level typed) ───
+// Pure verdict function (no DB/no res) — the SCN-create txn calls it before any insert,
+// so a reject never touches parent_package_id/container_type_id (provable pre-migration).
+// Exported so the Q4.2 proof harness exercises THIS exact code (no drifting copy).
+//   Model: container (typed: container_type_id set) → sub-package → items.
+//     • A container MUST be top-level (no parent_ref) and hold NO items; it only parents sub-packages.
+//     • A nested package's parent must exist, be top-level, and be a container — enforcing the
+//       depth-3 cap (no container-in-container; no sub-package under a sub-package).
+//     • A loose top-level package (untyped, no parent) may hold items directly (mixed shipment).
+// Returns { ok:true } or { ok:false, error } (caller maps !ok → 422).
+function validatePackageHierarchy (packages) {
+  const list = packages || []
+  const isTypedContainer = q => q && q.container_type_id != null && q.container_type_id !== ''
+  const hasParentRef     = q => q && q.parent_ref != null && q.parent_ref !== ''
+  const byRef = new Map()
+  list.forEach(p => { if (p.ref != null && p.ref !== '') byRef.set(String(p.ref), p) })
+  const containerRefs = new Set()
+  list.forEach(p => { if (hasParentRef(p)) containerRefs.add(String(p.parent_ref)) })
+  for (const p of list) {
+    const myRef = p.ref != null ? String(p.ref) : ''
+    const isReferencedAsParent = myRef !== '' && containerRefs.has(myRef)
+    const hasContents = (p.contents || []).some(c => c && c.line_ref && Number(c.qty) > 0)
+
+    // (Q4) A typed container is top-level and items-free; it only parents sub-packages.
+    if (isTypedContainer(p)) {
+      if (hasParentRef(p)) return { ok: false, error: `Package "${(p.type || myRef)}" is a container and must be top-level — a container cannot be nested inside another package.` }
+      if (hasContents)     return { ok: false, error: `Package "${(p.type || myRef)}" is a container and cannot hold items directly — allocate items to its sub-packages.` }
+    }
+    // (Q2, retained) A package that parents others must not also hold items directly.
+    if (isReferencedAsParent && hasContents) return { ok: false, error: `Package "${(p.type || myRef)}" holds sub-packages and cannot hold items directly — allocate items to its sub-packages.` }
+    // (Q4) A nested package's parent must exist, be top-level, and be a container.
+    //      Parent-with-a-parent ⇒ depth-4 (reject); parent-not-a-container ⇒ invalid nest.
+    if (hasParentRef(p)) {
+      const parent = byRef.get(String(p.parent_ref))
+      if (!parent || parent === p) return { ok: false, error: `Package parent_ref "${p.parent_ref}" does not match any package in this shipment.` }
+      if (hasParentRef(parent))    return { ok: false, error: `Package "${(p.type || myRef)}" exceeds the 3-level limit (container → sub-package → items) — sub-packages cannot be nested under other sub-packages.` }
+      if (!isTypedContainer(parent)) return { ok: false, error: `Package "${(p.type || myRef)}" must be nested under a container — its parent "${p.parent_ref}" is not a container.` }
+    }
+  }
+  return { ok: true }
+}
+
 module.exports = router
+module.exports.validatePackageHierarchy = validatePackageHierarchy
+module.exports.resolveDelegation = resolveDelegation   // D3 proofs

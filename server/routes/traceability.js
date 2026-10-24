@@ -16,19 +16,37 @@ router.use(require('../middleware/permissions').denyReadOnly) // C-a: viewer/aud
 router.use(require('../middleware/permissions').enforce('traceability')) // C-b2: upload=supplier/expeditor (can_create); verify/reject=materials_engineer (can_approve)
 router.param('projectId', require('../middleware/permissions').requireProjectScope) // Stage 1: external roles WBS-scoped to granted projects
 
+// ─── VENDOR SCOPE (P2e) ───────────────────────────────────────
+// Vendors see and upload only certificates on their own supplier's POs (req.user.supplier_id,
+// set from the users row by the external gate); certificates with no po_id are invisible.
+// Internal roles are unchanged: every vendor fragment below is empty for them.
+const vendorView = require('../lib/vendorView')
+const { EXTERNAL_ROLES } = require('../middleware/permissions')
+const VENDOR_VERSION_STATUSES = ['pending', 'overdue', 'rejected']
+const isVendor = req => req.user?.role === 'vendor'
+// "<col> IN (the vendor's POs in the project)", or 1=0 without a supplier.
+function vendorPoScope(req, pid, col = 'po_id') {
+  if (req.user.supplier_id == null) return { sql: ' AND 1=0', params: [] }
+  return { sql: ` AND ${col} IN (SELECT id FROM purchase_orders WHERE supplier_id = ? AND project_id = ?)`, params: [Number(req.user.supplier_id), Number(pid)] }
+}
+// P2g: a vendor sees its own certificates of these categories (an explicit list; the rejection reasons and
+// verifier names live on 'approval' certificates). Internal roles keep category='vdrl'.
+const VENDOR_CERT_CATEGORIES = "category IN ('vdrl','approval')"
+// The vendor's certificate row (vendorView.certRow): verified_by is the verifier's name.
+const VENDOR_CERT_SELECT = `SELECT c.id AS cert_id, c.po_ref, c.document_name, c.cert_type, c.heat_ref, c.applies_to, c.tag,
+         c.is_required, c.file_name, c.status,
+         DATE_FORMAT(c.issue_date, '%Y-%m-%d') AS issue_date, DATE_FORMAT(c.due_date, '%Y-%m-%d') AS due_date,
+         DATE_FORMAT(c.received_date, '%Y-%m-%d') AS received_date, DATE_FORMAT(c.uploaded_date, '%Y-%m-%d') AS uploaded_date,
+         DATE_FORMAT(c.verified_date, '%Y-%m-%d') AS verified_date, vu.full_name AS verified_by, c.reject_reason
+       FROM traceability_certs c LEFT JOIN users vu ON vu.id = c.verified_by`
+
 // ─── UPLOAD STORAGE ───────────────────────────────────────────
 // Cert files land in uploads/traceability. 25 MB cap matches the
 // foundational cert uploader.
 const uploadDir = path.join(__dirname, '../uploads/traceability')
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => {
-    fs.mkdirSync(uploadDir, { recursive: true })
-    cb(null, uploadDir)
-  },
-  filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9.\-]+/g, '_')}`),
-})
+const blobStore = require('../lib/blobStore')   // blob migration
 const { fileFilter } = require('../utils/upload')
-const upload = multer({ storage, limits: { fileSize: 25 * 1024 * 1024 }, fileFilter: fileFilter('document') })
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 }, fileFilter: fileFilter('document') })
 
 // ─── AUDIT HELPER ─────────────────────────────────────────────
 // Mirrors the writeAudit used across the other route files.
@@ -64,20 +82,28 @@ const today = () => new Date().toISOString().slice(0, 10)
 router.get('/:projectId/summary', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
+    const v = isVendor(req) ? vendorPoScope(req, pid) : null   // P2e: the vendor's own POs only
+    const cat = v ? VENDOR_CERT_CATEGORIES : "category='vdrl'"   // P2g: vendors count both categories
     const [[counts]] = await db.query(
       `SELECT
-         SUM(category='vdrl' AND status IN ('received','verified')) AS vdrl_received,
-         SUM(category='vdrl' AND status='pending')                  AS vdrl_pending,
-         SUM(category='vdrl' AND status='overdue')                  AS vdrl_overdue
-       FROM traceability_certs WHERE project_id=?`, [pid])
-    const [[holds]] = await db.query(
-      `SELECT COUNT(*) AS active_holds FROM traceability_holds WHERE project_id=? AND status='active'`, [pid])
-    res.json({
+         SUM(${cat} AND status IN ('received','verified')) AS vdrl_received,
+         SUM(${cat} AND status='pending')                  AS vdrl_pending,
+         SUM(${cat} AND status='overdue')                  AS vdrl_overdue
+       FROM traceability_certs WHERE project_id=?${v ? v.sql : ''}`, [pid, ...(v ? v.params : [])])
+    // Holds link to certificates (related_cert_id); for vendors only holds on their own certificates.
+    const [[holds]] = v
+      ? await db.query(
+        `SELECT COUNT(*) AS active_holds FROM traceability_holds h JOIN traceability_certs c ON c.id = h.related_cert_id
+         WHERE h.project_id=? AND h.status='active'${vendorPoScope(req, pid, 'c.po_id').sql}`, [pid, ...v.params])
+      : await db.query(
+        `SELECT COUNT(*) AS active_holds FROM traceability_holds WHERE project_id=? AND status='active'`, [pid])
+    const body = {
       vdrl_received: Number(counts.vdrl_received) || 0,
       vdrl_pending:  Number(counts.vdrl_pending)  || 0,
       vdrl_overdue:  Number(counts.vdrl_overdue)  || 0,
       active_holds:  Number(holds.active_holds)   || 0,
-    })
+    }
+    res.json(v ? vendorView.certSummary(body) : body)
   } catch (e) {
     res.status(500).json({ error: 'Could not load traceability summary: ' + e.message })
   }
@@ -91,7 +117,7 @@ router.get('/:projectId/vdrl', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
     const { status = 'all', q } = req.query
-    const conds = ['project_id=?', "category='vdrl'"]
+    const conds = ['project_id=?', isVendor(req) ? VENDOR_CERT_CATEGORIES : "category='vdrl'"]   // P2g: vendors list both categories
     const params = [pid]
 
     if (status === 'received') conds.push("status IN ('received','verified')")
@@ -102,6 +128,16 @@ router.get('/:projectId/vdrl', async (req, res) => {
       const like = `%${q.trim()}%`
       conds.push('(po_ref LIKE ? OR vendor_name LIKE ? OR tag LIKE ? OR document_name LIKE ?)')
       params.push(like, like, like, like)
+    }
+
+    if (isVendor(req)) {   // P2e: the vendor's own POs only, projected
+      const v = vendorPoScope(req, pid)
+      const [vrows] = await db.query(
+        `${VENDOR_CERT_SELECT}
+         WHERE c.id IN (SELECT id FROM traceability_certs WHERE ${conds.join(' AND ')}${v.sql})
+         ORDER BY FIELD(c.status,'overdue','pending','received','verified','rejected'), c.due_date`,
+        [...params, ...v.params])
+      return res.json({ data: vrows.map(vendorView.certRow) })
     }
 
     const [rows] = await db.query(
@@ -127,6 +163,20 @@ router.get('/:projectId/cert/:certId', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
     const certId = Number(req.params.certId)
+    if (isVendor(req)) {   // P2e: only a certificate on the vendor's own PO; projected
+      const v = vendorPoScope(req, pid)
+      const [[vc]] = await db.query(
+        `${VENDOR_CERT_SELECT} WHERE c.id IN (SELECT id FROM traceability_certs WHERE id=? AND project_id=?${v.sql})`,
+        [certId, pid, ...v.params])
+      if (!vc) return res.status(404).json({ error: 'Certificate not found' })
+      const [vversions] = await db.query(
+        `SELECT id, rev, heat_ref, applies_to, file_name, status,
+                DATE_FORMAT(created_date, '%Y-%m-%d')  AS uploaded_date,
+                verified_by_name AS verified_by,
+                DATE_FORMAT(verified_date, '%Y-%m-%d') AS verified_date
+         FROM traceability_cert_versions WHERE cert_id=? ORDER BY rev`, [certId])
+      return res.json({ cert: vendorView.certRow(vc), versions: vversions.map(vendorView.certVersion) })
+    }
     const [[cert]] = await db.query(
       `SELECT id, po_ref, vendor_name, tag, document_name, cert_type, item_scope,
               heat_ref, applies_to, file_name, file_size, status, priority, verified_by,
@@ -168,11 +218,39 @@ router.post('/:projectId/cert', upload.single('file'), async (req, res) => {
     if (!heat_ref || !heat_ref.trim()) return res.status(422).json({ error: 'Heat / batch / ref number is required' })
     if (!req.file) return res.status(422).json({ error: 'A certificate file is required' })
 
+    // P2e: a vendor uploads only against a requirement on its own PO in this project, or ad hoc
+    // for its own PO (po_ref and vendor_name then come from that PO) — checked before storing.
+    let vendorPo = null
+    if (isVendor(req)) {
+      if (req.user.supplier_id == null) return res.status(403).json({ error: 'Access denied' })
+      const v = vendorPoScope(req, pid)
+      if (document_requirement_id && Number(document_requirement_id)) {
+        const [[own]] = await db.query(`SELECT id, status FROM traceability_certs WHERE id=? AND project_id=?${v.sql}`,
+          [Number(document_requirement_id), pid, ...v.params])
+        if (!own) return res.status(403).json({ error: 'Access denied' })
+        // 3T130: a vendor fulfils a requirement only while it is pending, overdue or rejected.
+        if (!VENDOR_VERSION_STATUSES.includes(own.status)) {
+          return res.status(409).json({ error: `A certificate cannot be uploaded while the requirement is ${own.status}` })
+        }
+      } else {
+        if (!po_id) return res.status(422).json({ error: 'A PO is required' })
+        const [[po]] = await db.query('SELECT id, po_number, vendor_name FROM purchase_orders WHERE id=? AND project_id=? AND supplier_id=?',
+          [Number(po_id), pid, Number(req.user.supplier_id)])
+        if (!po) return res.status(403).json({ error: 'Access denied' })
+        vendorPo = po
+      }
+    }
+
     const fileName = req.file.originalname
     const fileSize = req.file.size
-    // Record WHERE the (already disk-saved) file lives so it can be streamed from
-    // the Document Inbox. Stored relative to the server root; never an abs path.
-    const filePath = path.relative(path.join(__dirname, '..'), req.file.path)
+    // Blob migration: persist to blob (key) or disk (legacy relative shape — unchanged).
+    const traceStoredName = `${Date.now()}-${req.file.originalname.replace(/[^a-zA-Z0-9.\-]+/g, '_')}`
+    const traceDiskAbs = path.join(uploadDir, traceStoredName)
+    const { value: filePath } = await blobStore.persist({
+      key: blobStore.keyFor('traceability', traceStoredName),
+      diskAbsPath: traceDiskAbs, buffer: req.file.buffer, contentType: req.file.mimetype,
+      diskValue: path.relative(path.join(__dirname, '..'), traceDiskAbs),
+    })
     const mimeType = req.file.mimetype
     const reqId = document_requirement_id && Number(document_requirement_id)
 
@@ -204,7 +282,8 @@ router.post('/:projectId/cert', upload.single('file'), async (req, res) => {
             heat_ref, applies_to, issue_date, file_name, file_size, status, is_required,
             uploaded_by, uploaded_date, received_date, notes)
          VALUES (?, 'vdrl', ?, ?, ?, ?, ?, 'Certificate', ?, ?, ?, ?, ?, 'received', 0, ?, NOW(), ?, ?)`,
-        [pid, po_id || null, po_ref || null, vendor_name || null, tag || null,
+        [pid, vendorPo ? vendorPo.id : (po_id || null), vendorPo ? vendorPo.po_number : (po_ref || null),
+         vendorPo ? vendorPo.vendor_name : (vendor_name || null), tag || null,
          document_name || 'Ad-hoc certificate', heat_ref.trim(), applies_to || null, issue_date || null,
          fileName, fileSize, uid, today(), notes || null])
       certId = r.insertId
@@ -228,6 +307,10 @@ router.post('/:projectId/cert', upload.single('file'), async (req, res) => {
         [filePath, mimeType, certId])
     }
 
+    if (isVendor(req)) {
+      const [[row]] = await db.query(`${VENDOR_CERT_SELECT} WHERE c.id=?`, [certId])
+      return res.status(201).json(vendorView.certRow(row))
+    }
     res.status(201).json({ ok: true, cert_id: certId })
   } catch (e) {
     res.status(500).json({ error: 'Could not upload certificate: ' + e.message })
@@ -238,7 +321,51 @@ router.post('/:projectId/cert', upload.single('file'), async (req, res) => {
 // ADD CERT VERSION — multipart
 // ═══════════════════════════════════════════════════════════════
 // POST /api/traceability/cert/:certId/version
-router.post('/cert/:certId/version', upload.single('file'), async (req, res) => {
+// P2e: routes keyed by a certificate id take the project from the certificate and apply the
+// project grant check requireProjectScope applies (internal roles pass without a query; the
+// handler answers an unknown id with 404 as before). Externals: 404 for an unknown certificate,
+// 403 without a grant; vendors also need the certificate on their own PO and, to add a version,
+// a pending, overdue or rejected status (409 otherwise) — checked before the upload is read.
+function certScope({ version }) {
+  return async (req, res, next) => {
+    const role = req.user?.role
+    if (!role) return res.status(401).json({ error: 'Not authenticated' })
+    if (role === 'admin' || !EXTERNAL_ROLES.has(role)) return next()
+    try {
+      const [[c]] = await db.query('SELECT project_id, po_id, status FROM traceability_certs WHERE id = ?', [Number(req.params.certId)])
+      if (!c) return res.status(404).json({ error: 'Certificate not found' })
+      const [grant] = await db.query('SELECT id FROM user_wbs_access WHERE user_id = ? AND project_id = ? LIMIT 1', [req.user.id, c.project_id])
+      if (!grant.length) return res.status(403).json({ error: 'No project access' })
+      if (role === 'vendor') {
+        if (req.user.supplier_id == null || c.po_id == null) return res.status(403).json({ error: 'Access denied' })
+        const [[po]] = await db.query('SELECT id FROM purchase_orders WHERE id = ? AND project_id = ? AND supplier_id = ?',
+          [c.po_id, c.project_id, Number(req.user.supplier_id)])
+        if (!po) return res.status(403).json({ error: 'Access denied' })
+        if (version && !VENDOR_VERSION_STATUSES.includes(c.status)) {
+          return res.status(409).json({ error: `A version cannot be added while the certificate is ${c.status}` })
+        }
+      }
+      next()
+    } catch (e) {
+      console.error('[traceability] certificate scope check failed:', e.message)
+      res.status(500).json({ error: 'Permission check failed' })
+    }
+  }
+}
+
+// Removes a file stored by blobStore.persist when recording it failed (blobStore has no
+// delete): disk → unlink; blob → deleteIfExists in the same container.
+async function removeStoredCertFile({ where, value, diskAbs }) {
+  try {
+    if (where === 'disk') { fs.unlinkSync(diskAbs); return }
+    const { BlobServiceClient } = require('@azure/storage-blob')
+    await BlobServiceClient.fromConnectionString(process.env.AZURE_STORAGE_CONNECTION_STRING)
+      .getContainerClient(blobStore.CONTAINER).getBlockBlobClient(value).deleteIfExists()
+  } catch (e) { console.error('[traceability] could not remove the stored file:', e.message) }
+}
+
+router.post('/cert/:certId/version', certScope({ version: true }), upload.single('file'), async (req, res) => {
+  let stored = null
   try {
     const uid = req.user?.id
     const certId = Number(req.params.certId)
@@ -253,17 +380,49 @@ router.post('/cert/:certId/version', upload.single('file'), async (req, res) => 
     const [[{ n }]] = await db.query(`SELECT COUNT(*) AS n FROM traceability_cert_versions WHERE cert_id=?`, [certId])
     const rev = String.fromCharCode(65 + n) // A, B, C…
 
+    // §15 (cd) fix (P2e): store the file as the first upload does (blob or disk, same limits).
+    const verStoredName = `${Date.now()}-${req.file.originalname.replace(/[^a-zA-Z0-9.\-]+/g, '_')}`
+    const verDiskAbs = path.join(uploadDir, verStoredName)
+    stored = { ...(await blobStore.persist({
+      key: blobStore.keyFor('traceability', verStoredName),
+      diskAbsPath: verDiskAbs, buffer: req.file.buffer, contentType: req.file.mimetype,
+      diskValue: path.relative(path.join(__dirname, '..'), verDiskAbs),
+    })), diskAbs: verDiskAbs }
+
     await db.query(
       `INSERT INTO traceability_cert_versions
          (cert_id, rev, heat_ref, applies_to, file_name, file_size, status, created_by, created_date)
        VALUES (?, ?, ?, ?, ?, ?, 'received', ?, NOW())`,
       [certId, rev, heat_ref.trim(), applies_to || null, req.file.originalname, req.file.size, uid])
 
+    // The certificate's file becomes this version (the versions table has no path column).
+    if (await fileColumnsReady('traceability_certs')) {
+      await db.query(`UPDATE traceability_certs SET file_name=?, file_size=?, file_path=?, mime_type=? WHERE id=?`,
+        [req.file.originalname, req.file.size, stored.value, req.file.mimetype, certId])
+    }
+    stored = null   // recorded: keep the file
+
+    // 3T130: a vendor's new version puts the certificate back to received for re-verification,
+    // with received_date as the first upload sets it (copied from POST /:projectId/cert's
+    // requirement branch: status='received', received_date=today(), and its date-change entry).
+    // Conditional on the statuses a vendor may add a version to, so a concurrent verification stands.
+    if (isVendor(req)) {
+      const [[prev]] = await db.query('SELECT received_date FROM traceability_certs WHERE id=?', [certId])
+      const [rcv] = await db.query(
+        `UPDATE traceability_certs SET status='received', received_date=? WHERE id=? AND status IN (?,?,?)`,
+        [today(), certId, ...VENDOR_VERSION_STATUSES])
+      if (rcv.affectedRows) {
+        await writeDateChange(uid, 'traceability_cert', certId, 'received_date', prev ? prev.received_date : null, today(),
+          'Cert received via version upload')
+      }
+    }
+
     await writeAudit(uid, 'cert_version_added', 'traceability_cert', certId, null,
       { rev, heat_ref: heat_ref.trim() }, `Version ${rev} added to ${cert.document_name}`, Number(req.params.projectId) || null)
 
     res.status(201).json({ ok: true, rev })
   } catch (e) {
+    if (stored) await removeStoredCertFile(stored)
     res.status(500).json({ error: 'Could not add cert version: ' + e.message })
   }
 })
@@ -357,14 +516,20 @@ router.post('/cert/:certId/reject', async (req, res) => {
 // Streams the uploaded file when one exists on disk; otherwise returns a generated
 // placeholder PDF (seeded/demo certs carry a file_name but no real file). Gated by
 // traceability.can_view so document access follows the matrix.
-router.get('/cert/:certId/file', require('../middleware/permissions').requirePermission('traceability', 'can_view'), async (req, res) => {
+router.get('/cert/:certId/file', require('../middleware/permissions').requirePermission('traceability', 'can_view'), certScope({ version: false }), async (req, res) => {
   try {
     const certId = Number(req.params.certId)
     const [[cert]] = await db.query('SELECT * FROM traceability_certs WHERE id=?', [certId])
     if (!cert) return res.status(404).json({ error: 'Certificate not found' })
     const fname = (cert.file_name || `cert-${certId}.pdf`).replace(/["\r\n]/g, '')
-    // Real uploaded file on disk → stream it
+    // Real uploaded file → DUAL-READ FALLBACK (blob migration): blob first, then disk.
     if (cert.file_path) {
+      const blobStream = await blobStore.getFile(blobStore.keyFor('traceability', cert.file_path))
+      if (blobStream) {
+        res.setHeader('Content-Type', cert.mime_type || 'application/octet-stream')
+        res.setHeader('Content-Disposition', `inline; filename="${fname}"`)
+        return blobStream.pipe(res)
+      }
       const abs = path.join(__dirname, '..', cert.file_path)
       if (fs.existsSync(abs)) {
         res.setHeader('Content-Type', cert.mime_type || 'application/octet-stream')
@@ -439,6 +604,7 @@ router.get('/:projectId/trace/:tag', async (req, res) => {
 // GET /api/traceability/:projectId/tags — distinct tags with a lifecycle
 router.get('/:projectId/tags', async (req, res) => {
   try {
+    if (isVendor(req)) return res.json({ tags: [] })   // P2e: the tag list is hidden from vendors
     const pid = Number(req.params.projectId)
     const [rows] = await db.query(
       `SELECT DISTINCT tag FROM traceability_trace_lifecycle WHERE project_id=? ORDER BY tag`, [pid])
