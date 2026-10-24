@@ -64,10 +64,11 @@ export function canOpen(role: string | null | undefined, pageId: string, subId?:
   return nav.some(e => (e.sub ? e.sub.some(s => s.page === pageId) : e.page === pageId))
 }
 
-// Forwarder SCN document view/download (documents.js) is refused by the gate until ext-1b
-// adds the carrier check and the allowlist entry; set to true when ext-1b allows forwarder
-// document downloads. While false, the Logistics screen hides 👁 and ↓ for external roles.
-export const EXTERNAL_LOGISTICS_DOC_DOWNLOAD = false
+// Forwarder SCN document view/download: ext-1b is live, so the gate allows the logistics
+// download and documents.js answers it only for the SCN's carrier or delegated packer
+// ("You are not linked to this SCN." otherwise). While true, the Logistics screen shows 👁 and ↓
+// to external roles too.
+export const EXTERNAL_LOGISTICS_DOC_DOWNLOAD = true
 
 // Where an external user lands after choosing a project: the first entry after Home.
 export function landingPage(role: string | null | undefined): string {
