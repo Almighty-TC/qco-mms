@@ -3,7 +3,8 @@
 // workflow spine. Mounted at /api/rfi-meeting. Pooled connections only (../db).
 // All routes require a valid JWT. Reads gated on can_view; writes via the matrix
 // (create=can_create, edits/transitions=can_edit, close=can_approve). External
-// roles are respond-only AND row-restricted to records assigned to them.
+// roles are respond-only AND row-restricted to records assigned to them, and they see
+// only the records linked to them (3T167, VISIBLE_TO_USER).
 const express = require('express')
 const router  = express.Router()
 const db      = require('../db')
@@ -65,6 +66,27 @@ async function hasApprove(req) {
 }
 const isExternal = req => EXTERNAL_ROLES.has(req.user.role)
 
+// ─── EXTERNAL VISIBILITY (3T167) ──────────────────────────────
+// An external role sees a record only when it is assigned to, raised by or created by the
+// user, or the user is an attendee by user_id (attendees entered by name only do not count)
+// or owns one of its action items. Internal roles are unchanged. `r` is the record's alias.
+const VISIBLE_TO_USER = `(r.assigned_to = ? OR r.raised_by = ? OR r.created_by = ?
+  OR EXISTS (SELECT 1 FROM meeting_attendees ma WHERE ma.record_id = r.id AND ma.user_id = ?)
+  OR EXISTS (SELECT 1 FROM meeting_actions mt WHERE mt.record_id = r.id AND mt.assigned_to = ?))`
+const visibleParams = uid => [uid, uid, uid, uid, uid]
+// GET detail, attendees and actions and both PATCHes (3T168): a record an external user cannot
+// see (or that is not in this project) answers 404 "Not found", so its existence is not revealed.
+async function externalVisible(req, res, next) {
+  if (!isExternal(req)) return next()
+  try {
+    const [[r]] = await db.query(
+      `SELECT r.id FROM rfi_meeting_records r WHERE r.id=? AND r.project_id=? AND ${VISIBLE_TO_USER} LIMIT 1`,
+      [Number(req.params.id), Number(req.params.projectId), ...visibleParams(req.user.id)])
+    if (!r) return res.status(404).json({ error: 'Not found' })
+    next()
+  } catch (e) { dbError(res, e) }
+}
+
 // ─── RAG / OVERDUE DERIVATION (computed on read, like progress_pct) ──
 async function amberDays() {
   const [[s]] = await db.query("SELECT `value` AS v FROM system_settings WHERE `key`='rfi_amber_days'")
@@ -94,6 +116,7 @@ router.get('/:projectId', requirePermission('rfi_meeting', 'can_view'), async (r
     const offset = (page - 1) * limit
 
     const where = ['project_id = ?']; const params = [pid]
+    if (isExternal(req)) { where.push(VISIBLE_TO_USER); params.push(...visibleParams(req.user.id)) }   // 3T167
     if (req.query.type)     { where.push('record_type = ?'); params.push(req.query.type) }
     if (req.query.status)   { where.push('status = ?');      params.push(req.query.status) }
     if (req.query.assignee) { where.push('assigned_to = ?'); params.push(Number(req.query.assignee)) }
@@ -111,7 +134,7 @@ router.get('/:projectId', requirePermission('rfi_meeting', 'can_view'), async (r
     const orderBy  = SAFE_SORT[req.query.sort_col] || 'raised_date'
     const orderDir = String(req.query.sort_dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'
 
-    const [[{ total }]] = await db.query(`SELECT COUNT(*) AS total FROM rfi_meeting_records WHERE ${whereSql}`, params)
+    const [[{ total }]] = await db.query(`SELECT COUNT(*) AS total FROM rfi_meeting_records r WHERE ${whereSql}`, params)
     const [rows] = await db.query(
       `SELECT r.id, r.project_id, r.record_type, r.ref, r.title, r.status, r.priority,
               r.link_type, r.link_id, r.link_label, r.raised_by, r.assigned_to,
@@ -153,7 +176,7 @@ router.get('/:projectId/link-options/:type', requirePermission('rfi_meeting', 'c
 })
 
 // ─── GET ONE ──────────────────────────────────────────────────
-router.get('/:projectId/:id', requirePermission('rfi_meeting', 'can_view'), async (req, res) => {
+router.get('/:projectId/:id', requirePermission('rfi_meeting', 'can_view'), externalVisible, async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
     const [[row]] = await db.query(
@@ -198,8 +221,8 @@ router.post('/:projectId', requirePermission('rfi_meeting', 'can_create'), async
 
 // ─── WORKFLOW TRANSITION (validated state machine) ────────────
 // PATCH → enforce maps to can_edit. Closing additionally needs can_approve.
-// External roles may only transition records assigned to them.
-router.patch('/:projectId/:id/transition', async (req, res) => {
+// External roles may only transition records assigned to them (a record they cannot see: 404, 3T168).
+router.patch('/:projectId/:id/transition', externalVisible, async (req, res) => {
   try {
     const pid = Number(req.params.projectId); const uid = req.user.id
     const { to, response, assigned_to } = req.body
@@ -294,7 +317,7 @@ async function loadMeeting(pid, id) {
 }
 
 // ─── ATTENDEES ────────────────────────────────────────────────
-router.get('/:projectId/:id/attendees', requirePermission('rfi_meeting', 'can_view'), async (req, res) => {
+router.get('/:projectId/:id/attendees', requirePermission('rfi_meeting', 'can_view'), externalVisible, async (req, res) => {
   try {
     const [rows] = await db.query('SELECT id, user_id, attendee_name, attendee_org, attended FROM meeting_attendees WHERE record_id=? ORDER BY id', [Number(req.params.id)])
     res.json(rows)
@@ -323,7 +346,7 @@ router.delete('/:projectId/:id/attendees/:attendeeId', async (req, res) => {
 })
 
 // ─── ACTION ITEMS (each its own mini-workflow) ────────────────
-router.get('/:projectId/:id/actions', requirePermission('rfi_meeting', 'can_view'), async (req, res) => {
+router.get('/:projectId/:id/actions', requirePermission('rfi_meeting', 'can_view'), externalVisible, async (req, res) => {
   try {
     const [rows] = await db.query(
       `SELECT a.id, a.seq, a.description, a.assigned_to, u.full_name AS assigned_to_name, a.status,
@@ -346,7 +369,7 @@ router.post('/:projectId/:id/actions', async (req, res) => {
     res.status(201).json({ id: r.insertId, seq: Number(mx) + 1 })
   } catch (e) { dbError(res, e) }
 })
-router.patch('/:projectId/:id/actions/:actionId', async (req, res) => {
+router.patch('/:projectId/:id/actions/:actionId', externalVisible, async (req, res) => {   // 3T168: a meeting they cannot see: 404
   try {
     const pid = Number(req.params.projectId), id = Number(req.params.id), uid = req.user.id
     const { err } = await loadMeeting(pid, id); if (err) return res.status(err[0]).json({ error: err[1] })
