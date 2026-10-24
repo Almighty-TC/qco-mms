@@ -2,7 +2,7 @@
 // record only when it is assigned to, raised by or created by them, or they are an attendee by user_id, or own one
 // of its action items (attendees entered by name only do not count). The list (WHERE and total) and the detail,
 // attendees, actions and both PATCHes (404 "Not found", 3T168) for every external role and every branch; the external
-// write routes on visible records and every internal-role answer equal to git show HEAD. The real router over a fake db that evaluates the WHERE
+// write routes on visible records and every internal-role answer equal to the file at 83d17f5 (git show). The real router over a fake db that evaluates the WHERE
 // conditions itself (no database). Exit code 1 on any failure.
 // Usage: node tests/p2/rfiVisibility.test.cjs [--mutation]
 const fs = require('fs')
@@ -13,7 +13,7 @@ const REPO = path.join(__dirname, '../..')
 const ROOT = path.join(REPO, 'server')
 const RM = path.join(ROOT, 'routes/rfiMeeting.js')
 const RM_SRC = fs.readFileSync(RM, 'utf8')
-const RM_HEAD = execFileSync('git', ['-C', REPO, 'show', 'HEAD:server/routes/rfiMeeting.js'], { encoding: 'utf8' })
+const RM_HEAD = execFileSync('git', ['-C', REPO, 'show', '83d17f5:server/routes/rfiMeeting.js'], { encoding: 'utf8' })   // the file before 3T167
 
 // ── fake data: per external user one record for each branch, a name-only attendee meeting and a record in
 // project 28 assigned to them; records linked to no external user; users 4 (staff) and 999 (another party) ──
@@ -204,8 +204,8 @@ async function suite(src) {
   return { pass, fail, failed }
 }
 
-// Internal roles, and the external write routes on records they can see: answers and queries equal to git show
-// HEAD apart from the visibility check's own query (the total's table alias "r" normalised away).
+// Internal roles, and the external write routes on records they can see: answers and queries equal to the file
+// at 83d17f5 apart from the visibility check's own query (the total's table alias "r" normalised away).
 async function sameAsHead(src) {
   const NEW = compile(src), OLD = compile(RM_HEAD)
   const reqs = []
@@ -253,9 +253,9 @@ const MUTANTS = [
 ;(async () => {
   const r = await suite(RM_SRC)
   const I = await sameAsHead(RM_SRC)
-  r.failed.forEach(n => console.log('FAIL ' + n)); I.diffs.forEach(d => console.log('FAIL differs from HEAD: ' + d))
+  r.failed.forEach(n => console.log('FAIL ' + n)); I.diffs.forEach(d => console.log('FAIL differs from 83d17f5: ' + d))
   const fail = r.fail + (I.same === I.total ? 0 : 1)
-  console.log(`rfiVisibility: ${r.pass + (I.same === I.total ? 1 : 0)} passed, ${fail} failed (internal roles and the external write routes identical to HEAD on ${I.same} of ${I.total} requests, answers and queries)`)
+  console.log(`rfiVisibility: ${r.pass + (I.same === I.total ? 1 : 0)} passed, ${fail} failed (internal roles and the external write routes identical to 83d17f5 on ${I.same} of ${I.total} requests, answers and queries)`)
   if (process.argv.includes('--mutation')) {
     let killed = 0
     for (const [name, mutate] of MUTANTS) {
