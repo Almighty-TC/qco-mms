@@ -1166,12 +1166,14 @@ const PERM_MATRIX_COLS: AdminCol[] = [
 // ─── USER PROJECT / WBS ACCESS PANEL ────────────────────────
 // Admin control (third panel under User Overrides) to grant/revoke a user's
 // project access. Reuses the EXISTING admin endpoints — GET/POST/DELETE
-// /wbs-access (admin-gated + audited as wbs.grant/wbs.revoke). No backend change.
+// /wbs-access (admin-gated + audited as wbs.grant/wbs.revoke).
 //
-// Granularity: the access gate (permissions.js) keys ONLY on (user_id, project_id)
-// for wbs-scoped modules — wbs_code is not consulted — so grants here are
-// PROJECT-LEVEL, sent as wbs_code='ALL' (the existing whole-project convention).
-// Legacy node-level rows (e.g. 'CLA','03.01') still display their own code.
+// ext-3 granularity: a grant is the whole project (wbs_code='ALL') or one WBS code,
+// which covers that code and every code below it (the backend narrows contractors to
+// their codes). After a project is chosen its WBS is loaded (GET /foundational/:pid/wbs)
+// and offered as "Whole project (ALL)" plus each code, indented by level. ALL and codes
+// do not mix on one project (the server answers 409 "revoke first"; the picker disables
+// those choices); a project leaves the project select only once the user holds ALL on it.
 //
 // Internal vs external is informational only here (no convention change yet): the
 // parent passes the authoritative is_external split. Internal users bypass scoping
@@ -1179,14 +1181,19 @@ const PERM_MATRIX_COLS: AdminCol[] = [
 // governed by these grants.
 type WbsGrant = { id: number; wbs_code: string; project_id: number; projectName: string; projectCode: string; grantedAt: string; grantedByName: string }
 type ProjOpt  = { id: number; code: string; name: string }
+type WbsOpt   = { code: string; description: string | null }
 
 function UserWbsAccessPanel({ userId, external, dark }: { userId: number; external: boolean; dark: boolean }) {
   const { addToast } = useToast()
   const [grants,   setGrants]   = useState<WbsGrant[]>([])
   const [projects, setProjects] = useState<ProjOpt[]>([])
   const [addId,    setAddId]    = useState('')
+  const [addCode,  setAddCode]  = useState('')
   const [busy,     setBusy]     = useState(false)
   const [loading,  setLoading]  = useState(false)
+  // Each project's WBS codes, loaded when needed: undefined = not loaded yet, 'failed' = the load failed.
+  const [wbsByProject, setWbsByProject] = useState<Record<number, WbsOpt[] | 'failed'>>({})
+  const wbsRequested = useRef(new Set<number>())   // one request per project, even while one is in flight
   const bd = `1px solid ${dark ? '#334155' : '#dde3ed'}`
 
   // Current grants for this user — refetched after every grant/revoke.
@@ -1207,17 +1214,46 @@ function UserWbsAccessPanel({ userId, external, dark }: { userId: number; extern
       .catch(() => setProjects([]))
   }, [])
 
-  // Offer only projects the user can't already reach (any existing row = project access).
-  const grantedProjectIds = new Set(grants.map(g => g.project_id))
-  const available = projects.filter(p => !grantedProjectIds.has(p.id))
+  // A project's WBS codes (sorted by code), loaded once per project: the chosen project, and every
+  // project the user holds codes on (for the descriptions in the grant list).
+  const loadWbs = useCallback((pid: number) => {
+    if (wbsRequested.current.has(pid)) return
+    wbsRequested.current.add(pid)
+    axios.get<{ code: string; description: string | null }[]>(`${API_BASE}/api/foundational/${pid}/wbs`)
+      .then(({ data }) => setWbsByProject(prev => ({ ...prev, [pid]: data.map(n => ({ code: n.code, description: n.description })).sort((a, b) => a.code.localeCompare(b.code)) })))
+      .catch(() => setWbsByProject(prev => ({ ...prev, [pid]: 'failed' })))
+  }, [])
+  useEffect(() => { new Set(grants.filter(g => g.wbs_code !== 'ALL').map(g => g.project_id)).forEach(loadWbs) }, [grants, loadWbs])
+
+  // What the user holds on each project: a project leaves the project select only when it holds ALL there.
+  const heldOn = (pid: number) => grants.filter(g => g.project_id === pid).map(g => g.wbs_code)
+  const available = projects.filter(p => !heldOn(p.id).includes('ALL'))
+  const pid = addId ? Number(addId) : null
+  const held = pid ? heldOn(pid) : []
+  const holdsAll = held.includes('ALL'), holdsCodes = held.some(c => c !== 'ALL')
+  const wbs = pid ? wbsByProject[pid] : undefined
+  const codes = Array.isArray(wbs) ? wbs : []
+  const descOf = (projectId: number, code: string) => {
+    const w = wbsByProject[projectId]
+    return Array.isArray(w) ? w.find(n => n.code === code)?.description ?? null : null
+  }
+
+  // Choosing a project resets the scope: ALL when it can be granted, otherwise a code must be chosen.
+  const chooseProject = (value: string) => {
+    setAddId(value)
+    if (!value) { setAddCode(''); return }
+    const p = Number(value)
+    setAddCode(heldOn(p).some(c => c !== 'ALL') ? '' : 'ALL')
+    loadWbs(p)
+  }
 
   const grant = async () => {
-    if (!addId) return
+    if (!addId || !addCode) return
     setBusy(true)
     try {
-      await axios.post(`${API}/wbs-access`, { userId, projectId: Number(addId), wbsCode: 'ALL' })
-      setAddId(''); await loadGrants()
-      addToast('success', 'Project access granted')
+      await axios.post(`${API}/wbs-access`, { userId, projectId: Number(addId), wbsCode: addCode })
+      addToast('success', addCode === 'ALL' ? 'Project access granted' : `WBS code ${addCode} granted`)
+      setAddId(''); setAddCode(''); await loadGrants()
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } } }
       addToast('error', err.response?.data?.error ?? 'Grant failed')
@@ -1261,30 +1297,54 @@ function UserWbsAccessPanel({ userId, external, dark }: { userId: number; extern
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {grants.map(g => (
-              <div key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc' }}>
-                <span style={{ fontSize: 12, fontWeight: 600, color: '#E84E0F', fontFamily: 'JetBrains Mono, monospace' }}>{g.projectCode}</span>
-                <span style={{ fontSize: 12, color: dark ? '#cbd5e1' : '#475569', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.projectName}</span>
-                <span title="WBS scope" style={{ fontSize: 10, padding: '2px 7px', borderRadius: 9999, background: 'rgba(100,116,139,0.12)', color: '#64748b', fontWeight: 600, flexShrink: 0 }}>{g.wbs_code === 'ALL' ? 'Whole project' : g.wbs_code}</span>
-                <button onClick={() => revoke(g.id)} disabled={busy} title="Revoke access" style={{ width: 22, height: 22, borderRadius: 4, border: 'none', background: 'rgba(239,68,68,0.12)', color: '#ef4444', cursor: busy ? 'not-allowed' : 'pointer', fontWeight: 700, fontSize: 13, lineHeight: 1, flexShrink: 0 }}>×</button>
-              </div>
-            ))}
+            {grants.map(g => {
+              const desc = g.wbs_code === 'ALL' ? null : descOf(g.project_id, g.wbs_code)
+              return (
+                <div key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', borderRadius: 6, border: bd, background: dark ? '#0f172a' : '#f8fafc' }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: '#E84E0F', fontFamily: 'JetBrains Mono, monospace' }}>{g.projectCode}</span>
+                  <span style={{ fontSize: 12, color: dark ? '#cbd5e1' : '#475569', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.projectName}</span>
+                  <span title="WBS scope" style={{ fontSize: 10, padding: '2px 7px', borderRadius: 9999, background: 'rgba(100,116,139,0.12)', color: '#64748b', fontWeight: 600, flexShrink: 0 }}>{g.wbs_code === 'ALL' ? 'Whole project' : g.wbs_code}</span>
+                  {desc && <span title={desc} style={{ fontSize: 11, color: '#94a3b8', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1 }}>{desc}</span>}
+                  <button onClick={() => revoke(g.id)} disabled={busy} title="Revoke access" style={{ width: 22, height: 22, borderRadius: 4, border: 'none', background: 'rgba(239,68,68,0.12)', color: '#ef4444', cursor: busy ? 'not-allowed' : 'pointer', fontWeight: 700, fontSize: 13, lineHeight: 1, flexShrink: 0 }}>×</button>
+                </div>
+              )
+            })}
           </div>
         )}
       </div>
 
-      {/* Grant new access — project-level (whole project) */}
+      {/* Grant new access — the whole project or one WBS code */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}>
-        <select value={addId} onChange={e => setAddId(e.target.value)} style={{ ...inp(dark), width: 280, height: 34 }}>
+        <select value={addId} onChange={e => chooseProject(e.target.value)} style={{ ...inp(dark), width: 280, height: 34 }}>
           <option value="">+ Grant project access…</option>
           {available.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
         </select>
-        <button onClick={grant} disabled={busy || !addId} style={{ padding: '7px 16px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#E84E0F', color: '#fff', cursor: (busy || !addId) ? 'not-allowed' : 'pointer', opacity: (busy || !addId) ? 0.5 : 1, fontFamily: 'IBM Plex Sans, sans-serif' }}>
+        {pid && (
+          <select value={addCode} onChange={e => setAddCode(e.target.value)} style={{ ...inp(dark), width: 320, height: 34 }} title="Scope of the grant">
+            <option value="" disabled>{wbs === undefined ? 'Loading WBS…' : 'Choose a WBS code…'}</option>
+            <option value="ALL" disabled={holdsAll || holdsCodes}>Whole project (ALL)</option>
+            {codes.map(n => (
+              <option key={n.code} value={n.code} disabled={holdsAll || held.includes(n.code)}>
+                {'\u00a0\u00a0'.repeat(n.code.split('.').length - 1)}{n.code}{n.description ? `: ${n.description}` : ''}
+              </option>
+            ))}
+          </select>
+        )}
+        <button onClick={grant} disabled={busy || !addId || !addCode} style={{ padding: '7px 16px', borderRadius: 6, fontSize: 13, fontWeight: 600, border: 'none', background: '#E84E0F', color: '#fff', cursor: (busy || !addId || !addCode) ? 'not-allowed' : 'pointer', opacity: (busy || !addId || !addCode) ? 0.5 : 1, fontFamily: 'IBM Plex Sans, sans-serif' }}>
           {busy ? 'Saving…' : 'Grant'}
         </button>
         {available.length === 0 && projects.length > 0 && (
           <span style={{ fontSize: 11, color: '#94a3b8' }}>All projects already granted.</span>
         )}
+      </div>
+      {pid && wbs === 'failed' && (
+        <div style={{ fontSize: 11, color: '#d97706', marginTop: 6 }}>The project's WBS could not be loaded; only the whole project can be granted.</div>
+      )}
+      {pid && Array.isArray(wbs) && wbs.length === 0 && (
+        <div style={{ fontSize: 11, color: '#d97706', marginTop: 6 }}>This project has no WBS codes; only the whole project can be granted.</div>
+      )}
+      <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>
+        A grant covers the code and everything below it. Material held on a parent code is not visible to a child-code grant; grant the parent code to include it. To narrow a user who holds a whole project, revoke that row (×) first, then grant codes.
       </div>
     </div>
   )
