@@ -2,7 +2,8 @@
 // site_contractor and subcontractor in materialcontrol.js (stock list and stat cards, FMR list and counts, FMR
 // detail, item picker), foundational.js (WBS tree) and traceability.js (heat-status, heat detail); the
 // POST /api/admin/wbs-access validation; 3T170: the FMR detail's lines and the list's line values for covered lines only,
-// and the FMR create check through the helper; 3T171: no pickups for an FMR with hidden lines, quantities as strings. Grants ALL, one code, two codes, an underscore code (LIKE escaping); the
+// and the FMR create check through the helper; 3T171: no pickups for an FMR with hidden lines, quantities as strings;
+// 3T174: the FMR list's wbs_scopes for contractors only (internal roles, vendor and forwarder also equal to e2a5a63). Grants ALL, one code, two codes, an underscore code (LIKE escaping); the
 // dot boundary (FLO.01 does not cover FLO.010). Internal roles, vendors and forwarders: answers and queries equal to
 // the files at c99b441 (git show). The real routers over a fake db that evaluates the WHERE conditions itself (no
 // database). Exit code 1 on any failure.
@@ -17,6 +18,7 @@ const BASE = 'c99b441'   // the files before 3T169
 const F = { grant: 'lib/wbsGrant.js', mc: 'routes/materialcontrol.js', fd: 'routes/foundational.js', tr: 'routes/traceability.js', ad: 'routes/admin.js' }
 const SRC = Object.fromEntries(Object.entries(F).map(([k, f]) => [k, fs.readFileSync(path.join(ROOT, f), 'utf8')]))
 const OLD = Object.fromEntries(['mc', 'fd', 'tr'].map(k => [k, execFileSync('git', ['-C', REPO, 'show', `${BASE}:server/${F[k]}`], { encoding: 'utf8' })]))
+const MC_E2A = execFileSync('git', ['-C', REPO, 'show', 'e2a5a63:server/routes/materialcontrol.js'], { encoding: 'utf8' })   // 3T174: the file before wbs_scopes
 
 // ── fake data, project 27 (and a few rows in project 28) ──
 const NODES = [[1, 'FLO', null], [2, 'FLO.01', 1], [3, 'FLO.01.02', 2], [4, 'FLO.010', 1], [5, 'FLO.02', 1], [6, 'GRD', null], [7, 'GRD.01', 6],
@@ -235,6 +237,7 @@ async function suite(srcs) {
     check(JSON.stringify(r.body.wbs_scopes) === JSON.stringify(rows.includes('ALL') ? [] : rows), `${tag}: wbs_scopes`)
     r = await call(R.mc, '/api/mc', u, 'GET', '/27/fmr?view=all&limit=1000')
     check(r.status === 200 && ids(r.body.data) === JSON.stringify(want.fmr) && r.body.total === want.fmr.length && r.body.counts.total === want.fmr.length, `${tag}: FMR list (request's WBS or a line's), total and counts`)
+    check(JSON.stringify(r.body.wbs_scopes) === JSON.stringify(rows.includes('ALL') ? [] : rows), `${tag}: FMR list wbs_scopes ${rows.includes('ALL') ? '[]' : JSON.stringify(rows)}, as the stock list`)
     r = await call(R.mc, '/api/mc', u, 'GET', '/27/fmr?limit=1000')
     check(ids(r.body.data) === JSON.stringify(want.open), `${tag}: FMR list, default view`)
     for (const f of [1, 2, 3, 4, 5, 6]) {
@@ -343,6 +346,14 @@ async function sameAsBase(srcs) {
     calls = []; const b = await call(O[k], base, u, method, url, body); const qb = calls.map(c => c.q + JSON.stringify(c.params))
     if (JSON.stringify(a) === JSON.stringify(b) && JSON.stringify(qa) === JSON.stringify(qb)) same++; else diffs.push(`${u.role} ${base}${url} ${a.status}/${b.status}`)
   }
+  // 3T174: the FMR list for these roles also equal to e2a5a63 (no wbs_scopes key for them)
+  const E = load({ ...srcs, mc: MC_E2A })
+  for (const u of users) for (const url of ['/27/fmr?view=all&limit=1000', '/27/fmr', '/27/fmr?search=FMR']) {
+    total++
+    calls = []; const a = await call(N.mc, '/api/mc', u, 'GET', url); const qa = calls.map(c => c.q + JSON.stringify(c.params))
+    calls = []; const b = await call(E.mc, '/api/mc', u, 'GET', url); const qb = calls.map(c => c.q + JSON.stringify(c.params))
+    if (JSON.stringify(a) === JSON.stringify(b) && JSON.stringify(qa) === JSON.stringify(qb) && !('wbs_scopes' in (a.body || {}))) same++; else diffs.push(`${u.role} e2a5a63 /api/mc${url} ${a.status}/${b.status}`)
+  }
   return { same, total, diffs }
 }
 
@@ -378,6 +389,9 @@ const MUTANTS = [
   M('mc', '3T170: create, the old prefix check for contractors', "    const narrowed = wbsGrant.isNarrowed(req.user?.role)   // 3T170: contractors through the grant helper\n    const g = narrowed", "    const narrowed = false\n    const g = narrowed"),
   M('mc', '3T171: pickups kept with hidden lines', 'pickups: hidden ? [] : pickups })', 'pickups })'),
   M('mc', '3T171: quantities as numbers', "const qtySum = (ls, k) => ls.reduce((s, l) => s + Number(l[k] || 0), 0).toFixed(3)", 'const qtySum = (ls, k) => ls.reduce((s, l) => s + Number(l[k] || 0), 0)'),
+  M('mc', '3T174: no wbs_scopes in the FMR list', "res.json(g ? { data, total, page, limit, counts, wbs_scopes: g.all ? [] : g.codes } : { data, total, page, limit, counts })", 'res.json({ data, total, page, limit, counts })'),
+  M('mc', '3T174: wbs_scopes for every role', "res.json(g ? { data, total, page, limit, counts, wbs_scopes: g.all ? [] : g.codes } : { data, total, page, limit, counts })", 'res.json({ data, total, page, limit, counts, wbs_scopes: g ? (g.all ? [] : g.codes) : [] })'),
+  M('mc', '3T174: ALL gives codes', 'wbs_scopes: g.all ? [] : g.codes } :', 'wbs_scopes: g.codes.length ? g.codes : [\'ALL\'] } :'),
   M('ad', 'validation: no user check', "    if (!u) return res.status(422).json({ error: 'User not found' })\n", ''),
   M('ad', 'validation: no project check', "    if (!p) return res.status(422).json({ error: 'Project not found' })\n", ''),
   M('ad', 'validation: no code check', "      if (!n) return res.status(422).json({ error: 'WBS code not found in this project' })\n", ''),
@@ -390,7 +404,7 @@ const MUTANTS = [
   const I = await sameAsBase(SRC)
   r.failed.forEach(n => console.log('FAIL ' + n)); I.diffs.forEach(d => console.log('FAIL differs from c99b441: ' + d))
   const fail = r.fail + (I.same === I.total ? 0 : 1)
-  console.log(`wbsGrant: ${r.pass + (I.same === I.total ? 1 : 0)} passed, ${fail} failed (internal roles, vendor and forwarder identical to c99b441 on ${I.same} of ${I.total} requests, answers and queries)`)
+  console.log(`wbsGrant: ${r.pass + (I.same === I.total ? 1 : 0)} passed, ${fail} failed (internal roles, vendor and forwarder identical to c99b441, the FMR list also to e2a5a63, on ${I.same} of ${I.total} requests, answers and queries)`)
   if (process.argv.includes('--mutation')) {
     let killed = 0
     for (const [name, k, mutate] of MUTANTS) {

@@ -921,7 +921,8 @@ router.get('/:projectId/fmr', async (req, res) => {
     ])
 
     const data = g ? await narrowFmrList(fmrs, g, pid) : fmrs   // 3T170: covered lines only
-    res.json({ data, total, page, limit, counts })
+    // 3T174: a contractor also gets its scope, as the stock list gives it ([] for ALL); no other role gets the key.
+    res.json(g ? { data, total, page, limit, counts, wbs_scopes: g.all ? [] : g.codes } : { data, total, page, limit, counts })
   } catch (e) {
     console.error('[mc:fmr]', e.message)
     dbError(res, e)
