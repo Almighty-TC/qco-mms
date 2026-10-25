@@ -118,6 +118,14 @@ async function forwarderLinkedToScn(conn, scnId, userId) {
   return !!scn && isPackagingDelegate(scn.packaging_delegated_to, userId)
 }
 
+// LIST form of forwarderLinkedToScn (3T172) for the register and its pipeline counts: the
+// assigned CARRIER or the delegated packer, isPackagingDelegate's meaning in SQL
+// (packaging_delegated_to = the user id; NULL never matches). Pre-migration → carrier only.
+async function forwarderScnFilter(conn, userId) {
+  if (!(await scnHasDelegateCol(conn))) return { sql: 's.forwarder_user_id = ?', params: [userId] }
+  return { sql: '(s.forwarder_user_id = ? OR s.packaging_delegated_to = ?)', params: [userId, userId] }
+}
+
 // DELETE-doc predicate — TIGHTER than upload because DELETE is destructive. A forwarder may
 // delete a document ONLY IF BOTH: (a) they are the SCN's assigned carrier (forwarderIsCarrier)
 // AND (b) THEY uploaded that document (scn_documents.uploaded_by = their id). The own-uploads
@@ -363,10 +371,11 @@ router.get('/register/:projectId', async (req, res) => {
     const conditions = ['s.project_id = ?']
     const params = [pid]
 
-    // ─── FREIGHT FORWARDER: only see their assigned SCNs ─────
-    if (role === 'freight_forwarder') {
-      conditions.push('s.forwarder_user_id = ?')
-      params.push(uid)
+    // ─── FREIGHT FORWARDER: only see their SCNs (carrier or delegated packer) ─────
+    const ff = role === 'freight_forwarder' ? await forwarderScnFilter(db, uid) : null
+    if (ff) {
+      conditions.push(ff.sql)
+      params.push(...ff.params)
     }
 
     // Status filter — match against both DB value and display mapping
@@ -465,11 +474,11 @@ router.get('/register/:projectId', async (req, res) => {
       rag: computeRAG(r.status, r.eta),
     }))
 
-    // Pipeline counts — scoped to forwarder if applicable
-    const pipelineSql = role === 'freight_forwarder'
-      ? 'SELECT status FROM shipment_control_notes WHERE project_id = ? AND forwarder_user_id = ?'
+    // Pipeline counts — scoped to forwarder if applicable (the same link as the list)
+    const pipelineSql = ff
+      ? `SELECT s.status FROM shipment_control_notes s WHERE s.project_id = ? AND ${ff.sql}`
       : 'SELECT status FROM shipment_control_notes WHERE project_id = ?'
-    const pipelineParams = role === 'freight_forwarder' ? [pid, uid] : [pid]
+    const pipelineParams = ff ? [pid, ...ff.params] : [pid]
     const [allStatuses] = await db.query(pipelineSql, pipelineParams)
     const pipeline_counts = {
       pending_pickup:   0,
@@ -1276,4 +1285,5 @@ module.exports.forwarderOwnsScnPackaging = forwarderOwnsScnPackaging
 module.exports.completePackaging = completePackaging          // D4 hand-back
 module.exports.isPackagingDelegate = isPackagingDelegate      // shared predicate
 module.exports.forwarderIsCarrier = forwarderIsCarrier        // FIX 1: doc/PoC carrier authz
+module.exports.forwarderLinkedToScn = forwarderLinkedToScn    // 3T172: the register's list form must agree
 module.exports.forwarderMayDeleteDoc = forwarderMayDeleteDoc  // FIX 1: doc-delete own-uploads-only
