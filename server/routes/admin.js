@@ -1063,10 +1063,27 @@ router.post('/wbs-access', async (req, res) => {
     return res.status(400).json({ error: 'userId, projectId and wbsCode are required' })
   }
   try {
+    // 3T169: the user and the project exist; the code is ALL or a code of that project's
+    // WBS; ALL and specific codes are not mixed on one project (revoke first). Duplicates
+    // keep the unique-index 409 below.
+    const code = wbsCode.trim()
+    const [[u]] = await db.query('SELECT id FROM users WHERE id=?', [userId])
+    if (!u) return res.status(422).json({ error: 'User not found' })
+    const [[p]] = await db.query('SELECT id FROM projects WHERE id=?', [projectId])
+    if (!p) return res.status(422).json({ error: 'Project not found' })
+    if (code !== 'ALL') {
+      const [[n]] = await db.query('SELECT id FROM wbs_nodes WHERE project_id=? AND code=? LIMIT 1', [projectId, code])
+      if (!n) return res.status(422).json({ error: 'WBS code not found in this project' })
+    }
+    const [held] = await db.query('SELECT wbs_code FROM user_wbs_access WHERE user_id=? AND project_id=?', [userId, projectId])
+    if (code !== 'ALL' && held.some(h => h.wbs_code === 'ALL'))
+      return res.status(409).json({ error: 'The user already has the whole project (ALL); revoke first' })
+    if (code === 'ALL' && held.some(h => h.wbs_code !== 'ALL'))
+      return res.status(409).json({ error: 'The user has WBS code grants on this project; revoke first' })
     const [r] = await db.query(
       `INSERT INTO user_wbs_access (user_id, project_id, wbs_code, created_by)
        VALUES (?, ?, ?, ?)`,
-      [userId, projectId, wbsCode.trim(), req.user.id]
+      [userId, projectId, code, req.user.id]
     )
     audit(req, 'wbs.grant', `user=${userId} project=${projectId} wbs=${wbsCode}`)
     const [[row]] = await db.query('SELECT * FROM user_wbs_access WHERE id=?', [r.insertId])

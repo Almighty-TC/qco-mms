@@ -22,6 +22,7 @@ router.param('projectId', require('../middleware/permissions').requireProjectSco
 // Internal roles are unchanged: every vendor fragment below is empty for them.
 const vendorView = require('../lib/vendorView')
 const { EXTERNAL_ROLES } = require('../middleware/permissions')
+const wbsGrant = require('../lib/wbsGrant')   // 3T169: contractors see heats only through stock in their WBS grants
 const VENDOR_VERSION_STATUSES = ['pending', 'overdue', 'rejected']
 const isVendor = req => req.user?.role === 'vendor'
 // "<col> IN (the vendor's POs in the project)", or 1=0 without a supplier.
@@ -702,6 +703,19 @@ router.get('/:projectId/heat/:heat', async (req, res) => {
     const pid = Number(req.params.projectId)
     const heat = req.params.heat
     const norm = 'UPPER(TRIM(?))'
+    // 3T169: a contractor with code grants sees a heat only when it has stock with that heat
+    // under them (404 otherwise); its stock, issue and transfer rows are filtered by WBS too.
+    // ALL (the whole project) is not narrowed.
+    let g = wbsGrant.isNarrowed(req.user?.role) ? await wbsGrant.grants(db, req.user.id, pid) : null
+    if (g && g.all) g = null
+    const scoped = col => (g ? wbsGrant.covers(col, g) : { sql: '', params: [] })
+    const and = c => (c.sql ? ' AND ' + c.sql : '')
+    const sS = scoped('s.wbs_code'), sI = scoped('fil.wbs_code'), sT = scoped('wbs_code')
+    if (g) {
+      const [[has]] = await db.query(
+        `SELECT s.id FROM warehouse_stock s WHERE s.project_id=? AND UPPER(TRIM(s.heat_number)) = ${norm}${and(sS)} LIMIT 1`, [pid, heat, ...sS.params])
+      if (!has) return res.status(404).json({ error: 'Heat not found' })
+    }
 
     const [certs] = await db.query(
       `SELECT id AS cert_id, category, po_ref, vendor_name, tag, document_name, cert_type,
@@ -727,18 +741,18 @@ router.get('/:projectId/heat/:heat', async (req, res) => {
       `SELECT s.id AS stock_id, s.item_code, s.description, s.heat_number, s.location_code,
               s.qty, s.qty_available, s.condition_status, s.trace_hold, w.name AS warehouse_name
        FROM warehouse_stock s LEFT JOIN warehouses w ON w.id=s.warehouse_id
-       WHERE s.project_id=? AND UPPER(TRIM(s.heat_number)) = ${norm} ORDER BY s.id`, [pid, heat])
+       WHERE s.project_id=? AND UPPER(TRIM(s.heat_number)) = ${norm}${and(sS)} ORDER BY s.id`, [pid, heat, ...sS.params])
 
     const [issues] = await db.query(
       `SELECT fil.id, fil.fmr_id, f.fmr_ref, fil.qty, fil.heat_number, fil.location_code, fil.item_code, fil.wbs_code,
               DATE_FORMAT(fil.issued_at,'%Y-%m-%d') AS issued_at
        FROM fmr_issue_lines fil JOIN fmr_requests f ON f.id=fil.fmr_id
-       WHERE f.project_id=? AND UPPER(TRIM(fil.heat_number)) = ${norm} ORDER BY fil.id`, [pid, heat])
+       WHERE f.project_id=? AND UPPER(TRIM(fil.heat_number)) = ${norm}${and(sI)} ORDER BY fil.id`, [pid, heat, ...sI.params])
 
     const [transfers] = await db.query(
       `SELECT id, transfer_ref, item_code, heat_number, qty, uom, status, from_location, to_location
        FROM warehouse_transfers
-       WHERE project_id=? AND UPPER(TRIM(heat_number)) = ${norm} ORDER BY id`, [pid, heat])
+       WHERE project_id=? AND UPPER(TRIM(heat_number)) = ${norm}${and(sT)} ORDER BY id`, [pid, heat, ...sT.params])
 
     res.json({ heat, certs, holds, stock, issues, transfers })
   } catch (e) {
@@ -752,6 +766,10 @@ router.get('/:projectId/heat/:heat', async (req, res) => {
 router.get('/:projectId/heat-status', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
+    // 3T169: a contractor with code grants gets only the heats that have stock under them
+    // (ALL, the whole project, is not narrowed).
+    const g = wbsGrant.isNarrowed(req.user?.role) ? await wbsGrant.grants(db, req.user.id, pid) : null
+    const cov = g && !g.all ? wbsGrant.covers('s.wbs_code', g) : null
     const [rows] = await db.query(
       `SELECT UPPER(TRIM(c.heat_ref)) AS heat_key,
               SUM(c.status='verified') AS verified,
@@ -760,8 +778,10 @@ router.get('/:projectId/heat-status', async (req, res) => {
               COUNT(*) AS cert_count,
               SUM(EXISTS(SELECT 1 FROM traceability_holds h WHERE h.related_cert_id=c.id AND h.status='active')) AS active_holds
        FROM traceability_certs c
-       WHERE c.project_id=? AND c.heat_ref IS NOT NULL AND TRIM(c.heat_ref)<>''
-       GROUP BY UPPER(TRIM(c.heat_ref))`, [pid])
+       WHERE c.project_id=? AND c.heat_ref IS NOT NULL AND TRIM(c.heat_ref)<>''${cov ? `
+         AND UPPER(TRIM(c.heat_ref)) IN (SELECT UPPER(TRIM(s.heat_number)) FROM warehouse_stock s
+           WHERE s.project_id=? AND s.heat_number IS NOT NULL AND ${cov.sql})` : ''}
+       GROUP BY UPPER(TRIM(c.heat_ref))`, cov ? [pid, pid, ...cov.params] : [pid])
     // Aggregate to one badge status per heat: hold > rejected > pending > verified.
     const map = {}
     for (const r of rows) {

@@ -22,6 +22,7 @@ const pocDir = path.join(__dirname, '../uploads/fmr-poc')
 fs.mkdirSync(pocDir, { recursive: true })
 const { fileFilter } = require('../utils/upload')
 const blobStore = require('../lib/blobStore')   // blob migration: memoryStorage → blobStore.persist
+const wbsGrant = require('../lib/wbsGrant')     // 3T169: contractors see project data under their WBS grants only
 const pocUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
@@ -662,22 +663,17 @@ router.get('/:projectId/stock', async (req, res) => {
     let conditions = ['s.project_id = ?']
     let params = [pid]
 
-    // ─── SUBCONTRACTOR: scope to their WBS codes, hide location ──
+    // ─── CONTRACTORS (3T169): stock under their WBS grants (lib/wbsGrant: ALL, or each code
+    // and its descendants); subcontractors also lose grid location and hold reason. NULL-wbs
+    // stock is never covered by a code grant (the Q3 rule: no `s.wbs_code IS NULL` bypass).
     let isSubcontractor = role === 'subcontractor'
     let subWbsCodes = []
-    if (isSubcontractor) {
-      const [wbsRows] = await db.query(
-        'SELECT wbs_code FROM user_wbs_access WHERE user_id=? AND project_id=?', [uid, pid]
-      )
-      subWbsCodes = wbsRows.map(r => r.wbs_code).filter(c => c !== 'ALL')
-      if (subWbsCodes.length > 0) {
-        // Q3: dropped the `s.wbs_code IS NULL OR …` bypass. It let NULL-wbs stock leak to
-        // every subcontractor regardless of scope; with children now inheriting their
-        // parent's WBS snapshot, all stock carries a real WBS (0 NULL-wbs rows exist), so
-        // strict scoping loses nothing and children are correctly visible only within scope.
-        conditions.push(`(${subWbsCodes.map(() => 's.wbs_code LIKE ?').join(' OR ')})`)
-        subWbsCodes.forEach(c => params.push(`${c}%`))
-      }
+    let scope = null   // the grant condition, also applied to the stat cards
+    if (wbsGrant.isNarrowed(role)) {
+      const g = await wbsGrant.grants(db, uid, pid)
+      scope = wbsGrant.covers('s.wbs_code', g)
+      conditions.push(scope.sql); params.push(...scope.params)
+      subWbsCodes = g.all ? [] : g.codes
     }
 
     if (warehouse_id && warehouse_id !== 'all') { conditions.push('s.warehouse_id = ?'); params.push(warehouse_id) }
@@ -742,14 +738,14 @@ router.get('/:projectId/stock', async (req, res) => {
          ORDER BY ${orderClause}
          LIMIT ? OFFSET ?`,
         [...params, limit, offset]),
-      // Whole-project stat cards (independent of filter/page).
+      // Whole-project stat cards (independent of filter/page); a contractor's under its grant (3T169).
       db.query(
         `SELECT COUNT(*) AS total_items,
                 COUNT(DISTINCT s.warehouse_id) AS warehouse_count,
                 SUM(CASE WHEN s.trace_hold=1 THEN 1 ELSE 0 END) AS trace_hold_count,
                 SUM(CASE WHEN s.condition_status != 'good' THEN 1 ELSE 0 END) AS condition_issues
-         FROM warehouse_stock s WHERE s.project_id = ?`,
-        [pid]),
+         FROM warehouse_stock s WHERE s.project_id = ?${scope ? ' AND ' + scope.sql : ''}`,
+        [pid, ...(scope ? scope.params : [])]),
     ])
 
     // Subcontractors: strip grid location and hold reason
@@ -844,6 +840,9 @@ router.get('/:projectId/fmr', async (req, res) => {
 
     let conditions = ['f.project_id = ?']
     let params = [pid]
+    const g = wbsGrant.isNarrowed(req.user?.role) ? await wbsGrant.grants(db, req.user.id, pid) : null   // 3T169
+    const scope = g ? fmrCovered(g) : null
+    if (scope) { conditions.push(scope.sql); params.push(...scope.params) }
     if (status && status !== 'all') { conditions.push('f.status = ?'); params.push(status) }
     // ── Register view ── active (default) hides completed; records = picked-up only.
     // partial_issued is terminal: once part is released the FMR is done and a NEW FMR
@@ -917,16 +916,65 @@ router.get('/:projectId/fmr', async (req, res) => {
          SUM(CASE WHEN status NOT IN ('issued','partial_issued','rejected','cancelled') THEN 1 ELSE 0 END) AS active_count,
          SUM(CASE WHEN status IN ('issued','partial_issued') THEN 1 ELSE 0 END) AS records_count,
          SUM(CASE WHEN required_date < CURDATE() AND status NOT IN ('issued','partial_issued','rejected','cancelled') THEN 1 ELSE 0 END) AS overdue
-       FROM fmr_requests WHERE project_id = ?`,
-      [pid]),
+       FROM fmr_requests${scope ? ' f' : ''} WHERE project_id = ?${scope ? ' AND ' + scope.sql : ''}`,
+      [pid, ...(scope ? scope.params : [])]),
     ])
 
-    res.json({ data: fmrs, total, page, limit, counts })
+    const data = g ? await narrowFmrList(fmrs, g, pid) : fmrs   // 3T170: covered lines only
+    res.json({ data, total, page, limit, counts })
   } catch (e) {
     console.error('[mc:fmr]', e.message)
     dbError(res, e)
   }
 })
+
+// 3T169: an FMR is under a contractor's grant when its own wbs_code or any of its lines'
+// wbs_code is covered (FMR lines carry their own WBS; the header holds the first line's).
+function fmrCovered(g) {
+  const h = wbsGrant.covers('f.wbs_code', g), l = wbsGrant.covers('l.wbs_code', g)
+  return { sql: `(${h.sql} OR EXISTS (SELECT 1 FROM fmr_lines l WHERE l.fmr_id=f.id AND ${l.sql}))`, params: [...h.params, ...l.params] }
+}
+
+// 3T170: a request as a narrowed contractor sees it when some of its lines are hidden: the
+// header's line-derived values (the first-line summary and the quantity totals) come from the
+// covered lines only; status stays the request's own (the workflow and the list views use it).
+// Quantities are DECIMAL(15,3) columns, which the driver returns as strings: so are the sums (3T171).
+const qtySum = (ls, k) => ls.reduce((s, l) => s + Number(l[k] || 0), 0).toFixed(3)
+function narrowedHeader(f, covered) {
+  const sum = k => qtySum(covered, k)
+  const out = { ...f, qty_requested: sum('qty_requested'), qty_issued: sum('qty_issued') }
+  if (f.approved_qty != null) out.approved_qty = sum('qty_approved')
+  const first = covered[0]
+  if (first) Object.assign(out, { item_code: first.item_code, description: first.description, wbs_code: first.wbs_code, uom: first.uom })
+  return out
+}
+
+// 3T170: list rows for a narrowed contractor: where lines are hidden, line_count and
+// total_qty_requested count the covered lines only, the header summary follows them
+// (narrowedHeader) and stock_on_hand is that of the first covered line's item.
+async function narrowFmrList(rows, g, pid) {
+  if (!rows.length) return rows
+  const [lines] = await db.query(
+    `SELECT fmr_id, item_code, description, wbs_code, qty_requested, qty_approved, qty_issued, uom
+     FROM fmr_lines WHERE fmr_id IN (?) ORDER BY fmr_id, id`, [rows.map(r => r.id)])
+  const covered = {}
+  for (const l of lines) if (wbsGrant.coversCode(g, l.wbs_code)) (covered[l.fmr_id] = covered[l.fmr_id] || []).push(l)
+  const out = rows.map(r => {
+    const c = covered[r.id] || []
+    if (c.length >= Number(r.line_count)) return r   // nothing hidden
+    return { ...narrowedHeader(r, c), line_count: c.length, total_qty_requested: qtySum(c, 'qty_requested') }
+  })
+  const moved = out.filter((r, i) => r.item_code !== rows[i].item_code)
+  if (moved.length) {
+    const codes = [...new Set(moved.map(r => r.item_code).filter(Boolean))]
+    const [soh] = codes.length ? await db.query(
+      `SELECT item_code, COALESCE(SUM(qty_available),0) AS q FROM warehouse_stock
+       WHERE project_id=? AND condition_status='good' AND trace_hold=0 AND item_code IN (?) GROUP BY item_code`, [pid, codes]) : [[]]
+    const by = Object.fromEntries(soh.map(s => [s.item_code, s.q]))
+    for (const r of moved) r.stock_on_hand = by[r.item_code] ?? 0
+  }
+  return out
+}
 
 // ─── FMR WBS SCOPE HELPER ─────────────────────────────────────
 // Returns 'ALL' (unrestricted) or an array of WBS-code prefixes the
@@ -950,7 +998,8 @@ router.get('/:projectId/fmr/items', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
     const { q, warehouse_id, wbs_id } = req.query
-    const scope = await getFmrWbsScope(req.user?.id, pid)
+    const narrowed = wbsGrant.isNarrowed(req.user?.role)   // 3T169: contractors through the grant helper
+    const scope = narrowed ? null : await getFmrWbsScope(req.user?.id, pid)
 
     const conds = ['s.project_id = ?', 's.qty_available > 0', "s.condition_status != 'quarantine'"]
     const params = [pid]
@@ -962,7 +1011,10 @@ router.get('/:projectId/fmr/items', async (req, res) => {
       params.push(like, like, like)
     }
     // WBS scope restriction (skip when unrestricted).
-    if (scope !== 'ALL') {
+    if (narrowed) {
+      const cov = wbsGrant.covers('s.wbs_code', await wbsGrant.grants(db, req.user.id, pid))
+      conds.push(cov.sql); params.push(...cov.params)
+    } else if (scope !== 'ALL') {
       if (!scope.length) return res.json({ data: [] })
       conds.push('(' + scope.map(() => 's.wbs_code = ? OR s.wbs_code LIKE ?').join(' OR ') + ')')
       scope.forEach(p => params.push(p, `${p}%`))
@@ -1003,10 +1055,12 @@ router.post('/:projectId/fmr', async (req, res) => {
     if (!Array.isArray(lines) || lines.length === 0) return res.status(422).json({ error: 'At least one line item is required' })
     if (!required_date) return res.status(422).json({ error: 'Required date is required' })
 
-    const scope = await getFmrWbsScope(userId, pid)
+    const narrowed = wbsGrant.isNarrowed(req.user?.role)   // 3T170: contractors through the grant helper
+    const g = narrowed ? await wbsGrant.grants(db, userId, pid) : null
+    const scope = narrowed ? null : await getFmrWbsScope(userId, pid)
 
     // ── Line validation ───────────────────────────────────────
-    for (const ln of lines) {
+    for (const [i, ln] of lines.entries()) {
       const wbs = ln.wbs_code
       const qty = Number(ln.qty_requested)
       if (!wbs) return res.status(422).json({ error: 'Each line needs a WBS' })
@@ -1020,9 +1074,9 @@ router.post('/:projectId/fmr', async (req, res) => {
         if (Number(stock.warehouse_id) !== Number(warehouse_id))
           return res.status(422).json({ error: 'Mixed warehouse not allowed — all items in one FMR must come from the same warehouse' })
       }
-      // (b) WBS must be in the contractor's scope
-      if (!inScope(scope, wbs))
-        return res.status(422).json({ error: `WBS ${wbs} is outside your contract scope of work` })
+      // (b) WBS must be in the contractor's scope (the request's own WBS is its first line's)
+      if (narrowed ? !wbsGrant.coversCode(g, wbs) : !inScope(scope, wbs))
+        return res.status(422).json({ error: narrowed ? `Line ${i + 1}${ln.item_code ? ` (${ln.item_code})` : ''}: WBS ${wbs} is outside your granted WBS` : `WBS ${wbs} is outside your contract scope of work` })
       // (c) equipment lines: qty must be 1 and a single WBS
       if (ln.item_type === 'equipment' && qty !== 1)
         return res.status(422).json({ error: 'Equipment items are unique — quantity must be 1' })
@@ -1077,11 +1131,24 @@ router.get('/:projectId/fmr/:fmrId/detail', async (req, res) => {
        FROM fmr_requests f LEFT JOIN warehouses w ON w.id=f.warehouse_id
        WHERE f.id=? AND f.project_id=?`, [fmrId, pid])
     if (!fmr) return res.status(404).json({ error: 'FMR not found' })
-    const [lines] = await db.query(
+    const g = wbsGrant.isNarrowed(req.user?.role) ? await wbsGrant.grants(db, req.user.id, pid) : null
+    if (g) {   // 3T169: outside the contractor's grant → 404
+      const sc = fmrCovered(g)
+      const [[inside]] = await db.query(`SELECT f.id FROM fmr_requests f WHERE f.id=? AND ${sc.sql}`, [fmrId, ...sc.params])
+      if (!inside) return res.status(404).json({ error: 'FMR not found' })
+    }
+    const [allLines] = await db.query(
       `SELECT id, item_id, item_code, item_type, description, wbs_code,
               qty_requested, qty_approved, qty_issued, uom, line_status, package_id,
               DATE_FORMAT(ros_date, '%Y-%m-%d') AS ros_date
        FROM fmr_lines WHERE fmr_id=? ORDER BY id`, [fmrId])
+    // 3T170: a narrowed contractor sees only the lines under its grant; when lines are hidden the
+    // header's line-derived values follow the covered lines (narrowedHeader) and the packages are
+    // those of the covered lines or of no line. 3T171: a pickup records only the request and a
+    // total quantity (no line, issue line or package link), so it cannot be attributed to the
+    // lines shown: an FMR with hidden lines returns no pickups.
+    const lines = g ? allLines.filter(l => wbsGrant.coversCode(g, l.wbs_code)) : allLines
+    const hidden = lines.length < allLines.length
     // Heat/Lot P4b-i: per-line issued-heat breakdown from the issue ledger, so the
     // View modal can show "issued 20 of H-A + 10 of H-B" (one row per line+heat).
     const [issuedHeats] = await db.query(
@@ -1102,7 +1169,9 @@ router.get('/:projectId/fmr/:fmrId/detail', async (req, res) => {
               u.full_name AS issued_by_name
        FROM fmr_pickups pk LEFT JOIN users u ON u.id=pk.issued_by
        WHERE pk.fmr_id=? ORDER BY pk.picked_up_at, pk.id`, [fmrId])
-    res.json({ fmr, lines, packages, pickups })
+    const shownPkgs = new Set(lines.map(l => l.package_id).filter(Boolean)), linkedPkgs = new Set(allLines.map(l => l.package_id).filter(Boolean))
+    res.json({ fmr: hidden ? narrowedHeader(fmr, lines) : fmr, lines,
+      packages: hidden ? packages.filter(p => shownPkgs.has(p.id) || !linkedPkgs.has(p.id)) : packages, pickups: hidden ? [] : pickups })
   } catch (e) {
     console.error('[mc:fmr-detail]', e.message)
     dbError(res, e)

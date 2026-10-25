@@ -9,6 +9,7 @@ const multer  = require('multer')
 const { fileFilter } = require('../utils/upload')
 const { parseImportSheet } = require('../utils/validate')
 const { checkWbsRows, existingCodes, normCode, refusal } = require('../lib/wbsImport')
+const wbsGrant = require('../lib/wbsGrant')   // 3T169: contractors see only their granted WBS subtrees
 const path    = require('path')
 const fs      = require('fs')
 const XLSX    = require('xlsx')
@@ -73,6 +74,9 @@ async function certGate(req, res, next) {
 router.get('/:projectId/wbs', async (req, res) => {
   try {
     const pid = Number(req.params.projectId)
+    // 3T169: a contractor gets only the nodes inside its granted subtrees; parent_id stays as
+    // stored, and the screen's buildTree shows a node whose parent is not in the list as a root.
+    const cov = wbsGrant.isNarrowed(req.user?.role) ? wbsGrant.covers('w.code', await wbsGrant.grants(db, req.user.id, pid)) : null
     const [rows] = await db.query(
       `SELECT w.*, u.full_name AS owner_name,
         COALESCE(po_agg.po_qty, 0) AS po_qty
@@ -83,9 +87,9 @@ router.get('/:projectId/wbs', async (req, res) => {
          FROM po_lines l JOIN purchase_orders p ON p.id = l.po_id
          GROUP BY l.wbs_code_snapshot, p.project_id
        ) po_agg ON po_agg.code = w.code AND po_agg.project_id = w.project_id
-       WHERE w.project_id = ?
+       WHERE w.project_id = ?${cov ? ' AND ' + cov.sql : ''}
        ORDER BY w.code`,
-      [pid]
+      [pid, ...(cov ? cov.params : [])]
     )
     res.json(rows)
   } catch (e) {
