@@ -12,7 +12,11 @@ const GRANTED = 'SELECT 1 FROM user_wbs_access WHERE user_id = ? AND project_id 
 // RAG and the PO counts). The keys stay, as null, because the Home cards read absent counts as 0.
 const withoutPoHealth = (row, keys) => ({ ...row, ...Object.fromEntries(keys.map(k => [k, null])) });
 const LIST_HEALTH = ['rag', 'totalPOs', 'breached', 'atRisk'];
-const ROW_HEALTH = ['rag', 'total_pos', 'at_risk', 'breached'];
+
+// 3T177: GET /:id gives external roles only the identity keys GET / returns (no PO health,
+// progress, client, dates or approval thresholds); internal roles get the whole row.
+const IDENTITY = ['id', 'code', 'name', 'phase'];
+const identityOf = row => Object.fromEntries(IDENTITY.map(k => [k, row[k]]));
 
 // ─── LIST ALL PROJECTS ──────────────────────────────────────
 // Returns all projects ordered by creation date, with snake_case DB columns
@@ -59,7 +63,7 @@ router.get('/:id', async (req, res) => {
     }
     const [rows] = await db.query('SELECT * FROM projects WHERE id = ?', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Project not found' });
-    res.json(external ? withoutPoHealth(rows[0], ROW_HEALTH) : rows[0]);
+    res.json(external ? identityOf(rows[0]) : rows[0]);
   } catch (err) {
     dbError(res, err);
   }

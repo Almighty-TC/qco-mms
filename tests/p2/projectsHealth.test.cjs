@@ -2,7 +2,8 @@
 // project's project-wide PO health from server/routes/projects.js: GET / returns rag, totalPOs, breached and atRisk
 // as null for them, GET /:id rag, total_pos, at_risk and breached as null (the keys stay: the Home cards read absent
 // counts as 0); every other key and every internal-role answer equal to the file at e2a5a63 (git show). The real
-// router over a fake db (no database). Exit code 1 on any failure.
+// router over a fake db (no database). Exit code 1 on any failure. 3T177 trims GET /:id further for external roles to
+// id, code, name and phase (tests/p2/projectsDetail.test.cjs); here the detail must still carry no PO health.
 // Usage: node tests/p2/projectsHealth.test.cjs [--mutation]
 const fs = require('fs')
 const path = require('path')
@@ -54,8 +55,8 @@ async function suite(src) {
     check(a.body.every(r => LIST_HEALTH.every(k => k in r && r[k] === null)), `${u.role} list: rag, totalPOs, breached and atRisk are null`)
     check(a.body.every((r, i) => JSON.stringify(Object.keys(r)) === JSON.stringify(Object.keys(b.body[i])) && Object.keys(r).filter(k => !LIST_HEALTH.includes(k)).every(k => r[k] === b.body[i][k])), `${u.role} list: the same keys, the other values unchanged`)
     const d = await call(R, u, '/27'), e = await call(O, u, '/27')
-    check(d.status === 200 && ROW_HEALTH.every(k => k in d.body && d.body[k] === null), `${u.role} detail: rag, total_pos, at_risk and breached are null`)
-    check(JSON.stringify(Object.keys(d.body)) === JSON.stringify(Object.keys(e.body)) && Object.keys(d.body).filter(k => !ROW_HEALTH.includes(k)).every(k => d.body[k] === e.body[k]), `${u.role} detail: the same keys, the other values unchanged`)
+    check(d.status === 200 && ROW_HEALTH.every(k => !(k in d.body) || d.body[k] === null), `${u.role} detail: no rag, total_pos, at_risk or breached`)
+    check(Object.keys(d.body).length > 0 && Object.keys(d.body).filter(k => !ROW_HEALTH.includes(k)).every(k => k in e.body && d.body[k] === e.body[k]), `${u.role} detail: the values it keeps unchanged`)
     const n = await call(R, u, '/28')
     check(n.status === 403 && n.body.error === 'No project access', `${u.role} detail of a project without a grant: 403`)
   }
@@ -80,10 +81,10 @@ async function sameAsBase(src) {   // internal roles: answers and queries equal 
 }
 const MUTANTS = [
   ['list not narrowed', s => s.replace('res.json(external ? rows.map(r => withoutPoHealth(r, LIST_HEALTH)) : rows);', 'res.json(rows);')],
-  ['detail not narrowed', s => s.replace('res.json(external ? withoutPoHealth(rows[0], ROW_HEALTH) : rows[0]);', 'res.json(rows[0]);')],
+  ['detail not narrowed', s => s.replace('res.json(external ? identityOf(rows[0]) : rows[0]);', 'res.json(rows[0]);')],
   ['list keeps the RAG', s => s.replace("const LIST_HEALTH = ['rag', 'totalPOs', 'breached', 'atRisk'];", "const LIST_HEALTH = ['totalPOs', 'breached', 'atRisk'];")],
   ['list keeps totalPOs', s => s.replace("const LIST_HEALTH = ['rag', 'totalPOs', 'breached', 'atRisk'];", "const LIST_HEALTH = ['rag', 'breached', 'atRisk'];")],
-  ['detail keeps at_risk', s => s.replace("const ROW_HEALTH = ['rag', 'total_pos', 'at_risk', 'breached'];", "const ROW_HEALTH = ['rag', 'total_pos', 'breached'];")],
+  ['detail keeps at_risk', s => s.replace("const IDENTITY = ['id', 'code', 'name', 'phase'];", "const IDENTITY = ['id', 'code', 'name', 'phase', 'at_risk'];")],
   ['keys omitted instead of null', s => s.replace('const withoutPoHealth = (row, keys) => ({ ...row, ...Object.fromEntries(keys.map(k => [k, null])) });', 'const withoutPoHealth = (row, keys) => Object.fromEntries(Object.entries(row).filter(([k]) => !keys.includes(k)));')],
   ['internal roles narrowed too', s => s.replace('res.json(external ? rows.map(r => withoutPoHealth(r, LIST_HEALTH)) : rows);', 'res.json(rows.map(r => withoutPoHealth(r, LIST_HEALTH)));')],
 ]
