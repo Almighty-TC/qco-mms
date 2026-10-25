@@ -1599,16 +1599,19 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
   const collapseAll = () => { setExpanded(new Set()) }
 
   // ── Depth preset: a "Level N" pick sets the EXPANSION depth, it is NOT a filter.
-  // Expands every node SHALLOWER than the chosen level (codeDepth = code.split('.').
-  // length, the same depth source the old filter used) so depth-N nodes render
+  // Expands every node SHALLOWER than the chosen level so depth-N nodes render
   // collapsed-but-expandable — chevrons still drill deeper. Overwrites manual expand
   // state, like expand/collapse-all. Search/RAG (collectVisible) still supersede this
   // when active. Maps: all→expandAll; level1→∅; level1-2→depth<2; level1-3→depth<3.
+  // ext-3: depth counts from the shallowest node shown (a contractor granted FLO.01
+  // sees FLO.01 as level 1), codeDepth = code.split('.').length.
   const applyDepthPreset = (value: string) => {
     setDepthLevel(value)
     if (value === 'all') { expandAll(); return }
     const showThrough = value === 'level1' ? 1 : value === 'level1-2' ? 2 : 3   // deepest level to reveal
-    setExpanded(new Set(nodes.filter(n => n.code.split('.').length < showThrough).map(n => n.id)))
+    const codeDepth = (n: WBSNode) => n.code.split('.').length
+    const top = nodes.length ? Math.min(...nodes.map(codeDepth)) : 1
+    setExpanded(new Set(nodes.filter(n => codeDepth(n) - top + 1 < showThrough).map(n => n.id)))
   }
 
   // ── Resizable column widths (Code, WBS Node, ROS, Notes, PO Qty) ──
@@ -1741,6 +1744,7 @@ export const FoundWBSScreen = ({ dark, projectId, projectName, onBack }: {
         <div>
           <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: col, letterSpacing: '-0.02em' }}>🌲 WBS</h2>
           <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 3 }}>Work Breakdown Structure — {projectName}</div>
+          {readOnly && <div style={{ fontSize: 12, color: '#2563eb', marginTop: 4 }}>You can see the parts of the WBS granted to you.</div>}
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center' }}>
           {/* View toggle */}

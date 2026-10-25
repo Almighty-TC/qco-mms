@@ -185,6 +185,8 @@ const DASHBOARD_GRID =
   `var(--col-breach,  ${DEFAULT_COL_WIDTHS.breach}px) ` +
   `var(--col-status,  ${DEFAULT_COL_WIDTHS.status}px) ` +
   `32px`
+// ext-3: external roles' rows carry no RAG bar, PO counts or status — the project and the arrow.
+const EXTERNAL_GRID = `minmax(0, 1fr) 32px`
 
 // ─── PROJECT ROW ─────────────────────────────────────────────
 // One row per project.  gridTemplateColumns is driven by CSS
@@ -193,11 +195,12 @@ const DASHBOARD_GRID =
 // the header in the same browser reflow.
 // onSelect navigates to Procurement when a row is clicked.
 const ProjectRow = ({
-  project, dark, onSelect,
+  project, dark, onSelect, external = false,
 }: {
   project: Project
   dark: boolean
   onSelect: (p: Project) => void
+  external?: boolean   // ext-3: code, name and phase only
 }) => {
   const [hovered, setHovered] = useState(false)
   const total    = project.totalPOs ?? 0
@@ -211,7 +214,7 @@ const ProjectRow = ({
       onClick={() => onSelect(project)}
       style={{
         display: 'grid',
-        gridTemplateColumns: DASHBOARD_GRID,
+        gridTemplateColumns: external ? EXTERNAL_GRID : DASHBOARD_GRID,
         alignItems: 'center',
         background: hovered ? (dark ? '#1e2d4a' : '#f4f7fb') : (dark ? '#1e293b' : '#ffffff'),
         borderBottom: `1px solid ${dark ? '#334155' : '#e8ecf2'}`,
@@ -220,7 +223,7 @@ const ProjectRow = ({
       }}>
 
       {/* RAG accent bar */}
-      <div style={{ width: 4, height: '100%', background: RAG_BAR[project.rag] ?? RAG_BAR.grey, borderRadius: '2px 0 0 2px', alignSelf: 'stretch' }} />
+      {!external && <div style={{ width: 4, height: '100%', background: RAG_BAR[project.rag] ?? RAG_BAR.grey, borderRadius: '2px 0 0 2px', alignSelf: 'stretch' }} />}
 
       {/* Project name + code — truncates with tooltip when column is narrow */}
       <div style={{ padding: '14px 16px', minWidth: 0, overflow: 'hidden' }}>
@@ -242,7 +245,7 @@ const ProjectRow = ({
             </>
           )}
           {/* Mini PO progress bar — only shown when PO data exists */}
-          {total > 0 && (
+          {!external && total > 0 && (
             <div style={{ display: 'flex', gap: 1, alignItems: 'center', marginLeft: 6, flexShrink: 0 }}>
               {Array.from({ length: Math.min(total, 24) }).map((_, i) => {
                 const isBreached = i < Math.round(breached / total * Math.min(total, 24))
@@ -254,6 +257,7 @@ const ProjectRow = ({
         </div>
       </div>
 
+      {!external && <>
       {/* Total POs — uses != null so genuine 0 renders as 0, not as a dash */}
       <div style={{ textAlign: 'center', padding: '0 8px', overflow: 'hidden' }}>
         <div style={{ fontSize: 18, fontWeight: 600, fontFamily: 'JetBrains Mono, monospace', color: dark ? '#f1f5f9' : '#0f172a' }}>
@@ -278,6 +282,7 @@ const ProjectRow = ({
       <div style={{ padding: '0 8px', overflow: 'hidden' }}>
         <RAGPill status={project.rag} size="sm" />
       </div>
+      </>}
 
       {/* Arrow */}
       <div style={{ textAlign: 'center', color: hovered ? '#2563eb' : '#c4cedf', fontSize: 16, transition: 'color 120ms', paddingRight: 12 }}>›</div>
@@ -697,7 +702,7 @@ const Nav = ({
 // directly on the same ref without needing to drill through callbacks.
 // onSelectProject navigates to Procurement for the chosen project.
 const DashboardHome = ({
-  projects, loading, error, dark, containerRef, startResize, onSelectProject,
+  projects, loading, error, dark, containerRef, startResize, onSelectProject, external = false,
 }: {
   projects: Project[]
   loading: boolean
@@ -706,13 +711,14 @@ const DashboardHome = ({
   containerRef: React.RefObject<HTMLDivElement>
   startResize: (col: string, startX: number) => void
   onSelectProject: (p: Project) => void
+  external?: boolean   // ext-3 (TC's answer): no PO counts or RAG for external roles
 }) => {
   const criticalCount = projects.filter(p => p.rag === 'red').length
   const atRiskCount   = projects.filter(p => p.rag === 'amber').length
 
   return (
     <div>
-      {(criticalCount > 0 || atRiskCount > 0) && (
+      {!external && (criticalCount > 0 || atRiskCount > 0) && (
         <CriticalAlertBanner alerts={[
           ...(criticalCount > 0 ? [{ label: 'Projects breached', count: criticalCount, color: 'red' }] : []),
           ...(atRiskCount   > 0 ? [{ label: 'Projects at risk',   count: atRiskCount,   color: 'amber' }] : []),
@@ -752,19 +758,21 @@ const DashboardHome = ({
             as every ProjectRow, so alignment is guaranteed. */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: DASHBOARD_GRID,
+          gridTemplateColumns: external ? EXTERNAL_GRID : DASHBOARD_GRID,
           background: dark ? '#0f172a' : '#f4f7fb',
           borderBottom: `1px solid ${dark ? '#334155' : '#dde3ed'}`,
           padding: '7px 0',
           height: 32,
           alignItems: 'center',
         }}>
-          <div />
+          {!external && <div />}
           <HeaderCell label="Project" col="project" align="left" onResize={startResize} />
+          {!external && <>
           <HeaderCell label="POs"     col="pos"                  onResize={startResize} />
           <HeaderCell label="Risk"    col="risk"                 onResize={startResize} />
           <HeaderCell label="Breach"  col="breach"               onResize={startResize} />
           <HeaderCell label="Status"  col="status"               onResize={startResize} />
+          </>}
           <div />
         </div>
 
@@ -781,7 +789,7 @@ const DashboardHome = ({
         )}
 
         {projects.map(p => (
-          <ProjectRow key={p.id} project={p} dark={dark} onSelect={onSelectProject} />
+          <ProjectRow key={p.id} project={p} dark={dark} onSelect={onSelectProject} external={external} />
         ))}
       </div>
     </div>
@@ -1041,13 +1049,19 @@ function App() {
       const response = await axios.get(`${API}/projects`, {
         headers: { Authorization: `Bearer ${token}` },
       })
+      // ext-3 (TC's answer): external roles keep only code, name and phase, so the nulls the
+      // backend sends them never become 0 counts or a "Not started" pill (nor do the real values
+      // an older backend still sends); rag '' also keeps the topbar "critical" count at 0.
+      const ext = isExternal(user?.role)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const normalised: Project[] = response.data.map((p: any) => ({
+      const normalised: Project[] = response.data.map((p: any) => ext
+        ? { id: p.id, code: p.code, name: p.name, phase: p.phase ?? undefined, rag: '' }
+        : {
         ...p,
         totalPOs: p.totalPOs ?? p.total_pos ?? 0,
         atRisk:   p.atRisk   ?? p.at_risk   ?? 0,
         breached: p.breached ?? 0,
-      }))
+      })
       setProjects(normalised)
       // Active-project reconciliation now lives in a dedicated effect keyed on
       // `projects` (see below) so it can validate a URL-derived :projectId too.
@@ -1371,7 +1385,7 @@ function App() {
           {page === 'dashboard' && !notLinked && (!selectedProjectId || externalUser) && (
             <DashboardHome
               projects={projects} loading={loading} error={error} dark={dark}
-              containerRef={containerRef} startResize={startResize}
+              containerRef={containerRef} startResize={startResize} external={externalUser}
               onSelectProject={p => { setSelectedProjectId(p.id); setSelectedProjectName(p.name); localStorage.setItem('qmat_last_project', JSON.stringify({ id: p.id, name: p.name })); if (externalUser) navigate(landingPage(user?.role) as Page) }}
             />
           )}

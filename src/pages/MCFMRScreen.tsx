@@ -77,6 +77,8 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
   const { addToast } = useToast()
   const { isSubcontractor, user } = useCurrentUser()
   const external = isExternal(user?.role)   // ext-2b: external roles always use the contractor view
+  // ext-3: contractors' scope banner reads the list response's wbs_scopes (see ScopeBanner)
+  const contractorRole = user?.role === 'site_contractor' || user?.role === 'subcontractor' ? user.role : null
   const col    = dark ? '#f1f5f9' : '#0f172a'
   const cardBg = dark ? '#1e293b' : '#fff'
   const bg     = dark ? '#0f172a' : '#f4f7fb'
@@ -87,6 +89,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
   // Subcontractors (and every external role) always in contractor view; can't switch to MC view
   const [view, setView]           = useState<View>(isSubcontractor || external ? 'contractor' : 'mc')
   const [counts, setCounts]       = useState<FMRCounts | null>(null)
+  const [wbsScopes, setWbsScopes] = useState<string[] | undefined>(undefined)
   const [search, setSearch]       = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [pickup, setPickup]       = useState<PickupWindow>('all')
@@ -117,6 +120,7 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
     if (pickup !== 'all' && pickup !== 'overdue' && pickup !== 'today') params.pickup_window = String(pickup)
     const { data } = await axios.get(`${API}/mc/${projectId}/fmr`, { params })
     setCounts(data.counts)
+    setWbsScopes(Array.isArray(data.wbs_scopes) ? data.wbs_scopes : undefined)
     return { data: (data.data ?? []) as FMRRow[], total: (data.total ?? 0) as number }
   }, [projectId, debouncedSearch, critOnly, pickup, statusFilter, regView])
 
@@ -244,20 +248,10 @@ const MCFMRInner = ({ dark, projectId, projectName, onBack, userRole = '' }: {
       </div>
 
       <div style={{ padding: 24 }}>
-        {/* ScopeBanner for subcontractors */}
-        {isSubcontractor && <ScopeBanner role="subcontractor" wbsScopes={['03.01','03.02','04.01']} />}
+        {/* ScopeBanner for contractors: their granted WBS codes (none for the whole project) */}
+        {contractorRole && <ScopeBanner role={contractorRole} wbsScopes={wbsScopes} />}
         <h1 style={{ margin: '0 0 4px', fontSize: 20, fontWeight: 700, color: col }}>FMR Register</h1>
         <div style={{ fontSize: 12, color: sub, marginBottom: 16 }}>Field Material Requests — {projectName}</div>
-
-        {/* Contractor scope banner (for internal team in contractor view) */}
-        {view === 'contractor' && !isSubcontractor && (
-          <div style={{ background: dark ? '#162032' : '#eff6ff', border: `1px solid ${dark ? '#334155' : '#bfdbfe'}`, borderRadius: 8, padding: '8px 14px', marginBottom: 16, fontSize: 12, color: col, display: 'flex', gap: 8, alignItems: 'center' }}>
-            <span style={{ color: '#2563eb' }}>ℹ</span>
-            Showing materials for your assigned WBS scope:
-            <span style={{ fontFamily: 'JetBrains Mono, monospace', color: '#2563eb' }}>03.01 · 03.02 · 04.01</span>
-            · You cannot see FMRs or materials outside your scope
-          </div>
-        )}
 
         {/* KPI cards */}
         {counts && (

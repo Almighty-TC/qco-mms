@@ -102,6 +102,8 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
   const { addToast } = useToast()
   const { isSubcontractor, user } = useCurrentUser()
   const external = isExternal(user?.role)   // ext-2b: Resolve and Move are internal-only (gate-refused)
+  // ext-3: contractors' scope banner reads the stock response's wbs_scopes (see ScopeBanner)
+  const contractorRole = user?.role === 'site_contractor' || user?.role === 'subcontractor' ? user.role : null
   const col    = dark ? '#f1f5f9' : '#0f172a'
   const cardBg = dark ? '#1e293b' : '#fff'
   const bg     = dark ? '#0f172a' : '#f4f7fb'
@@ -110,7 +112,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
   const theadBg = dark ? '#162032' : '#f8fafc'
 
   const [totals, setTotals]   = useState<any>(null)
-  const [wbsScopes, setWbsScopes] = useState<string[]>([])
+  const [wbsScopes, setWbsScopes] = useState<string[] | undefined>(undefined)
   const [search, setSearch]   = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [groupBy, setGroupBy] = useState<GroupBy>('warehouse') // now drives the server-side sort
@@ -150,7 +152,7 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
     if (showHolds)                params.show_holds = 'true'
     const { data } = await axios.get(`${API}/mc/${projectId}/stock`, { params })
     setTotals(data.totals)
-    if (data.wbs_scopes) setWbsScopes(data.wbs_scopes)
+    setWbsScopes(Array.isArray(data.wbs_scopes) ? data.wbs_scopes : undefined)
     return { data: (data.data ?? []) as StockItem[], total: (data.total ?? 0) as number }
   }, [projectId, debouncedSearch, showHolds])
 
@@ -180,14 +182,14 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
           <BackButton onFallback={onBack} dark={dark} />
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          {/* Subcontractors cannot stock take or export */}
-          {!isSubcontractor && (
+          {/* External roles cannot stock take or export (ext-3) */}
+          {!external && (
             <button onClick={() => setShowStockTake(true)}
               style={{ padding: '6px 14px', borderRadius: 6, border: 'none', background: '#22c55e', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
               📋 Stock take
             </button>
           )}
-          {!isSubcontractor && (
+          {!external && (
             <button style={{ padding: '6px 14px', borderRadius: 6, border: bd, background: 'none', color: col, cursor: 'pointer', fontSize: 12 }}>↓ Export</button>
           )}
           <HelpButton screenName="Stock Register" sections={STOCK_REGISTER_HELP} dark={dark} />
@@ -195,13 +197,11 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
       </div>
 
       <div style={{ padding: 24 }}>
-        {/* ScopeBanner for subcontractors */}
-        {isSubcontractor && wbsScopes.length > 0 && (
-          <ScopeBanner role="subcontractor" wbsScopes={wbsScopes} />
-        )}
+        {/* ScopeBanner for contractors: their granted WBS codes (none for the whole project) */}
+        {contractorRole && <ScopeBanner role={contractorRole} wbsScopes={wbsScopes} />}
         <h1 style={{ margin: '0 0 4px', fontSize: 20, fontWeight: 700, color: col }}>Stock Register</h1>
         <div style={{ fontSize: 12, color: sub, marginBottom: 20 }}>
-          {totals?.total_items ?? '…'} of {totals?.total_items ?? '…'} items · {totals?.warehouse_count ?? '…'} warehouses
+          {totals?.total_items ?? '…'} items · {totals?.warehouse_count ?? '…'} warehouses
         </div>
 
         {/* KPI cards */}
@@ -227,12 +227,6 @@ const MCStockRegisterInner = ({ dark, projectId, projectName, onBack }: {
             placeholder="Search item, WBS, warehouse, vendor, tag…"
             style={{ ...inputSt, flex: '1 1 260px' }} />
           <ResetColumnsButton onClick={rt.resetWidths} dark={dark} />
-          <select style={{ ...inputSt }}>
-            <option>All warehouses</option>
-          </select>
-          <select style={{ ...inputSt }}>
-            <option>All WBS</option>
-          </select>
           {/* Subcontractors cannot see hold details */}
           {!isSubcontractor && (
             <button onClick={() => setShowHolds(v => !v)}

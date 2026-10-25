@@ -751,6 +751,7 @@ export const FMR_HELP: HelpSection[] = [
       {P(<>The {B('FMR (Field Material Request) Register')} is where site crews request material from the
         warehouse, and where Materials Control approves and issues it. Each FMR can hold {B('multiple line items')}.</>)}
       {P(<>The flow is: {Code('Raised → Approved → Issued / Picked up')}.</>)}
+      {P(<>Site contractors and subcontractors see only FMRs and material under the WBS codes granted to them (and everything below those codes); the banner lists the codes.</>)}
     </>,
   },
   {
@@ -799,6 +800,7 @@ export const STOCK_REGISTER_HELP: HelpSection[] = [
     content: <>
       {P(<>The {B('Stock Register')} is the live inventory of everything received into the project's warehouses —
         every line ties back to the receipt and SCN it came from.</>)}
+      {P(<>Site contractors and subcontractors see only stock under the WBS codes granted to them (and everything below those codes); the banner lists the codes.</>)}
     </>,
   },
   {
