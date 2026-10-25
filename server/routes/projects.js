@@ -8,6 +8,12 @@ const { EXTERNAL_ROLES } = require('../middleware/permissions');
 // grant requireProjectScope checks); internal roles are unchanged.
 const GRANTED = 'SELECT 1 FROM user_wbs_access WHERE user_id = ? AND project_id = ? LIMIT 1';
 
+// 3T174 (TC's answer): external roles do not receive a project's project-wide PO health (the
+// RAG and the PO counts). The keys stay, as null, because the Home cards read absent counts as 0.
+const withoutPoHealth = (row, keys) => ({ ...row, ...Object.fromEntries(keys.map(k => [k, null])) });
+const LIST_HEALTH = ['rag', 'totalPOs', 'breached', 'atRisk'];
+const ROW_HEALTH = ['rag', 'total_pos', 'at_risk', 'breached'];
+
 // ─── LIST ALL PROJECTS ──────────────────────────────────────
 // Returns all projects ordered by creation date, with snake_case DB columns
 // aliased to camelCase for consistent JSON output. External roles: granted projects only.
@@ -38,7 +44,7 @@ router.get('/', async (req, res) => {
       ORDER BY p.created_at DESC
     `;
     const [rows] = external ? await db.query(sql, [req.user.id]) : await db.query(sql);
-    res.json(rows);
+    res.json(external ? rows.map(r => withoutPoHealth(r, LIST_HEALTH)) : rows);
   } catch (err) {
     dbError(res, err);
   }
@@ -46,13 +52,14 @@ router.get('/', async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   try {
-    if (EXTERNAL_ROLES.has(req.user?.role)) {
+    const external = EXTERNAL_ROLES.has(req.user?.role);
+    if (external) {
       const [grant] = await db.query(GRANTED, [req.user.id, Number(req.params.id)]);
       if (!grant.length) return res.status(403).json({ error: 'No project access' });
     }
     const [rows] = await db.query('SELECT * FROM projects WHERE id = ?', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Project not found' });
-    res.json(rows[0]);
+    res.json(external ? withoutPoHealth(rows[0], ROW_HEALTH) : rows[0]);
   } catch (err) {
     dbError(res, err);
   }
